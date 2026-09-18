@@ -12,6 +12,7 @@
     "server": "node src/server.js",
     "test": "node --test test/*.test.mjs && node test/test-prompt.mjs && node test/render-test.mjs && node test/scroll-test.mjs && node test/usage-e2e.mjs",
     "test:unit": "node --test test/*.test.mjs",
+    "test:local": "node test/local/test-inline-fallback.mjs && node test/local/test-sender-retry.mjs && node test/local/test-qzone-backoff.mjs && node test/local/test-sticker-lookup.mjs && node test/local/test-send-tools.mjs",
     "test:prompt": "node test/test-prompt.mjs",
     "test:render": "node test/render-test.mjs",
     "test:scroll": "node test/scroll-test.mjs",
@@ -38,10 +39,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/carbonbromine/qq-agent.git"
+    "url": "https://github.com/sakurawwwxh/qq-agent-plus.git"
   },
   "bugs": {
-    "url": "https://github.com/carbonbromine/qq-agent/issues"
+    "url": "https://github.com/sakurawwwxh/qq-agent-plus/issues"
   },
-  "homepage": "https://github.com/carbonbromine/qq-agent#readme"
+  "homepage": "https://github.com/sakurawwwxh/qq-agent-plus#readme"
 }

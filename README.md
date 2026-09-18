@@ -7,6 +7,25 @@ Electron 或 Windows 运行环境。
 本项目基于 [K0nd1us/QQ-agent](https://github.com/K0nd1us/QQ-agent)
 改造，保留上游 Git 历史和 MIT 许可。
 
+## 本仓库说明
+
+本仓库是 [carbonbromine/qq-agent](https://github.com/carbonbromine/qq-agent) 的定制分支，
+基线 revision `8dca708`，在其之上叠加了约 1200 行改动，集中在五块：
+
+- **对话行为**：一轮里分条发言、看图先定性再回话、表情包清单常驻系统提示、收尾自检；
+- **发送链路**：网络级发送重试、QQ 系统表情、消息 id 归一化、内联工具调用兜底解析；
+- **贴纸系统**：自动收藏与 QQ 收藏优先、查找兜底、同步护栏；
+- **主动发言**：多个活跃时段、间隔护栏、跳过原因日志、follow-up 提醒、重启补齐漏消息；
+- **模型接入**：按用途控制思考模式、服务商审核拦截重试、兜底模型切换。
+
+完整清单见 [相对上游的改动](docs/CHANGES-VS-UPSTREAM.md)，新增配置项示例见
+[配置示例](docs/CONFIG-EXAMPLES.md)。运维工具（自检、备份、发送监控、进程看门狗等）
+收录在 [ops/](ops/README.md)，本地回归测试在 [test/local/](test/local/README.md)。
+
+分支说明：`main` = 上述基线 + 本仓库改动，与生产部署保持一致；
+`upstream-sync` 把上游最新 `main` 合并了进来，属于预览分支（只做了合并与单测，
+未在生产验证），上线前请先在测试环境跑一轮。
+
 ## 架构
 
 ```text
@@ -31,7 +50,7 @@ Docker（需要 sudo 确认）、下载 SnowLuma、配置 OneBot、安装 QQ Age
 同步全部服务凭据。SnowLuma 已经包含 OneBot，不需要再安装 NapCat 或 Lagrange。
 
 ```bash
-git clone https://github.com/carbonbromine/qq-agent.git
+git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent
 bash deploy-all.sh
 ```
@@ -103,7 +122,7 @@ bash deploy-all.sh --help
 - OpenAI Chat Completions 兼容模型
 
 ```bash
-git clone https://github.com/carbonbromine/qq-agent.git
+git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent
 
 bash deploy.sh \
@@ -306,4 +325,6 @@ bash -n deploy.sh manage.sh
 
 ## 许可
 
-本项目使用 MIT 许可。OneBot 协议端是独立软件，遵循其自身许可。
+本项目使用 MIT 许可（见 [LICENSE](LICENSE)）。派生关系与版权归属见 [NOTICE](NOTICE.md)：
+上游 K0nd1us/QQ-agent、carbonbromine/qq-agent 的版权归原作者，本仓库改动部分的版权
+归本仓库作者，同样以 MIT 发布。OneBot 协议端是独立软件，遵循其自身许可。
