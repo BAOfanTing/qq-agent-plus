@@ -169,6 +169,16 @@ export const DEFAULT_CONFIG = {
     idleThresholdMs: 1800000,   // 群里静默多久才算"冷场"
     probability: 0.25
   },
+  // 自主节奏（可选）：消息不再即时触发，改由模型按自己安排的节奏醒来统一处理。
+  // 默认关闭；开启后建议先在小范围（scope）试，确认能接受"延迟接话"的节奏。
+  pacing: {
+    enabled: false,
+    scope: 'group',            // group | all —— 对哪些会话启用（私聊永远即时，不受影响）
+    instantOnMention: true,    // 被 @ 时立刻处理，不排队
+    defaultWakeMinutes: 20,    // 默认多久后自己醒一次看看
+    minWakeMinutes: 5,         // 两次自主醒来之间的最短间隔
+    maxSilenceMinutes: 45      // 最长沉默上限（超过就重排一次更早的醒来）
+  },
   // GitHub 自动更新。外部 systemd timer 只负责唤醒，是否实际检查由 enabled 控制。
   autoUpdate: {
     enabled: false,
@@ -293,6 +303,8 @@ export const DEFAULT_CONFIG = {
     enabled: true,
     promptMaxStickers: 10,
     collectEnabled: true,
+    // 别人发来的表情包自动进库（同图只存一次，受 maxCollectPerHour 限频）
+    autoCollect: true,
     maxCollectPerHour: 10,
     // 发表情包的积极程度（0=不鼓励 1=偶尔 2=较积极 3=很积极）。
     // 这是在提示词层面引导模型"更愿意用表情回应"，不是强制每次都发 ——
