@@ -52,7 +52,26 @@ const check = (name, ok, detail = '') => {
 };
 
 // ── 假时钟 + 可控定时器：把 24 小时的排期压缩成"手动点火" ──
-let fakeNow = new Date(2026, 8, 19, 10, 0, 0).getTime(); // 本机 09-19 10:00，在活跃时段内
+// 活跃时段按配置时区（time-control 的 TIME_ZONE，固定 Asia/Shanghai）判读钟点，跟跑测机器的
+// 时区无关：CI 跑在 UTC 上，直接 new Date(2026, 8, 19, 2, 0) 造出来的"凌晨两点"在那边是上午十点，
+// 断言就会莫名其妙地挂。所以时间戳一律按那个时区造。
+const { TIME_ZONE } = await import(pathToFileURL(path.join(repoRoot, 'src', 'time-control.js')).href);
+const zonedMs = (y, m, d, hh, mm) => {
+  const guess = Date.UTC(y, m - 1, d, hh, mm);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: TIME_ZONE,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).formatToParts(new Date(guess));
+  const pick = (type) => Number(parts.find((part) => part.type === type).value);
+  const asUtc = Date.UTC(pick('year'), pick('month') - 1, pick('day'), pick('hour') % 24, pick('minute'));
+  return guess - (asUtc - guess);
+};
+let fakeNow = zonedMs(2026, 9, 19, 10, 0); // 该时区的 09-19 10:00，在活跃时段内
 let timers = [];
 globalThis.setTimeout = (fn, ms, ...args) => {
   const handle = { fn, ms: Number(ms) || 0, args, canceled: false };
@@ -195,7 +214,7 @@ try {
   const { updateConfig } = await import(pathToFileURL(path.join(repoRoot, 'src', 'config.js')).href);
   updateConfig({ qzoneInteractions: { activeHours: { start: '07:00', end: '01:00' } } });
   const beforeQuiet = { ...calls };
-  fakeNow = new Date(2026, 8, 19, 2, 0, 0).getTime(); // 凌晨 2 点，落在 01:00–07:00 的静默段
+  fakeNow = zonedMs(2026, 9, 19, 2, 0); // 该时区凌晨 2 点，落在 01:00–07:00 的静默段
   timers = [];
   mgr.start();
   await fire('静默段首检');
