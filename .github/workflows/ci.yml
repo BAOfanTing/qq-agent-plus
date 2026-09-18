@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 语法检查（src / scripts / test）
+        run: |
+          set -e
+          count=0
+          for f in src/*.js scripts/*.mjs test/*.mjs test/local/*.mjs; do
+            node --check "$f"
+            count=$((count + 1))
+          done
+          echo "语法检查通过（$count 个文件）"
+
+      - name: 未定义调用扫描（严格模式）
+        run: node src/ops.js scan --strict
+
+      - name: 单元测试
+        run: npm run test:unit
+
+      - name: 本地回归测试
+        run: npm run test:local

@@ -6,6 +6,7 @@
 
 **面向 Linux 服务器的 QQ 群聊 Agent · 会分条说话、会发表情包、记得住人、自带运维命令**
 
+[![CI](https://github.com/sakurawwwxh/qq-agent-plus/actions/workflows/ci.yml/badge.svg)](https://github.com/sakurawwwxh/qq-agent-plus/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/sakurawwwxh/qq-agent-plus?color=e8b400&label=stars&logo=github)](https://github.com/sakurawwwxh/qq-agent-plus/stargazers)
 [![Last commit](https://img.shields.io/github/last-commit/sakurawwwxh/qq-agent-plus?logo=git&logoColor=white)](https://github.com/sakurawwwxh/qq-agent-plus/commits/main)
@@ -13,6 +14,8 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](docs/LINUX.md)
 [![OneBot](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
 [![LLM](https://img.shields.io/badge/LLM-OpenAI%20%E5%85%BC%E5%AE%B9-6b4fbb)](#时间控制)
+
+**简体中文** ｜ [English](README.en.md)
 
 </div>
 
@@ -32,6 +35,39 @@ OpenAI Chat Completions 会话，不依赖 DSH、MCP、Electron 或 Windows 运�
 配置项示例见 [配置示例](docs/CONFIG-EXAMPLES.md)；运维命令统一收在 [src/ops.js](src/ops.js)，
 用法见 [运维工具](docs/OPS.md)；本地回归测试在 [test/local/](test/local/README.md)。
 衍生关系与版权说明见 [NOTICE](NOTICE.md)。
+
+## 🖼 演示
+
+运维命令都是程序自带（`src/ops.js`），只读命令不会碰业务数据：
+
+```text
+$ node src/ops.js audit
+════════ 1. systemd 用户服务 ════════
+  [正常] qq-agent-linux.service  active
+  [正常] qq-agent-backup.timer   enabled（下次 周日 04:10）
+  [正常] process-guard.timer     enabled（每 10 分钟）
+════════ 4. 代码体检 ════════
+  js 语法: 62/62 通过    未定义调用: 0 处
+════════ 9. 运行态 ════════
+  控制台 API: 200    账号: 在线
+===== 自检结论 =====
+  全部通过（0 项异常）
+
+$ node src/ops.js watch-send --minutes=5
+基线：outbox 最新 rowid=17，待处理消息 0 条
+SEND_OK 第 1 条新发送：rowid=18（send_message）
+```
+
+群聊里的一轮（示意；真实聊天记录不会公开）——接住对方的话之后，
+如果还有自己的半句就分条接着说，合适的场合直接用表情：
+
+```text
+群友： 今晚还打不打
+机器人：打啊
+机器人：我吃完饭了 缓十分钟就来
+机器人：[表情包：别墨迹]
+```
+
 
 ## 🧱 架构
 
@@ -336,10 +372,16 @@ Agent 配置或前端存储。旧的 `3110` 门户不再映射。
 
 ```bash
 npm ci --omit=dev --ignore-scripts
-npm test
+npm run test:unit     # 单元测试
+npm run test:local    # 本地回归（自动用临时数据目录，不碰生产数据）
+node src/ops.js scan --strict
 npm audit --omit=dev
 bash -n deploy.sh manage.sh
 ```
+
+CI（GitHub Actions）在每次推送和 PR 上跑：语法检查、未定义调用扫描（严格模式）、
+单元测试与本地回归。当前基线上有 5 个遗留失败用例被显式跳过，清单与实测表现见
+[已知问题](docs/KNOWN-ISSUES.md)。
 
 详细说明见 [Linux 运维手册](docs/LINUX.md)。
 试验性三模式对话引擎见

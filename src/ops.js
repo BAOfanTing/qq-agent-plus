@@ -1021,7 +1021,9 @@ function cmdScan(args) {
       ngLine(`写日志失败: ${error && error.message ? error.message : error}`);
     }
   }
-  // 原则：只记录、不阻断。
+  // 原则：只记录、不阻断（挂在服务启动链上时不能因为扫描结果把服务拦下来）。
+  // CI 或人工把关时用 --strict：有可疑调用就以 1 退出。
+  if (hasFlag(args, '--strict') && report.total > 0) return 1;
   return 0;
 }
 
@@ -1830,13 +1832,15 @@ SSH 配置、防火墙、定时任务、可升级包、TLS 证书到期、备份
 
 环境变量: QQ_AGENT_DATA_DIR / QQ_AGENT_BACKUP_DIR / QQ_AGENT_SERVICE / QQ_AGENT_KEEP`,
 
-  scan: `用法: node src/ops.js scan [目录] [--ignore=名1,名2] [--no-ignore] [--log=文件]
+  scan: `用法: node src/ops.js scan [目录] [--ignore=名1,名2] [--no-ignore] [--log=文件] [--strict]
 
 扫描"调用了但本文件既没定义也没 import"的函数名（把注释/字符串/正则/模板串抹白后匹配）。
-只报告、不阻断，退出码恒为 0。目录默认 src/。
+默认只报告、不阻断，退出码恒为 0（挂在服务启动链上时不能拦住服务）。
+目录默认 src/。
 
---ignore=a,b  忽略名单（默认内置项目已知误报表；传空 --ignore= 可关闭默认值）
---no-ignore   不使用任何忽略名单
+--strict     有可疑调用时以退出码 1 结束（CI 把关用）
+--ignore=a,b 忽略名单（默认内置项目已知误报表；传空 --ignore= 可关闭默认值）
+--no-ignore  不使用任何忽略名单
 --log=文件    有可疑调用时追加记录（对应原启动自检；服务启动时可用它挂 ExecStartPost）
 
 环境变量: QQ_AGENT_LOG（仅文档用途，--log 未指定时不写日志）`,
