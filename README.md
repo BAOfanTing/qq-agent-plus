@@ -1,10 +1,25 @@
+<div align="center">
+
+<img src="docs/assets/mark.svg" alt="QQ Agent Plus" width="104" height="104">
+
 # QQ Agent Plus
 
-面向 Linux 服务器的 QQ 群聊 Agent。它直接连接外部 OneBot v11 服务，
-每次触发使用独立的 OpenAI Chat Completions 会话，不依赖 DSH、MCP、
-Electron 或 Windows 运行环境。
+**面向 Linux 服务器的 QQ 群聊 Agent · 会分条说话、会发表情包、记得住人、自带运维命令**
 
-## 特性
+[![License](https://img.shields.io/badge/license-MIT-3da639.svg)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/sakurawwwxh/qq-agent-plus?color=e8b400&label=stars&logo=github)](https://github.com/sakurawwwxh/qq-agent-plus/stargazers)
+[![Last commit](https://img.shields.io/github/last-commit/sakurawwwxh/qq-agent-plus?logo=git&logoColor=white)](https://github.com/sakurawwwxh/qq-agent-plus/commits/main)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933?logo=nodedotjs&logoColor=white)](package.json)
+[![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](docs/LINUX.md)
+[![OneBot](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
+[![LLM](https://img.shields.io/badge/LLM-OpenAI%20%E5%85%BC%E5%AE%B9-6b4fbb)](#时间控制)
+
+</div>
+
+面向 Linux 服务器的 QQ 群聊 Agent：直接连接外部 OneBot v11 服务，每次触发使用独立的
+OpenAI Chat Completions 会话，不依赖 DSH、MCP、Electron 或 Windows 运行环境。
+
+## ✨ 特性
 
 下面这些改动都来自真实群聊里踩过的坑，每条的失败模式与效果写在[改动清单](docs/CHANGES.md)里：
 
@@ -18,7 +33,7 @@ Electron 或 Windows 运行环境。
 用法见 [运维工具](docs/OPS.md)；本地回归测试在 [test/local/](test/local/README.md)。
 衍生关系与版权说明见 [NOTICE](NOTICE.md)。
 
-## 架构
+## 🧱 架构
 
 ```text
 OneBot WebSocket
@@ -35,7 +50,7 @@ OneBot WebSocket
 消息只在处理成功后确认。模型或进程失败时，未发送批次自动重试；
 发送结果无法确认时进入 `held`，必须人工核对，避免重复发言。
 
-## 全栈一键部署
+## 🚀 全栈一键部署
 
 全新 Linux 机器推荐运行交互式安装器。它会询问部署目录和端口，自动安装
 Docker（需要 sudo 确认）、下载 SnowLuma、配置 OneBot、安装 QQ Agent，并生成和
@@ -104,7 +119,7 @@ SnowLuma 2FA 后还需提供 `--snowluma-totp`。完整参数见：
 bash deploy-all.sh --help
 ```
 
-## 仅部署 QQ Agent
+## 📦 仅部署 QQ Agent
 
 要求：
 
@@ -180,7 +195,7 @@ bash deploy.sh \
 先执行单元测试，再复用 `deploy.sh` 部署；失败会回滚、停止自动更新并私聊管理员。
 详见[自动更新部署](docs/AUTO_UPDATE.md)。
 
-## 运维
+## 🛠 运维
 
 ```bash
 bash manage.sh status
@@ -222,7 +237,7 @@ Agent 配置或前端存储。旧的 `3110` 门户不再映射。
 
 启用前必须确保旧机器人未处理相同会话，否则会产生双回复。
 
-## 数据
+## 💾 数据
 
 数据默认位于部署参数指定的 `data` 目录：
 
@@ -297,7 +312,7 @@ Agent 配置或前端存储。旧的 `3110` 门户不再映射。
 处理当前批次；没有未读消息时读取该模式配置的最近存档，让模型自行决定是否
 发言。该操作仍受运行模式、暂停、白名单、时间控制、并发上限和 `held` 状态保护。
 
-## 时间控制
+## ⏰ 时间控制
 
 “设置 -> 时间控制”默认关闭。关闭时忽略全部时间规则，不改变现有唤醒、提示词、
 模型请求或消息处理策略。开启后统一使用上海时间，全局规则默认为 DS 低峰：
@@ -317,7 +332,7 @@ Agent 配置或前端存储。旧的 `3110` 门户不再映射。
 
 聊天、密钥、Token 和运行数据均被 Git 忽略。
 
-## 验证
+## ✅ 验证
 
 ```bash
 npm ci --omit=dev --ignore-scripts
@@ -331,7 +346,7 @@ bash -n deploy.sh manage.sh
 [Conversation Modes](docs/CONVERSATION_MODES.md)；早期参与者续接方案见
 [Threaded Conversation Pilot](docs/THREADED_PILOT.md)。
 
-## 许可
+## 📄 许可
 
 本项目使用 MIT 许可（见 [LICENSE](LICENSE)）；衍生关系与第三方版权见 [NOTICE](NOTICE.md)。
 OneBot 协议端是独立软件，遵循其自身许可。
