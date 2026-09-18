@@ -1,12 +1,13 @@
+// Linux 全栈部署的 SnowLuma / noVNC 端口是 5099 / 6081，上游旧默认值 15099 / 16081 会导致状态误报
 const DEFAULT_ENDPOINTS = Object.freeze({
-  dsh: 'http://127.0.0.1:3080/',
-  bridge: 'http://127.0.0.1:3100/api/status',
-  snowluma: 'http://127.0.0.1:15099/api/ui/public',
-  novnc: 'http://127.0.0.1:16081/'
+  dsh: process.env.DSH_URL || 'http://127.0.0.1:3080/',
+  bridge: process.env.BRIDGE_URL || 'http://127.0.0.1:3100/api/status',
+  snowluma: `${String(process.env.SNOWLUMA_WEBUI_URL || 'http://127.0.0.1:5099').replace(/\/+$/, '')}/api/ui/public`,
+  novnc: process.env.QQ_AGENT_NOVNC_URL || 'http://127.0.0.1:6081/'
 });
 
 export const SNOWLUMA_WEBUI_URL = String(
-  process.env.SNOWLUMA_WEBUI_URL || 'http://127.0.0.1:15099'
+  process.env.SNOWLUMA_WEBUI_URL || 'http://127.0.0.1:5099'
 ).replace(/\/+$/, '');
 
 async function responseJson(response) {
