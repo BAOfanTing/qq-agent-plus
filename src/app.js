@@ -502,6 +502,8 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     emit('onebot-status', status);
     if (status.connected) incidentPilot?.resumeNotifications();
     if (status.connected) autoUpdate?.resumeNotifications();
+    // 连上（含重连）就补一次：把重启/断线期间漏掉的消息捞回来
+    if (status.connected) scheduleCatchUp();
   });
 
   // ── 入站事件处理 ──
@@ -616,7 +618,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       ts: event.time ? Math.round(Number(event.time) * 1000) : Date.now(),
       senderId,
       senderName,
-      text: text || '[图片]' ,
+      // 表情包（QQ 标记为动画表情/表情的图）与普通图片分开标注，让模型和存档一眼能分辨
+      text: text || (media.some((m) => m.kind === 'image' && /表情/.test(String(m.summary || '')))
+        ? '[表情包]' : '[图片]'),
       reply,
       media,
       mentionsSelf,
@@ -628,6 +632,10 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     if (stored.duplicate) return;
     if (!isSelf) identityPilot?.observeMessage(chatKey, stored);
     if (!isSelf) slangPilot?.observeMessage(chatKey, stored);
+    if (!isSelf) {
+      Promise.resolve(stickers.autoCollect?.(chatKey, stored)).catch((error) =>
+        log('[sticker] 自动收藏失败:', error?.message ?? error));
+    }
     emit('chat-update', chatKey);
     if (
       !isSelf
@@ -637,6 +645,45 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       )
     ) return;
     if (!isSelf) orchestrator.onIncoming(chatKey);
+  }
+
+  // ── 启动/重连补齐 ──
+  // 服务重启或协议端断线时事件会丢：消息根本没进库，也就永远没人回。
+  // 连上以后从协议端拉一次最近历史，把库里没有的消息补进来；去重靠 mid，重复不会脏数据。
+  let lastCatchUpAt = 0;
+  function scheduleCatchUp() {
+    if (Date.now() - lastCatchUpAt < 60000) return;   // 断线重连可能连续触发，一分钟内只补一次
+    lastCatchUpAt = Date.now();
+    setTimeout(() => { catchUpMissedMessages().catch(() => {}); }, 3000);
+  }
+  async function catchUpMissedMessages() {
+    const cfgNow = getConfig();
+    const targets = [
+      ...(cfgNow.allow?.groups ?? []).map((g) => ({ kind: 'group', id: String(g) })),
+      ...(cfgNow.allow?.private ?? []).map((p) => ({ kind: 'private', id: String(p) }))
+    ];
+    for (const { kind, id } of targets) {
+      const chatKey = `${kind}:${id}`;
+      try {
+        const data = kind === 'group'
+          ? await onebot.call('get_group_msg_history', { group_id: Number(id), count: 20 }, 20000, null)
+          : await onebot.call('get_friend_msg_history', { user_id: Number(id), count: 20 }, 20000, null);
+        const list = Array.isArray(data?.messages) ? data.messages : [];
+        let added = 0;
+        for (const item of list) {
+          const mid = item?.message_id;
+          if (mid === undefined || mid === null) continue;
+          if (store.findByMid(chatKey, mid)) continue;         // 库里已有（含自己发的），跳过
+          const ts = Math.round(Number(item?.time || 0) * 1000) || Date.now();
+          const fresh = Date.now() - ts <= 30 * 60 * 1000;     // 半小时内的按新消息处理，更早的只补记录
+          await ingestMessage(kind, id, item, !fresh);
+          added += 1;
+        }
+        if (added) console.log(`[catchup] ${chatKey} 补进 ${added} 条（重启/断线期间漏掉的）`);
+      } catch (error) {
+        console.log(`[catchup] ${chatKey} 补齐失败：${error?.message ?? error}`);
+      }
+    }
   }
 
   async function handleFriendProposalAdminCommand(kind, id, text) {
@@ -890,7 +937,8 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
 
   function setConsoleCookie(res, token) {
     res.setHeader('set-cookie',
-      `qq_agent_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/`);
+      // 本地改动：加 Max-Age，避免关掉浏览器就要重新输令牌
+      `qq_agent_token=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000`);
   }
 
   function writeConsoleAccess(token) {
@@ -2831,6 +2879,7 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     if (getConfig().dailyMoments?.enabled) dailyMoments.start();
     if (getConfig().qzoneInteractions?.enabled) qzoneInteractions.start();
     if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
+    orchestrator.startScheduledWakeTicker();
     autoUpdate.start();
     log(`控制台已就绪：http://${serverCfg.host}:${port} (${getConfig().runtime.mode})`);
     log(`OneBot: ws=${getConfig().onebot?.wsUrl} http=${getConfig().onebot?.httpUrl}`);
