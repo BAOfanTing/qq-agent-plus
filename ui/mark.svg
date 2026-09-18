@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="QQ Agent Plus">
+  <defs>
+    <linearGradient id="sea" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#38a2ff"/>
+      <stop offset="0.55" stop-color="#1478d4"/>
+      <stop offset="1" stop-color="#0a5aa8"/>
+    </linearGradient>
+    <linearGradient id="belly" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dff1ff"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="48" cy="48" r="46" fill="url(#sea)"/>
+  <circle cx="48" cy="48" r="46" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
+
+  <!-- 鲸鱼：身体 + 尾鳍 -->
+  <path d="M19 58c0-11 9-19 22-19 8 0 15 3 21 8 2 2 4 3 7 3 3 0 6-1 8-3-1 6-5 10-10 12 1 5-3 9-9 10-4 3-10 5-17 5-13 0-22-6-22-16z"
+        fill="url(#belly)"/>
+  <path d="M75 50c4-3 6-7 6-12 3 6 2 13-3 18-1-2-2-4-3-6z" fill="#ffffff" opacity="0.95"/>
+  <path d="M70 62c5 1 9 0 12-3-2 7-8 11-15 10 1-2 2-5 3-7z" fill="#ffffff" opacity="0.95"/>
+
+  <!-- 眼睛与嘴线 -->
+  <circle cx="34" cy="55" r="2.9" fill="#0b2a47"/>
+  <path d="M41 63c3 2 7 2 10-1" stroke="#9fd0f2" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+
+  <!-- 喷水 -->
+  <path d="M40 38c0-5 3-9 8-11-2 4-2 7-1 10" fill="#ffffff" opacity="0.9"/>
+  <circle cx="58" cy="26" r="3.2" fill="#ffffff" opacity="0.9"/>
+  <circle cx="68" cy="21" r="2" fill="#ffffff" opacity="0.65"/>
+</svg>
