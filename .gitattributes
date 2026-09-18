@@ -1,0 +1,10 @@
+# 行尾符约定：仓库内统一 LF，检查出到 Windows 也保持 LF。
+#
+# 上游 carbonbromine/qq-agent 以 LF 提交；本仓库沿用同一约定，
+# 这样每次同步上游都不会产生"整文件改动"式的行尾噪音。
+# 已提交文件如需重新规范化：git add --renormalize .
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF，否则 cmd.exe 解析会出错（已在 ops/qq-console.bat 上踩过）。
+*.bat text eol=crlf
+*.cmd text eol=crlf
