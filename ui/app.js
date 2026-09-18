@@ -8646,6 +8646,23 @@ $$('.tab').forEach((tab) => {
   } catch { /* 老浏览器不支持 addEventListener，忽略 */ }
   $('#theme-btn')?.addEventListener('click', cycleTheme);
 
+  // 地址栏带 ?token= 时先自动登录（供快捷方式/脚本免输令牌）；
+  // 成功后清掉地址栏里的明文令牌再重载，避免留在浏览历史里。
+  try {
+    const u = new URL(location.href);
+    const t = u.searchParams.get('token');
+    if (t) {
+      const res = await fetch('/api/login', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: t })
+      });
+      if (res.ok) {
+        u.searchParams.delete('token');
+        location.replace(u.toString());
+        return;
+      }
+    }
+  } catch { /* 自动登录失败就按原流程弹登录框 */ }
   // 启动 loading：先等 HTTP 服务可用（页面可能先于服务打开）
   setLoadingStatus('正在启动 QQ Agent 服务…');
   await bootLoop();
@@ -8675,6 +8692,9 @@ $$('.tab').forEach((tab) => {
   refreshStatus();
   setInterval(refreshStatus, 15000);
   connectSSE();
+  // 首次 startListPoller() 在配置加载前执行，会落到 4000ms 兜底值，导致会话列表每 4 秒重建一次（界面闪烁）；
+  // 配置就绪后重新校准一次轮询间隔
+  startListPoller();
   loadSessions();
   loadMemoryView();
   initSessionScrollLoader();
