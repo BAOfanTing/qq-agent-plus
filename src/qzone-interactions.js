@@ -22,6 +22,7 @@ import {
   qzoneInteractionPersonaHash,
   QZONE_INTERACTION_PROMPT_VERSION
 } from './qzone-interaction-prompt.js';
+import { resolveToolCalls } from './inline-tools.js';
 
 const STATE_FILE = path.join(DATA_DIR, 'qzone-interactions.json');
 const HOUR_MS = 60 * 60 * 1000;
@@ -51,10 +52,41 @@ function interactionError(code, message, httpStatus = 409) {
   return Object.assign(new Error(message), { code, httpStatus });
 }
 
+// ── 活跃时段（本功能专用）：窗口外不阅览动态，也不影响聊天回复 ──
+const ACTIVE_HOURS_OFFSET_MS = 8 * 60 * 60 * 1000;   // Asia/Shanghai
+
+function activeHoursMinute(value) {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value ?? ''));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+/** 解析 {start:'08:00', end:'23:00'}；缺省或非法 = 全天可用。 */
+function normalizeActiveHours(raw) {
+  const start = activeHoursMinute(raw?.start);
+  const end = activeHoursMinute(raw?.end);
+  if (start == null || end == null || start === end) return null;
+  return { start, end };
+}
+
+/** 当前是否在活跃时段内；不在时给出下一次进入窗口的时间。 */
+function activeHoursState(hours, now) {
+  if (!hours) return { active: true, nextActiveAt: 0 };
+  const d = new Date(now + ACTIVE_HOURS_OFFSET_MS);
+  const minute = d.getUTCHours() * 60 + d.getUTCMinutes();
+  const wrap = hours.start > hours.end;
+  const active = wrap
+    ? minute >= hours.start || minute < hours.end
+    : minute >= hours.start && minute < hours.end;
+  if (active) return { active: true, nextActiveAt: 0 };
+  const delta = minute < hours.start ? hours.start - minute : 1440 - minute + hours.start;
+  return { active: false, nextActiveAt: now + delta * 60000 };
+}
+
 function normalizedConfig(raw = getConfig().qzoneInteractions || {}) {
   return {
     enabled: raw.enabled === true,
     startupCatchup: raw.startupCatchup === true,
+    activeHours: normalizeActiveHours(raw.activeHours),
     feedIntervalMinutes: Math.min(1440, Math.max(5, Number(raw.feedIntervalMinutes) || 60)),
     replyIntervalMinutes: Math.min(1440, Math.max(1, Number(raw.replyIntervalMinutes) || 5)),
     feedFetchCount: Math.min(50, Math.max(1, Number(raw.feedFetchCount) || 30)),
@@ -416,6 +448,12 @@ export class QzoneInteractionManager {
       this.#schedule(time.nextActiveAt ? time.nextActiveAt - now + 1 : 60000);
       return;
     }
+    // 本功能自带活跃时段：窗口外不阅览动态（聊天回复不受影响）
+    const hours = activeHoursState(cfg.activeHours, now);
+    if (!hours.active) {
+      this.#schedule(Math.max(1000, hours.nextActiveAt - now + 1));
+      return;
+    }
     if (this.running) {
       this.#schedule(60000);
       return;
@@ -431,14 +469,31 @@ export class QzoneInteractionManager {
           source: 'scheduled',
           includeExisting: cfg.startupCatchup
         }));
+        if (Number(this.state.failStreak)) {
+          this.state.failStreak = 0;
+          this.#save();
+        }
       } catch (error) {
-        this.log('[qzone-interactions] run failed:', error?.message ?? error);
+        const message = String(error?.message ?? error);
+        // 主动停止/重启触发的 abort 不是故障：不上报、不退避
+        if (!/Qzone interaction task stopped/i.test(message)) {
+          const streak = Math.min(6, (Number(this.state.failStreak) || 0) + 1);
+          this.state.failStreak = streak;
+          this.#save();
+          // 一轮连续故障只上报一次，之后安静退避重试（避免刷屏 + 避免被 QQ 限流）
+          if (streak === 1) this.log('[qzone-interactions] run failed:', message);
+          else console.log(`[qzone-interactions] run failed（连续 ${streak} 次，退避重试中）:`, message);
+        }
       }
     }
     if (!this.stopped) {
       const nextFeed = this.state.lastFeedPollAt + cfg.feedIntervalMinutes * 60000;
       const nextReply = this.state.lastReplyPollAt + cfg.replyIntervalMinutes * 60000;
-      this.#schedule(Math.max(1000, Math.min(nextFeed, nextReply) - this.now()));
+      const dueDelay = Math.max(1000, Math.min(nextFeed, nextReply) - this.now());
+      // 连续失败退避：1→2 分钟、2→4 分钟…最多 30 分钟；成功一次即清零
+      const streak = Math.min(6, Number(this.state.failStreak) || 0);
+      const backoff = streak ? Math.min(30, 2 ** streak) * 60000 : 0;
+      this.#schedule(Math.max(dueDelay, backoff));
     }
   }
 
@@ -775,7 +830,7 @@ export class QzoneInteractionManager {
         role: 'assistant',
         content: typeof message.content === 'string' ? message.content : null,
         ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
-        ...(Array.isArray(message.tool_calls) ? { tool_calls: message.tool_calls } : {})
+        ...(resolveToolCalls(message).length ? { tool_calls: resolveToolCalls(message) } : {})
       };
       messages.push(assistant);
       if (session) {
@@ -795,7 +850,7 @@ export class QzoneInteractionManager {
           totalTokens: Number(response.usage?.total_tokens) || 0
         });
       }
-      const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      const calls = resolveToolCalls(message);
       if (!calls.length) {
         messages.push({
           role: 'user',
