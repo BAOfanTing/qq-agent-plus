@@ -8699,7 +8699,11 @@ $$('.tab').forEach((tab) => {
     state.config = cfg0;
     syncGraduatedFeatureNavigation(cfg0);
     const t = cfg0?.ui?.theme;
-    if (THEME_VALUES.includes(t)) applyTheme(t);
+    if (THEME_VALUES.includes(t)) {
+      applyTheme(t);
+      // 记一份"后端主题"，供下次首屏的内联脚本直接使用（否则会先按系统色画一版再被覆盖）
+      try { localStorage.setItem('qqa-theme-server', t); } catch { /* 忽略 */ }
+    }
     else if (cfg0 && !('ui' in cfg0)) { /* 后端还没这个字段，保持本地值 */ }
   } catch { /* 接口不可用就用本地的 */ }
 

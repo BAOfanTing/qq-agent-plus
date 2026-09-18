@@ -24,9 +24,14 @@
     (function () {
       try {
         var saved = localStorage.getItem('qqa-theme') || '';
+        // 后端配置里的主题（上次启动时同步下来的）：首屏就用它，避免"先按系统色画一版、
+        // 启动完成再被后端覆盖"——那一下整屏换色就是用户看到的"闪"。
+        var server = localStorage.getItem('qqa-theme-server') || '';
         var sys = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        // 合法值：dark / light / system。未知值回退暗色。
-        var theme = (saved === 'light' || saved === 'dark') ? saved : (saved === 'system' ? sys : (saved || sys));
+        // 优先级：本机显式选择 > 上次从后端同步到的值 > "跟随系统" > 系统实际取值
+        var theme = (saved === 'light' || saved === 'dark') ? saved
+          : (server === 'light' || server === 'dark') ? server
+          : (saved === 'system' ? sys : (saved || sys));
         if (theme !== 'light' && theme !== 'dark') theme = 'dark';
         document.documentElement.setAttribute('data-theme', theme);
       } catch (e) {

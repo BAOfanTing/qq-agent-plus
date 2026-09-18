@@ -2627,3 +2627,15 @@ input[type=checkbox], input[type=radio] {
 /* 其余长文本字段（URL 等）：不再铺满整行，但保留比普通字段更宽的宽度 */
 #cfg-price-remote-url, #new-baseurl, #auto-update-branch-advanced { max-width: 520px; }
 #cfg-model-pick { max-width: 560px; }
+
+/* ── 主题切换的平滑过渡与状态条对齐（消除"闪"与横向位移）──
+   主题在启动时可能被后端配置调整一次；直接换色会"啪"地一下，这里给常用表面加上
+   0.2s 过渡。状态条右对齐：文字从"模型：-"变成完整信息时会变长，右对齐让增长向左
+   展开，位置更稳。 */
+body, #sidebar, #topbar, #tabs, .view, .list-pane, .detail-pane, .chat-item, .session-item,
+.btn, .icon-btn, input, select, textarea, .control-section, .health-card, .usage-card,
+.tool-card, .price-card, .modal, .banner, .empty-hint, .tab, table, th, td {
+  transition: background-color .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+#topbar { justify-content: flex-end; }
+.top-status { justify-content: flex-end; }
