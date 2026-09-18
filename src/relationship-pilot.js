@@ -13,6 +13,7 @@ import {
   RELATIONSHIP_EVENT_TOOL,
   RELATIONSHIP_EVENT_TYPES
 } from './relationship-pilot-prompt.js';
+import { resolveToolCalls } from './inline-tools.js';
 
 const EVENT_TYPES = new Set(RELATIONSHIP_EVENT_TYPES);
 const clean = (value, max = 240) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -90,7 +91,7 @@ function callUsageOf(response) {
 }
 
 function parseRelationshipResponse(response, evidence) {
-  const calls = Array.isArray(response?.message?.tool_calls) ? response.message.tool_calls : [];
+  const calls = resolveToolCalls(response?.message);
   if (calls.length !== 1 || calls[0]?.function?.name !== 'submit_relationship_events') {
     throw new Error('关系评估模型未提交唯一的 submit_relationship_events 结果');
   }
@@ -532,8 +533,8 @@ export class RelationshipPilotManager {
           ...(typeof response?.message?.reasoning_content === 'string' && response.message.reasoning_content
             ? { reasoning_content: response.message.reasoning_content }
             : {}),
-          ...(Array.isArray(response?.message?.tool_calls) && response.message.tool_calls.length
-            ? { tool_calls: structuredClone(response.message.tool_calls) }
+          ...(resolveToolCalls(response?.message).length
+            ? { tool_calls: structuredClone(resolveToolCalls(response?.message)) }
             : {}),
           raw: response.raw ?? null
         });

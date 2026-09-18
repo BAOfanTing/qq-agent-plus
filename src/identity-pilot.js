@@ -6,6 +6,7 @@ import {
   buildFriendReviewUserPrompt,
   FRIEND_REVIEW_TOOL
 } from './friend-review-prompt.js';
+import { resolveToolCalls } from './inline-tools.js';
 
 export { inactiveIdentityPilotStatus } from './identity-pilot-core.js';
 
@@ -121,10 +122,8 @@ function wrapSessions(sessions, takeAudit) {
   });
 }
 
-function parseManualFriendReview(response, history, settings) {
-  const calls = Array.isArray(response?.message?.tool_calls)
-    ? response.message.tool_calls
-    : [];
+export function parseManualFriendReview(response, history, settings) {
+  const calls = resolveToolCalls(response?.message);
   if (calls.length !== 1 || calls[0]?.function?.name !== 'submit_friend_review') {
     throw new Error('模型未提交唯一的 submit_friend_review 结果');
   }
@@ -457,9 +456,8 @@ export class IdentityPilotManager extends CoreIdentityPilotManager {
             && response.message.reasoning_content
             ? { reasoning_content: response.message.reasoning_content }
             : {}),
-          ...(Array.isArray(response?.message?.tool_calls)
-            && response.message.tool_calls.length
-            ? { tool_calls: structuredClone(response.message.tool_calls) }
+          ...(resolveToolCalls(response?.message).length
+            ? { tool_calls: structuredClone(resolveToolCalls(response?.message)) }
             : {}),
           raw: response.raw ?? null
         });

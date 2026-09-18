@@ -27,6 +27,7 @@ import {
   buildFriendReviewUserPrompt,
   FRIEND_REVIEW_TOOL
 } from './friend-review-prompt.js';
+import { resolveToolCalls } from './inline-tools.js';
 
 const DB_DISPLAY_NAME = 'identity-pilot.sqlite';
 const FRIEND_REVIEW_RATINGS = ['quality', 'interest', 'reciprocity', 'stability'];
@@ -42,10 +43,8 @@ function reviewUsage(response) {
   };
 }
 
-function parseFriendReview(response, history, settings) {
-  const calls = Array.isArray(response?.message?.tool_calls)
-    ? response.message.tool_calls
-    : [];
+export function parseFriendReview(response, history, settings) {
+  const calls = resolveToolCalls(response?.message);
   if (calls.length !== 1 || calls[0]?.function?.name !== 'submit_friend_review') {
     throw new Error('模型未提交唯一的 submit_friend_review 结果');
   }
