@@ -85,7 +85,7 @@ function config(overrides = {}) {
     rootDir,
     appDir: overrides.app || envStr('QQ_AGENT_APP_DIR', path.join(rootDir, 'app')),
     dataDir: overrides.data || envStr('QQ_AGENT_DATA_DIR', path.join(rootDir, 'data')),
-    backupDir: overrides.backupDir || envStr('QQ_AGENT_BACKUP_DIR', path.join(os.homedir(), 'qq-agent-backups')),
+    backupDir: overrides.backupDir || envStr('QQ_AGENT_BACKUP_DIR', path.join(os.homedir(), 'qq-agent', 'backups')),
     service: envStr('QQ_AGENT_SERVICE', 'qq-agent-linux.service'),
     updateTimer: envStr('QQ_AGENT_UPDATE_TIMER', 'qq-agent-linux-update.timer'),
     guardTimer: envStr('QQ_AGENT_GUARD_TIMER', 'process-guard.timer'),
@@ -1696,7 +1696,7 @@ Description=QQ Agent data weekly backup
 [Service]
 Type=oneshot
 ExecStart=${nodeBin} ${opsPath} backup --confirm
-# 默认部署根目录 /data/qq-agent，备份输出到 $HOME/qq-agent-backups，保留 4 份：
+# 默认部署根目录 /data/qq-agent，备份输出到 $HOME/qq-agent/backups，保留 4 份：
 # Environment=QQ_AGENT_DIR=${cfg.rootDir}
 # Environment=QQ_AGENT_DATA_DIR=${cfg.dataDir}
 # Environment=QQ_AGENT_BACKUP_DIR=${cfg.backupDir}

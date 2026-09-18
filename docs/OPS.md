@@ -90,7 +90,7 @@ node src/ops.js install-timers --confirm
 | `QQ_AGENT_DIR` | `/data/qq-agent` | 部署根目录 |
 | `QQ_AGENT_APP_DIR` | `$QQ_AGENT_DIR/app` | 应用目录（`src/`、`ui/`、自带 `.runtime/node`） |
 | `QQ_AGENT_DATA_DIR` | `$QQ_AGENT_DIR/data` | 数据目录（config.json、sqlite、sessions） |
-| `QQ_AGENT_BACKUP_DIR` | `$HOME/qq-agent-backups` | 备份输出目录 |
+| `QQ_AGENT_BACKUP_DIR` | `$HOME/qq-agent/backups` | 备份输出目录 |
 | `QQ_AGENT_SERVICE` | `qq-agent-linux.service` | systemd user 服务名 |
 | `QQ_AGENT_KEEP` | `4` | `backup` 保留份数（也可用 `--keep=N`） |
 | `QQ_AGENT_USER` | 当前登录用户 | 进程/定时任务检查的目标用户 |
