@@ -4,6 +4,7 @@
   <meta charset="UTF-8" data-page-node-id="8xi2lJIfYAgLleFVuOJUJ4" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="6HjAQtPOvWz7Elp6uKOeUp" />
   <title>QQ Agent Linux</title>
+  <link rel="icon" type="image/svg+xml" href="/mark.svg" />
   <link rel="stylesheet" href="/style.css" data-page-node-id="x8F6i7W4lVVFQuDLeTBT6x" />
   <script>
     /* 主题预置：在样式生效前就定好 data-theme，避免首屏闪白/闪黑。
@@ -24,52 +25,57 @@
   </script>
 </head>
 <body data-page-node-id="5GGvlGz5NSrqH40BenIGFr">
-  <header id="topbar" data-page-node-id="DeBgpH1MJHGjjjZ348ThQJ">
-    <div class="brand" data-page-node-id="eJBHX5RA8yyNceHXSG3HE3"><img class="brand-mark" src="/mark.svg" alt="" data-page-node-id="brandMark01">QQ Agent <span class="brand-sub" data-page-node-id="VbspRAGex84VDC4rlmYz0x"></span></div>
-    <div class="top-status" data-page-node-id="bJ0ckrJT6G2Tmd3CRV0BDG">
-      <span id="onebot-dot" class="dot dot-off" title="OneBot 连接状态" data-page-node-id="kZj99OAhFFri832S3xi5AY"></span>
-      <span id="onebot-label" class="muted" data-page-node-id="fFZerwgFQ1Y2b5Ypm3z9jJ">OneBot 未连接</span>
-      <span class="sep" data-page-node-id="xxx5qYDKjwTwAWINv1K3YF"></span>
-      <span id="model-label" class="muted" data-page-node-id="mxYqKFiIVWYn1SDTF1HQvJ">模型：-</span>
-      <span class="sep" data-page-node-id="JuGqHVKz2OXrfUFdvohz3O"></span>
-      <span id="usage-label" class="muted" data-page-node-id="ASGoXILEnFSWWqgmj2pS4B">今日：-</span>
-      <span class="sep" data-page-node-id="GWds7ORTDExh6JmgVu8cSC"></span>
-      <span id="search-count-label" class="muted" title="今日联网搜索次数（web_search / web_fetch）" data-page-node-id="OLNka4FykNQRaxEpBoEK6t">搜索：-</span>
-      <button id="theme-btn" class="icon-btn" title="切换主题（暗 → 亮 → 跟随系统）" aria-label="切换主题" data-page-node-id="v47iM0LsuM4VppZ5WLh7Qi"></button>
-      <button id="pause-btn" class="btn btn-small" data-page-node-id="plyqWsDjnlKP1Td6wSVJaD">暂停</button>
-      <label class="runtime-control" title="新实例运行模式">
-        <select id="runtime-mode" aria-label="运行模式">
-          <option value="observe">观察</option>
-          <option value="active">启用</option>
-        </select>
-      </label>
-    </div>
-  </header>
+  <div id="shell">
+    <aside id="sidebar">
+      <div class="side-head">
+        <img class="brand-mark" src="/mark.svg" alt="" data-page-node-id="brandMark01">
+        <div class="side-title">
+          <strong>QQ Agent</strong>
+          <span class="brand-sub" data-page-node-id="VbspRAGex84VDC4rlmYz0x"></span>
+        </div>
+      </div>
 
-  <div id="banner" class="banner hidden" data-page-node-id="XwcKf16gobwX1Rec9tqlEn"></div>
+      <nav id="tabs" data-page-node-id="E9BCxQoSdlNgyXwJBELj6z">
+        <div class="nav-group-label">对话</div>
+        <button class="tab active" data-icon="💬" data-tab="sessions" data-page-node-id="QA2pcdHYdARJK2APBNKZmC">会话</button>
+        <button class="tab" data-icon="🗂" data-tab="chats" data-page-node-id="AdXD0D2NiWH5UBfpPQqzQ2">存档</button>
+        <button class="tab" data-icon="🎛" data-tab="control" data-page-node-id="qcontrolnav">控制</button>
+        <div class="nav-group-label">记忆</div>
+        <button class="tab" data-icon="🧠" data-tab="memory" data-page-node-id="vXS9OY6wG4MkJlzQ2aLADZ">会话记忆</button>
+        <button class="tab" data-icon="👥" data-tab="people-memory" data-page-node-id="qpeoplememorynav">人物记忆</button>
+        <button class="tab" data-icon="🪪" data-tab="identity" data-feature-nav="identity">人物印象</button>
+        <button class="tab" data-icon="🤝" data-tab="friends" data-feature-nav="auto-friend">好友管理</button>
+        <div class="nav-group-label">运行</div>
+        <button class="tab" data-icon="📈" data-tab="assets" data-page-node-id="qassetobserve">观测</button>
+        <button class="tab" data-icon="💰" data-tab="usage" data-page-node-id="hcZzcXuMojNoiE7UcRVYfR">用量</button>
+        <button class="tab" data-icon="🚨" data-tab="incidents" data-feature-nav="incidents">异常处理</button>
+        <button class="tab" data-icon="⚙️" data-tab="settings" data-page-node-id="4cXbRBtGmcpcL272eKvHPV">设置</button>
+      </nav>
 
-  <div id="loading-overlay" class="loading-overlay" data-page-node-id="MpXTOwnEFQFI3iciufCGwk">
-    <div class="loading-card" data-page-node-id="boXG4AHTg9zdLRzAkPQU0d">
-      <div class="loading-title" data-page-node-id="Jd8xjaha2bCfyriCNfs8Tn">QQ Agent 正在启动</div>
-      <div class="loading-sub" id="loading-status" data-page-node-id="pnFkOCeJYMuEWqSGBEF5NX">正在连接 QQ Agent 服务，请稍候…</div>
-      <div class="loading-spinner" data-page-node-id="pVvSFcW7fHjA5K8LpxpM5o"></div>
-      <pre class="loading-logs" id="loading-logs" data-page-node-id="qCOILAMT7FkCZFYCEKYo4o"></pre>
-    </div>
-  </div>
+      <div class="side-foot">
+        <label class="runtime-control" title="新实例运行模式">
+          <select id="runtime-mode" aria-label="运行模式">
+            <option value="observe">观察</option>
+            <option value="active">启用</option>
+          </select>
+        </label>
+        <button id="pause-btn" class="btn btn-small" data-page-node-id="plyqWsDjnlKP1Td6wSVJaD">暂停</button>
+        <button id="theme-btn" class="icon-btn" title="切换主题（暗 → 亮 → 跟随系统）" aria-label="切换主题" data-page-node-id="v47iM0LsuM4VppZ5WLh7Qi"></button>
+      </div>
+    </aside>
 
-  <nav id="tabs" data-page-node-id="E9BCxQoSdlNgyXwJBELj6z">
-    <button class="tab" data-tab="control" data-page-node-id="qcontrolnav">控制</button>
-    <button class="tab active" data-tab="sessions" data-page-node-id="QA2pcdHYdARJK2APBNKZmC">会话</button>
-    <button class="tab" data-tab="chats" data-page-node-id="AdXD0D2NiWH5UBfpPQqzQ2">存档</button>
-    <button class="tab" data-tab="memory" data-page-node-id="vXS9OY6wG4MkJlzQ2aLADZ">会话记忆</button>
-    <button class="tab" data-tab="people-memory" data-page-node-id="qpeoplememorynav">人物记忆</button>
-    <button class="tab" data-tab="identity" data-feature-nav="identity">人物印象</button>
-    <button class="tab" data-tab="friends" data-feature-nav="auto-friend">好友管理</button>
-    <button class="tab" data-tab="incidents" data-feature-nav="incidents">异常处理</button>
-    <button class="tab" data-tab="assets" data-page-node-id="qassetobserve">观测</button>
-    <button class="tab" data-tab="usage" data-page-node-id="hcZzcXuMojNoiE7UcRVYfR">用量</button>
-    <button class="tab" data-tab="settings" data-page-node-id="4cXbRBtGmcpcL272eKvHPV">设置</button>
-  </nav>
+    <div id="workspace">
+      <header id="topbar" data-page-node-id="DeBgpH1MJHGjjjZ348ThQJ">
+        <div class="top-status" data-page-node-id="bJ0ckrJT6G2Tmd3CRV0BDG">
+          <span id="onebot-dot" class="dot dot-off" title="OneBot 连接状态" data-page-node-id="kZj99OAhFFri832S3xi5AY"></span>
+          <span id="onebot-label" class="muted" data-page-node-id="fFZerwgFQ1Y2b5Ypm3z9jJ">OneBot 未连接</span>
+          <span id="model-label" class="muted" data-page-node-id="mxYqKFiIVWYn1SDTF1HQvJ">模型：-</span>
+          <span id="usage-label" class="muted" data-page-node-id="ASGoXILEnFSWWqgmj2pS4B">今日：-</span>
+          <span id="search-count-label" class="muted" title="今日联网搜索次数（web_search / web_fetch）" data-page-node-id="OLNka4FykNQRaxEpBoEK6t">搜索：-</span>
+        </div>
+      </header>
+
+      <div id="banner" class="banner hidden" data-page-node-id="XwcKf16gobwX1Rec9tqlEn"></div>
 
   <main id="layout" data-page-node-id="hvuDZ0DOoYC7fFheJnpiGZ">
     <!-- 统一控制入口 -->
@@ -154,6 +160,17 @@
       <div id="settings-form" class="settings-pane" data-page-node-id="EsfgJ2QGHHSAtdlHW1RQyT"></div>
     </section>
   </main>
+  </div>
+  </div>
+
+  <div id="loading-overlay" class="loading-overlay" data-page-node-id="MpXTOwnEFQFI3iciufCGwk">
+    <div class="loading-card" data-page-node-id="boXG4AHTg9zdLRzAkPQU0d">
+      <div class="loading-title" data-page-node-id="Jd8xjaha2bCfyriCNfs8Tn">QQ Agent 正在启动</div>
+      <div class="loading-sub" id="loading-status" data-page-node-id="pnFkOCeJYMuEWqSGBEF5NX">正在连接 QQ Agent 服务，请稍候…</div>
+      <div class="loading-spinner" data-page-node-id="pVvSFcW7fHjA5K8LpxpM5o"></div>
+      <pre class="loading-logs" id="loading-logs" data-page-node-id="qCOILAMT7FkCZFYCEKYo4o"></pre>
+    </div>
+  </div>
 
   <dialog id="console-login">
     <form id="console-login-form">
