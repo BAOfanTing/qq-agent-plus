@@ -20,7 +20,8 @@ Electron 或 Windows 运行环境。
 
 完整清单见 [相对上游的改动](docs/CHANGES-VS-UPSTREAM.md)，新增配置项示例见
 [配置示例](docs/CONFIG-EXAMPLES.md)。运维工具（自检、备份、发送监控、进程看门狗等）
-收录在 [ops/](ops/README.md)，本地回归测试在 [test/local/](test/local/README.md)。
+统一收在 [src/ops.js](src/ops.js)，用法见 [运维工具文档](docs/OPS.md)，
+本地回归测试在 [test/local/](test/local/README.md)。
 
 分支说明：`main` = 上述基线 + 本仓库改动，与生产部署保持一致；
 `upstream-sync` 把上游最新 `main` 合并了进来，属于预览分支（只做了合并与单测，
@@ -202,6 +203,22 @@ bash manage.sh update-status
 bash manage.sh update-now --confirm
 bash manage.sh backup /path/to/new-backup-dir
 ```
+
+`manage.sh` 之外的运维工具（只读体检、数据备份、发送/登录监控、进程看门狗、
+表情名导出、非交互部署、SSH 隧道）统一由 `src/ops.js` 提供，只用 Node 内置模块：
+
+```bash
+node src/ops.js help                     # 全部子命令
+node src/ops.js audit                    # 服务 + 代码 + 数据体检（只读）
+node src/ops.js audit-host               # 主机体检（只读）
+node src/ops.js scan                     # 未定义调用扫描
+node src/ops.js backup --confirm         # 停/起服务 + 打包数据目录，只留最近 4 份
+node src/ops.js install-timers --print   # 查看两个 systemd user 定时器
+node src/ops.js console --open           # 建 SSH 隧道并打开控制台
+```
+
+每个子命令都支持 `--help`；环境变量、常用示例与远程执行说明见
+[运维工具文档](docs/OPS.md)。
 
 控制台默认端口为 `3210`。Token 可在
 `设置 -> 系统 -> 控制台安全` 中轮换。
