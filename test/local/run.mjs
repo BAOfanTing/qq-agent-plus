@@ -13,6 +13,7 @@ const CASES = [
   'test-inline-fallback.mjs',
   'test-sender-retry.mjs',
   'test-qzone-backoff.mjs',
+  'test-qzone-intervals.mjs',
   'test-sticker-lookup.mjs',
   'test-send-tools.mjs',
   'test-thinking-toolchoice.mjs',
