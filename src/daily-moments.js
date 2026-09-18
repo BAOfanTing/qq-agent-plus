@@ -26,6 +26,7 @@ import {
   shanghaiDayStart,
   todayKey
 } from './util.js';
+import { resolveToolCalls } from './inline-tools.js';
 
 const STATE_FILE = path.join(DATA_DIR, 'daily-moments.json');
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1075,8 +1076,7 @@ export class DailyMomentsManager {
         role: 'assistant',
         content: typeof message.content === 'string' ? message.content : (message.content ?? null),
         ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
-        ...(Array.isArray(message.tool_calls) && message.tool_calls.length
-          ? { tool_calls: message.tool_calls } : {})
+        ...(resolveToolCalls(message).length ? { tool_calls: resolveToolCalls(message) } : {})
       };
       messages.push(assistant);
       if (session) {
@@ -1085,7 +1085,7 @@ export class DailyMomentsManager {
         this.sessions.update(session.id);
         this.emit('session-update', { sessionId: session.id });
       }
-      const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      const calls = resolveToolCalls(message);
       if (!calls.length) {
         messages.push({
           role: 'user',
@@ -1354,11 +1354,20 @@ export class DailyMomentsManager {
   }
 
   async #findDuplicate(content, signal) {
-    const data = typeof this.onebot.getQzoneMoments === 'function'
-      ? await this.onebot.getQzoneMoments({ num: 30, signal })
-      : await this.onebot.call('get_qzone_msg_list', { pos: 0, num: 30 }, 30000, signal);
+    // 查重只是二次保险：协议端读不到列表（接口结构不稳定/未实现）时跳过，
+    // 不阻断发布；同一 dayKey 是否已发过由发布闸门 #blockingRecord 把关。
+    let data = null;
+    try {
+      data = typeof this.onebot.getQzoneMoments === 'function'
+        ? await this.onebot.getQzoneMoments({ num: 30, signal })
+        : await this.onebot.call('get_qzone_msg_list', { pos: 0, num: 30 }, 30000, signal);
+    } catch (error) {
+      console.log('[daily-moments] 空间列表读取失败，跳过查重继续发布：', error?.message ?? error);
+      return null;
+    }
     if (!Array.isArray(data?.msglist)) {
-      throw momentError('MOMENT_CHECK_FAILED', '无法读取空间列表核对重复内容，本次未发起发布', 502);
+      console.log('[daily-moments] 空间列表结构异常，视为无历史说说继续发布');
+      return null;
     }
     const target = cleanText(content, 1000);
     return data.msglist.find((item) =>
