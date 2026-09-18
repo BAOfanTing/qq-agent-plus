@@ -55,6 +55,11 @@ function ensureColumn(db, table, name, definition) {
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
 }
 
+// 模型常把提示词里的 "#123" 连 # 一起传进来；消息 id 本身只可能是数字（可为负）。
+function normalizeMid(value) {
+  return String(value ?? '').trim().replace(/^(?:#+|collected_)+/, '').trim();
+}
+
 export class ChatStore {
   constructor(maxPerChat = 0, { dataDir = DATA_DIR, filename } = {}) {
     this.maxPerChat = Math.max(0, Number(maxPerChat) || 0);
@@ -861,7 +866,7 @@ export class ChatStore {
   }
 
   findByMid(chatKey, mid) {
-    return entry(this.db.prepare('SELECT * FROM messages WHERE chat_key=? AND mid=?').get(chatKey, String(mid)));
+    return entry(this.db.prepare('SELECT * FROM messages WHERE chat_key=? AND mid=?').get(chatKey, normalizeMid(mid)));
   }
 
   findByLocalId(chatKey, localId) {

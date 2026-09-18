@@ -60,7 +60,21 @@ export class SendQueue {
     assertCanSend(chatKey, options.signal);
     const id = this.store.beginSend(chatKey, options.runId, payload);
     try {
-      const data = await send();
+      let data = null;
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          data = await send();
+          break;
+        } catch (error) {
+          const message = String(error?.message ?? error);
+          // 只有网络层抖动才值得重试（协议端进程重启、连接被掐、5xx）；
+          // 参数错/限频/被拒绝重试也一样失败，直接抛给上层。
+          const transient = /fetch failed|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|ETIMEDOUT|network|Unexpected status code: 5\d\d|timeout/i.test(message);
+          if (attempt >= 2 || !transient || options.signal?.aborted) throw error;
+          console.log(`[sender] 发送失败，1.5 秒后重试一次（${message.slice(0, 80)}）`);
+          await sleep(1500);
+        }
+      }
       this.store.finishSend(id, { messageId: data?.message_id });
       return data;
     } catch (error) {
@@ -212,6 +226,29 @@ export class SendQueue {
         eventKind: 'poke'
       });
       this.onSent?.({ chatKey, text: `[拍一拍]${target}`, messageId: null });
+      return data;
+    });
+  }
+
+  /** 发送一个 QQ 系统表情（小黄脸/汪汪这类）。face = { id, name }。 */
+  sendFace(chatKey, face, options = {}) {
+    const [kind, id] = String(chatKey).split(':');
+    const chain = this.#chain(chatKey);
+    return chain(async () => {
+      this.#checkRate(chatKey);
+      await sleep(randInt(300, 900));
+      const data = await this.#deliver(chatKey, options,
+        { type: 'face', faceId: String(face?.id ?? ''), faceName: face?.name ?? '' },
+        () => this.onebot.sendFace(kind, id, face?.id, {
+          replyToMessageId: options.replyToMessageId ?? null,
+          atUserId: options.atUserId ?? null,
+          text: options.text ?? null,
+          signal: options.signal
+        }));
+      const ts = Date.now();
+      const label = (options.text ? String(options.text) : '') + (face?.name ? `[表情：${face.name}]` : `[表情：${face?.id ?? ''}]`);
+      this.store.appendSelf(chatKey, { text: label, ts, mid: data?.message_id ?? null, eventKind: 'face' });
+      this.onSent?.({ chatKey, text: label, messageId: data?.message_id ?? null });
       return data;
     });
   }

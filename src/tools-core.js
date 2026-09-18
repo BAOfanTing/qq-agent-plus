@@ -3,7 +3,63 @@
 // 不再需要 key/token 参数 —— 模型物理上无法把消息发到别的群/私聊，安全性反而更强。
 //
 // 工具命名去掉了 qq_ 前缀（更短，省 token）。
+import fs from 'node:fs';
+import path from 'node:path';
 import { getConfig } from './config.js';
+
+// 消息 id 归一化：模型常把聊天记录里的 "#123" 连 # 一起传进来，而 OneBot 只认纯数字 id。
+// store.js 里有一份同名函数但没导出，所以这里保留 tools 层自用的一份。
+function normalizeMid(value) {
+  return String(value ?? '').trim().replace(/^(?:#+|collected_)+/, '').trim();
+}
+
+// QQ 系统表情：中文名 → 编号。表由 /home/ubuntu/export-face-names.sh 从 SnowLuma 容器导出到数据目录。
+let FACE_INDEX = null;
+function faceIndex() {
+  if (FACE_INDEX) return FACE_INDEX;
+  FACE_INDEX = new Map();
+  try {
+    const dir = process.env.QQ_AGENT_DATA_DIR || path.join(process.cwd(), 'data');
+    const bySid = JSON.parse(fs.readFileSync(path.join(dir, 'face-names.json'), 'utf8')).bySid || {};
+    for (const [sid, name] of Object.entries(bySid)) {
+      const key = String(name).trim();
+      if (!key) continue;
+      const prev = FACE_INDEX.get(key);
+      const num = Number(sid);
+      // 同名时优先数字较小的经典表情（0~103 那批）
+      if (prev === undefined || (Number.isFinite(num) && num < Number(prev))) FACE_INDEX.set(key, sid);
+    }
+  } catch { /* 表不存在时退化为只认编号 */ }
+  return FACE_INDEX;
+}
+
+function faceLookup(name) {
+  const key = String(name ?? '').trim().replace(/^\/+/, '');
+  if (!key) return { error: 'name 不能为空，请填表情中文名，如 微笑' };
+  const idx = faceIndex();
+  if (idx.has(key)) return { face: { id: idx.get(key), name: key } };
+  if (/^\d+$/.test(key)) return { face: { id: key, name: `编号${key}` } };
+  const like = [...idx.keys()].filter((n) => n.includes(key) || key.includes(n)).slice(0, 12);
+  return {
+    error: `找不到表情「${key}」。` + (like.length
+      ? `你是不是想发：${like.join('、')}`
+      : '常用：微笑、得意、流泪、害羞、酷、白眼、玫瑰、爱心、强、抱拳、打call、汪汪')
+  };
+}
+
+/** 表情 id 找不到时，把库里的有效 id 列给模型，方便它同一轮就改对。 */
+async function stickerLookupHint(ctx, key) {
+  try {
+    const result = await ctx.stickers.list('', 12);
+    const items = Array.isArray(result?.stickers) ? result.stickers : [];
+    if (!items.length) return `你给的是「${key}」，表情库现在是空的：可以用 collect_sticker 先收几张。`;
+    const lines = items.map((st) => `${st.id}（${st.localNote || st.desc || '无备注'}）`).join('；');
+    return `你给的是「${key}」。有效 id 例如：${lines}；完整列表用 list_stickers 查。`;
+  } catch {
+    return `你给的是「${key}」，有效 id 请用 list_stickers 查。`;
+  }
+}
+
 import { normalizeMessageList, unquoteJsonString } from './util.js';
 import { formatStickerList } from './stickers.js';
 import { validateImageUrl, safeFetchBinary } from './safe-fetch.js';
@@ -138,8 +194,8 @@ function hasParticipant(ctx, userId) {
 }
 
 function messageTargetError(ctx, { replyToMessageId, atUserId }) {
-  const reply = String(replyToMessageId ?? '').trim();
-  const at = String(atUserId ?? '').trim();
+  const reply = normalizeMid(replyToMessageId);
+  const at = normalizeMid(atUserId);
   if (reply && at) return 'replyToMessageId 和 atUserId 只能选择一个';
   if (reply) {
     if (!/^-?[1-9]\d*$/.test(reply)) {
@@ -243,7 +299,7 @@ export function buildToolDefs() {
     },
     {
       name: 'send_sticker',
-      description: '发送一个 QQ 收藏表情（一条消息只能一张表情，不能附带文字；想说的话先用 send_message 单独发）。stickerId 从 list_stickers 获取。',
+      description: '发送一个 QQ 收藏表情（一条消息只能一张表情，不能附带文字；想说的话先用 send_message 单独发）。stickerId 直接填【可用表情包】里的备注名即可（如“别墨迹”），也接受完整 id。',
       parameters: {
         type: 'object',
         properties: {
@@ -256,7 +312,7 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           const sticker = await ctx.stickers.findForSend(unquoteJsonString(args.stickerId));
-          if (!sticker) return err(`找不到表情 ${args.stickerId}，请先用 list_stickers 获取有效 id`);
+          if (!sticker) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`);
           if (!sticker.url) return err(`表情 ${sticker.id} 没有可发送的图片地址`);
           const targetError = messageTargetError(ctx, args);
           if (targetError) return err(targetError);
@@ -275,7 +331,7 @@ export function buildToolDefs() {
           }
           const result = await ctx.sender.sendSticker(ctx.chatKey, sticker, {
             runId: ctx.session.leaseId, signal: ctx.signal,
-            replyToMessageId: args.replyToMessageId ?? null,
+            replyToMessageId: normalizeMid(args.replyToMessageId) || null,
             atUserId: args.atUserId ?? null
           });
           ctx.stickers.markUsed(sticker.id, String(ctx.session.triggerText || '').slice(0, 100));
@@ -321,10 +377,10 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           const sticker = await ctx.stickers.findForSend(args.stickerId);
-          if (!sticker) return err(`找不到表情 ${args.stickerId}`);
+          if (!sticker) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`);
           if (!sticker.url) return err('该表情没有图片地址');
           const dataUrl = await downloadImageAsDataUrl(sticker.url, ctx.signal);
-          return { content: imageParts(`表情 ${sticker.id}（备注：${sticker.desc || '无'}）：`, [dataUrl]) };
+          return { content: imageParts(`表情 ${sticker.id}（你的备注：${sticker.localNote || sticker.desc || '无'}）（先判断情绪/态度再回应）：`, [dataUrl]) };
         } catch (error) {
           return err(error?.message ?? error);
         }
@@ -346,7 +402,7 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           const entry = ctx.stickers.note(String(args.stickerId), { note: args.note, tags: args.tags, usage: args.usage });
-          if (!entry) return err(`找不到表情 ${args.stickerId}`);
+          if (!entry) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`);
           return ok({ updated: true, id: entry.id, localNote: entry.localNote, tags: entry.tags });
         } catch (error) {
           return err(error?.message ?? error);
@@ -372,6 +428,64 @@ export function buildToolDefs() {
           if (!imageMedia) return err('该消息没有可收藏的图片');
           const saved = ctx.stickers.collect(args.messageId, { url: imageMedia.url, note: String(args.note ?? '') });
           return ok({ collected: true, id: saved.id, note: saved.localNote });
+        } catch (error) {
+          return err(error?.message ?? error);
+        }
+      }
+    },
+    {
+      name: 'send_face',
+      description: '发送一个 QQ 系统表情（就是聊天记录里显示成 [表情14 微笑] 的那种小黄脸、汪汪等）。name 填中文名，例如 微笑 / 得意 / 流泪 / 害羞 / 酷 / 白眼 / 玫瑰 / 爱心 / 强 / 抱拳 / 打call / 汪汪。只能发表情本身，不能同时带文字——想说话请先用 send_message 单独发。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '表情中文名，如 微笑、玫瑰、汪汪' },
+          text: { type: 'string', description: '可选：和表情放在同一条消息里的文字（文字在前、表情在后），例如 text 填「你可真行」就是「你可真行[微笑]」' },
+          replyToMessageId: { type: ['integer', 'string'], description: '可选：要引用的消息 id（聊天记录里的 #数字）' },
+          atUserId: { type: ['integer', 'string'], description: '可选：要 @ 的 QQ 号' }
+        },
+        required: ['name']
+      },
+      async execute(ctx, args) {
+        try {
+          const hit = faceLookup(unquoteJsonString(args.name));
+          if (hit.error) return err(hit.error);
+          const targetError = messageTargetError(ctx, args);
+          if (targetError) return err(targetError);
+          const result = await ctx.sender.sendFace(ctx.chatKey, hit.face, {
+            runId: ctx.session.leaseId, signal: ctx.signal,
+            replyToMessageId: normalizeMid(args.replyToMessageId) || null,
+            atUserId: args.atUserId ?? null,
+            text: args.text ? unquoteJsonString(args.text) : null
+          });
+          ctx.session.sent.push({ type: 'face', text: `${args.text ? unquoteJsonString(args.text) : ''}[表情:${hit.face.name}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
+          ctx.emit('session-update', ctx.session.id);
+          return ok({ sent: true, faceId: hit.face.id, name: hit.face.name, messageId: result?.message_id ?? null, note: '系统表情已发送。' });
+        } catch (error) {
+          return err(error?.message ?? error);
+        }
+      }
+    },
+    {
+      name: 'schedule_wake',
+      description: '给自己安排一次稍后的主动发言机会。适用：想等这波聊完再接话、话题冷一点再补一句、过一会儿想追问某件事、或想让群里过会儿有人说话。到点后你会被唤醒，并看到自己当时留的想法。只能安排当前所在的这个会话；同一会话只保留最近一次安排（再次调用会覆盖）。注意：这不是给别人设提醒，是给自己安排开口时机。',
+      parameters: {
+        type: 'object',
+        properties: {
+          minutes: { type: 'number', description: '多少分钟后唤醒自己（5~240 分钟）' },
+          note: { type: 'string', description: '给未来的自己留一句话：到点想做什么、想说什么' }
+        },
+        required: ['minutes']
+      },
+      async execute(ctx, args) {
+        try {
+          if (typeof ctx.scheduleWake !== 'function') return err('当前环境不支持自主唤醒');
+          const m = Number(args.minutes);
+          if (!Number.isFinite(m) || m < 5 || m > 240) return err('minutes 需要是 5~240 之间的数字');
+          const note = String(args.note ?? '').slice(0, 200);
+          const at = ctx.scheduleWake(Math.round(m * 60000), note);
+          const when = new Date(at).toLocaleTimeString('zh-CN', { hour12: false });
+          return ok({ scheduled: true, minutes: Math.round(m), at: when, note, hint: '到点会作为主动机会唤醒你；不需要再回复这条结果。' });
         } catch (error) {
           return err(error?.message ?? error);
         }
@@ -513,7 +627,7 @@ export function buildToolDefs() {
     },
     {
       name: 'get_message_images',
-      description: '查看某条消息里的图片/表情（视觉模型可以直接看懂）。消息文本出现 [图片] 时可用。id 用聊天记录里每条消息前的 #数字。',
+      description: '查看某条消息里的图片/表情（视觉模型可以直接看懂）。消息文本出现 [图片] / [表情包] 时可用。id 用聊天记录里每条消息前的 #数字。',
       parameters: {
         type: 'object',
         properties: { messageId: { type: ['integer', 'string'], description: 'QQ 消息 id（聊天记录里的 #数字，可能为负数）' } },
@@ -533,7 +647,25 @@ export function buildToolDefs() {
           }
           if (!dataUrls.length) return err(`图片获取失败：${failed.join('；')}`);
           const note = failed.length ? `（另有 ${failed.length} 张获取失败）` : '';
-          return { content: imageParts(`消息 ${args.messageId} 的图片内容${note}：`, dataUrls) };
+          // 这张图它之前收藏时已经理解过（库里有备注）→ 直接给出当时的理解，别让它重新描述画面
+          const known = [];
+          for (const m of (Array.isArray(entry.media) ? entry.media : [])) {
+            if (!m || m.kind !== 'image') continue;
+            try {
+              // 消息里的文件名是 "<MD5>.jpg"，库里存的是纯 MD5 → 去后缀、大写再比一次；最后退到 URL
+              const file = String(m.file || '').trim();
+              const bare = file.replace(/\.[a-z0-9]+$/i, '').toUpperCase();
+              const hit = (file ? await ctx.stickers.find(file) : null)
+                || (bare ? await ctx.stickers.find(bare) : null)
+                || (m.url ? await ctx.stickers.find(String(m.url)) : null);
+              const label = hit ? String(hit.localNote || hit.desc || '').trim() : '';
+              if (label && !known.includes(label)) known.push(label);
+            } catch { /* 查库失败不影响看图 */ }
+          }
+          const knownHint = known.length
+            ? `（这张你之前看过并记过：「${known.join('」「')}」——按这个理解回，别再描述画面）`
+            : '';
+          return { content: imageParts(`消息 ${args.messageId} 的图片内容${note}${knownHint}（先判断它想表达的情绪/态度：无语呆滞、嘲讽、卖萌、赞同、挑衅、摆烂、委屈…再针对态度回话，不要复述画面）：`, dataUrls) };
         } catch (error) {
           return err(error?.message ?? error);
         }

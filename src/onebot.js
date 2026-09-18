@@ -1,6 +1,21 @@
 // OneBot v11 客户端：WebSocket 只收事件，HTTP API 负责发送与查询。
 import WebSocket from 'ws';
+import fs from 'node:fs';
+import path from 'node:path';
 import { sanitizeUserText, escapeCqText } from './util.js';
+
+// QQ 系统表情对照表：把「[表情14]」渲染成「[表情14 微笑]」，让模型知道对方发的是哪个表情。
+// 表来自容器内 QQ 自带的 sys-face-catalog.json，由 /home/ubuntu/export-face-names.sh 导出到数据目录。
+let FACE_NAMES = null;
+function faceNameOf(id) {
+  if (FACE_NAMES === null) {
+    try {
+      const dir = process.env.QQ_AGENT_DATA_DIR || path.join(process.cwd(), 'data');
+      FACE_NAMES = JSON.parse(fs.readFileSync(path.join(dir, 'face-names.json'), 'utf8')).bySid || {};
+    } catch { FACE_NAMES = {}; }
+  }
+  return FACE_NAMES[String(id ?? '')] || '';
+}
 
 const RECONNECT_MIN_MS = 3000;
 const RECONNECT_MAX_MS = 30000;
@@ -296,6 +311,35 @@ export class OneBotClient {
     return this.sendSegments(kind, id, segments, signal);
   }
 
+  async sendFace(kind, id, faceId, { replyToMessageId = null, atUserId = null, text = null, signal } = {}) {
+    const segments = [];
+    if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
+      const rid = String(replyToMessageId).trim();
+      if (!/^-?[1-9]\d*$/.test(rid)) {
+        throw new OneBotActionError('replyToMessageId 必须是非零整数', {
+          action: kind === 'private' ? 'send_private_msg' : 'send_group_msg',
+          outcome: 'failed'
+        });
+      }
+      segments.push({ type: 'reply', data: { id: rid } });
+    }
+    if (atUserId !== undefined && atUserId !== null && String(atUserId).trim() !== '') {
+      const at = String(atUserId).trim();
+      if (!/^\d+$/.test(at)) {
+        throw new OneBotActionError('atUserId 必须是正整数 QQ 号，且不能为 all', {
+          action: kind === 'private' ? 'send_private_msg' : 'send_group_msg',
+          outcome: 'failed'
+        });
+      }
+      segments.push({ type: 'at', data: { qq: at } });
+    }
+    if (text !== undefined && text !== null && String(text).trim() !== '') {
+      segments.push({ type: 'text', data: { text: escapeCqText(String(text)) } });
+    }
+    segments.push({ type: 'face', data: { id: String(faceId) } });
+    return this.sendSegments(kind, id, segments, signal);
+  }
+
   async sendPoke(kind, id, targetUserId, signal) {
     if (kind === 'private') {
       return this.call('friend_poke', { user_id: Number(id) }, 15000, signal);
@@ -352,7 +396,13 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
         }
         break;
       }
-      case 'face': out.push(`[表情${d.id ?? ''}]`); break;
+      case 'face': {
+        const faceName = faceNameOf(d.id);
+        // 标成「QQ表情」：这个编号是 QQ 系统表情编号，不是表情库的 stickerId，
+        // 不标清楚模型会拿它去查表情（今天 5 次「找不到表情 277/489/491/492」就是这么来的）
+        out.push(faceName ? `[QQ表情${d.id ?? ''} ${faceName}]` : `[QQ表情${d.id ?? ''}]`);
+        break;
+      }
       case 'image': out.push('[图片]'); break;
       case 'record': out.push('[语音]'); break;
       case 'video': out.push('[视频]'); break;
