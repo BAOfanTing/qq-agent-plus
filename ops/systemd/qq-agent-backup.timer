@@ -1,0 +1,11 @@
+[Unit]
+# 每周日凌晨 4:10 备份一次数据目录；关机错过会在下次开机补跑（Persistent=true）。
+Description=Weekly QQ Agent data backup (Sun 04:10)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:10:00
+Persistent=true
+Unit=qq-agent-backup.service
+
+[Install]
+WantedBy=timers.target

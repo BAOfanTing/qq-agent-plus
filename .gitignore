@@ -43,3 +43,6 @@ desktop.ini
 *.sqlite-wal
 *.sqlite-shm
 coverage/
+
+__pycache__/
+*.pyc
