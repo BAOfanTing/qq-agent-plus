@@ -118,6 +118,8 @@ export function isRetryableError(error) {
  * 配置：api.thinking = { chat: 'off', default: 'on' }；也接受 'off' / 'on' 字符串（全局）。
  * 只有明确 off 时才带 thinking 字段 —— 不认这个字段的网关因此不会 400。
  */
+// 思考模式下降级强制 tool_choice 的提示只打一次（每种工具一次），避免每次判断刷屏。
+const thinkingToolChoiceWarned = new Set();
 function thinkingModeFor(purpose) {
   let t = null;
   try { t = getConfig().api?.thinking; } catch { return 'on'; }
@@ -264,7 +266,21 @@ export async function chatCompletion({
   if (thinkingOff) body.thinking = { type: 'disabled' };
   if (tools && tools.length > 0) {
     body.tools = tools;
-    body.tool_choice = toolChoice;
+    // 思考模式与强制 tool_choice 不兼容：部分网关（DeepSeek 系）会整次请求 400
+    // "Thinking mode does not support this tool_choice"。此前贴纸判断就踩在这个组合上
+    // （每张图重试 3 次全失败，最后整张图跳过）。降级成 auto 由提示词与工具描述驱动，
+    // 调用方本身也有内联文本兜底解析，比硬失败强。
+    const forced = toolChoice && typeof toolChoice === 'object';
+    if (!thinkingOff && forced) {
+      const name = String(toolChoice?.function?.name || '');
+      if (!thinkingToolChoiceWarned.has(name)) {
+        thinkingToolChoiceWarned.add(name);
+        console.warn('[llm] 思考模式不接受强制 tool_choice，已降级为 auto（每种工具只提示一次）：', name || JSON.stringify(toolChoice));
+      }
+      body.tool_choice = 'auto';
+    } else {
+      body.tool_choice = toolChoice;
+    }
   }
   const temp = temperature === null ? (api.temperature ?? 0.8) : temperature;
   if (temp !== null && temp !== undefined && Number.isFinite(Number(temp))) body.temperature = Number(temp);
