@@ -234,7 +234,10 @@ function validateCheckout(directory) {
     }
   }
   const pkg = readObject(path.join(directory, 'package.json'));
-  if (pkg.name !== 'qq-agent') throw new Error('Downloaded repository is not QQ Agent');
+  // 兼容改名前后的仓库标识：本项目包名是 qq-agent-plus，早先的部署仍可能是 qq-agent。
+  if (!['qq-agent', 'qq-agent-plus'].includes(String(pkg.name || ''))) {
+    throw new Error('Downloaded repository is not a QQ Agent project');
+  }
 }
 
 function retryLog(scope) {

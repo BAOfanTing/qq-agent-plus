@@ -7,7 +7,7 @@
 - 本仓库自基线 revision `8dca708` 起的改动：版权归本仓库作者所有，同样以 MIT 许可发布。
 
 MIT 许可要求保留原始版权声明与许可文本；本仓库完整保留 `LICENSE` 与上游 Git 历史，
-改动内容以提交形式记录（清单见 `docs/CHANGES-VS-UPSTREAM.md`）。
+改动内容以提交形式记录（清单见 `docs/CHANGES.md`）。
 
 ## 免责声明
 

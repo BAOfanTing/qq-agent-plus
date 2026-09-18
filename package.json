@@ -1,8 +1,8 @@
 {
-  "name": "qq-agent",
+  "name": "qq-agent-plus",
   "version": "0.5.0",
   "private": false,
-  "description": "Linux stateless QQ Agent with SQLite message leases and an isolated console.",
+  "description": "Linux QQ group agent (OneBot v11)：分条发言、贴纸系统、主动发言与内置运维命令。",
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
@@ -27,7 +27,7 @@
     "ws": "^8.18.0"
   },
   "license": "MIT",
-  "author": "Kondius",
+  "author": "sakurawwwxh",
   "keywords": [
     "qq",
     "bot",
