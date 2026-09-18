@@ -2488,3 +2488,129 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 
 /* ── 骨架屏 ── */
 .skeleton, .sk-line, .sk-block { border-radius: 8px; }
+
+/* ══════════════════════════════════════════════════════════════
+   表单系统
+   ══════════════════════════════════════════════════════════════
+   背景：原来字段容器是 flex + flex:1，输入框会被拉到整行宽（一个 QQ 号占 900px），
+   标签只是 12px 灰字，复选框行的文字会被挤成三行。这里统一成：
+     · 字段自适应网格，列宽 200~300px，输入框不再无限拉伸；
+     · 标签统一 12px / 600 字重 / 与控件 6px 间距；
+     · 控件统一 36px 高、10px 圆角、悬停与聚焦都有反馈；
+     · 复选框 / 单选框行横向排列、不换行、与控件同高；
+     · 提交类按钮单独占一行并右对齐（在网格里跨列）。
+   仍然只动样式：所有控件 ID、class、JS 逻辑不变。
+*/
+
+/* ── 字段容器：flex 拉伸 → 自适应网格 ── */
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 340px));
+  gap: 12px 18px;
+  align-items: end;
+  margin-bottom: 14px;
+}
+/* 数字/短文本字段不必占满列宽；文本框（URL、模型名等）保留较宽的列 */
+.field:has(input[type=number]) { max-width: 220px; }
+.update-deploy-settings > label:has(input[type=number]) { max-width: 220px; }
+.field { min-width: 0; }
+.field label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  color: var(--muted);
+}
+.field input[type=text], .field input[type=password], .field input[type=number],
+.field input[type=search], .field select {
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--bg-3);
+  font-size: 13.5px;
+}
+.field textarea { width: 100%; padding: 10px 12px; border-radius: 10px; background: var(--bg-3); font-size: 13.5px; }
+.field input:hover:not(:disabled), .field select:hover:not(:disabled), .field textarea:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.field input:disabled, .field select:disabled, .field textarea:disabled { opacity: .6; cursor: not-allowed; }
+.field input[type=number] { font-variant-numeric: tabular-nums; }
+
+/* ── 旧式内联字段（<label><span>标题</span><input></label>，如"更新部署"）── */
+.update-deploy-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 300px));
+  gap: 12px 16px;
+  align-items: end;
+}
+.update-deploy-settings > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.update-deploy-settings > label > span { font-size: 12px; font-weight: 600; letter-spacing: .2px; color: var(--muted); }
+.update-deploy-settings input[type=text],
+.update-deploy-settings input[type=number],
+.update-deploy-settings input[type=search] { width: 100%; height: 36px; padding: 0 12px; border-radius: 10px; }
+.update-deploy-settings > label:has(> input[type=checkbox]) {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 2px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.update-deploy-settings > .btn { grid-column: 1 / -1; justify-self: end; }
+
+/* ── 勾选类控件 ── */
+input[type=checkbox], input[type=radio] {
+  width: 16px; height: 16px; flex-shrink: 0;
+  accent-color: var(--accent);
+  margin: 0;
+}
+.checkbox-row { align-items: center; gap: 8px; min-height: 32px; font-size: 13px; }
+.checkbox-row label { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.experimental-settings .checkbox-row { flex-wrap: nowrap; }
+
+/* ── 概览数字（当前版本 / 目标版本 / 上次检查 …）── */
+.update-deploy-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1px;
+  margin: 12px 0 16px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.update-deploy-summary > div {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; background: var(--bg-2);
+}
+.update-deploy-summary span { font-size: 11.5px; color: var(--muted); }
+.update-deploy-summary strong { font-family: var(--mono); font-size: 13.5px; font-weight: 600; }
+
+/* ── 区块标题与说明 ── */
+.control-section-title h3 { font-size: 15px; font-weight: 650; letter-spacing: .2px; }
+.control-section-title .muted { font-size: 12px; }
+.settings-pane section > h3 { font-size: 15px; font-weight: 650; letter-spacing: .2px; margin: 0 0 6px; }
+.hint { font-size: 12px; line-height: 1.55; }
+.control-result { border-radius: 10px; padding: 8px 12px; font-size: 12.5px; }
+
+/* ── 操作条：按钮成组出现时统一间距与对齐 ── */
+.settings-actions { gap: 10px; margin: 16px 0; }
+.control-password-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 300px)); gap: 12px 16px; align-items: end; }
+.control-key-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 300px)); gap: 12px 16px; align-items: end; }
+
+/* ── 登录对话框 ── */
+#console-login { border: 1px solid var(--border); border-radius: 16px; padding: 22px 24px; background: var(--bg-2); box-shadow: var(--shadow-lg); }
+#console-login::backdrop { background: var(--overlay); backdrop-filter: blur(3px); }
+#console-login-form { display: flex; flex-direction: column; gap: 10px; }
+#console-login-form h2 { font-size: 16px; font-weight: 650; margin: 0 0 4px; }
+#console-login-form label { font-size: 12px; font-weight: 600; letter-spacing: .2px; color: var(--muted); }
+#console-login-form input { height: 36px; }
+#console-login-form .btn { height: 36px; justify-content: center; }
+
+/* 其余长文本字段（URL 等）：不再铺满整行，但保留比普通字段更宽的宽度 */
+#cfg-price-remote-url, #new-baseurl, #auto-update-branch-advanced { max-width: 520px; }
+#cfg-model-pick { max-width: 560px; }
