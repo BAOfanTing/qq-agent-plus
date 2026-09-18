@@ -200,7 +200,11 @@ body {
   display: flex; align-items: flex-start; justify-content: center;
   padding: 78px 16px 16px;
   pointer-events: none;              /* 不挡操作；卡片本身恢复可点击 */
+  opacity: 0;                        /* 默认静态隐藏：正常进入时一秒都不出现 */
+  transition: opacity .22s ease;
 }
+/* 只有 html 上没有 boot-silent（= 脚本判定启动过慢，或 8 秒兜底被触发）时才显示 */
+html.boot-show .loading-overlay { opacity: 1; }
 .loading-card {
   width: min(400px, 88vw);
   padding: 16px 18px;

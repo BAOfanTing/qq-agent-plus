@@ -489,32 +489,36 @@ function setLoadingStatus(text) {
   if (loadingLogs) loadingLogs.textContent = bootLogs.slice(-12).join('\n');
 }
 
-// 启动壳默认先藏起来：服务可用得快时（本地/隧道，通常几百毫秒）完全不显示，
-// 避免"点进控制台闪一下"；只有超过 LOADING_REVEAL_MS 还没就绪才淡入。
-// 注意：只有 JS 跑起来才会隐藏它——脚本没加载出来时，静态页面上那张启动卡仍然在。
-const LOADING_REVEAL_MS = 900;
+// 启动提示默认由 CSS 静态隐藏（html.boot-silent .loading-overlay{opacity:0}），
+// 正常进入（哪怕要一两秒）一秒都不会出现；只有超过 LOADING_REVEAL_MS 还没就绪
+// （服务没起、协议端连不上、启动卡住）才加上 boot-show 淡入。index.html 里还有一份
+// 8 秒兜底，负责"脚本压根没加载成功"时把提示显示出来。
+const LOADING_REVEAL_MS = 5000;
 let loadingRevealed = false;
-if (loadingOverlay) {
-  loadingOverlay.style.transition = 'opacity .18s ease';
-  loadingOverlay.style.opacity = '0';
-  loadingOverlay.style.pointerEvents = 'none';
+let loadingRevealTimer = null;
+
+function revealLoading() {
+  if (appReady || loadingRevealed) return;
+  if (!document.getElementById('loading-overlay')) return;
+  loadingRevealed = true;
+  document.documentElement.classList.remove('boot-silent');
+  document.documentElement.classList.add('boot-show');
 }
+
 function revealLoadingIfSlow() {
-  setTimeout(() => {
-    if (appReady || loadingRevealed || !loadingOverlay) return;
-    loadingRevealed = true;
-    loadingOverlay.style.pointerEvents = '';
-    loadingOverlay.style.opacity = '1';
-  }, LOADING_REVEAL_MS);
+  if (loadingRevealTimer) clearTimeout(loadingRevealTimer);
+  loadingRevealTimer = setTimeout(revealLoading, LOADING_REVEAL_MS);
 }
 
 function hideLoading() {
   appReady = true;
-  if (!loadingOverlay) return;
-  if (!loadingRevealed) { loadingOverlay.remove(); return; }  // 从没显示过，直接摘掉，不做淡出
-  loadingOverlay.style.transition = 'opacity .25s ease';
-  loadingOverlay.style.opacity = '0';
-  setTimeout(() => { loadingOverlay?.remove(); }, 300);
+  if (loadingRevealTimer) clearTimeout(loadingRevealTimer);
+  try { clearTimeout(window.__bootRevealFallback); } catch { /* 忽略 */ }
+  document.documentElement.classList.remove('boot-show');
+  const el = document.getElementById('loading-overlay');
+  if (!el) return;
+  if (!loadingRevealed) { el.remove(); return; }   // 从没显示过，直接摘掉
+  setTimeout(() => el.remove(), 260);              // 等淡出动画
 }
 
 async function pollUntilReady() {

@@ -1,11 +1,22 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-page-node-id="ZXebjK2cF5fnVGKycsygcn">
+<html lang="zh-CN" class="boot-silent" data-page-node-id="ZXebjK2cF5fnVGKycsygcn">
 <head data-page-node-id="IsCa0pdqCFHN4aOg8ZLqCH">
   <meta charset="UTF-8" data-page-node-id="8xi2lJIfYAgLleFVuOJUJ4" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="6HjAQtPOvWz7Elp6uKOeUp" />
   <title>QQ Agent Linux</title>
   <link rel="icon" type="image/svg+xml" href="/mark.svg" />
   <link rel="stylesheet" href="/style.css" data-page-node-id="x8F6i7W4lVVFQuDLeTBT6x" />
+  <script>
+    /* 启动提示默认静态隐藏（css: html.boot-silent .loading-overlay{opacity:0}）：
+       正常进入时它一秒都不会出现，避免"有个框突然出现一下"。
+       app.js 跑起来并等满 5 秒仍未就绪时，会自己加上 boot-show 把提示淡入；
+       这份兜底只负责"脚本压根没加载成功"的情况——8 秒后把提示显示出来，
+       免得用户对着一个没有任何说明的空壳。 */
+    window.__bootRevealFallback = setTimeout(function () {
+      document.documentElement.classList.remove('boot-silent');
+      document.documentElement.classList.add('boot-show');
+    }, 8000);
+  </script>
   <script>
     /* 主题预置：在样式生效前就定好 data-theme，避免首屏闪白/闪黑。
        优先级：localStorage 里的显式选择 > 系统偏好 > 暗色。
