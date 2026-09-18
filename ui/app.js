@@ -752,7 +752,7 @@ function renderControlHub(data = {}) {
       ${CORE_SERVICE_LINKS.map((service) => {
         const status = statuses.get(service.id);
         const online = service.id === 'agent' || status?.online === true;
-        return `<a class="control-service" href="${esc(serviceUrl(service.port))}" target="_blank" rel="noreferrer">
+        return `<a class="control-service" data-hub-service="${esc(service.id)}" href="${esc(serviceUrl(service.port))}" target="_blank" rel="noreferrer">
           <span class="control-service-mark">${esc(service.mark)}</span>
           <span class="control-service-copy"><strong>${esc(service.name)}</strong><small>${esc(service.detail)} · :${service.port}</small></span>
           <span class="control-service-state ${online ? 'online' : 'offline'}">${online ? '在线' : status ? '不可达' : '检测中'}</span>
@@ -762,25 +762,24 @@ function renderControlHub(data = {}) {
     <section class="control-section">
       <div class="control-section-title">
         <div><h3>更新部署</h3><span class="muted">${esc(update.repository || '-')} · ${esc(update.branch || 'main')}</span></div>
-        <span class="control-service-state ${update.status === 'failed' ? 'offline' : update.enabled ? 'online' : ''}">${esc(updateState)}</span>
+        <span class="control-service-state ${update.status === 'failed' ? 'offline' : update.enabled ? 'online' : ''}" data-hub-deploy-state>${esc(updateState)}</span>
       </div>
       <div class="update-deploy-summary">
-        <div><span>当前版本</span><strong>${esc(revision(update.currentRevision))}</strong></div>
-        <div><span>目标版本</span><strong>${esc(revision(update.targetRevision))}</strong></div>
-        <div><span>上次检查</span><strong>${update.lastCheckAt ? esc(fmtTime(update.lastCheckAt)) : '-'}</strong></div>
-        <div><span>下次检查</span><strong>${update.nextCheckAt ? esc(fmtTime(update.nextCheckAt)) : '-'}</strong></div>
+        <div><span>当前版本</span><strong data-hub-deploy="current">${esc(revision(update.currentRevision))}</strong></div>
+        <div><span>目标版本</span><strong data-hub-deploy="target">${esc(revision(update.targetRevision))}</strong></div>
+        <div><span>上次检查</span><strong data-hub-deploy="lastCheck">${update.lastCheckAt ? esc(fmtTime(update.lastCheckAt)) : '-'}</strong></div>
+        <div><span>下次检查</span><strong data-hub-deploy="nextCheck">${update.nextCheckAt ? esc(fmtTime(update.nextCheckAt)) : '-'}</strong></div>
       </div>
       <div class="update-deploy-settings">
         <label><span>告警管理员 QQ</span><input type="text" id="auto-update-owner" inputmode="numeric" value="${esc(update.ownerUin || '')}" /></label>
         <label><span>检查间隔（小时）</span><input type="number" id="auto-update-interval" min="1" max="168" value="${esc(update.intervalHours || 6)}" /></label>
         <button type="button" class="btn btn-small" id="auto-update-save" ${update.busy ? 'disabled' : ''}>保存设置</button>
       </div>
-      ${update.error ? `<div class="control-result error">${esc(update.error)}</div>` : ''}
+      <div class="control-result error hidden" id="hub-deploy-error" style="margin-top:8px"></div>
       <div class="settings-actions">
         <button type="button" class="btn btn-primary btn-small" id="auto-update-run" ${!update.installed || update.busy ? 'disabled' : ''}>↻ 手动更新</button>
-        ${update.enabled
-          ? `<button type="button" class="btn btn-small" id="auto-update-pause" ${update.busy ? 'disabled' : ''}>暂停自动更新</button>`
-          : `<button type="button" class="btn btn-small" id="auto-update-resume" ${!update.installed || update.busy ? 'disabled' : ''}>恢复自动更新</button>`}
+        <button type="button" class="btn btn-small" id="auto-update-pause" ${update.enabled && !update.busy ? '' : 'disabled'}>暂停自动更新</button>
+        <button type="button" class="btn btn-small" id="auto-update-resume" ${!update.enabled && update.installed && !update.busy ? '' : 'disabled'}>恢复自动更新</button>
         <span id="auto-update-result" class="control-result muted" role="status" aria-live="polite"></span>
       </div>
     </section>
@@ -817,8 +816,22 @@ function renderControlHub(data = {}) {
       </form>
       <div id="snowluma-password-result" class="control-result muted" role="status" aria-live="polite"></div>
     </section>`;
-  if (!setHtmlIfChanged(box, __html)) return;
+  // 结构只建一次：之后只更新易变字段（服务状态/部署状态/版本时间/按钮可用性）。
+  // 之前每次刷新都整页重建，看起来是"整页闪一下"，也会把别的模块注入的内容抹掉。
+  if (!box.__hubBuilt) {
+    box.__hubBuilt = true;
+    box.__renderedHtml = null;
+    box.innerHTML = __html;
+    bindControlHubHandlers();
+    box.__renderedHtml = __html;
+  }
+  updateControlHubFields(box, statuses, update);
+}
 
+// 首次建结构后绑定一次事件即可（DOM 不再重建，不需要重复绑）
+function bindControlHubHandlers() {
+  const box = $('#control-page');
+  if (!box) return;
   $('#control-refresh')?.addEventListener('click', () => loadControlHub({ force: true }));
   $('#auto-update-save')?.addEventListener('click', () => saveAutoUpdateSettings(false));
   $('#auto-update-run')?.addEventListener('click', runManualUpdate);
@@ -833,10 +846,89 @@ function renderControlHub(data = {}) {
   $('#snowluma-password-form')?.addEventListener('submit', changeSnowLumaPassword);
 }
 
+// 控制页的易变字段：就地更新文本/类，不重建 DOM（也就不会闪）
+function updateControlHubFields(box, statuses, update) {
+  if (!box) return;
+  const labels = {
+    idle: '等待检查', disabled: '已暂停', queued: '等待启动', checking: '检查更新',
+    testing: '验证更新', deploying: '部署中', succeeded: '更新成功',
+    'no-update': '已是最新', failed: '更新失败'
+  };
+  const updateState = update.status === 'failed'
+    ? labels.failed
+    : update.enabled ? (labels[update.status] || '等待检查') : '已暂停';
+  const revision = (value) => value ? String(value).slice(0, 12) : '-';
+  const setText = (el, text) => { if (el && el.textContent !== text) el.textContent = text; };
+
+  // 服务卡片状态
+  for (const [id, status] of statuses) {
+    const el = box.querySelector('[data-hub-service="' + id + '"] .control-service-state');
+    if (!el) continue;
+    const online = id === 'agent' || status?.online === true;
+    const text = online ? '在线' : status ? '不可达' : '检测中';
+    setText(el, text);
+    const cls = 'control-service-state ' + (online ? 'online' : 'offline');
+    if (el.className !== cls) el.className = cls;
+  }
+
+  // 部署状态徽标
+  const badge = box.querySelector('[data-hub-deploy-state]');
+  if (badge) {
+    setText(badge, updateState);
+    const cls = 'control-service-state ' + (update.status === 'failed' ? 'offline' : update.enabled ? 'online' : '');
+    if (badge.className !== cls) badge.className = cls;
+  }
+
+  // 版本与检查时间
+  const summary = {
+    current: revision(update.currentRevision),
+    target: revision(update.targetRevision),
+    lastCheck: update.lastCheckAt ? fmtTime(update.lastCheckAt) : '-',
+    nextCheck: update.nextCheckAt ? fmtTime(update.nextCheckAt) : '-'
+  };
+  for (const [field, text] of Object.entries(summary)) {
+    setText(box.querySelector('[data-hub-deploy="' + field + '"]'), text);
+  }
+
+  // 输入框：只在用户没在编辑、且值确实不同时同步
+  const syncInput = (id, value) => {
+    const el = document.getElementById(id);
+    if (!el || document.activeElement === el) return;
+    const next = String(value ?? '');
+    if (el.value !== next) el.value = next;
+  };
+  syncInput('auto-update-owner', update.ownerUin || '');
+  syncInput('auto-update-interval', update.intervalHours || 6);
+
+  // 错误行
+  const errorBox = document.getElementById('hub-deploy-error');
+  if (errorBox) {
+    setText(errorBox, update.error || '');
+    errorBox.classList.toggle('hidden', !update.error);
+  }
+
+  // 按钮可用性 / 暂停与恢复的显隐
+  const runBtn = document.getElementById('auto-update-run');
+  if (runBtn) runBtn.disabled = !update.installed || update.busy === true;
+  const saveBtn = document.getElementById('auto-update-save');
+  if (saveBtn) saveBtn.disabled = update.busy === true;
+  const pauseBtn = document.getElementById('auto-update-pause');
+  if (pauseBtn) {
+    pauseBtn.hidden = update.enabled !== true;
+    pauseBtn.disabled = update.busy === true;
+  }
+  const resumeBtn = document.getElementById('auto-update-resume');
+  if (resumeBtn) {
+    resumeBtn.hidden = update.enabled === true;
+    resumeBtn.disabled = !update.installed || update.busy === true;
+  }
+}
+
 async function loadControlHub({ force = false } = {}) {
   const box = $('#control-page');
   if (!box) return;
-  if (!state.integrationStatus || force) {
+  if ((!state.integrationStatus || force) && !box.__hubBuilt) {
+    // 只有首次进入（还没有结构）才写占位；刷新时保留现有页面，避免"整页清空再重建"
     box.innerHTML = '<div class="empty-hint">正在检查服务…</div>';
   }
   try {
