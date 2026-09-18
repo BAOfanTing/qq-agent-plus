@@ -25,6 +25,7 @@ export function normalizeStickerEntry(raw) {
       ? String(entry.localFile)
       : '',
     md5: String(entry.md5 || '').trim().toUpperCase(),
+    srcKey: String(entry.srcKey ?? '').trim(),
     desc: String(entry.desc ?? '').trim(),
     localNote: String(entry.localNote ?? '').trim(),
     tags,
@@ -109,6 +110,8 @@ export function mergeStickerLibrary(existing, fetched) {
       if (idx >= 0) out[idx] = merged;
     }
   }
+  // 保护：这次一条都没拉到（接口失败/空列表）时不要剪枝——否则 QQ 一抖，本地库连备注一起被清空
+  if (!fetchedIds.size) return out;
   return out.filter((e) => e.source !== 'qq' || e.hidden || fetchedIds.has(e.id));
 }
 
@@ -132,7 +135,17 @@ export function findSticker(entries, ref) {
   const exactLabels = visible.filter((entry) =>
     [entry.desc, entry.localNote].some((value) =>
       String(value || '').trim().toLowerCase() === label));
-  return exactLabels.length === 1 ? exactLabels[0] : null;
+  if (exactLabels.length === 1) return exactLabels[0];
+  // 模糊兜底：模型经常只记得备注里的半句，唯一命中就认它；多处命中仍然要求精确 id
+  if (label.length >= 2) {
+    const loose = visible.filter((entry) =>
+      [entry.desc, entry.localNote, ...(Array.isArray(entry.tags) ? entry.tags : [])].some((value) => {
+        const text = String(value || '').trim().toLowerCase();
+        return text.length > 0 && (text.includes(label) || label.includes(text));
+      }));
+    if (loose.length === 1) return loose[0];
+  }
+  return null;
 }
 
 export function formatStickerList(entries, query = '', limit = 48) {
@@ -172,7 +185,7 @@ export function buildStickerContext(entries, max = 10) {
     const used = e.useCount ? `（用过${e.useCount}次）` : '';
     return `- ${label}${extra}${used}（stickerId：${e.id}）`;
   });
-  return `【可用表情包】你的 QQ 收藏表情里有 ${list.length} 个表情（以下为常用/有备注的 ${top.length} 个，完整列表可用 list_stickers 查询）：\n${lines.join('\n')}`;
+  return `【可用表情包】你的表情库里有 ${list.length} 个表情包（以下是常用/有备注的 ${top.length} 个，完整列表可用 list_stickers 查询）：\n${lines.join('\n')}`;
 }
 
 /** 发送前的表情包策略提示（软策略）。 */
@@ -189,10 +202,11 @@ export function buildStickerStrategyHint(level = 1) {
   ][Math.min(3, Math.max(0, Number(level) || 0))];
   return [
     '【表情包策略：像真人一样用，不刷屏】',
-    '- 合适时机：被戳中笑点/槽点、接梗、怼人、赞同、自嘲、安慰、无语、赢了/输了、告别/晚安、别人发了表情时回一张，都可以自然用。',
+    '- 合适时机：被戳中笑点/槽点、接梗、怼人、赞同、自嘲、安慰、无语、赢了/输了、告别/晚安，都可以自然用；别人发了表情包/图片时，接完话基本都要回一张自己的。',
     `- ${freqByLevel}`,
-    '- 选择：优先用备注（desc）和你的记忆（localNote/tags）能准确对上语境的；没有备注/不确定的表情，先 get_sticker_image 看图再决定，不要瞎发。',
+    '- 选择：先看备注/笔记/标签能不能对上语境——完全贴切的优先，语义接近、氛围对的也可以用，不用等 100% 契合；只有明显不搭才别发。',
     '- 发送：用 send_sticker；一条消息只能是一张表情，不能在同一气泡里附带文字；想说的话先用 send_message 作为单独气泡发出，再单独发表情。',
+    '- 选图很简单：stickerId 直接填【可用表情包】里的备注名（如“别墨迹”“大肥鱼”），备注里独特的一小段也行，系统会自动匹配；命中不唯一时才需要完整 id（可用 list_stickers 看全库）。',
     '- 不要：在严肃/正式/敏感话题硬塞表情；不要每次都用同一个；不要一条消息里塞多个表情；不要把文字和表情混在同一个气泡里。'
   ].join('\n');
 }
