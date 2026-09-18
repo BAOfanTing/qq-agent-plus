@@ -35,7 +35,9 @@ export const EXPERIMENTAL_TERMINAL_TOOL = 'finish';
 export const EXPERIMENTAL_SAME_ROUND_ACTION_TOOLS = new Set([
   'send_message',
   'send_sticker',
+  'send_face',
   'send_poke',
+  'schedule_wake',
   'memory_append',
   'memory_remove',
   'collect_sticker',

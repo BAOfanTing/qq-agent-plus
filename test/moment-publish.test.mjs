@@ -255,13 +255,20 @@ test('stale persona, revoked source permission, and paused runtime block draft p
   }
 });
 
-test('failed duplicate lookup does not dispatch and does not consume the draft', async () => {
+// 与上游差异：上游要求"查重失败即不发布"；本仓库改为跳过查重、继续发布
+//（同一 dayKey 的发布闸门仍然把关，重复风险由 reconcile 按内容核对兜底）。
+test('failed duplicate lookup skips dedup and still publishes', async () => {
   const f = fixture();
   const preview = await f.manager.run({ dayKey, publish: false });
-  f.options.onebot.call = async () => { throw new Error('login expired'); };
-  await assert.rejects(f.manager.publishDraft(preview.record.id), /login expired/);
-  assert.equal(f.manager.status().latest.status, 'preview');
-  assert.equal(f.manager.status().latest.publishAttempted, false);
+  const realCall = f.options.onebot.call;
+  let listCalls = 0;
+  f.options.onebot.call = async (action, params) => {
+    if (action === 'get_qzone_msg_list' && ++listCalls === 1) throw new Error('login expired');
+    return realCall(action, params);
+  };
+  await f.manager.publishDraft(preview.record.id);
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.manager.status().latest.status, 'published');
 });
 
 test('unknown publish can be reconciled by exact content without another send', async () => {
