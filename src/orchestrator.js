@@ -9,7 +9,10 @@
 // 同一会话（群/私聊）同时最多一个运行；运行期间新消息只写 JSON（未读），不叠加触发。
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
+  DATA_DIR,
   conversationConfigForChat,
   getConfig,
   identityPilotEnabled,
@@ -18,6 +21,76 @@ import {
   storeConfigForChat,
   updateConfig
 } from './config.js';
+// ── 主动开话题的时间段：窗口外不主动开口（聊天回复不受影响）──
+const PROACTIVE_TZ_OFFSET_MS = 8 * 60 * 60 * 1000;   // Asia/Shanghai
+
+// 主动开话题的"上次判定时间"要落盘：否则服务一重启，15 秒后的第一个 tick 就又能开一次话题，
+// 表现就是"重启一下群里就多一次开话题"，跟"约 5 小时概率一次"的设定不符。
+const PROACTIVE_STATE_FILE = path.join(DATA_DIR, 'proactive-state.json');
+function readProactiveLastAttempt() {
+  try {
+    return Number(JSON.parse(fs.readFileSync(PROACTIVE_STATE_FILE, 'utf8')).lastAttemptAt) || 0;
+  } catch { return 0; }
+}
+/**
+ * "我说了话但没人接" 的补话判定（纯函数，便于单测）。
+ * 只给一次机会：20 分钟内不重复安排；有人刚说话/已有安排/不在发言时段都不安排。
+ */
+export function followUpPlan({
+  sentCount = 0, unread = 0, lastFollowUpAt = 0, hasScheduledWake = false,
+  windowActive = true, now = Date.now(), random = Math.random
+} = {}) {
+  if (!sentCount) return { schedule: false, reason: '本轮没发言' };
+  if (unread > 0) return { schedule: false, reason: '有人刚说话，走正常回复' };
+  if (hasScheduledWake) return { schedule: false, reason: '已有唤醒安排' };
+  if (!windowActive) return { schedule: false, reason: '不在可主动发言的时段' };
+  if (now - Number(lastFollowUpAt || 0) < 20 * 60 * 1000) return { schedule: false, reason: '20 分钟内已经给过机会' };
+  return { schedule: true, minutes: 10 + Math.floor(random() * 3), reason: '发言后没人接话' };
+}
+
+function writeProactiveLastAttempt(ts) {
+  try {
+    fs.writeFileSync(PROACTIVE_STATE_FILE, JSON.stringify({ lastAttemptAt: Number(ts) || Date.now() }));
+  } catch { /* 写不进去也不影响正常发言 */ }
+}
+
+function activeHoursMinuteOf(value, end = false) {
+  if (end && String(value) === '24:00') return 1440;
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value ?? ''));
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+/** 解析时间段：支持 {start,end} 或 {windows:[{start,end},…]}；未配置 = 全天。 */
+function proactiveWindows(raw) {
+  const list = [];
+  const push = (w) => {
+    const start = activeHoursMinuteOf(w?.start);
+    const end = activeHoursMinuteOf(w?.end, true);
+    if (start != null && end != null && start !== end) list.push({ start, end });
+  };
+  if (Array.isArray(raw?.windows)) raw.windows.forEach(push);
+  else push(raw);
+  return list;
+}
+
+/** 现在是否在某个窗口内；不在时给出最近的窗口开始时间。 */
+function proactiveWindowState(raw, now) {
+  const windows = proactiveWindows(raw);
+  if (!windows.length) return { active: true, nextActiveAt: now };
+  const d = new Date(now + PROACTIVE_TZ_OFFSET_MS);
+  const minute = d.getUTCHours() * 60 + d.getUTCMinutes();
+  let best = null;
+  for (const w of windows) {
+    const wrap = w.start > w.end;
+    const active = wrap ? (minute >= w.start || minute < w.end) : (minute >= w.start && minute < w.end);
+    if (active) return { active: true, nextActiveAt: now };
+    const delta = minute < w.start ? w.start - minute : 1440 - minute + w.start;
+    if (best == null || delta < best) best = delta;
+  }
+  return { active: false, nextActiveAt: now + best * 60000 };
+}
+
+
 import { canRun } from './access.js';
 import { assertTimeAllowed, isTimeActive, TimeControlError, watchTimeWindow, withTimeScope } from './time-gate.js';
 import { vendorOfConfig } from './model-prices.js';
@@ -28,6 +101,7 @@ import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
 import { modelImageVerdict } from './vision-scan.js';
 import { currentProviders } from './providers.js';
 import { buildSlangContextForChat } from './asset-observer.js';
+import { parseInlineToolCalls } from './inline-tools.js';
 
 function handoffParticipantIds(triggerEntries) {
   return [...new Set((triggerEntries || [])
@@ -199,6 +273,9 @@ export class Orchestrator {
     this.pauseReason = null;
     this.proactiveTimer = null;
     this.proactiveSuppressions = new Set();
+    // 模型自己安排的「稍后主动发言」：chatKey -> { at, note, timer }
+    this.scheduledWakes = new Map();
+    this.scheduledWakeTicker = null;
     this.aborted = false;
   }
 
@@ -283,12 +360,67 @@ export class Orchestrator {
 
   // ── 入站接口 ───────────────────────────────────────────────────────────
 
+  /**
+   * 说了话但没人接 —— 安排一次短唤醒，让自己决定要不要补一句。
+   * 真人在群里说完没动静时，偶尔会补一句短的（"？""人呢""算了"），也会就此打住；
+   * 这里只给一次机会，避免变成刷屏。
+   */
+  #maybeScheduleFollowUp(chatKey, session) {
+    try {
+      const window = proactiveWindowState(getConfig().proactive?.activeHours, Date.now());
+      const plan = followUpPlan({
+        sentCount: Array.isArray(session?.sent) ? session.sent.length : 0,
+        unread: this.store.unreadCount(chatKey),
+        lastFollowUpAt: this.followUpAt?.get(chatKey) || 0,
+        hasScheduledWake: this.scheduledWakes?.has(chatKey) === true,
+        windowActive: window.active === true
+      });
+      if (!plan.schedule) return;
+      if (!this.followUpAt) this.followUpAt = new Map();
+      this.followUpAt.set(chatKey, Date.now());
+      this.scheduleInitiativeWake(chatKey, plan.minutes * 60 * 1000,
+        '【系统提醒】你刚才发过言，到现在没人接话。想补就补一句很短的（“？”/“人呢”/“算了”）——只有这一次机会，不补就到此为止；也可以判断没必要，直接安静结束。');
+      console.log(`[follow-up] ${chatKey} 发言后没人接话，${plan.minutes} 分钟后给它一次补话机会`);
+    } catch { /* 安排不上也不影响正常回复 */ }
+  }
+
   /** 收到新消息（已通过白名单校验并写入 store）。 */
   onIncoming(chatKey) {
     if (this.paused || this.aborted || !canRun(chatKey)) return;
     if (!this.#chatRuntimeDecision(chatKey).allowed) return;
     if (this.runningChats.has(chatKey)) return;   // 运行结束后 drain 会接管
+    // 自主节奏：不即时唤醒，攒着等"自己安排的醒来"统一处理；被 @ 时例外
+    if (this.#pacingApplies(chatKey)) {
+      const pending = this.store.peekUnread(chatKey, 50) || [];
+      const mentioned = pending.some((m) => m.mentionsSelf === true);
+      if (!(mentioned && getConfig().pacing?.instantOnMention !== false)) {
+        this.#ensurePacedWake(chatKey);
+        return;
+      }
+    }
     this.scheduleWake(chatKey);
+  }
+
+  /** 自主节奏是否作用于该会话（按 pacing.scope 判定）。 */
+  #pacingApplies(chatKey) {
+    const p = getConfig().pacing || {};
+    if (p.enabled !== true) return false;
+    // 硬规则：私聊里每句话都是直接对它说的 —— 永远即时回复，不排队
+    if (chatKey.startsWith('private:')) return false;
+    const scope = String(p.scope || 'group');
+    if (scope === 'all') return true;
+    return chatKey.startsWith('group:');
+  }
+
+  /** 确保该会话有一次自主节奏唤醒安排；已有且在合理范围内则不动。 */
+  #ensurePacedWake(chatKey) {
+    const p = getConfig().pacing || {};
+    const minMs = Math.max(60000, (Number(p.minWakeMinutes) || 5) * 60000);
+    const maxMs = Math.max(minMs, (Number(p.maxSilenceMinutes) || 45) * 60000);
+    const defMs = Math.max(minMs, Math.min(maxMs, (Number(p.defaultWakeMinutes) || 20) * 60000));
+    const existing = this.scheduledWakes.get(chatKey);
+    if (existing && existing.at - Date.now() <= maxMs) return;
+    this.scheduleInitiativeWake(chatKey, defMs, '', { paced: true });
   }
 
   /** 防抖聚批：等待 wakeDelayMs，期间每来一条消息重置计时。 */
@@ -618,7 +750,7 @@ export class Orchestrator {
     return task;
   }
 
-  async #wake(chatKey, { proactive = false, manual = false, waitingSessionId = null } = {}) {
+  async #wake(chatKey, { proactive = false, manual = false, waitingSessionId = null, wakeNote = '', paced = false } = {}) {
     if (!canRun(chatKey)) { if (waitingSessionId) this.#discardWaiting(waitingSessionId); return; }
     if (!this.#chatRuntimeDecision(chatKey).allowed) {
       if (waitingSessionId) this.#discardWaiting(waitingSessionId);
@@ -670,7 +802,7 @@ export class Orchestrator {
           tier: 4,
           count: manualContextCount,
           shouldRespond: true,
-          reason: '控制台主动唤醒'
+          reason: paced ? '自主节奏唤醒' : '控制台主动唤醒'
         };
       }
 
@@ -682,7 +814,7 @@ export class Orchestrator {
             tier: 4,
             count: manualContextCount,
             shouldRespond: true,
-            reason: '控制台主动唤醒'
+            reason: paced ? '自主节奏唤醒' : '控制台主动唤醒'
           }
         : tierResult0;
 
@@ -845,11 +977,16 @@ export class Orchestrator {
 
     // drain：运行期间来的新消息 → 再次新开会话处理（这是"确保看到所有发言"的关键）
     if (!this.aborted && !this.paused) {
+      const pacedNow = this.#pacingApplies(chatKey);
       const unread = this.store.unreadCount(chatKey);
-      if (unread > 0) {
+      if (!pacedNow && unread > 0) {
         const drainDelay = Math.max(200, Number(getConfig().drainDelayMs) || 1200);
         this.scheduleWake(chatKey, drainDelay);
       }
+      // 自主节奏：本次处理完，确保还留着下一次"自己醒来"的安排
+      if (pacedNow) this.#ensurePacedWake(chatKey);
+      // 说了话但没人接：给一次"要不要补一句"的机会（真人也常补一句"？""人呢"）
+      if (!pacedNow && unread === 0) this.#maybeScheduleFollowUp(chatKey, session);
     }
 
     // 记忆自动整理（后台静默，绝不阻塞/影响聊天主流程）
@@ -1042,6 +1179,8 @@ export class Orchestrator {
     chatKey,
     triggerEntries,
     proactive,
+    wakeNote = '',
+    paced = false,
     manual = false,
     seq,
     contextLimit = null,
@@ -1097,7 +1236,8 @@ export class Orchestrator {
     const openAiTools = toOpenAiTools(toolDefs);
     const systemPrompt = buildSystemPrompt({
       identityPilotAvailable: identityAvailable,
-      friendProposalAvailable
+      friendProposalAvailable,
+      stickerEntries
     });
     const promptPrefixHash = crypto.createHash('sha256')
       .update(String(cfg.api.provider || ''))
@@ -1197,11 +1337,22 @@ export class Orchestrator {
     this.sessions.update(session.id);
     this.emit('session-update', session.id);
 
+    const wakeLead = wakeNote
+      ? (String(wakeNote).startsWith('【系统提醒】')
+        ? String(wakeNote).slice(0, 300)
+        : `这是你自己之前安排的：${String(wakeNote).slice(0, 300)}。现在时间到了，看看当前情况决定要不要说话。`)
+      : '（主动机会）群里已经安静了一会儿。';
+    const pacedLead = (wakeNote ? `你之前给自己留过话：${String(wakeNote).slice(0, 200)}\n` : '')
+      + '这些消息是攒着等你按自己的节奏来看的。决定要不要说话、说什么；不想接就安静结束，'
+      + '并用 schedule_wake 给自己安排下一次醒来的时间（比如几分钟后、或二三十分钟后）。';
+    const wakeTail = String(wakeNote).startsWith('【系统提醒】')
+      ? '就按上面那条提醒处理：想补就补一句很短的，补完就放下；不想补就安静结束。'
+      : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。';
     const currentUserMessage = {
       role: 'user',
       content: proactive && !manual
-        ? `${userPrompt}\n\n【本次唤醒】（主动机会）群里已经安静了一会儿。你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。`
-        : userPrompt
+        ? `${userPrompt}\n\n【本次唤醒】${wakeLead}${wakeTail}`
+        : (paced ? `${userPrompt}\n\n【本次唤醒】${pacedLead}` : userPrompt)
     };
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -1236,7 +1387,9 @@ export class Orchestrator {
       sender: this.sender,
       session,
       signal,
-      emit: (type, payload) => this.emit(type, payload)
+      emit: (type, payload) => this.emit(type, payload),
+      // 让模型能给自己安排一次稍后的主动发言
+      scheduleWake: (delayMs, note) => this.scheduleInitiativeWake(chatKey, delayMs, note)
     };
 
     const maxRounds = Math.max(1, Number(cfg.api.maxRounds) || 12);
@@ -1305,7 +1458,8 @@ export class Orchestrator {
         messages,
         tools: openAiTools,
         signal,
-        cacheKey: `qq-agent:${promptPrefixHash.slice(0, 32)}`
+        cacheKey: `qq-agent:${promptPrefixHash.slice(0, 32)}`,
+        purpose: 'chat'
       });
       signal.throwIfAborted();
       session.model = response.model || session.model;
@@ -2098,62 +2252,9 @@ function safeParse(text) {
   try { return typeof text === 'string' ? JSON.parse(text) : text; } catch { return { raw: String(text).slice(0, 500) }; }
 }
 
-// ── 内联工具调用解析（少数模型不返回原生 tool_calls，而是把调用写进文本） ──
-// 支持的格式：
-//   1. <tool_call> <function=send_message> <parameter=messages>…</parameter> </function> </tool_call>
-//   2. <tool_call> {"name":"send_message","arguments":{...}} </tool_call>
-//   3. <tool_call> send_message \n {"messages":"..."} </tool_call>
-// 返回 [{ name, args }]；没有解析到则返回 []。
-export function parseInlineToolCalls(text) {
-  const out = [];
-  const blockRe = /<tool_call\b[^>]*>([\s\S]*?)<\/tool_call>/gi;
-  let match;
-  while ((match = blockRe.exec(String(text || ''))) !== null) {
-    const block = match[1].trim();
-    if (!block) continue;
-    const call = parseInlineBlock(block);
-    if (call) out.push(call);
-  }
-  return out;
-}
+// ── 内联工具调用解析（已抽到 src/inline-tools.js，判断类模块共用） ──
+export { parseInlineToolCalls };
 
-function parseInlineBlock(block) {
-  // 1) 整个块是 JSON：{"name": "...", "arguments": {...}}（部分模型用 parameters/args）
-  const jsonMatch = block.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try {
-      const obj = JSON.parse(jsonMatch[0]);
-      const name = obj.name || obj.function || obj.tool;
-      const args = obj.arguments || obj.parameters || obj.args || obj.input || {};
-      if (name) return { name: String(name), args: (args && typeof args === 'object' && !Array.isArray(args)) ? args : {} };
-    } catch { /* 不是 JSON，继续按 XML 解析 */ }
-  }
-
-  // 2) <function=send_message> + <parameter=key>value</parameter>
-  const fnMatch = block.match(/<function\s*=\s*([^>]+)>/i);
-  let name = fnMatch ? fnMatch[1].trim().replace(/^["']|["']$/g, '') : '';
-  const args = {};
-  const paramRe = /<parameter\s*=\s*([^>]+)>([\s\S]*?)<\/parameter>/gi;
-  let pm;
-  while ((pm = paramRe.exec(block)) !== null) {
-    const key = pm[1].trim().replace(/^["']|["']$/g, '');
-    let value = pm[2].trim();
-    try { value = JSON.parse(value); } catch { /* 保持原始文本 */ }
-    args[key] = value;
-  }
-  if (name && fnMatch) return { name, args };
-
-  // 3) 首行是函数名，其余是 JSON 参数（GLM/Qwen 部分格式）
-  const lines = block.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-  if (!name && lines.length >= 2 && /^[a-zA-Z_][\w.-]*$/.test(lines[0])) {
-    name = lines[0];
-    try {
-      const parsed = JSON.parse(lines.slice(1).join('\n'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { name, args: parsed };
-    } catch { /* ignore */ }
-  }
-  return null;
-}
 
 /**
  * 聊天记录里可能出现的占位名（非真实昵称）。
