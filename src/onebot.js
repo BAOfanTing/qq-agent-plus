@@ -379,7 +379,64 @@ export function forwardIdFromData(d) {
  * resolveReply: async (mid) => { sender, text } | null —— 解析引用原文。
  * resolveAtName: async (qq) => string | null —— 把 @ 的 QQ 号解析成群名片。
  */
-export async function segmentsToText(segments, { resolveReply = null, resolveAtName = null, includeReply = true } = {}) {
+/**
+ * 分享卡片（OneBot 的 json / xml 段）→ 可读文本。
+ *
+ * 群里转发说说、公众号文章、音乐时都是这两种段；旧实现只输出「[卡片消息]」，
+ * 模型既看不到内容，也认不出"这是我自己空间动态被转进来了"。
+ * 这里把常见字段抽出来，并在卡片作者就是机器人自己时标注「你自己的动态」。
+ */
+export function cardToText(seg, selfId = '') {
+  const d = seg?.data ?? {};
+  const raw = typeof d.data === 'string'
+    ? d.data
+    : (d.data && typeof d.data === 'object' ? JSON.stringify(d.data) : '');
+  const source = String(raw || '').trim();
+  if (!source) return '[卡片消息]';
+  const squash = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const pickXml = (re) => {
+    const m = re.exec(source);
+    if (!m) return '';
+    return squash(String(m[1]).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1'));
+  };
+
+  let title = '';
+  let desc = '';
+  let prompt = '';
+  let nick = '';
+  let uin = '';
+  if (source.startsWith('{')) {
+    try {
+      const obj = JSON.parse(source);
+      const meta = obj?.meta && typeof obj.meta === 'object' ? obj.meta : {};
+      const detail = meta.detail_1 || meta.news || meta.music || meta.detail || Object.values(meta)[0] || {};
+      title = squash(detail.title || obj.title);
+      desc = squash(detail.desc || obj.desc);
+      prompt = squash(obj.prompt);
+      nick = squash(detail.host?.nick);
+      uin = squash(detail.host?.uin);
+    } catch { /* 不是合法 JSON：交给下面的 XML 分支兜底 */ }
+  }
+  if (!title && !desc) {
+    const brief = pickXml(/\bbrief="([^"]*)"/i);
+    title = pickXml(/<title[^>]*>([\s\S]*?)<\/title>/i) || brief;
+    desc = pickXml(/<summary[^>]*>([\s\S]*?)<\/summary>/i) || pickXml(/<des[^>]*>([\s\S]*?)<\/des>/i);
+    const src = pickXml(/<source[^>]*name="([^"]*)"/i);
+    if (src && !prompt) prompt = src;
+  }
+
+  const body = [title, desc].filter(Boolean).join(' — ');
+  const mine = selfId && uin && String(uin) === String(selfId);
+  const tags = [prompt, mine ? '你自己的动态' : (nick ? `来自 ${nick}` : '')].filter(Boolean).join(' · ');
+  if (!body && !tags) {
+    // 认不出的卡片结构留一条样本（卡片少见，不会刷屏），以后按真实结构扩展解析
+    try { console.log('[onebot] 未能解析的卡片样本：', source.slice(0, 240)); } catch { /* 忽略 */ }
+    return '[卡片消息]';
+  }
+  return `[卡片${tags ? ' ' + tags : ''}${body ? '：' + body : ''}]`;
+}
+
+export async function segmentsToText(segments, { resolveReply = null, resolveAtName = null, includeReply = true, selfId = '' } = {}) {
   if (typeof segments === 'string') return sanitizeUserText(segments.trim());
   const out = [];
   for (const seg of segments ?? []) {
@@ -424,7 +481,8 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
         out.push(replyText || '[引用消息]');
         break;
       }
-      case 'json': out.push('[卡片消息]'); break;
+      case 'json':
+      case 'xml': out.push(cardToText(seg, selfId)); break;
       case 'forward': {
         // 不带 res_id：那个 id 会过期（payload is empty），打出来只会误导模型拿它当参数。
         // 模型要看内容用 read_forward 工具 + 消息前的 #数字。

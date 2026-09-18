@@ -15,7 +15,8 @@ const CASES = [
   'test-qzone-backoff.mjs',
   'test-sticker-lookup.mjs',
   'test-send-tools.mjs',
-  'test-thinking-toolchoice.mjs'
+  'test-thinking-toolchoice.mjs',
+  'test-card-segments.mjs'
 ];
 
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));

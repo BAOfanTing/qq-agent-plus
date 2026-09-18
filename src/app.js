@@ -582,6 +582,7 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         }
       }
       text = await segmentsToText(segments, {
+        selfId: String(onebot.selfId || ''),
         resolveReply: (mid) => (
           reply && String(reply.messageId) === String(mid)
             ? reply
