@@ -2639,3 +2639,16 @@ body, #sidebar, #topbar, #tabs, .view, .list-pane, .detail-pane, .chat-item, .se
 }
 #topbar { justify-content: flex-end; }
 .top-status { justify-content: flex-end; }
+
+/* ── 顶栏高度固定：状态条文字变长时不再换行，避免"整块内容被顶下去再回来" ──
+   实测 1024px 窗口：数据到达后状态条从 27px 变 63px（换行），顶栏 48 → 83px，
+   下面所有内容整体位移 35px。这里锁死顶栏高度 + 状态条不换行 + 超长省略。 */
+#topbar { height: 54px; flex-wrap: nowrap; gap: 10px; overflow: hidden; }
+.top-status { flex-wrap: nowrap; overflow: hidden; min-width: 0; }
+.top-status > .muted {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 34vw; flex-shrink: 1; min-width: 0;
+}
+@media (max-width: 760px) {
+  .top-status > .muted { max-width: 42vw; }
+}

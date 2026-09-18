@@ -550,6 +550,15 @@ async function bootLoop() {
   if (state.tab === 'memory') loadMemoryView();
 }
 
+// 状态条里的标签：文字会随数据变长，窄窗口下容易换行把整块内容顶下去。
+// 统一通过这个 setter 写，顺便把完整文本放进 title，截断时鼠标悬停还能看到。
+function setStatusLabel(selector, text) {
+  const el = $(selector);
+  if (!el) return;
+  el.textContent = text;
+  el.title = text;
+}
+
 // ── 就绪度体检（傻瓜式引导的核心） ──
 function assessReadiness(cfg, status) {
   const checks = [];
@@ -915,21 +924,21 @@ async function refreshStatus() {
     label.textContent = s.onebot.connected
       ? `OneBot 已连接${s.onebot.self ? `（${s.onebot.self.nickname}）` : ''}`
       : 'OneBot 未连接';
-    $('#model-label').textContent = `模型：${s.orchestrator.model || '未设置'}`;
+    setStatusLabel('#model-label', `模型：${s.orchestrator.model || '未设置'}`);
     const u = s.usage;
     // 成本：官方价匹配得上就显示；匹配不上（中转站常见）只显示 token，不显示误导性的 ¥0
     const c = s.cost;
     const costTxt = c && c.cost > 0 ? ` · ¥${c.cost.toFixed(3)}` : '';
     const rate = s.cacheHitRate;
     const rateTxt = rate > 0 ? ` · 缓存 ${Math.round(rate * 100)}%` : '';
-    $('#usage-label').textContent = `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}`;
-    $('#search-count-label').textContent = `搜索：${s.webSearchCount ?? u.webSearchCount ?? 0} 次`;
+    setStatusLabel('#usage-label', `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}`);
+    setStatusLabel('#search-count-label', `搜索：${s.webSearchCount ?? u.webSearchCount ?? 0} 次`);
     state.paused = s.paused;
     state.pauseReason = s.pauseReason;
     $('#pause-btn').textContent = state.paused ? '恢复' : '暂停';
     if ($('#runtime-mode')) $('#runtime-mode').value = s.orchestrator.mode || 'observe';
     if (s.timeControl?.enabled) {
-      $('#model-label').textContent += s.timeControl.active ? ' · 活跃时段' : ' · 非活跃时段';
+      setStatusLabel('#model-label', $('#model-label').textContent + (s.timeControl.active ? ' · 活跃时段' : ' · 非活跃时段'));
     }
     if (state.tab === 'settings' && state.settingsSection === 'time-control') loadTimeControlStatus();
     if (state.tab === 'settings' && state.settingsSection === 'moments') loadDailyMomentsStatus();
@@ -8528,7 +8537,7 @@ async function saveConfig({ quiet = false } = {}) {
   const data = await api('/api/config', { method: 'POST', body: JSON.stringify(patch) });
   state.config = data.config;
   syncGraduatedFeatureNavigation(state.config);
-  if (!quiet) $('#model-label').textContent = `模型：${state.config.api.model || '未设置'}`;
+  if (!quiet) setStatusLabel('#model-label', `模型：${state.config.api.model || '未设置'}`);
   return data;
 }
 
