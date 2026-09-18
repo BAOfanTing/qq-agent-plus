@@ -113,12 +113,57 @@ export function isRetryableError(error) {
  * @param {object} args 同 chatCompletion
  * @param {number} [retries=2] 最多额外重试几次（默认 2，即总共最多 3 次尝试）
  */
-export async function chatCompletionWithRetry(args, retries = 2) {
+/**
+ * 按用途决定要不要"思考"（网关侧 thinking 开关）。
+ * 配置：api.thinking = { chat: 'off', default: 'on' }；也接受 'off' / 'on' 字符串（全局）。
+ * 只有明确 off 时才带 thinking 字段 —— 不认这个字段的网关因此不会 400。
+ */
+function thinkingModeFor(purpose) {
+  let t = null;
+  try { t = getConfig().api?.thinking; } catch { return 'on'; }
+  if (t === 'off' || t === false) return 'off';
+  if (t === 'on' || t === true || t == null) return 'on';
+  if (typeof t === 'object') {
+    const v = (purpose && t[purpose] != null) ? t[purpose] : t.default;
+    return v === 'off' || v === false ? 'off' : 'on';
+  }
+  return 'on';
+}
+
+// 服务商的内容审核会偶尔把整次请求判为 high risk 直接拒绝（2026-09-18 实测：群里吵架上下文触发，
+// 模型一句话都没机会说，表现为"已读不回"）。识别到这种拒绝时，用精简上下文重试一次。
+const MODERATION_REFUSAL_RE = /considered high risk|high risk request/i;
+
+export function isModerationRefusal(response) {
+  const msg = response?.message;
+  if (!msg) return false;
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) return false;
+  return MODERATION_REFUSAL_RE.test(String(msg.content || ''));
+}
+
+export function trimForModerationRetry(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  const systems = list.filter((m) => m?.role === 'system');
+  const lastUser = [...list].reverse().find((m) => m?.role === 'user');
+  return lastUser ? [...systems, lastUser] : systems;
+}
+
+/** 同一个模型内部的"带重试 + 审核拦截重试"完整走法；抽出来给主模型和兜底模型共用。 */
+async function runCompletionWithRetries(args, retries) {
   let lastError = null;
+  let moderationRetried = false;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       args.signal?.throwIfAborted();
-      return await chatCompletion(args);
+      const response = await chatCompletion(args);
+      if (!moderationRetried && isModerationRefusal(response)) {
+        moderationRetried = true;
+        args = { ...args, messages: trimForModerationRetry(args.messages) };
+        console.warn('[llm] 服务商审核拦截整次请求，改用精简上下文重试一次');
+        await delay(600, undefined, { signal: args.signal });
+        continue;
+      }
+      return response;
     } catch (error) {
       lastError = error;
       if (args.signal?.aborted || attempt >= retries || !isRetryableError(error)) throw error;
@@ -128,6 +173,61 @@ export async function chatCompletionWithRetry(args, retries = 2) {
     }
   }
   throw lastError;
+}
+
+/** 主模型不可用时，是否值得换兜底模型再试：可重试类故障，外加认证/欠费/权限类（换服务商可能就能用）。 */
+function isFallbackWorthy(error) {
+  if (isRetryableError(error)) return true;
+  const msg = String(error?.message ?? error ?? '');
+  if (/HTTP\s*(401|402|403)/i.test(msg)) return true;
+  if (/unauthorized|forbidden|invalid api.?key|incorrect api.?key|余额|欠费/i.test(msg)) return true;
+  return false;
+}
+
+/** 从配置取兜底模型覆盖项；没配 / 已停用 / 调用方自带 overrides（专用模型场景）时不兜底。 */
+function pickFallback(args) {
+  if (args.overrides) return null;
+  let fb = null;
+  try { fb = getConfig().api?.fallback; } catch { return null; }
+  if (!fb || fb.enabled === false || !String(fb.model || '').trim()) return null;
+  const api = effectiveApi();
+  return {
+    ...api,
+    baseUrl: fb.baseUrl || api.baseUrl,
+    apiKey: fb.apiKey || api.apiKey,
+    model: fb.model,
+    timeoutMs: Number(fb.timeoutMs) || api.timeoutMs
+  };
+}
+
+/**
+ * 带重试 + 兜底模型的对话请求。
+ * 主模型彻底失败（重试耗尽 / 认证欠费类错误），或两轮都被服务商审核拦下时，
+ * 自动改用 config.api.fallback 里配置的备用模型再试一次（只切一次，不递归）。
+ */
+export async function chatCompletionWithRetry(args, retries = 2) {
+  let response = null;
+  let primaryError = null;
+  try {
+    response = await runCompletionWithRetries(args, retries);
+  } catch (error) {
+    primaryError = error;
+  }
+
+  const shouldFallback = primaryError
+    ? isFallbackWorthy(primaryError)
+    : isModerationRefusal(response);
+  const fb = shouldFallback ? pickFallback(args) : null;
+  if (!fb || args.signal?.aborted) {
+    if (primaryError) throw primaryError;
+    return response;
+  }
+
+  const why = primaryError
+    ? `失败（${String(primaryError?.message ?? primaryError).slice(0, 90)}）`
+    : '两轮都被审核拦截';
+  console.warn(`[llm] 主模型${why}，改用兜底模型 ${fb.model}`);
+  return await runCompletionWithRetries({ ...args, overrides: fb }, 1);
 }
 
 /**
@@ -143,19 +243,25 @@ export async function chatCompletion({
   signal = null,
   overrides = null,
   cacheKey = '',
-  maxTokens = null
+  maxTokens = null,
+  purpose = ''
 }) {
   assertTimeAllowed();
   const api = overrides || effectiveApi();
+  // 聊天这类"随口回一句"的任务关掉思考：省一半输出 token、少 1~3 秒；
+  // 判断/写作类（表情包要不要收、说说、空间互动、身份评估）不传 purpose，继续思考。
+  const thinkingOff = thinkingModeFor(purpose) === 'off';
   const body = {
     model: api.model,
     messages: messages.map(({ role, content, tool_calls, tool_call_id, name, reasoning_content }) => ({
       role, content, ...(tool_calls ? { tool_calls } : {}),
       ...(tool_call_id ? { tool_call_id } : {}), ...(name ? { name } : {}),
-      ...(reasoning_content ? { reasoning_content } : {})
+      // 关思考时不能把上一轮的 reasoning_content 带回去（有的网关会 400）
+      ...(!thinkingOff && reasoning_content ? { reasoning_content } : {})
     })),
     stream: false
   };
+  if (thinkingOff) body.thinking = { type: 'disabled' };
   if (tools && tools.length > 0) {
     body.tools = tools;
     body.tool_choice = toolChoice;
