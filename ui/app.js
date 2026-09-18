@@ -550,6 +550,17 @@ async function bootLoop() {
   if (state.tab === 'memory') loadMemoryView();
 }
 
+// 只在内容真的变化时替换 DOM。
+// 背景：控制页/异常页等会在每次状态刷新（15 秒一次 + 推送）时重建整块 HTML，
+// 数据没变也照重建 —— 页面就"整页闪一下"。用这个函数收口：HTML 相同直接跳过。
+function setHtmlIfChanged(el, html) {
+  if (!el) return false;
+  if (el.__renderedHtml === html) return false;
+  el.__renderedHtml = html;
+  el.innerHTML = html;
+  return true;
+}
+
 // 状态条里的标签：文字会随数据变长，窄窗口下容易换行把整块内容顶下去。
 // 统一通过这个 setter 写，顺便把完整文本放进 title，截断时鼠标悬停还能看到。
 function setStatusLabel(selector, text) {
@@ -680,7 +691,7 @@ function renderControlHub(data = {}) {
       ? (updateLabels[update.status] || '等待检查')
       : '已暂停';
   const revision = (value) => value ? String(value).slice(0, 12) : '-';
-  box.innerHTML = `
+  const __html = `
     <div class="control-head">
       <div><h2>服务与访问控制</h2><span class="muted">统一入口</span></div>
       <button type="button" class="icon-btn" id="control-refresh" title="刷新服务状态" aria-label="刷新服务状态">↻</button>
@@ -754,6 +765,7 @@ function renderControlHub(data = {}) {
       </form>
       <div id="snowluma-password-result" class="control-result muted" role="status" aria-live="polite"></div>
     </section>`;
+  if (!setHtmlIfChanged(box, __html)) return;
 
   $('#control-refresh')?.addEventListener('click', () => loadControlHub({ force: true }));
   $('#auto-update-save')?.addEventListener('click', () => saveAutoUpdateSettings(false));
@@ -5262,7 +5274,7 @@ function renderIdentityFeaturePage(status, identities, memories) {
   const box = $('#identity-page');
   if (!box) return;
   const query = state.identityFeatureQuery || '';
-  box.innerHTML = `
+  const __html = `
     <div class="asset-head">
       <div><h2>人物统一印象</h2><span class="muted" id="identity-feature-state">${status.active ? `运行中 · 最近索引 ${status.lastIndexedAt ? esc(fmtTime(status.lastIndexedAt)) : '-'}` : status.enabled ? `启动失败${status.error ? `：${esc(status.error)}` : ''}` : '当前已停用'}</span></div>
       <button type="button" class="icon-btn" id="identity-feature-refresh" title="刷新人物与旧印象" aria-label="刷新人物与旧印象">↻</button>
@@ -5295,6 +5307,7 @@ function renderIdentityFeaturePage(status, identities, memories) {
       <h3>旧印象</h3>
       <div id="identity-feature-memories">${renderMemoryAssets(memories)}</div>
     </section>`;
+  if (!setHtmlIfChanged(box, __html)) return;
 
   $('#identity-feature-refresh')?.addEventListener('click', () => loadIdentityFeaturePage());
   const search = () => {
@@ -5322,7 +5335,7 @@ function renderIdentityFeaturePage(status, identities, memories) {
 async function loadIdentityFeaturePage() {
   const box = $('#identity-page');
   if (!box) return;
-  box.innerHTML = '<div class="empty-hint">正在读取人物与旧印象…</div>';
+  if (!box.__renderedHtml) box.innerHTML = '<div class="empty-hint">正在读取人物与旧印象…</div>';
   try {
     const query = encodeURIComponent(state.identityFeatureQuery || '');
     const [cfg, status, identities, memories, chats] = await Promise.all([
@@ -5351,7 +5364,7 @@ function renderFriendFeaturePage(c, status) {
   const proposalCounts = status.friendProposal?.counts || {};
   const opportunityCounts = status.friendProposal?.opportunityCounts || {};
   const incomingCounts = status.incomingFriendRequest?.counts || {};
-  box.innerHTML = `
+  const __html = `
     <div class="asset-head">
       <div><h2>好友管理</h2><span class="muted" id="friend-feature-state">${status.active ? '统一身份库运行中' : status.enabled ? '统一身份库启动失败' : '人物统一印象已停用'}</span></div>
       <button type="button" class="icon-btn" id="friend-feature-refresh" title="刷新好友工作流" aria-label="刷新好友工作流">↻</button>
@@ -5427,6 +5440,7 @@ function renderFriendFeaturePage(c, status) {
       <h3>消息触发与评估记录</h3>
       <div class="identity-pilot-people" id="identity-friend-opportunities"></div>
     </section>`;
+  if (!setHtmlIfChanged(box, __html)) return;
   $('#friend-feature-refresh')?.addEventListener('click', () => loadFriendFeaturePage());
   $('#friend-feature-save')?.addEventListener('click', saveFriendFeatureConfig);
 }
@@ -5492,7 +5506,7 @@ async function saveFriendFeatureConfig() {
 async function loadFriendFeaturePage() {
   const box = $('#friend-page');
   if (!box) return;
-  box.innerHTML = '<div class="empty-hint">正在读取好友工作流…</div>';
+  if (!box.__renderedHtml) box.innerHTML = '<div class="empty-hint">正在读取好友工作流…</div>';
   try {
     const [cfg, status] = await Promise.all([
       api('/api/config'),
@@ -5516,7 +5530,7 @@ function renderSlangFeaturePage(c, status) {
   const box = $('#slang-page');
   if (!box) return;
   const slang = c.slangPilot || {};
-  box.innerHTML = `
+  const __html = `
     <div class="asset-head">
       <div><h2>黑话研究</h2><span class="muted">${status.active ? `运行中 · 待研究 ${fmtTok(status.pendingResearch)} · 待入库 ${fmtTok(status.pendingAdmission)}` : status.enabled ? `启动失败${status.error ? `：${esc(status.error)}` : ''}` : '当前已停用'}</span></div>
       <button type="button" class="icon-btn" id="slang-feature-refresh" title="刷新黑话状态" aria-label="刷新黑话状态">↻</button>
@@ -5553,6 +5567,7 @@ function renderSlangFeaturePage(c, status) {
         <span class="hint" id="slang-feature-save-result"></span>
       </div>
     </section>`;
+  if (!setHtmlIfChanged(box, __html)) return;
   $('#slang-feature-refresh')?.addEventListener('click', () => loadSlangFeaturePage());
   $('#slang-feature-save')?.addEventListener('click', saveSlangFeatureConfig);
   $$('[data-open-slang-assets]', box).forEach((button) => {
@@ -5629,7 +5644,7 @@ function renderIncidentFeaturePage(c, status, incidents = []) {
   if (!box) return;
   const settings = c.incidentPilot || {};
   const counts = status.counts || {};
-  box.innerHTML = `
+  const __html = `
     <div class="asset-head">
       <div><h2>异常</h2><span class="muted">${status.active ? '异常处理试点运行中' : status.exists ? '试点已停用，保留只读日志' : '异常处理试点尚未启用'}</span></div>
       <button type="button" class="icon-btn" id="incident-feature-refresh" title="刷新异常" aria-label="刷新异常">↻</button>
@@ -5698,6 +5713,7 @@ function renderIncidentFeaturePage(c, status, incidents = []) {
       </table></div>
       ${incidents.length ? '' : '<div class="empty-hint">当前筛选条件下没有异常日志</div>'}
     </section>`;
+  if (!setHtmlIfChanged(box, __html)) return;
 
   $('#incident-feature-refresh')?.addEventListener('click', () => loadIncidentFeaturePage());
   $('#incident-feature-save')?.addEventListener('click', saveIncidentFeatureConfig);
@@ -5760,7 +5776,7 @@ async function saveIncidentFeatureConfig() {
 async function loadIncidentFeaturePage() {
   const box = $('#incident-page');
   if (!box) return;
-  box.innerHTML = '<div class="empty-hint">正在读取异常日志…</div>';
+  if (!box.__renderedHtml) box.innerHTML = '<div class="empty-hint">正在读取异常日志…</div>';
   try {
     const params = new URLSearchParams({ limit: '200' });
     if (state.incidentState) params.set('state', state.incidentState);
