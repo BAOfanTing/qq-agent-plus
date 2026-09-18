@@ -1,0 +1,394 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { ChatStore } from '../src/store.js';
+
+describe('ChatStore', () => {
+  function fixture(t, cap = 0) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-store-'));
+    const store = new ChatStore(cap, { dataDir: dir });
+    t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    return { store, dir };
+  }
+  function append(store, mid, text = 'message') {
+    return store.appendIncoming('group:1', { mid, text, senderId: '42', senderName: 'member' });
+  }
+
+  it('deduplicates replayed messages and preserves pagination order', (t) => {
+    const { store } = fixture(t);
+    append(store, 1);
+    assert.equal(append(store, 1).duplicate, true);
+    append(store, 2);
+    assert.equal(store.unreadCount('group:1'), 2);
+    assert.deepEqual(store.recent('group:1', { limit: 1, offset: 1 }).map((m) => m.mid), ['1']);
+  });
+
+  it('claims a snapshot without acknowledging it and keeps later messages pending', (t) => {
+    const { store } = fixture(t);
+    append(store, 1);
+    const batch = store.claimUnread('group:1');
+    assert.equal(store.findByMid('group:1', 1).read, false);
+    assert.equal(store.claimUnread('group:1'), null);
+    append(store, 2);
+    assert.equal(store.ackLease(batch.id), 1);
+    assert.equal(store.ackLease(batch.id), 0);
+    assert.deepEqual(store.peekUnread('group:1').map((m) => m.mid), ['2']);
+  });
+
+  it('returns failed unsent batches to pending and stops after the attempt budget', (t) => {
+    const { store } = fixture(t);
+    append(store, 1);
+    for (let n = 0; n < 3; n++) {
+      const batch = store.claimUnread('group:1');
+      store.failLease(batch.id, 'offline', { delayMs: 0 });
+    }
+    assert.equal(store.unreadCount('group:1'), 0);
+    assert.equal(store.getChatMeta('group:1').failed, 1);
+    assert.equal(store.retryFailed('group:1'), 1);
+    assert.equal(store.unreadCount('group:1'), 1);
+  });
+
+  it('recovers expired leases without re-sending uncertain external effects', (t) => {
+    const { store } = fixture(t);
+    append(store, 1);
+    const batch = store.claimUnread('group:1');
+    const send = store.beginSend('group:1', batch.id, { text: 'hello' });
+    store.finishSend(send, { error: 'response lost' });
+    assert.equal(store.recoverExpired(Date.now() + 300000), 1);
+    assert.equal(store.getChatMeta('group:1').held, 1);
+    assert.equal(store.retryFailed('group:1'), 0);
+    assert.equal(store.resolveHeld('group:1'), 1);
+  });
+
+  it('reconciles unknown operations individually without deleting business history', (t) => {
+    const { store } = fixture(t);
+    const message = store.appendIncoming('group:9', {
+      mid: 901, ts: Date.now(), senderId: '42', text: 'unknown write'
+    });
+    const lease = store.claimUnread('group:9');
+    const first = store.beginSend('group:9', lease.id, { type: 'text', text: 'one' });
+    const second = store.beginSend('group:9', lease.id, { type: 'poke', targetUserId: '42' });
+    store.finishSend(first, { error: 'response lost' });
+    store.finishSend(second, { error: 'response lost' });
+    store.failLease(lease.id, 'Delivery uncertain; batch held for operator review');
+    assert.equal(store.getChatMeta('group:9').held, 1);
+    assert.equal(store.listUnknownOperations('group:9').length, 2);
+
+    const one = store.reconcileUnknownOperation(first, 'sent');
+    assert.equal(one.remaining, 1);
+    assert.equal(store.findByMid('group:9', message.mid).state, 'held');
+    const two = store.reconcileUnknownOperation(second, 'failed');
+    assert.equal(two.remaining, 0);
+    assert.equal(store.findByMid('group:9', message.mid).state, 'acked');
+    assert.equal(store.getChatMeta('group:9').held, 0);
+  });
+
+  it('persists leases and recovers an interrupted unsent run after reopening', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-store-reopen-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    let store = new ChatStore(0, { dataDir: dir });
+    append(store, 1);
+    store.claimUnread('group:1');
+    store.close();
+    store = new ChatStore(0, { dataDir: dir });
+    assert.equal(store.recoverExpired(Date.now() + 300000), 1);
+    assert.equal(store.unreadCount('group:1'), 1);
+    store.close();
+  });
+
+  it('bounds each batch and never evicts pending messages for retention', (t) => {
+    const { store } = fixture(t, 2);
+    for (let i = 1; i <= 6; i++) append(store, i, 'x'.repeat(3000));
+    assert.equal(store.unreadCount('group:1'), 6);
+    const batch = store.claimUnread('group:1', { maxChars: 3000 });
+    assert.equal(batch.messages.length, 1);
+    assert.ok(batch.messages[0].text.length < 2100);
+    assert.equal(store.findByMid('group:1', 1).text.length, 3000);
+    store.failLease(batch.id, 'invalid model', { retryable: false });
+    assert.equal(store.getChatMeta('group:1').failed, 1);
+    assert.equal(store.getChatMeta('group:1').unread, 5);
+  });
+
+  it('imports a legacy JSON once, preserving the original archive', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-store-import-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(dir, 'messages'));
+    const file = path.join(dir, 'messages/group_1.json');
+    fs.writeFileSync(file, JSON.stringify({ chatKey: 'group:1', messages: [
+      { mid: 1, text: 'old', read: true }, { mid: 2, text: 'new', read: false }
+    ] }));
+    let store = new ChatStore(0, { dataDir: dir });
+    assert.equal(store.unreadCount('group:1'), 1);
+    store.close();
+    store = new ChatStore(0, { dataDir: dir });
+    assert.equal(store.getChatMeta('group:1').total, 2);
+    assert.ok(fs.existsSync(file));
+    store.close();
+  });
+
+  it('updates media without duplication and only marks specified pending IDs read', (t) => {
+    const { store } = fixture(t);
+    const m = append(store, 1);
+    append(store, 2);
+    store.updateByMid('group:1', 1, { text: 'expanded', appendMedia: [{ url: 'https://example.com/a' }, { url: 'https://example.com/a' }] });
+    assert.equal(store.findByLocalId('group:1', m.id).media.length, 1);
+    assert.equal(store.findByMid('group:1', 1).text, 'expanded');
+    assert.equal(store.markRead('group:1', [m.id]), 1);
+    assert.equal(store.activeMembers('group:1')[0].count, 2);
+    assert.equal(store.drainUnread('group:1').length, 1);
+  });
+
+  it('persists conversation threads and append-only checkpoints', (t) => {
+    const { store } = fixture(t);
+    const first = store.upsertConversationThread('group:1', {
+      participantIds: ['42'],
+      topic: '部署排查',
+      lastMessageId: 10,
+      continuationWindowMs: 120000,
+      ttlMs: 600000
+    });
+    assert.equal(first.state, 'engaged');
+    assert.deepEqual(first.participantIds, ['42']);
+    assert.ok(first.engagedUntil > Date.now());
+
+    const second = store.upsertConversationThread('group:1', {
+      participantIds: ['43'],
+      lastMessageId: 11,
+      continuationWindowMs: 120000,
+      ttlMs: 600000
+    });
+    assert.equal(second.threadId, first.threadId);
+    assert.equal(second.version, first.version + 1);
+    assert.deepEqual(second.participantIds, ['42', '43']);
+
+    store.appendThreadCheckpoint('group:1', second.threadId, 'run-1', {
+      summary: '服务已恢复',
+      openQuestions: ['是否还会断线']
+    }, [10, 11]);
+    const checkpoint = store.latestThreadCheckpoint('group:1');
+    assert.equal(checkpoint.threadId, first.threadId);
+    assert.equal(checkpoint.state.summary, '服务已恢复');
+    assert.deepEqual(checkpoint.sourceMessageIds, [10, 11]);
+
+    assert.equal(store.closeConversationThread('group:1', 'test-finished'), true);
+    assert.equal(store.getConversationThread('group:1'), null);
+  });
+
+  it('restores active threads after reopening and expires them by deadline', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-thread-reopen-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    let store = new ChatStore(0, { dataDir: dir });
+    const thread = store.upsertConversationThread('group:1', {
+      participantIds: ['42'],
+      continuationWindowMs: 60000,
+      ttlMs: 60000
+    });
+    store.close();
+
+    store = new ChatStore(0, { dataDir: dir });
+    assert.equal(store.getConversationThread('group:1').threadId, thread.threadId);
+    assert.equal(store.getConversationThread('group:1', thread.expiresAt + 1), null);
+    store.close();
+  });
+
+  it('applies lifecycle idle deadlines, hard rollover and one-shot resume state', (t) => {
+    const { store } = fixture(t);
+    const startedAt = 1_000_000;
+    const listening = store.updateLifecycleThread('group:1', {
+      disposition: 'listening',
+      participantIds: ['42'],
+      silentIdleMs: 300000,
+      activeIdleMs: 1200000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      promptHash: 'prompt-v1',
+      now: startedAt
+    });
+    assert.equal(listening.state, 'listening');
+    assert.equal(listening.idleDeadline, startedAt + 300000);
+    assert.ok(store.getConversationThread('group:1', startedAt + 299999));
+    const acceptedBeforeDeadline = store.updateLifecycleThread('group:1', {
+      disposition: 'listening',
+      silentIdleMs: 300000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      acceptedAt: startedAt + 299999,
+      now: startedAt + 310000
+    });
+    assert.equal(acceptedBeforeDeadline.threadId, listening.threadId, '截止前到达的消息应继续原生命周期');
+    assert.equal(store.getConversationThread('group:1', acceptedBeforeDeadline.idleDeadline + 1), null);
+
+    const active = store.updateLifecycleThread('group:2', {
+      disposition: 'active',
+      participantIds: ['42'],
+      promptTokens: 12000,
+      activeIdleMs: 1200000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      promptHash: 'prompt-v1',
+      now: startedAt
+    });
+    assert.equal(active.promptTokens, 12000);
+    store.appendThreadTurns('group:2', active.threadId, 'run-1', [
+      { role: 'user', content: '第一轮' },
+      { role: 'assistant', content: '继续' }
+    ]);
+    assert.equal(store.getThreadTurns(active.threadId).length, 2);
+
+    const refreshedOnce = store.updateLifecycleThread('group:2', {
+      disposition: 'active',
+      participantIds: ['43'],
+      activeIdleMs: 1200000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      promptHash: 'prompt-v1',
+      now: startedAt + 15 * 60000
+    });
+    assert.equal(refreshedOnce.promptTokens, 12000, '未提供新 usage 时保留上次输入 Token');
+    const refreshed = store.updateLifecycleThread('group:2', {
+      disposition: 'active',
+      participantIds: ['43'],
+      activeIdleMs: 1200000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      promptHash: 'prompt-v1',
+      now: startedAt + 25 * 60000
+    });
+    assert.equal(refreshedOnce.hardDeadline, active.hardDeadline, '第一次刷新不延长硬上限');
+    assert.equal(refreshed.hardDeadline, active.hardDeadline, '硬上限不能随消息刷新');
+    const armed = store.getConversationThread('group:2', active.hardDeadline + 1);
+    assert.equal(armed.state, 'rollover_armed');
+    assert.equal(armed.promptTokens, 0);
+    assert.equal(store.getThreadTurns(active.threadId).length, 0, '滚动时清除原始 provider transcript');
+
+    const resumed = store.updateLifecycleThread('group:2', {
+      disposition: 'active',
+      promptHash: 'prompt-v1',
+      now: active.hardDeadline + 2
+    });
+    assert.notEqual(resumed.threadId, active.threadId, '任意消息续接应创建新生命周期');
+    assert.equal(resumed.state, 'active');
+
+    const equalDeadline = store.updateLifecycleThread('group:3', {
+      disposition: 'active',
+      activeIdleMs: 1200000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      now: startedAt
+    });
+    store.updateLifecycleThread('group:3', {
+      disposition: 'active',
+      activeIdleMs: 1200000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      now: startedAt + 10 * 60000
+    });
+    assert.equal(
+      store.getConversationThread('group:3', equalDeadline.hardDeadline + 1).state,
+      'rollover_armed',
+      '空闲与硬截止相同时应按硬截止进入续接待命'
+    );
+
+    const crossedDuringRun = store.updateLifecycleThread('group:4', {
+      disposition: 'active',
+      activeIdleMs: 2400000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      now: startedAt
+    });
+    const crossedResult = store.updateLifecycleThread('group:4', {
+      disposition: 'listening',
+      activeIdleMs: 2400000,
+      hardLifetimeMs: 1800000,
+      rolloverArmedMs: 600000,
+      acceptedAt: crossedDuringRun.hardDeadline - 1,
+      now: crossedDuringRun.hardDeadline + 10000
+    });
+    assert.equal(crossedResult.state, 'rollover_armed', '截止前接收的活跃轮次跨过硬上限后仍应待续接');
+  });
+
+  it('restores lifecycle provider turns after reopening', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-lifecycle-reopen-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    let store = new ChatStore(0, { dataDir: dir });
+    const thread = store.updateLifecycleThread('group:1', {
+      disposition: 'active',
+      promptHash: 'stable-prefix',
+      now: Date.now()
+    });
+    store.appendThreadTurns('group:1', thread.threadId, 'run-1', [
+      { role: 'user', content: '第一批消息' },
+      {
+        role: 'assistant',
+        content: null,
+        reasoning_content: '需要先检查',
+        tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'check', arguments: '{}' } }]
+      },
+      { role: 'tool', tool_call_id: 'call-1', name: 'check', content: 'ok' }
+    ]);
+    store.close();
+
+    store = new ChatStore(0, { dataDir: dir });
+    const restored = store.getConversationThread('group:1');
+    assert.equal(restored.threadId, thread.threadId);
+    const turns = store.getThreadTurns(thread.threadId);
+    assert.equal(turns.length, 3);
+    assert.equal(turns[1].reasoning_content, '需要先检查');
+    store.close();
+  });
+
+  it('adds lifecycle columns to databases created by the threaded pilot', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-thread-migrate-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const filename = path.join(dir, 'messages.sqlite');
+    const old = new DatabaseSync(filename);
+    old.exec(`
+      CREATE TABLE conversation_threads (
+        chat_key TEXT PRIMARY KEY, thread_id TEXT NOT NULL, state TEXT NOT NULL,
+        topic TEXT NOT NULL DEFAULT '', participant_ids TEXT NOT NULL DEFAULT '[]',
+        opened_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        last_human_at INTEGER NOT NULL DEFAULT 0, last_agent_at INTEGER NOT NULL DEFAULT 0,
+        engaged_until INTEGER NOT NULL DEFAULT 0, expires_at INTEGER NOT NULL DEFAULT 0,
+        last_message_id INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1,
+        close_reason TEXT
+      );
+      INSERT INTO conversation_threads
+        (chat_key,thread_id,state,opened_at,updated_at,expires_at)
+        VALUES ('group:1','old-thread','engaged',1,1,9999999999999);
+    `);
+    old.close();
+
+    const store = new ChatStore(0, { dataDir: dir });
+    const migrated = store.getConversationThread('group:1');
+    assert.equal(migrated.threadId, 'old-thread');
+    assert.equal(migrated.mode, 'threaded');
+    assert.equal(migrated.transcriptChars, 0);
+    assert.equal(migrated.promptTokens, 0);
+    store.close();
+  });
+
+  it('atomically rolls back message acknowledgement when lifecycle persistence fails', (t) => {
+    const { store } = fixture(t);
+    append(store, 1);
+    const lease = store.claimUnread('group:1');
+    const cyclic = { role: 'user', content: 'broken' };
+    cyclic.self = cyclic;
+
+    assert.throws(() => store.commitLifecycleRun({
+      chatKey: 'group:1',
+      leaseId: lease.id,
+      runId: lease.id,
+      threadOptions: { disposition: 'active', promptHash: 'v1' },
+      checkpointState: { summary: 'should roll back' },
+      sourceMessageIds: [1],
+      messages: [cyclic]
+    }));
+
+    assert.equal(store.findByMid('group:1', 1).state, 'leased');
+    assert.equal(store.getConversationThread('group:1'), null);
+    assert.equal(store.latestThreadCheckpoint('group:1'), null);
+  });
+});

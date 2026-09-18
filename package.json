@@ -1,0 +1,47 @@
+{
+  "name": "qq-agent",
+  "version": "0.5.0",
+  "private": false,
+  "description": "Linux stateless QQ Agent with SQLite message leases and an isolated console.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "server": "node src/server.js",
+    "test": "node --test test/*.test.mjs && node test/test-prompt.mjs && node test/render-test.mjs && node test/scroll-test.mjs && node test/usage-e2e.mjs",
+    "test:unit": "node --test test/*.test.mjs",
+    "test:prompt": "node test/test-prompt.mjs",
+    "test:render": "node test/render-test.mjs",
+    "test:scroll": "node test/scroll-test.mjs",
+    "test:usage": "node test/usage-e2e.mjs",
+    "test:legacy-selftest": "node test/selftest.mjs"
+  },
+  "dependencies": {
+    "jce": "0.2.3",
+    "node-html-parser": "^9.0.4",
+    "undici": "^6.28.0",
+    "ws": "^8.18.0"
+  },
+  "license": "MIT",
+  "author": "Kondius",
+  "keywords": [
+    "qq",
+    "bot",
+    "agent",
+    "openai",
+    "onebot",
+    "llm",
+    "linux",
+    "systemd"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/carbonbromine/qq-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/carbonbromine/qq-agent/issues"
+  },
+  "homepage": "https://github.com/carbonbromine/qq-agent#readme"
+}

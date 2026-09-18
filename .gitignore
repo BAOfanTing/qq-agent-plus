@@ -1,0 +1,45 @@
+# 敏感数据：整个 data/ 都不进版本库
+# 里面是真实聊天记录、群友记忆、会话留档、表情库，以及**含 API Key 的 config.json**。
+# 分享给别人前用 `node scripts/sanitize-release.mjs` 生成干净副本。
+data/
+
+*.log
+
+# OneBot 协议端是独立服务，不纳入本仓库。
+snowluma/
+
+# AI 协作过程记录（findings/progress/task_plan）：开发过程稿，不是作品的一部分
+findings.md
+progress.md
+task_plan.md
+
+# 依赖
+node_modules/
+.runtime/
+.dbg/
+debug-*.md
+
+# 运行时临时文件
+.trash/
+*.tmp
+*.bak
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 本地环境变量（若以后用到）
+.env
+.env.local
+.deployment.json
+.deployment-node
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+coverage/
