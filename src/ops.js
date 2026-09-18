@@ -614,7 +614,15 @@ function auditHost(args) {
   else for (const line of certbot.stdout.split('\n')) if (/Certificate Name|Expiry/i.test(line)) noteLine(line.trim());
   const liveDir = '/etc/letsencrypt/live';
   if (exists(liveDir)) {
-    for (const name of fs.readdirSync(liveDir)) {
+    // 证书目录通常是 root-only：普通用户 stat 得到但读不了，必须吞掉 EACCES 而不是整段崩掉
+    // （原 shell 版靠 glob 展开为空自然跳过，Node 的 readdirSync 会直接抛）。
+    let certNames = [];
+    try {
+      certNames = fs.readdirSync(liveDir);
+    } catch (error) {
+      skipLine(`读取 ${liveDir} 失败（${error?.code || error?.message || error}），跳过证书到期检查`);
+    }
+    for (const name of certNames) {
       const fullchain = path.join(liveDir, name, 'fullchain.pem');
       if (!exists(fullchain)) continue;
       const expiry = run('openssl', ['x509', '-enddate', '-noout', '-in', fullchain]);
@@ -1478,19 +1486,12 @@ async function cmdDeploy(args) {
   const keyFile = envStr('QQ_AGENT_MODEL_KEY_FILE');
   if (!key && keyFile) {
     key = readFileSafe(keyFile).replace(/[\r\n]+/g, '');
-    if (!key) {
-      ngLine(`读取 API Key 文件失败或为空: ${keyFile}`);
-      return 1;
-    }
+    if (!key) noteLine(`（提示）读取 API Key 文件失败或为空: ${keyFile}`);
   }
-  if (!key) {
-    ngLine('缺少模型凭据：请设置 QQ_AGENT_MODEL_API_KEY（或 QQ_AGENT_MODEL_KEY_FILE）');
-    return 1;
-  }
-  if (!baseUrl || !model) {
-    ngLine('缺少 QQ_AGENT_MODEL_BASE_URL / QQ_AGENT_MODEL');
-    return 1;
-  }
+  // 缺凭据只在"真的要部署"时才算失败：--dry-run 仍应能看清计划（否则在没有凭据的机器上预演都跑不了）。
+  const missing = [];
+  if (!key) missing.push('QQ_AGENT_MODEL_API_KEY（或 QQ_AGENT_MODEL_KEY_FILE）');
+  if (!baseUrl || !model) missing.push('QQ_AGENT_MODEL_BASE_URL / QQ_AGENT_MODEL');
   const deployScript = path.join(srcDir, 'deploy-all.sh');
   const scriptArgs = ['deploy-all.sh', '-y', '--root-dir', cfg.rootDir, '--onebot-http-port', obHttp, '--onebot-ws-port', obWs, '--image', image];
 
@@ -1499,14 +1500,19 @@ async function cmdDeploy(args) {
     noteLine(`部署根目录: ${cfg.rootDir}`);
     noteLine(`协议端镜像: ${image}`);
     noteLine(`OneBot 端口: HTTP ${obHttp} / WS ${obWs}`);
-    noteLine(`模型: ${model} @ ${baseUrl}`);
-    noteLine(`模型凭据: 有（未打印）`);
+    noteLine(`模型: ${model || '(未设置)'} @ ${baseUrl || '(未设置)'}`);
+    noteLine(`模型凭据: ${key ? '有（未打印）' : '缺失'}`);
   };
   if (dryRun) {
     say('部署预演（不会执行任何命令）:');
     plan();
     say(`  将执行: cd ${srcDir} && bash ${scriptArgs.join(' ')}`);
+    if (missing.length) noteLine(`（预演）真实部署前需要补: ${missing.join('、')}`);
     return 0;
+  }
+  if (missing.length) {
+    ngLine(`缺少必要配置: ${missing.join('、')}`);
+    return 1;
   }
   if (!hasFlag(args, '--confirm')) {
     say('部署会修改服务与数据目录：请加 --confirm 执行（或 --dry-run 预演）');
