@@ -191,21 +191,29 @@ body {
 }
 
 /* ── 启动 loading 壳 ── */
+/* 启动提示改成"浮层"而不是"整屏遮罩"：
+   以前它会用背景色盖住整页，等 /api/status 就绪才淡出——点进控制台就是白屏闪一下。
+   现在外壳（侧栏 + 视图）立即可见，只有一张小卡片浮在顶部，服务慢或没起来时才看得到。 */
 .loading-overlay {
   position: fixed; inset: 0; z-index: 999;
-  background: var(--bg);
-  display: flex; align-items: center; justify-content: center;
+  background: transparent;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 78px 16px 16px;
+  pointer-events: none;              /* 不挡操作；卡片本身恢复可点击 */
 }
 .loading-card {
-  width: min(520px, 92vw);
-  padding: 28px 30px;
-  background: var(--bg-2);
+  width: min(400px, 88vw);
+  padding: 16px 18px;
+  background: color-mix(in srgb, var(--bg-2) 94%, transparent);
+  backdrop-filter: blur(10px) saturate(150%);
   border: 1px solid var(--border);
   border-radius: 14px;
-  display: flex; flex-direction: column; gap: 12px;
+  box-shadow: var(--shadow-md);
+  display: flex; flex-direction: column; gap: 10px;
+  pointer-events: auto;
 }
-.loading-title { font-size: 17px; font-weight: 600; }
-.loading-sub { color: var(--muted); font-size: 13px; }
+.loading-title { font-size: 14.5px; font-weight: 600; }
+.loading-sub { color: var(--muted); font-size: 12.5px; }
 .loading-spinner {
   width: 22px; height: 22px;
   border: 3px solid var(--border);
@@ -2464,7 +2472,8 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .asset-table-wrap, .context-call-table-wrap { border-radius: 12px; border: 1px solid var(--border); overflow: hidden; }
 
 /* ── 对话框 / 登录卡 / 加载页 ── */
-.modal-overlay, .model-modal-overlay, .loading-overlay { backdrop-filter: blur(3px); background: var(--overlay); }
+/* 弹窗类才需要压暗背景；启动提示是浮层，不压暗（否则进控制台会整屏闪一下） */
+.modal-overlay, .model-modal-overlay { backdrop-filter: blur(3px); background: var(--overlay); }
 .modal, .model-modal, .loading-card { border-radius: 16px; box-shadow: var(--shadow-lg); border: 1px solid var(--border); }
 .modal-head, .model-modal-head { border-bottom: 1px solid var(--border); }
 .modal-foot, .model-modal-foot { border-top: 1px solid var(--border); }

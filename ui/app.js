@@ -489,13 +489,32 @@ function setLoadingStatus(text) {
   if (loadingLogs) loadingLogs.textContent = bootLogs.slice(-12).join('\n');
 }
 
+// 启动壳默认先藏起来：服务可用得快时（本地/隧道，通常几百毫秒）完全不显示，
+// 避免"点进控制台闪一下"；只有超过 LOADING_REVEAL_MS 还没就绪才淡入。
+// 注意：只有 JS 跑起来才会隐藏它——脚本没加载出来时，静态页面上那张启动卡仍然在。
+const LOADING_REVEAL_MS = 900;
+let loadingRevealed = false;
+if (loadingOverlay) {
+  loadingOverlay.style.transition = 'opacity .18s ease';
+  loadingOverlay.style.opacity = '0';
+  loadingOverlay.style.pointerEvents = 'none';
+}
+function revealLoadingIfSlow() {
+  setTimeout(() => {
+    if (appReady || loadingRevealed || !loadingOverlay) return;
+    loadingRevealed = true;
+    loadingOverlay.style.pointerEvents = '';
+    loadingOverlay.style.opacity = '1';
+  }, LOADING_REVEAL_MS);
+}
+
 function hideLoading() {
   appReady = true;
-  if (loadingOverlay) {
-    loadingOverlay.style.transition = 'opacity .25s ease';
-    loadingOverlay.style.opacity = '0';
-    setTimeout(() => { loadingOverlay?.remove(); }, 300);
-  }
+  if (!loadingOverlay) return;
+  if (!loadingRevealed) { loadingOverlay.remove(); return; }  // 从没显示过，直接摘掉，不做淡出
+  loadingOverlay.style.transition = 'opacity .25s ease';
+  loadingOverlay.style.opacity = '0';
+  setTimeout(() => { loadingOverlay?.remove(); }, 300);
 }
 
 async function pollUntilReady() {
@@ -518,7 +537,8 @@ async function pollUntilReady() {
 async function bootLoop() {
   for (let i = 0; i < 90; i++) {
     if (await pollUntilReady()) break;
-    await new Promise((r) => setTimeout(r, 1000));
+    // 头 3 秒用短间隔（服务通常立刻可用，短间隔能让首屏更快进入），之后退回 1 秒避免空转
+    await new Promise((r) => setTimeout(r, i < 12 ? 250 : 1000));
   }
   hideLoading();
   refreshStatus();
@@ -8657,14 +8677,16 @@ $$('.tab').forEach((tab) => {
         body: JSON.stringify({ token: t })
       });
       if (res.ok) {
+        // 只把地址栏里的明文令牌抹掉（不重载页面）：重载会让控制台白屏闪一下。
+        // 服务器已在响应里下发 Cookie，抹掉地址栏后继续正常启动即可。
         u.searchParams.delete('token');
-        location.replace(u.toString());
-        return;
+        history.replaceState(null, '', u.toString());
       }
     }
   } catch { /* 自动登录失败就按原流程弹登录框 */ }
   // 启动 loading：先等 HTTP 服务可用（页面可能先于服务打开）
   setLoadingStatus('正在启动 QQ Agent 服务…');
+  revealLoadingIfSlow();
   await bootLoop();
 
   // 主题：以后端配置为准（跨设备同步），仅当后端确实存过才覆盖本地
@@ -8679,7 +8701,8 @@ $$('.tab').forEach((tab) => {
 
   // 首启引导：关键配置（模型/白名单）没填就直接带去设置页
   try {
-    const cfg = await api('/api/config');
+    // 复用上面那次 /api/config 的结果，少一次请求（首屏更快）
+    const cfg = state.config || await api('/api/config');
     const ready = !!cfg.api.model && ((cfg.allow.groups?.length || cfg.allow.private?.length) || cfg.allowAllWhenEmpty);
     if (!ready) {
       switchTab('settings');
