@@ -550,6 +550,58 @@ async function bootLoop() {
   if (state.tab === 'memory') loadMemoryView();
 }
 
+// 列表按 key 做增量更新：已存在且内容未变的行，保持同一个 DOM 节点。
+// 为什么需要它：以前列表是 box.innerHTML = rows.map(...) 整列重建，每次刷新
+// （15 秒一次 + 推送）都会把每一行销毁重建——行上的悬停/选中态、正在跑的动画、
+// 内部滚动位置全被重置，看起来就是"列表闪来闪去"。这里按 key 对齐：
+//   · key 相同且 HTML 相同 → 复用原节点（什么都不做）
+//   · key 相同但 HTML 变了 → 只替换这一行
+//   · key 不存在 → 插入新节点；多余的 key → 删除
+function patchKeyedList(container, entries, keyAttr = 'data-key') {
+  if (!container) return;
+  // 比较用的规范化：把"由本地 ticker 维护"的倒计时文本抹掉，
+  // 否则每次刷新都判定成"行变了"，整行重建（倒计时还会闪回旧值）。
+  const VOLATILE = /(<(?:span|strong)[^>]*data-(?:until|deadline)="[^"]*"[^>]*>)[\s\S]*?(<\/(?:span|strong)>)/g;
+  const norm = (html) => String(html).replace(VOLATILE, '$1$2');
+  const existing = new Map();
+  for (const node of Array.from(container.children)) {
+    const key = node.getAttribute && node.getAttribute(keyAttr);
+    if (key) existing.set(key, node);
+  }
+  const makeNode = (html, key) => {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = String(html).trim();
+    const node = tpl.content.firstElementChild;
+    if (!node) return null;
+    node.setAttribute(keyAttr, key);
+    node.__renderedHtml = html;
+    node.__cmp = norm(html);
+    return node;
+  };
+  const seen = new Set();
+  let prev = null;
+  for (const entry of entries) {
+    const key = String(entry.key);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let node = existing.get(key) || null;
+    const cmp = norm(entry.html);
+    if (node && node.__cmp !== cmp) {
+      const fresh = makeNode(entry.html, key);
+      if (fresh) { node.replaceWith(fresh); node = fresh; }
+    } else if (!node) {
+      node = makeNode(entry.html, key);
+    }
+    if (!node) continue;
+    const wantNext = prev ? prev.nextElementSibling : container.firstElementChild;
+    if (node !== wantNext) container.insertBefore(node, prev ? prev.nextSibling : container.firstChild);
+    prev = node;
+  }
+  for (const [key, node] of existing) {
+    if (!seen.has(key)) node.remove();
+  }
+}
+
 // 只在内容真的变化时替换 DOM。
 // 背景：控制页/异常页等会在每次状态刷新（15 秒一次 + 推送）时重建整块 HTML，
 // 数据没变也照重建 —— 页面就"整页闪一下"。用这个函数收口：HTML 相同直接跳过。
@@ -1412,7 +1464,7 @@ function renderSessionList() {
   const displayItems = buildSessionDisplayItems(all);
   const shown = displayItems.slice(0, state.sessionLimit);
   const rest = displayItems.length - shown.length;
-  box.innerHTML = shown.map((s) => {
+  const sessionRows = shown.map((s) => {
     const chatName = formatChatTitle(s.chatKey, chatNameOf(s.chatKey));
     const waitHtml = s.status === 'waiting' && s.waitUntil
       ? `<span class="session-wait" data-until="${Number(s.waitUntil)}">等待中 · ${fmtWaitRemain(Number(s.waitUntil))}</span>`
@@ -1457,7 +1509,8 @@ function renderSessionList() {
           ${s.status !== 'waiting' ? `<span>${s.usage ? fmtTokens(s.usage.totalTokens) : '-'}</span>${mode === 'lifecycle' ? `<span>${fmtYuan(s.estimatedCost)}</span>` : ''}<span>${s.totalRounds || 0} 模型轮</span>${searchHtml}</span>` : ''}
         </div>
       </div>`;
-  }).join('');
+  }).map((html, index) => ({ key: String(shown[index].displayKey), html }));
+  patchKeyedList(box, sessionRows, 'data-display-key');
   // 底部提示：还有多少条没显示 / 已全部显示
   const more = $('#session-more');
   if (more) {
@@ -1474,6 +1527,8 @@ function renderSessionList() {
   }
   for (const s of displayItems) state.seenSessionIds.add(s.displayKey);
   $$('.session-item', box).forEach((el) => {
+    if (el.__bound) return;      // 增量更新会保留旧行，别重复绑定
+    el.__bound = true;
     const activate = () => selectSession(el.dataset.id);
     el.addEventListener('click', activate);
     el.addEventListener('keydown', (event) => {
@@ -2053,7 +2108,7 @@ async function openUnknownOperations(chatKey) {
 function renderChatList() {
   const box = $('#chat-items');
   state.seenChatKeys = state.seenChatKeys || new Set();
-  box.innerHTML = state.chats.map((c) => {
+  const chatRows = state.chats.map((c) => {
     const name = formatChatTitle(c.key, chatNameOf(c.key));
     const isNew = !state.seenChatKeys.has(c.key);
     const mode = conversationModeForChat(c.key);
@@ -2082,12 +2137,18 @@ function renderChatList() {
         <div class="chat-item-sub">${esc(c.lastText || '（空）')}</div>
         <div class="session-meta"><span>${c.total} 条 · 失败 ${c.failed || 0} · 待确认 ${c.held || 0}${c.thread ? ` · 线程 v${c.thread.version}` : ''}</span><span>${fmtTime(c.lastTs)}</span></div>
       </div>`;
-  }).join('') || '<div class="list-head muted">还没有消息存档（等白名单里的群/好友来消息）</div>';
+  }).map((html, index) => ({ key: String(state.chats[index].key), html }));
+  patchKeyedList(box, chatRows, 'data-key');
+  if (!chatRows.length) box.innerHTML = '<div class="list-head muted">还没有消息存档（等白名单里的群/好友来消息）</div>';
   for (const c of state.chats) state.seenChatKeys.add(c.key);
   $$('.chat-item', box).forEach((el) => {
+    if (el.__bound) return;      // 增量更新会保留旧行，别重复绑定
+    el.__bound = true;
     el.addEventListener('click', () => selectChat(el.dataset.key));
   });
   $$('[data-chat-runtime]', box).forEach((button) => {
+    if (button.__bound) return;
+    button.__bound = true;
     button.addEventListener('click', (event) => {
       event.stopPropagation();
       openChatRuntimeControl(button.dataset.chatRuntime).catch((error) => alert(error.message));

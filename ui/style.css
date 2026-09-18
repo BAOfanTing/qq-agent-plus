@@ -1194,12 +1194,12 @@ html.boot-show .loading-overlay { opacity: 1; }
 .model-modal-overlay { animation: fadeIn var(--dur-base) var(--ease-in-out); }
 .model-modal { animation: popIn var(--dur-slow) var(--ease-spring); }
 .session-item.new-item, .chat-item.new-item { animation: itemIn var(--dur-slow) var(--ease-out-quart); }
-.member-table tr { animation: itemIn var(--dur-base) var(--ease-out-quart); }
+/* 表格行不要挂入场动画：表格每次刷新都会重建行，动画会跟着重放＝整片闪。
+   需要入场感的地方用「新增行才加类」的方式（见 .session-item.new-item）。 */
+.member-table tr { animation: none; }
 
-/* 页面切换：切页签/切设置分区时给一点入场感 */
-.page, .settings-section, #usage-page, #chats-page, #settings-page {
-  animation: pageIn var(--dur-slow) var(--ease-out-quart);
-}
+/* 页面容器上的入场动画已移除：这些容器的内容会被整块重建，
+   动画会在每次刷新时重放（观感＝整页闪一下）。页签切换本身是即时切换，不需要它。 */
 
 /* 统计卡片：悬浮轻微抬升（1px 位移 + 阴影），让"可看"变成"可感" */
 .usage-card {
