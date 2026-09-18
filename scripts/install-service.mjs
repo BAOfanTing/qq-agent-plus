@@ -18,7 +18,7 @@ const snowlumaWebuiUrl = String(
 const repository = String(
   process.env.QQ_AGENT_REPOSITORY
   || previous.repository
-  || 'https://github.com/carbonbromine/qq-agent.git'
+  || 'https://github.com/sakurawwwxh/qq-agent-plus.git'
 ).trim();
 const branch = String(process.env.QQ_AGENT_BRANCH || previous.branch || 'main').trim();
 if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(repository)) {

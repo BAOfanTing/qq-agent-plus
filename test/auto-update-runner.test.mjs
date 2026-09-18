@@ -56,7 +56,7 @@ test('scheduled updater uses the persistent Git cache and records no-update', (t
     autoUpdate: {
       enabled: true,
       ownerUin: '900001',
-      repository: 'https://github.com/carbonbromine/qq-agent.git',
+      repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
       branch: 'main',
       intervalHours: 6
     },
@@ -119,7 +119,7 @@ test('updater tests a checkout and delegates deployment with the exact revision'
     autoUpdate: {
       enabled: true,
       ownerUin: '900001',
-      repository: 'https://github.com/carbonbromine/qq-agent.git',
+      repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
       branch: 'main',
       intervalHours: 6
     },
@@ -200,7 +200,7 @@ test('transient GitHub TLS failures are retried before fetch', (t) => {
     autoUpdate: {
       enabled: true,
       ownerUin: '900001',
-      repository: 'https://github.com/carbonbromine/qq-agent.git',
+      repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
       branch: 'main',
       intervalHours: 6,
       networkRetries: 3,
@@ -261,7 +261,7 @@ test('probe request checks repository and branch without fetching or deploying',
     autoUpdate: {
       enabled: false,
       ownerUin: '',
-      repository: 'https://github.com/carbonbromine/qq-agent.git',
+      repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
       branch: 'feat/test-branch',
       intervalHours: 6
     },
