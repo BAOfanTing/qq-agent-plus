@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # 发布前再跑一遍与 CI 相同的检查，任何一步失败都不会出 Release
+      - run: npm ci
+      - run: node src/ops.js scan --strict
+      - run: npm run test:unit
+      - run: npm run test:local
+
+      - name: 生成发布说明草稿
+        run: |
+          {
+            echo "## 本次改动"
+            echo
+            git log --no-merges --pretty=format:'- %s (%h)' "$(git tag --sort=-creatordate | sed -n '2p')..${GITHUB_REF_NAME}" 2>/dev/null || git log --no-merges --pretty=format:'- %s (%h)' -20
+            echo
+            echo
+            echo "安装与部署见 [docs/OPS.md](docs/OPS.md)。"
+          } > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: 创建 Release（草稿，确认后发布）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --draft \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file RELEASE_NOTES.md

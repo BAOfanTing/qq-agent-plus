@@ -14,6 +14,7 @@ const CASES = [
   'test-sender-retry.mjs',
   'test-qzone-backoff.mjs',
   'test-qzone-intervals.mjs',
+  'test-qzone-reply-fallback.mjs',
   'test-sticker-lookup.mjs',
   'test-send-tools.mjs',
   'test-thinking-toolchoice.mjs',
@@ -21,17 +22,18 @@ const CASES = [
 ];
 
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-agent-local-'));
 let failed = 0;
 
-try {
-  for (const file of CASES) {
-    const target = path.join(here, file);
-    if (!fs.existsSync(target)) {
-      console.error(`FAIL ${file}（文件不存在）`);
-      failed += 1;
-      continue;
-    }
+// 每个用例一个全新的临时数据目录：用例之间互不污染，也保证单个用例重跑时的行为可预期。
+for (const file of CASES) {
+  const target = path.join(here, file);
+  if (!fs.existsSync(target)) {
+    console.error(`FAIL ${file}（文件不存在）`);
+    failed += 1;
+    continue;
+  }
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), `qq-agent-local-${path.basename(file, '.mjs')}-`));
+  try {
     const run = spawnSync(process.execPath, [target], {
       stdio: 'inherit',
       env: { ...process.env, QQ_AGENT_DATA_DIR: dataDir }
@@ -39,9 +41,9 @@ try {
     const ok = run.status === 0;
     if (!ok) failed += 1;
     console.log(`${ok ? 'PASS' : 'FAIL'} ${file}`);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
-} finally {
-  fs.rmSync(dataDir, { recursive: true, force: true });
 }
 
 console.log(`\n本地回归结果: ${CASES.length - failed}/${CASES.length} 通过`);

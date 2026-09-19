@@ -1,4 +1,5 @@
 import { PEAK_WINDOWS } from './model-prices.js';
+import { ZONE_OFFSET_MS } from './util.js';
 
 export const TIME_ZONE = 'Asia/Shanghai';
 export const DEFAULT_TIME_CONTROL = {
@@ -10,7 +11,6 @@ export const DEFAULT_TIME_CONTROL = {
 const DAY = 1440;
 const WEEK = DAY * 7;
 const MINUTE_MS = 60000;
-const OFFSET_MS = 8 * 60 * MINUTE_MS;
 const MODES = new Set(['deepseek-offpeak', 'custom', 'always']);
 
 function minuteOf(value, end = false) {
@@ -108,10 +108,10 @@ export function timeControlState(timeControl, chatKey = '', now = Date.now()) {
   const override = timeControl.overrides?.[chatKey];
   const schedule = override && override.mode !== 'inherit'
     ? override : (timeControl.schedule ?? DEFAULT_TIME_CONTROL.schedule);
-  const local = new Date(now + OFFSET_MS);
+  const local = new Date(now + ZONE_OFFSET_MS);
   const weekday = (local.getUTCDay() + 6) % 7;
   const monday = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate())
-    - OFFSET_MS - weekday * DAY * MINUTE_MS;
+    - ZONE_OFFSET_MS - weekday * DAY * MINUTE_MS;
   const minute = (now - monday) / MINUTE_MS;
   let ranges;
   try { ranges = intervalsFor(schedule); } catch { ranges = []; }

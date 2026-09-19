@@ -37,6 +37,9 @@ import { safeFetchBinary } from './safe-fetch.js';
 import { integrationStatus, updateSnowLumaPassword } from './integrations.js';
 import { AutoUpdateManager } from './auto-update.js';
 
+// /healthz 用：只暴露名称、版本与运行状态，不含任何配置内容
+const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+
 // 全局 fetch（undici）默认连接建立超时只有 10 秒，openrouter.ai 这类海外端点
 // 握手慢时会直接报 "Connect Timeout Error ... timeout: 10000ms"（注意这不是
 // 请求超时——那是 llm.js 里 180 秒的 AbortSignal）。这里放宽到 30 秒。
@@ -1053,7 +1056,17 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
   async function handleHttp(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
     const pathname = url.pathname;
-    if (pathname === '/healthz' && req.method === 'GET') return json(res, 200, { ok: true });
+    if (pathname === '/healthz' && req.method === 'GET') {
+      // 给拨测/uptime 监控用：无鉴权，但只含版本与连接状态，不带任何配置
+      return json(res, 200, {
+        ok: true,
+        name: PKG.name,
+        version: PKG.version,
+        uptimeSeconds: Math.round(process.uptime()),
+        onebotConnected: Boolean(onebot?.connected),
+        timestamp: Date.now()
+      });
+    }
     if (pathname === '/api/login' && req.method === 'POST') {
       const origin = String(req.headers.origin || '');
       if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) {

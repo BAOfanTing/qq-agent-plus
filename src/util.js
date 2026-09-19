@@ -22,7 +22,7 @@ export function nowMs() {
 
 // ── 时间格式化（固定上海时区，给模型/界面看） ───────────────────────────
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
+export const ZONE_OFFSET_MS = 8 * 60 * 60 * 1000; // Asia/Shanghai（UTC+8）：全项目钟点/自然日判断共用
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -30,16 +30,13 @@ function pad2(n) {
 
 function shanghaiDate(ts = Date.now()) {
   const value = Number(ts);
-  return new Date((Number.isFinite(value) ? value : Date.now()) + SHANGHAI_OFFSET_MS);
+  return new Date((Number.isFinite(value) ? value : Date.now()) + ZONE_OFFSET_MS);
 }
 
 /** 2026-08-30 21:33:05（周六） */
 export function formatFullTime(ts = Date.now()) {
   const d = shanghaiDate(ts);
   const formatted = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}（${WEEKDAYS[d.getUTCDay()]}）`;
-  // #region debug-point A:prompt-time
-  if (false) (() => { try { const body = JSON.stringify({ sessionId: 'agent-time-sticker-download', runId: 'post-fix', hypothesisId: 'A', location: 'src/util.js:formatFullTime', msg: '[DEBUG] Formatted model prompt time', data: { ts: Number(ts), formatted, timezone: 'Asia/Shanghai', hostTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone, offsetMinutes: 480 }, ts: Date.now() }); const req = process.getBuiltinModule('node:http').request('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } }, (res) => res.resume()); req.on('error', () => {}); req.on('socket', (socket) => socket.unref()); req.setTimeout(500, () => req.destroy()); req.end(body); } catch {} })();
-  // #endregion
   return formatted;
 }
 
@@ -67,12 +64,18 @@ export function shanghaiDayStart(ts = Date.now()) {
     shifted.getUTCFullYear(),
     shifted.getUTCMonth(),
     shifted.getUTCDate()
-  ) - SHANGHAI_OFFSET_MS;
+  ) - ZONE_OFFSET_MS;
 }
 
 // ── 文本处理 ─────────────────────────────────────────────────────────────
 
 /** 防止底层网关把文本中的 [CQ: 当作 CQ 码解析：替换为全角冒号。 */
+/** 当前时刻在固定时区里的"当天第几分钟"（00:00=0）。活跃时段/主动窗口都用它，别再各自 new Date(+8)。 */
+export function minuteOfDayInZone(ts = Date.now()) {
+  const d = shanghaiDate(ts);
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+
 export function escapeCqText(text) {
   return String(text ?? '').replace(/\[CQ:/gi, '[CQ：');
 }

@@ -84,18 +84,18 @@ globalThis.clearTimeout = (handle) => {
 
 const calls = { feed: 0, reply: 0 };
 let modelCalls = 0;
-let failReply = false;
+let failFeeds = false;
 const onebot = {
   selfId: '10000001',
   selfNickname: '犊子',
   async call(method) {
     if (method === 'get_qzone_feeds') {
       calls.feed += 1;
+      if (failFeeds) throw new Error('OneBot get_qzone_feeds 失败: retcode=100 使用人数过多，请稍后再试');
       return { feeds: [] };
     }
     if (method === 'get_qzone_msg_list') {
       calls.reply += 1;
-      if (failReply) throw new Error('OneBot get_qzone_msg_list 失败: retcode=100 Unexpected status code: 501');
       return { msglist: [] };
     }
     throw new Error(`用例未覆盖的接口: ${method}`);
@@ -187,11 +187,13 @@ try {
   check('没有新内容时一轮不调模型（0 token）', modelCalls === 0 && logs.length === 0, `modelCalls=${modelCalls} logs=${logs.length}`);
 
   // ⑤ 接口连续失败：只尝试一次，退避 2 分钟 → 4 分钟，绝不是每秒重试
-  failReply = true;
-  jump(REPLY_MINUTES + 1);
-  const beforeFail = calls.reply;
+  //    （好友动态接口的失败会让整轮失败；回复列表接口的失败自 2026-09 起是软兜底，
+  //      由 test-qzone-reply-fallback.mjs 单独覆盖）
+  failFeeds = true;
+  jump(FEED_MINUTES + 1);
+  const feedBeforeFail = calls.feed;
   const afterFail1 = await fire('失败轮 1');
-  check('失败轮只尝试一次（不刷屏重试）', calls.reply === beforeFail + 1, `本轮尝试 ${calls.reply - beforeFail} 次`);
+  check('失败轮只尝试一次（不刷屏重试）', calls.feed === feedBeforeFail + 1, `本轮尝试 ${calls.feed - feedBeforeFail} 次`);
   check('失败后退避到 2 分钟', minutes(afterFail1) === 2, `实际 ${minutes(afterFail1)} 分钟`);
   check('failStreak 记为 1', readState().failStreak === 1, `failStreak=${readState().failStreak}`);
 
@@ -199,7 +201,7 @@ try {
   const afterFail2 = await fire('失败轮 2');
   check('再次失败退避翻倍到 4 分钟', minutes(afterFail2) === 4, `实际 ${minutes(afterFail2)} 分钟`);
   check('连续失败也只报一条日志（第一条）', logs.length === 1, `logs=${logs.length}`);
-  failReply = false;
+  failFeeds = false;
 
   // ⑥ 到点在活跃时段之外：不调用接口，排到下一个时段开始（07:00）
   mgr.stop();

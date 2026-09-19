@@ -24,7 +24,7 @@ QQ_AGENT_DATA_DIR=$T node test/local/test-sender-retry.mjs
 | 文件 | 验证什么 | 需要 DATA_DIR | 耗时 |
 | --- | --- | --- | --- |
 | `test-sender-retry.mjs` | 发送走网络层错误（`fetch failed`）时重试一次；限频等非网络错误不重试；连续失败最多重试一次 | 是（写 config.json） | < 2 秒 |
-| `test-qzone-backoff.mjs` | 空间互动接口连续失败时指数退避：23 秒内只尝试一次，失败计数=1，下一次排到分钟级 | 是（写 config.json） | 约 25 秒 |
+| `test-qzone-backoff.mjs` | 空间互动接口连续失败时指数退避（假时钟）：首轮失败只尝试一次、退避 2 分钟 → 4 分钟翻倍、连续故障只报一条日志 | 是（写 config.json） | < 2 秒 |
 | `test-qzone-intervals.mjs` | 巡检节奏（假时钟把 24 小时压到毫秒）：好友动态 24 小时 / 评论回复 2 小时各自到点才跑、没到点的接口一次不调、没有新内容不调模型、失败只重试一次并退避 2→4 分钟、活跃时段外排到时段开始 | 是（写 config.json） | < 2 秒 |
 | `test-send-tools.mjs` | 工具层发送不再抛 "is not defined"，`replyToMessageId` 的 `#` 被归一化后透传给 sender | 是（写临时目录） | < 2 秒 |
 | `test-inline-fallback.mjs` | 内联工具调用兜底：4 种文本格式能解析、普通文本不误判；关系/身份/每日说说/空间互动都认内联提交 | 建议设（被 import 的模块会读 config.json；用例本身不写数据目录，只写 `/tmp/qz-behavior/`） | < 2 秒 |

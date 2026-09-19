@@ -23,6 +23,7 @@ import {
   QZONE_INTERACTION_PROMPT_VERSION
 } from './qzone-interaction-prompt.js';
 import { resolveToolCalls } from './inline-tools.js';
+import { minuteOfDayInZone } from './util.js';
 
 const STATE_FILE = path.join(DATA_DIR, 'qzone-interactions.json');
 const HOUR_MS = 60 * 60 * 1000;
@@ -53,7 +54,6 @@ function interactionError(code, message, httpStatus = 409) {
 }
 
 // ── 活跃时段（本功能专用）：窗口外不阅览动态，也不影响聊天回复 ──
-const ACTIVE_HOURS_OFFSET_MS = 8 * 60 * 60 * 1000;   // Asia/Shanghai
 
 function activeHoursMinute(value) {
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value ?? ''));
@@ -71,8 +71,7 @@ function normalizeActiveHours(raw) {
 /** 当前是否在活跃时段内；不在时给出下一次进入窗口的时间。 */
 function activeHoursState(hours, now) {
   if (!hours) return { active: true, nextActiveAt: 0 };
-  const d = new Date(now + ACTIVE_HOURS_OFFSET_MS);
-  const minute = d.getUTCHours() * 60 + d.getUTCMinutes();
+  const minute = minuteOfDayInZone(now);
   const wrap = hours.start > hours.end;
   const active = wrap
     ? minute >= hours.start || minute < hours.end
@@ -618,40 +617,51 @@ export class QzoneInteractionManager {
   async #discoverReplies(cfg, signal) {
     const selfId = String(this.onebot.selfId || '');
     if (!selfId) throw new Error('无法确认当前登录 QQ');
-    const own = await this.onebot.call(
-      'get_qzone_msg_list',
-      { target_uin: Number(selfId), pos: 0, num: cfg.ownPostCount },
-      30000,
-      signal
-    );
-    if (!Array.isArray(own?.msglist)) throw new Error('自己的动态列表返回格式无效');
     const candidates = new Map();
-    for (const item of own.msglist) {
-      const post = {
-        uin: selfId,
-        tid: String(item.tid || ''),
-        nickname: this.onebot.selfNickname || getConfig().persona?.botName || '我',
-        content: cleanText(item.content, 1200),
-        time: Number(item.time) || 0,
-        commentCount: Number(item.comment_num) || 0
-      };
-      if (!post.tid) continue;
-      const previous = this.state.watchedPosts.find((watch) => watch.key === qzonePostKey(post));
-      this.#watchPost(post, { own: true });
-      if (post.commentCount > 0
-        && Number(previous?.scannedCommentCount) !== post.commentCount) {
-        candidates.set(qzonePostKey(post), post);
+    // 主路径：自己的动态列表，评论数的权威来源。这个接口在 Qzone 侧常被限流（retcode=100），
+    // 失败不致命：feed 轮会持续用 #watchPost 刷新自己动态的评论数，本轮退回"已关注动态 +
+    // Cookie 详情接口"的兜底节奏即可，不再让整轮回复检查失败、触发退避。
+    let countsReliable = false;
+    try {
+      const own = await this.onebot.call(
+        'get_qzone_msg_list',
+        { target_uin: Number(selfId), pos: 0, num: cfg.ownPostCount },
+        30000,
+        signal
+      );
+      if (!Array.isArray(own?.msglist)) throw new Error('自己的动态列表返回格式无效');
+      countsReliable = true;
+      for (const item of own.msglist) {
+        const post = {
+          uin: selfId,
+          tid: String(item.tid || ''),
+          nickname: this.onebot.selfNickname || getConfig().persona?.botName || '我',
+          content: cleanText(item.content, 1200),
+          time: Number(item.time) || 0,
+          commentCount: Number(item.comment_num) || 0
+        };
+        if (!post.tid) continue;
+        const previous = this.state.watchedPosts.find((watch) => watch.key === qzonePostKey(post));
+        this.#watchPost(post, { own: true });
+        if (post.commentCount > 0
+          && Number(previous?.scannedCommentCount) !== post.commentCount) {
+          candidates.set(qzonePostKey(post), post);
+        }
       }
+    } catch (error) {
+      this.log(`[qzone-interactions] 自己的动态列表不可用，本轮改用已关注动态兜底（${cleanText(error?.message ?? error, 120)}）`);
     }
     for (const watched of this.state.watchedPosts) {
       if (!watched.tid || !watched.uin) continue;
       const ageMs = this.now() - Number(watched.time) * 1000;
       if (ageMs > cfg.maxAgeHours * HOUR_MS) continue;
       if (candidates.has(watched.key)) continue;
-      if (watched.own && !watched.conversationActive) {
+      if (watched.own && !watched.conversationActive && countsReliable) {
+        // 评论数可靠时，只在它变化后才值得拉一次详情
         if (Number(watched.commentCount) <= 0
           || Number(watched.scannedCommentCount) === Number(watched.commentCount)) continue;
       } else {
+        // 评论数拿不到（限流兜底）或非自己的动态：按节奏定期拉详情，靠评论 key 去重
         const interval = ageMs < 6 * HOUR_MS
           ? cfg.replyIntervalMinutes * 60000
           : (ageMs < 24 * HOUR_MS ? 30 * 60000 : 2 * HOUR_MS);
