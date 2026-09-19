@@ -18,7 +18,7 @@ async function freePort() {
   return port;
 }
 
-test('incident infrastructure stays active and versions chat controls', { skip: '基线遗留失败（Ubuntu 22.04 + Node 22 上稳定失败，见 docs/KNOWN-ISSUES.md），修好前跳过以免 CI 误报' }, async (t) => {
+test('incident infrastructure stays active and versions chat controls', async (t) => {
   const port = await freePort();
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.server = { ...cfg.server, host: '127.0.0.1', port, token: '' };
@@ -57,8 +57,11 @@ test('incident infrastructure stays active and versions chat controls', { skip: 
 
   const list = await request('/api/incidents?state=open');
   assert.equal(list.status, 200);
-  assert.equal(list.body.incidents.length, 1);
-  assert.equal(list.body.incidents[0].notifyState, 'pending');
+  // app.start() 连接 ws://127.0.0.1:1 会被基建自动捕获一条连接类事件；
+  // 这里只断言测试自己注入的那条，其余自动捕获属于正常行为。
+  const injected = list.body.incidents.filter((item) => item.source === 'test-api');
+  assert.equal(injected.length, 1);
+  assert.equal(injected[0].notifyState, 'pending');
 
   const control = await request('/api/chats/group_1/runtime-control', {
     method: 'PUT',

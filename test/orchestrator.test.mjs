@@ -645,7 +645,10 @@ describe('Orchestrator', () => {
     assert.equal(calls, 1);
   });
 
-  it('injects only confirmed slang visible to the current chat when enabled', { skip: '基线遗留失败（Ubuntu 22.04 + Node 22 上稳定失败，见 docs/KNOWN-ISSUES.md），修好前跳过以免 CI 误报' }, async (t) => {
+  it('keeps slang injection retired even with legacy config and slang assets', async (t) => {
+    // 黑话研究已下线（stable-feature-policy: slangPilot=false）：即使旧配置里
+    // enabled=true、磁盘上还有 slang.json，提示词也不应再注入任何黑话段落，
+    // 避免把某个群的梗泄露到另一个群。
     const { cfg, runner, append } = fixture(t);
     cfg.slangPilot = {
       ...structuredClone(DEFAULT_CONFIG.slangPilot),
@@ -704,9 +707,9 @@ describe('Orchestrator', () => {
 
     const prompt = String(request.messages.find((message) =>
       message.role === 'user')?.content || '');
-    assert.match(prompt, /【已确认黑话】/);
-    assert.match(prompt, /全局梗/);
-    assert.match(prompt, /本群梗/);
+    assert.doesNotMatch(prompt, /【已确认黑话】/);
+    assert.doesNotMatch(prompt, /全局梗/);
+    assert.doesNotMatch(prompt, /本群梗/);
     assert.doesNotMatch(prompt, /隔壁群梗/);
     assert.doesNotMatch(prompt, /待确认梗/);
   });

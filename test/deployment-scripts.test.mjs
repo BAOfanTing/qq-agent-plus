@@ -32,7 +32,7 @@ test('deploy script verifies and rolls back the update service and timer', () =>
   assert.match(source, /QQ_AGENT_SOURCE_REVISION/);
 });
 
-test('configure-linux creates observe config and preserves runtime mode on update', { skip: '基线遗留失败（Ubuntu 22.04 + Node 22 上稳定失败，见 docs/KNOWN-ISSUES.md），修好前跳过以免 CI 误报' }, (t) => {
+test('configure-linux creates observe config and preserves runtime mode on update', (t) => {
   const dataDir = tempDir(t, 'qq-deploy-config-');
   const script = path.join(repo, 'scripts/configure-linux.mjs');
   const first = runNode(script, [

@@ -21,8 +21,11 @@ function fileDigest(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
-test('disabled identity pilot creates no database and performs no OneBot work', { skip: '基线遗留失败（Ubuntu 22.04 + Node 22 上稳定失败，见 docs/KNOWN-ISSUES.md），修好前跳过以免 CI 误报' }, async (t) => {
-  const dir = fs.mkdtempSync(path.join(root, 'disabled-'));
+test('identity pilot is promoted: legacy enabled:false no longer gates it', async (t) => {
+  // 稳定特性策略（src/stable-feature-policy.js）把身份基建转正：
+  // config.js 的 identityPilotEnabled() 恒为 true，旧的 enabled:false 只会
+  // 留在原始配置里被忽略，不再阻止建库或索引。
+  const dir = fs.mkdtempSync(path.join(root, 'promoted-'));
   const store = new ChatStore(0, { dataDir: dir });
   t.after(() => {
     store.close();
@@ -37,13 +40,10 @@ test('disabled identity pilot creates no database and performs no OneBot work', 
     log: () => {}
   });
   const status = await manager.start();
-  assert.equal(status.enabled, false);
-  assert.equal(status.active, false);
-  assert.equal(calls, 0);
-  assert.equal(fs.existsSync(identityDatabasePath(dir)), false);
-  assert.equal(manager.observeMessage('group:1', {
-    senderId: '123456', senderName: '未启用', ts: Date.now()
-  }), false);
+  assert.equal(status.enabled, true);
+  assert.equal(status.active, true);
+  assert.equal(fs.existsSync(identityDatabasePath(dir)), true);
+  assert.equal(calls >= 1, true, '启动时应向 OneBot 拉取好友列表');
 });
 
 test('unifies the same QQ across chats and indexes legacy memory without modifying it', async (t) => {
@@ -177,7 +177,7 @@ test('legacy memory scanner ignores name-only identities and leaves source bytes
   assert.deepEqual(fs.readFileSync(file), before);
 });
 
-test('friend proposals require eligibility, deduplicate, cool down, and close on friend_add', { skip: '基线遗留失败（Ubuntu 22.04 + Node 22 上稳定失败，见 docs/KNOWN-ISSUES.md），修好前跳过以免 CI 误报' }, async (t) => {
+test('friend proposals require eligibility, deduplicate, cool down, and close on friend_add', async (t) => {
   const dir = fs.mkdtempSync(path.join(root, 'friend-proposals-'));
   const store = new ChatStore(0, { dataDir: dir });
   t.after(() => {
@@ -219,15 +219,23 @@ test('friend proposals require eligibility, deduplicate, cool down, and close on
   }
   const notices = [];
   const onebotActions = [];
+  const sentRequests = [];
   const manager = new IdentityPilotManager({
     store,
     dataDir: dir,
     config: () => cfg,
     onebot: {
       call: async (action) => {
-        onebotActions.push(action);
+        if (action === 'get_friend_list') onebotActions.push(action);
+        if (action === 'get_login_info') return { user_id: 900001, nickname: 'bot' };
         return [];
       }
+    },
+    // 好友申请分发已转正（stable-feature-policy）：批准后走协议发送，
+    // 这里注入桩件避免真实 SnowLuma 协议交互。
+    sendFriendRequest: async (_onebot, request) => {
+      sentRequests.push(request);
+      return { accepted: true };
     },
     notifyFriendProposal: async (proposal, ownerUin) => {
       notices.push({ proposal, ownerUin });
@@ -265,10 +273,13 @@ test('friend proposals require eligibility, deduplicate, cool down, and close on
     'approve',
     { decidedBy: '900001' }
   );
-  assert.equal(approved.proposal.status, 'approved_manual');
-  assert.equal(approved.execution, 'manual-required');
-  assert.equal(approved.protocolDispatchSupported, true);
-  assert.match(approved.note, /实验开关未开启/);
+  assert.equal(approved.proposal.status, 'sent');
+  assert.equal(approved.execution, 'sent');
+  assert.match(approved.note, /好友申请 API 已明确受理/);
+  assert.equal(sentRequests.length, 1);
+  assert.equal(sentRequests[0].userId, '123456');
+  assert.equal(sentRequests[0].selfId, '900001');
+  assert.equal(sentRequests[0].sourceChatKey, 'group:100');
   assert.deepEqual(onebotActions, ['get_friend_list', 'get_friend_list']);
 
   assert.equal(await manager.markFriendAdded('123456'), 1);

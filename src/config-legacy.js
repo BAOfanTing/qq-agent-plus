@@ -887,9 +887,11 @@ export function scheduleConfigSave() {
   clearTimeout(saveTimers.get('cfg'));
   saveTimers.set('cfg', setTimeout(() => {
     try {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
       const tmp = `${CONFIG_FILE}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(getConfig(), null, 2), 'utf8');
+      // config.json 含模型 Key 与控制台 Token，防抖路径也必须锁 0600，
+      // 否则 rename 会把 updateConfig 落好的 0600 打回 umask 默认（0664）
+      fs.writeFileSync(tmp, JSON.stringify(getConfig(), null, 2), { mode: 0o600 });
       fs.renameSync(tmp, CONFIG_FILE);
     } catch (error) {
       console.error('[config] 保存失败:', error);
