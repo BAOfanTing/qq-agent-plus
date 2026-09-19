@@ -55,6 +55,16 @@ node src/ops.js scan --log="$HOME/qq-agent-undefined-calls.log"   # 有可疑调
 node src/ops.js backup --dry-run
 node src/ops.js backup --confirm --keep=4
 
+# 备份出机（可选，强烈建议）：把备份包再推一份到 rclone 远端（如腾讯云 COS）
+# 一次性配置：装 rclone → rclone config 建远端 → 写 ~/qq-agent/tools/offsite.conf：
+#   RCLONE_REMOTE="my-cos:qq-agent-backups"
+# 安装定时器（每周日 05:10，紧跟本地 04:10 备份；未配置时脚本安静跳过）：
+#   cp scripts/systemd/qq-agent-backup-offsite.* ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now qq-agent-backup-offsite.timer
+# 手动跑一次 / 看日志：
+~/qq-agent/app/scripts/backup-offsite.sh
+tail ~/qq-agent/backups/offsite.log
+
 # 线上验证
 node src/ops.js watch-send --minutes=240
 node src/ops.js watch-login --timeout=25

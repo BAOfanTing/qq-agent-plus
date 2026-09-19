@@ -1,0 +1,8 @@
+[Unit]
+Description=QQ Agent 数据备份出机（rclone 推远端）
+After=qq-agent-backup.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/qq-agent/app/scripts/backup-offsite.sh
+# 未配置远端时脚本会安静退出，不产生失败单元

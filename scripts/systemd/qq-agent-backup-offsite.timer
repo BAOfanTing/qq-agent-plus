@@ -1,0 +1,10 @@
+[Unit]
+Description=每周推送 QQ Agent 备份到异地（本地备份 04:10 之后）
+
+[Timer]
+OnCalendar=Sun *-*-* 05:10:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

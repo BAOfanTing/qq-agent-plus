@@ -17,6 +17,8 @@
 
 **简体中文** ｜ [English](README.en.md)
 
+<img src="docs/assets/console-demo.png" alt="控制台：消息存档与会话管理" width="880">
+
 </div>
 
 面向 Linux 服务器的 QQ 群聊 Agent：直接连接外部 OneBot v11 服务，每次触发使用独立的
