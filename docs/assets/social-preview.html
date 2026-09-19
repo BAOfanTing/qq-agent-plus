@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>QQ Agent Plus — 社交预览图源码</title>
+<!-- 用浏览器按 1280×640 截图即得到 docs/assets/social-preview.png（GitHub Settings → Social preview 上传） -->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1280px; height: 640px; overflow: hidden;
+    background: #0b1220;
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    color: #e8eefc; position: relative;
+  }
+  .glow {
+    position: absolute; width: 900px; height: 900px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(76,141,255,.28) 0%, rgba(76,141,255,0) 62%);
+    right: -260px; top: -320px;
+  }
+  .glow2 {
+    position: absolute; width: 700px; height: 700px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(20,120,212,.18) 0%, rgba(20,120,212,0) 65%);
+    left: -240px; bottom: -360px;
+  }
+  .wrap { position: relative; padding: 64px 72px; height: 100%; display: flex; flex-direction: column; }
+  .brand { display: flex; align-items: center; gap: 22px; }
+  .brand svg { width: 112px; height: 112px; }
+  h1 { font-size: 62px; font-weight: 800; letter-spacing: .5px; }
+  h1 .plus { color: #4c8dff; }
+  .tagline { margin-top: 10px; font-size: 25px; color: #9db2d6; }
+  .chips { margin-top: 44px; display: flex; flex-wrap: wrap; gap: 14px; max-width: 980px; }
+  .chip {
+    font-size: 20px; padding: 11px 20px; border-radius: 999px;
+    background: rgba(76,141,255,.13); border: 1px solid rgba(76,141,255,.35); color: #cfe0ff;
+  }
+  .foot { margin-top: auto; display: flex; align-items: baseline; justify-content: space-between; }
+  .repo { font-size: 24px; color: #7f93b8; font-family: Consolas, monospace; }
+  .repo b { color: #4c8dff; font-weight: 700; }
+  .meta { font-size: 19px; color: #6b7fa3; }
+</style>
+</head>
+<body>
+  <div class="glow"></div><div class="glow2"></div>
+  <div class="wrap">
+    <div class="brand">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="QQ Agent Plus">
+  <defs>
+    <linearGradient id="sea" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#38a2ff"/>
+      <stop offset="0.55" stop-color="#1478d4"/>
+      <stop offset="1" stop-color="#0a5aa8"/>
+    </linearGradient>
+    <linearGradient id="belly" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dff1ff"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="48" cy="48" r="46" fill="url(#sea)"/>
+  <circle cx="48" cy="48" r="46" fill="none" stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
+
+  <!-- 鲸鱼：身体 + 尾鳍 -->
+  <path d="M19 58c0-11 9-19 22-19 8 0 15 3 21 8 2 2 4 3 7 3 3 0 6-1 8-3-1 6-5 10-10 12 1 5-3 9-9 10-4 3-10 5-17 5-13 0-22-6-22-16z"
+        fill="url(#belly)"/>
+  <path d="M75 50c4-3 6-7 6-12 3 6 2 13-3 18-1-2-2-4-3-6z" fill="#ffffff" opacity="0.95"/>
+  <path d="M70 62c5 1 9 0 12-3-2 7-8 11-15 10 1-2 2-5 3-7z" fill="#ffffff" opacity="0.95"/>
+
+  <!-- 眼睛与嘴线 -->
+  <circle cx="34" cy="55" r="2.9" fill="#0b2a47"/>
+  <path d="M41 63c3 2 7 2 10-1" stroke="#9fd0f2" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+
+  <!-- 喷水 -->
+  <path d="M40 38c0-5 3-9 8-11-2 4-2 7-1 10" fill="#ffffff" opacity="0.9"/>
+  <circle cx="58" cy="26" r="3.2" fill="#ffffff" opacity="0.9"/>
+  <circle cx="68" cy="21" r="2" fill="#ffffff" opacity="0.65"/>
+</svg>
+
+      <div>
+        <h1>QQ Agent <span class="plus">Plus</span></h1>
+        <div class="tagline">QQ 群聊 Agent · Linux + OneBot v11 · 自带运维命令</div>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip">一轮分多条短句发言</span>
+      <span class="chip">看图先读情绪</span>
+      <span class="chip">表情包自攒自用</span>
+      <span class="chip">每日说说与空间互动</span>
+      <span class="chip">单文件运维入口 ops.js</span>
+      <span class="chip">285 项测试 / CI 全绿</span>
+    </div>
+    <div class="foot">
+      <div class="repo">github.com/<b>sakurawwwxh</b>/qq-agent-plus</div>
+      <div class="meta">MIT · Node 22 · 不依赖 DSH / MCP / Electron</div>
+    </div>
+  </div>
+</body>
+</html>

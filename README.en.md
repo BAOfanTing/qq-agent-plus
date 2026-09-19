@@ -16,6 +16,8 @@
 
 [简体中文](README.md) ｜ **English**
 
+<img src="docs/assets/console-demo.png" alt="Console: message archive and session management" width="880">
+
 </div>
 
 A QQ group-chat agent for Linux servers. It talks to an external OneBot v11 service and runs
