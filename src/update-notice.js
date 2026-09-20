@@ -2,18 +2,36 @@
 // 本模块不做任何部署；点「立即更新」仍走既有的 /api/auto-update/run 链路。
 // 站点数据只写入 auto-update.json 的 updateNotice / ignoredVersion 两个键，
 // 与自动更新的既有字段互不影响。
+//
+// 取远端 revision 优先走 GitHub API（api.github.com 通常可达），
+// git ls-remote 只作兜底：实测服务器到 github.com 的 git 传输会整条卡死，
+// 而 api.github.com 正常。
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readAutoUpdateState, writeAutoUpdateState } from './auto-update.js';
 
 const CHECK_TTL_MS = 30 * 60 * 1000;
-const RELEASE_TIMEOUT_MS = 15000;
+const API_TIMEOUT_MS = 10000;
 const REVISION_LENGTH = 64;
 const BODY_LIMIT = 8000;
+const COMMIT_FALLBACK_COUNT = 10;
 
 function cleanText(value, max = 500) {
   return String(value ?? '').replace(/\0/g, '').trim().slice(0, max);
+}
+
+function ghHeaders() {
+  return { accept: 'application/vnd.github+json', 'user-agent': 'qq-agent-plus-console' };
+}
+
+async function fetchJson(url, fetchImpl) {
+  const res = await fetchImpl(url, {
+    headers: ghHeaders(),
+    signal: AbortSignal.timeout(API_TIMEOUT_MS)
+  });
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
 }
 
 /** 从仓库地址解析 GitHub owner/repo；非 github.com 返回 null。 */
@@ -33,8 +51,7 @@ export function deployedRevisionAt(dataDir, state = null) {
 }
 
 /**
- * 用 git ls-remote 取目标分支的远端 revision（不拉取对象）。
- * 沿用自动更新的网络设置：HTTP/1.1 与连通性超时。
+ * git ls-remote 兜底探测（不拉取对象），沿用自动更新的网络设置。
  */
 export function probeRemoteRevision(repository, branch, settings = {}, options = {}) {
   const execFileImpl = options.execFileImpl || execFile;
@@ -56,9 +73,26 @@ export function probeRemoteRevision(repository, branch, settings = {}, options =
         resolve({ ok: false, latencyMs, error: '目标分支没有返回 revision' });
         return;
       }
-      resolve({ ok: true, latencyMs, revision });
+      resolve({ ok: true, latencyMs, revision, source: 'git' });
     });
   });
+}
+
+/** 取目标分支的最新 revision：GitHub API 优先，git ls-remote 兜底。 */
+export async function fetchRemoteRevision(repository, branch, options = {}) {
+  const fetchImpl = options.fetchImpl || fetch;
+  const slug = parseGithubRepo(repository);
+  if (slug) {
+    try {
+      const data = await fetchJson(
+        `https://api.github.com/repos/${slug.owner}/${slug.repo}/commits/${encodeURIComponent(branch)}`,
+        fetchImpl
+      );
+      const revision = cleanText(data?.sha, REVISION_LENGTH);
+      if (revision) return { ok: true, revision, source: 'api' };
+    } catch { /* 落到 git 兜底 */ }
+  }
+  return probeRemoteRevision(repository, branch, options.settings || {}, { execFileImpl: options.execFileImpl });
 }
 
 /** 取 GitHub 最新 Release（公开仓库无需令牌）；失败返回 null，不抛出。 */
@@ -67,15 +101,10 @@ export async function fetchLatestRelease(repository, options = {}) {
   const slug = parseGithubRepo(repository);
   if (!slug) return null;
   try {
-    const res = await fetchImpl(
+    const data = await fetchJson(
       `https://api.github.com/repos/${slug.owner}/${slug.repo}/releases/latest`,
-      {
-        headers: { accept: 'application/vnd.github+json', 'user-agent': 'qq-agent-plus-console' },
-        signal: AbortSignal.timeout(RELEASE_TIMEOUT_MS)
-      }
+      fetchImpl
     );
-    if (!res.ok) return null;
-    const data = await res.json().catch(() => null);
     if (!data || typeof data !== 'object') return null;
     return {
       version: cleanText(data.tag_name, 64),
@@ -89,9 +118,30 @@ export async function fetchLatestRelease(repository, options = {}) {
   }
 }
 
+/** 没有发布说明时的兜底：把最近若干提交标题列成要点。 */
+export async function fetchRecentCommitSubjects(repository, options = {}) {
+  const fetchImpl = options.fetchImpl || fetch;
+  const slug = parseGithubRepo(repository);
+  if (!slug) return '';
+  try {
+    const data = await fetchJson(
+      `https://api.github.com/repos/${slug.owner}/${slug.repo}/commits?per_page=${COMMIT_FALLBACK_COUNT}`,
+      fetchImpl
+    );
+    if (!Array.isArray(data)) return '';
+    const subjects = data
+      .map((item) => cleanText(item?.commit?.message, 200).split('\n')[0].trim())
+      .filter(Boolean)
+      .slice(0, COMMIT_FALLBACK_COUNT);
+    return subjects.map((subject) => `- ${subject}`).join('\n');
+  } catch {
+    return '';
+  }
+}
+
 /**
- * 检查是否有新版本。结果缓存 30 分钟；若部署基线在缓存之后发生变化
- * （例如刚更新完），缓存立即失效并重新检查。
+ * 检查是否有新版本。成功结果缓存 30 分钟；部署基线变化（例如刚更新完）立即失效；
+ * 连不上 GitHub 时不写缓存，下次打开控制台会重试。
  */
 export async function checkForUpdate(dataDir, config = {}, { force = false, now = Date.now(), fetchImpl, execFileImpl } = {}) {
   const settings = config.autoUpdate || {};
@@ -104,26 +154,34 @@ export async function checkForUpdate(dataDir, config = {}, { force = false, now 
   if (!repository) {
     return { available: false, reason: 'unconfigured', checkedAt: now, deployed: deployedNow };
   }
-  const fresh = previous && previous.checkedAt && now - Number(previous.checkedAt) < CHECK_TTL_MS;
+  const fresh = previous && Number(previous.checkedAt) > 0
+    && now - Number(previous.checkedAt) < CHECK_TTL_MS;
   const baselineUnchanged = previous && String(previous.deployed || '') === String(deployedNow || '');
   if (!force && fresh && baselineUnchanged) {
     return { ...previous, cached: true };
   }
 
-  const probe = await probeRemoteRevision(repository, branch, settings, { execFileImpl });
+  const probe = await fetchRemoteRevision(repository, branch, { fetchImpl, execFileImpl, settings });
   if (!probe.ok) {
+    // 不缓存失败：checkedAt 记 0，下一次检查重新尝试
     const notice = {
       available: false, reason: 'unreachable', repository, branch,
       revision: '', deployed: deployedNow,
       version: '', name: '', body: '', publishedAt: 0, url: '',
-      checkedAt: now, error: probe.error || '连不上 GitHub'
+      checkedAt: 0, error: probe.error || '连不上 GitHub'
     };
     writeAutoUpdateState(dataDir, { updateNotice: notice });
     return notice;
   }
 
   const available = Boolean(deployedNow) && probe.revision !== deployedNow;
-  const release = available ? await fetchLatestRelease(repository, { fetchImpl }) : null;
+  let release = null;
+  let body = '';
+  if (available) {
+    release = await fetchLatestRelease(repository, { fetchImpl });
+    body = release?.body || '';
+    if (!body) body = await fetchRecentCommitSubjects(repository, { fetchImpl });
+  }
   const notice = {
     available,
     reason: deployedNow ? '' : 'unknown-deployed',
@@ -133,7 +191,7 @@ export async function checkForUpdate(dataDir, config = {}, { force = false, now 
     deployed: deployedNow,
     version: release?.version || '',
     name: release?.name || '',
-    body: release?.body || '',
+    body,
     publishedAt: release?.publishedAt || 0,
     url: release?.url || '',
     checkedAt: now,

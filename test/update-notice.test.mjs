@@ -7,7 +7,9 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-update-notice-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 
-const { parseGithubRepo, checkForUpdate, ignoreVersion } = await import('../src/update-notice.js');
+const {
+  parseGithubRepo, checkForUpdate, ignoreVersion, fetchRemoteRevision
+} = await import('../src/update-notice.js');
 const { readAutoUpdateState } = await import('../src/auto-update.js');
 
 after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -36,21 +38,38 @@ function caseDir(deployed = DEPLOYED) {
   return dir;
 }
 
+/** 假的 GitHub：按 URL 路由到 commits / releases / commits 列表。 */
+function fakeGitHub({ remoteRevision = REMOTE, release = RELEASE, commitSubjects = ['新增了某某功能', '修了某某问题'] } = {}) {
+  const impl = async (url) => {
+    const target = String(url);
+    impl.calls.push(target);
+    if (/\/commits\?per_page=/.test(target)) {
+      return {
+        ok: true,
+        json: async () => commitSubjects.map((subject, index) => ({
+          sha: `c${index}`, commit: { message: `${subject}\n\n细节` }
+        }))
+      };
+    }
+    if (/\/commits\//.test(target)) {
+      return remoteRevision
+        ? { ok: true, json: async () => ({ sha: remoteRevision }) }
+        : { ok: false, json: async () => null };
+    }
+    if (/\/releases\/latest/.test(target)) {
+      return release ? { ok: true, json: async () => release } : { ok: false, json: async () => null };
+    }
+    return { ok: false, json: async () => null };
+  };
+  impl.calls = [];
+  return impl;
+}
+
 function fakeExec(revision) {
   const impl = (cmd, args, opts, cb) => {
     impl.calls += 1;
     if (revision == null) cb(new Error('unable to access'), '', 'fatal: unable to access');
     else cb(null, `${revision}\trefs/heads/main\n`, '');
-  };
-  impl.calls = 0;
-  return impl;
-}
-
-function fakeFetch(payload) {
-  const impl = async () => {
-    impl.calls += 1;
-    if (!payload) return { ok: false, json: async () => null };
-    return { ok: true, json: async () => payload };
   };
   impl.calls = 0;
   return impl;
@@ -65,16 +84,16 @@ test('parses GitHub repository slugs', () => {
 
 test('detects a new revision and attaches the latest release notes', async () => {
   const dir = caseDir();
-  const exec = fakeExec(REMOTE);
-  const fetchImpl = fakeFetch(RELEASE);
-  const notice = await checkForUpdate(dir, CONFIG, { execFileImpl: exec, fetchImpl, force: true });
+  const github = fakeGitHub();
+  const notice = await checkForUpdate(dir, CONFIG, { fetchImpl: github, execFileImpl: fakeExec(null), force: true });
 
   assert.equal(notice.available, true);
   assert.equal(notice.version, 'v9.9.9');
   assert.equal(notice.deployed, DEPLOYED);
   assert.equal(notice.revision, REMOTE);
   assert.match(notice.body, /新增了某某功能/);
-  assert.equal(fetchImpl.calls, 1);
+  assert.equal(github.calls.filter((u) => /\/commits\//.test(u) && !/\?/.test(u)).length, 1);
+  assert.equal(github.calls.filter((u) => /releases\/latest/.test(u)).length, 1);
   // 持久化到状态文件
   const state = readAutoUpdateState(dir);
   assert.equal(state.updateNotice.available, true);
@@ -83,53 +102,57 @@ test('detects a new revision and attaches the latest release notes', async () =>
 
 test('treats identical revisions as up to date and serves cached results', async () => {
   const dir = caseDir(REMOTE);
-  const exec = fakeExec(REMOTE);
-  const fetchImpl = fakeFetch(RELEASE);
-  const first = await checkForUpdate(dir, CONFIG, { execFileImpl: exec, fetchImpl, force: true });
+  const github = fakeGitHub();
+  const first = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
   assert.equal(first.available, false);
-  assert.equal(fetchImpl.calls, 0, '已是最新时不应查询 Release');
+  assert.equal(github.calls.filter((u) => /releases\/latest/.test(u)).length, 0, '已是最新时不应查询 Release');
+  const probeCalls = github.calls.length;
 
-  const second = await checkForUpdate(dir, CONFIG, {
-    execFileImpl: exec, fetchImpl, now: Number(first.checkedAt) + 60_000
-  });
+  const second = await checkForUpdate(dir, CONFIG, { fetchImpl: github, now: Number(first.checkedAt) + 60_000 });
   assert.equal(second.cached, true);
-  assert.equal(exec.calls, 1, '缓存命中时不应再次探测远端');
+  assert.equal(github.calls.length, probeCalls, '缓存命中时不应再次请求 GitHub');
 });
 
 test('cache invalidates once the deployed baseline moves', async () => {
   const dir = caseDir();
-  const exec = fakeExec(REMOTE);
-  const fetchImpl = fakeFetch(RELEASE);
-  const first = await checkForUpdate(dir, CONFIG, { execFileImpl: exec, fetchImpl, force: true });
+  const github = fakeGitHub();
+  const first = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
   assert.equal(first.available, true);
-  assert.equal(exec.calls, 1);
+  const probeCalls = github.calls.length;
 
   // 部署基线变化（例如刚刚更新成功）后，即使还在缓存窗口也要重新检查
   fs.writeFileSync(path.join(dir, 'deployed-revision'), `${REMOTE}\n`);
-  const second = await checkForUpdate(dir, CONFIG, {
-    execFileImpl: exec, fetchImpl, now: Number(first.checkedAt) + 60_000
-  });
+  const second = await checkForUpdate(dir, CONFIG, { fetchImpl: github, now: Number(first.checkedAt) + 60_000 });
   assert.equal(second.cached, undefined);
   assert.equal(second.available, false);
-  assert.equal(exec.calls, 2);
+  assert.ok(github.calls.length > probeCalls);
 });
 
-test('unreachable GitHub degrades silently and release fetch failure is tolerated', async () => {
-  const offlineDir = caseDir();
-  const offline = await checkForUpdate(offlineDir, CONFIG, {
-    execFileImpl: fakeExec(null), fetchImpl: fakeFetch(RELEASE), force: true
-  });
-  assert.equal(offline.available, false);
-  assert.equal(offline.reason, 'unreachable');
-  assert.match(String(offline.error), /unable to access/);
+test('unreachable GitHub degrades silently and is never cached', async () => {
+  const dir = caseDir();
+  const github = fakeGitHub({ remoteRevision: null });
+  const exec = fakeExec(null);
+  const first = await checkForUpdate(dir, CONFIG, { fetchImpl: github, execFileImpl: exec, force: true });
+  assert.equal(first.available, false);
+  assert.equal(first.reason, 'unreachable');
+  assert.match(String(first.error), /unable to access/);
+  assert.equal(first.checkedAt, 0, '失败不写缓存时间戳');
+  assert.equal(exec.calls, 1, 'API 失败后应尝试 git 兜底');
 
-  const noReleaseDir = caseDir();
-  const noRelease = await checkForUpdate(noReleaseDir, CONFIG, {
-    execFileImpl: fakeExec(REMOTE), fetchImpl: fakeFetch(null), force: true
-  });
-  assert.equal(noRelease.available, true);
-  assert.equal(noRelease.version, '');
-  assert.equal(noRelease.body, '');
+  const callsAfterFirst = github.calls.length;
+  const second = await checkForUpdate(dir, CONFIG, { fetchImpl: github, execFileImpl: exec });
+  assert.equal(second.cached, undefined);
+  assert.ok(github.calls.length > callsAfterFirst, '失败后下一次打开控制台应重试');
+});
+
+test('falls back to recent commit subjects when no release body exists', async () => {
+  const dir = caseDir();
+  const github = fakeGitHub({ release: { ...RELEASE, body: '' } });
+  const notice = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
+  assert.equal(notice.available, true);
+  assert.equal(notice.version, 'v9.9.9');
+  assert.match(notice.body, /- 新增了某某功能/);
+  assert.equal(github.calls.filter((u) => /\/commits\?per_page=/.test(u)).length, 1);
 });
 
 test('ignores exactly one version at a time', () => {
