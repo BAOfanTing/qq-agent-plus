@@ -8,7 +8,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-update-notice-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 
 const {
-  parseGithubRepo, checkForUpdate, ignoreVersion, fetchRemoteRevision
+  parseGithubRepo, checkForUpdate, ignoreVersion, fetchLatestRelease, githubApiBase
 } = await import('../src/update-notice.js');
 const { readAutoUpdateState } = await import('../src/auto-update.js');
 
@@ -17,26 +17,24 @@ after(() => fs.rmSync(root, { recursive: true, force: true }));
 const CONFIG = {
   autoUpdate: {
     repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
-    branch: 'main',
-    connectivityTimeoutSeconds: 5,
-    forceHttp11: true
+    branch: 'main'
   }
 };
 const DEPLOYED = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const REMOTE = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-const RELEASE_SHA = 'cccccccccccccccccccccccccccccccccccccccc';
 // 与 GitHub compare 一致：按时间正序（最早的在前），客户端展示时反转成"最新在上"。
 const DELTA_COMMITS = [
   { sha: 'dddddddddddddddddddddddddddddddddddddddd', subject: '更早的一个提交' },
-  { sha: RELEASE_SHA, subject: '发布了 v9.9.9' },
-  { sha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', subject: '最新的一个提交' }
+  { sha: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', subject: '中间的一个提交' },
+  { sha: 'ffffffffffffffffffffffffffffffffffffffff', subject: '最新的一个提交' }
 ];
 const RELEASE = {
   tag_name: 'v9.9.9',
   name: 'v9.9.9 —— 测试版本',
   body: '- 新增了某某功能\n- 修了某某问题',
   published_at: '2026-09-20T00:00:00Z',
-  html_url: 'https://example.com/release'
+  html_url: 'https://example.com/release',
+  draft: false,
+  prerelease: false
 };
 
 function caseDir(deployed = DEPLOYED) {
@@ -45,65 +43,36 @@ function caseDir(deployed = DEPLOYED) {
   return dir;
 }
 
-/** 假的 GitHub：按 URL 路由到 compare / commits(单个) / commits 列表 / releases。 */
+/** 假的 GitHub：/releases/latest 与 /compare/{base}...{head} 两条路由。 */
 function fakeGitHub({
-  remoteRevision = REMOTE,
   release = RELEASE,
-  releaseSha = RELEASE_SHA,
-  compareCommits = DELTA_COMMITS,
-  compareOk = true,
-  recentSubjects = ['最近的兜底提交一', '最近的兜底提交二']
+  releaseHttp = 200,
+  compareHttp = 200,
+  compareStatus = 'ahead',
+  commits = DELTA_COMMITS
 } = {}) {
   const impl = async (url) => {
     const target = String(url);
     impl.calls.push(target);
+    if (/\/releases\/latest$/.test(target)) {
+      if (releaseHttp !== 200) return { ok: false, status: releaseHttp, json: async () => null };
+      return { ok: true, status: 200, json: async () => release };
+    }
     if (/\/compare\//.test(target)) {
-      if (!compareOk) return { ok: false, json: async () => null };
+      if (compareHttp !== 200) return { ok: false, status: compareHttp, json: async () => null };
       return {
         ok: true,
+        status: 200,
         json: async () => ({
-          status: 'ahead',
-          total_commits: compareCommits.length,
-          commits: compareCommits.map((item) => ({ sha: item.sha, commit: { message: `${item.subject}\n\n细节` } }))
+          status: compareStatus,
+          total_commits: commits.length,
+          commits: commits.map((item) => ({ sha: item.sha, commit: { message: `${item.subject}\n\n细节` } }))
         })
       };
     }
-    if (/\/commits\?per_page=/.test(target)) {
-      return {
-        ok: true,
-        json: async () => recentSubjects.map((subject, index) => ({
-          sha: `e${index}`, commit: { message: `${subject}\n\n细节` }
-        }))
-      };
-    }
-    if (/\/commits\//.test(target)) {
-      const ref = decodeURIComponent(target.split('/commits/')[1] || '');
-      if (ref === 'main' || ref === 'refs/heads/main') {
-        return remoteRevision
-          ? { ok: true, json: async () => ({ sha: remoteRevision }) }
-          : { ok: false, json: async () => null };
-      }
-      if (ref === (release?.tag_name || '')) {
-        return releaseSha ? { ok: true, json: async () => ({ sha: releaseSha }) } : { ok: false, json: async () => null };
-      }
-      return { ok: false, json: async () => null };
-    }
-    if (/\/releases\/latest/.test(target)) {
-      return release ? { ok: true, json: async () => release } : { ok: false, json: async () => null };
-    }
-    return { ok: false, json: async () => null };
+    return { ok: false, status: 404, json: async () => null };
   };
   impl.calls = [];
-  return impl;
-}
-
-function fakeExec(revision) {
-  const impl = (cmd, args, opts, cb) => {
-    impl.calls += 1;
-    if (revision == null) cb(new Error('unable to access'), '', 'fatal: unable to access');
-    else cb(null, `${revision}\trefs/heads/main\n`, '');
-  };
-  impl.calls = 0;
   return impl;
 }
 
@@ -114,95 +83,164 @@ test('parses GitHub repository slugs', () => {
   assert.equal(parseGithubRepo(''), null);
 });
 
-test('lists the commits between the deployed baseline and the target, release notes only when inside the delta', async () => {
+test('advertises a published release with its notes and the commits it brings', async () => {
   const dir = caseDir();
   const github = fakeGitHub();
   const notice = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
 
   assert.equal(notice.available, true);
-  assert.equal(notice.version, 'v9.9.9', 'Release 落在差集里时用 tag 当版本号');
+  assert.equal(notice.reason, '');
+  assert.equal(notice.version, 'v9.9.9', '版本号用 Release tag');
+  assert.equal(notice.revision, 'v9.9.9', '目标是 tag 本身，不是 branch 上的提交');
+  assert.equal(notice.name, RELEASE.name);
   assert.equal(notice.commitCount, DELTA_COMMITS.length);
-  assert.match(notice.body, /【v9\.9\.9 发布说明】/, '包含发布说明');
-  assert.match(notice.body, /最新的一个提交/, '包含提交说明');
-  assert.match(notice.body, /更早的一个提交/);
-  // 最新提交在最上面
-  assert.ok(notice.body.indexOf('最新的一个提交') < notice.body.indexOf('更早的一个提交'));
+  assert.equal(notice.url, RELEASE.html_url);
+  assert.match(notice.body, /【v9\.9\.9 发布说明】/);
+  assert.match(notice.body, /最新的一个提交/);
+  assert.ok(notice.body.indexOf('最新的一个提交') < notice.body.indexOf('更早的一个提交'), '最新提交在最上面');
+  assert.ok(
+    github.calls.some((url) => url.includes(`/compare/${DEPLOYED}...v9.9.9`)),
+    '方向判定要比较「当前部署...Release tag」'
+  );
   const state = readAutoUpdateState(dir);
   assert.equal(state.updateNotice.available, true);
   assert.equal(state.updateNotice.version, 'v9.9.9');
 });
 
-test('uses the short target revision as version when no release is inside the delta', async () => {
+test('a release already contained in the deployment is "current", never a rollback', async () => {
   const dir = caseDir();
-  // Release 指向的提交不在差集里（例如只是旧发行版）→ 只列提交，版本号用短 sha
-  const github = fakeGitHub({ releaseSha: 'ffffffffffffffffffffffffffffffffffffffff' });
+  // behind：当前部署比 Release 更靠前（例如自己跟着 main 走）→ 不能提示、更不能回退
+  const notice = await checkForUpdate(dir, CONFIG, {
+    fetchImpl: fakeGitHub({ compareStatus: 'behind' }),
+    force: true
+  });
+  assert.equal(notice.available, false);
+  assert.equal(notice.reason, 'ahead-of-release');
+  assert.equal(notice.version, 'v9.9.9', '仍记录最新 Release，供面板说明');
+
+  const same = await checkForUpdate(caseDir(), CONFIG, {
+    fetchImpl: fakeGitHub({ compareStatus: 'identical' }),
+    force: true
+  });
+  assert.equal(same.available, false);
+  assert.equal(same.reason, '');
+});
+
+test('diverged lines still follow the release', async () => {
+  const dir = caseDir();
+  const notice = await checkForUpdate(dir, CONFIG, {
+    fetchImpl: fakeGitHub({ compareStatus: 'diverged' }),
+    force: true
+  });
+  assert.equal(notice.available, true);
+  assert.equal(notice.version, 'v9.9.9');
+});
+
+test('a repository without any release never advertises an update', async () => {
+  const dir = caseDir();
+  const github = fakeGitHub({ releaseHttp: 404 });
   const notice = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
 
-  assert.equal(notice.available, true);
-  assert.equal(notice.version, REMOTE.slice(0, 7));
-  assert.equal(notice.name, '');
-  assert.equal(notice.commitCount, DELTA_COMMITS.length);
-  assert.doesNotMatch(notice.body, /发布说明/);
-  assert.match(notice.body, /最新的一个提交/);
+  assert.equal(notice.available, false);
+  assert.equal(notice.reason, 'no-release');
+  assert.equal(notice.version, '');
+  assert.equal(github.calls.filter((url) => /\/compare\//.test(url)).length, 0, '没有 Release 就不必比较');
+  assert.ok(notice.checkedAt > 0, '“没有 Release”是稳定结论，可以缓存');
 });
 
-test('falls back to recent commit subjects when the comparison is unavailable', async () => {
+test('draft and prerelease builds are not advertised', async () => {
   const dir = caseDir();
-  const github = fakeGitHub({ compareOk: false });
-  const notice = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
+  const draft = await checkForUpdate(dir, CONFIG, {
+    fetchImpl: fakeGitHub({ release: { ...RELEASE, draft: true } }),
+    force: true
+  });
+  assert.equal(draft.available, false);
+  assert.equal(draft.reason, 'no-release');
 
-  assert.equal(notice.available, true);
-  assert.equal(notice.version, REMOTE.slice(0, 7));
-  assert.match(notice.body, /最近的兜底提交一/);
-  assert.equal(github.calls.filter((u) => /\/commits\?per_page=/.test(u)).length, 1);
+  const prerelease = await checkForUpdate(caseDir(), CONFIG, {
+    fetchImpl: fakeGitHub({ release: { ...RELEASE, prerelease: true } }),
+    force: true
+  });
+  assert.equal(prerelease.available, false);
+  assert.equal(prerelease.reason, 'no-release');
 });
 
-test('treats identical revisions as up to date and serves cached results', async () => {
-  const dir = caseDir(REMOTE);
-  const github = fakeGitHub();
+test('an unknown deployment baseline is described but not advertised', async () => {
+  const dir = caseDir('');
+  const notice = await checkForUpdate(dir, CONFIG, { fetchImpl: fakeGitHub(), force: true });
+
+  assert.equal(notice.available, false);
+  assert.equal(notice.reason, 'unknown-deployed');
+  assert.equal(notice.version, 'v9.9.9', '面板要能告诉用户最新 Release 是哪个');
+});
+
+test('a failed release lookup is neither cached nor reported as "no release"', async () => {
+  const dir = caseDir();
+  const github = fakeGitHub({ releaseHttp: 503 });
   const first = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
-  assert.equal(first.available, false);
-  assert.equal(github.calls.filter((u) => /\/compare\//.test(u)).length, 0, '已是最新时不应比较差集');
-  assert.equal(github.calls.filter((u) => /releases\/latest/.test(u)).length, 0, '已是最新时不应查询 Release');
-  const probeCalls = github.calls.length;
 
-  const second = await checkForUpdate(dir, CONFIG, { fetchImpl: github, now: Number(first.checkedAt) + 60_000 });
-  assert.equal(second.cached, true);
-  assert.equal(github.calls.length, probeCalls, '缓存命中时不应再次请求 GitHub');
-});
-
-test('cache invalidates once the deployed baseline moves', async () => {
-  const dir = caseDir();
-  const github = fakeGitHub();
-  const first = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
-  assert.equal(first.available, true);
-  const probeCalls = github.calls.length;
-
-  fs.writeFileSync(path.join(dir, 'deployed-revision'), `${REMOTE}\n`);
-  const second = await checkForUpdate(dir, CONFIG, { fetchImpl: github, now: Number(first.checkedAt) + 60_000 });
-  assert.equal(second.cached, undefined);
-  assert.equal(second.available, false);
-  assert.ok(github.calls.length > probeCalls);
-});
-
-test('unreachable GitHub degrades silently and is never cached', async () => {
-  const dir = caseDir();
-  const github = fakeGitHub({ remoteRevision: null });
-  const exec = fakeExec(null);
-  const first = await checkForUpdate(dir, CONFIG, { fetchImpl: github, execFileImpl: exec, force: true });
   assert.equal(first.available, false);
   assert.equal(first.reason, 'unreachable');
-  assert.match(String(first.error), /unable to access/);
-  assert.equal(first.checkedAt, 0, '失败不写缓存时间戳');
-  assert.equal(exec.calls, 1, 'API 失败后应尝试 git 兜底');
+  assert.equal(first.checkedAt, 0, '读不到就不写缓存，下次重试');
+  assert.match(String(first.error), /GitHub 返回 503/);
 
   const callsAfterFirst = github.calls.length;
-  const second = await checkForUpdate(dir, CONFIG, { fetchImpl: github, execFileImpl: exec });
+  const second = await checkForUpdate(dir, CONFIG, { fetchImpl: github });
   assert.equal(second.cached, undefined);
   assert.ok(github.calls.length > callsAfterFirst, '失败后下一次打开控制台应重试');
 });
 
-test('ignores exactly one version at a time', () => {
+test('a failed comparison neither advertises nor caches, so the direction is never guessed', async () => {
+  const dir = caseDir();
+  const github = fakeGitHub({ compareHttp: 502 });
+  const first = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
+
+  assert.equal(first.available, false);
+  assert.equal(first.reason, 'compare-failed');
+  assert.equal(first.checkedAt, 0);
+  assert.match(String(first.error), /502/);
+  assert.equal(readAutoUpdateState(dir).updateNotice.available, false);
+
+  const callsAfterFirst = github.calls.length;
+  const second = await checkForUpdate(dir, CONFIG, { fetchImpl: github });
+  assert.equal(second.cached, undefined);
+  assert.ok(github.calls.length > callsAfterFirst);
+});
+
+test('serves cached results within the TTL and refreshes once the baseline moves', async () => {
+  const dir = caseDir();
+  const github = fakeGitHub({ compareStatus: 'identical' });
+  const first = await checkForUpdate(dir, CONFIG, { fetchImpl: github, force: true });
+  const callsAfterFirst = github.calls.length;
+
+  const cached = await checkForUpdate(dir, CONFIG, {
+    fetchImpl: github,
+    now: Number(first.checkedAt) + 60_000
+  });
+  assert.equal(cached.cached, true);
+  assert.equal(github.calls.length, callsAfterFirst, '缓存命中时不请求 GitHub');
+
+  // 基线变了（刚部署完）→ 立即重新检查
+  fs.writeFileSync(path.join(dir, 'deployed-revision'), `${'1'.repeat(40)}\n`);
+  const refreshed = await checkForUpdate(dir, CONFIG, {
+    fetchImpl: github,
+    now: Number(first.checkedAt) + 60_000
+  });
+  assert.equal(refreshed.cached, undefined);
+  assert.ok(github.calls.length > callsAfterFirst);
+});
+
+test('the GitHub API base can be pointed elsewhere for tests and mirrors', () => {
+  assert.equal(githubApiBase(), 'https://api.github.com');
+  process.env.QQ_AGENT_GITHUB_API = 'http://127.0.0.1:9/api/';
+  try {
+    assert.equal(githubApiBase(), 'http://127.0.0.1:9/api', '去掉尾部斜杠');
+  } finally {
+    delete process.env.QQ_AGENT_GITHUB_API;
+  }
+});
+
+test('ignores exactly one release tag at a time', () => {
   const dir = caseDir();
   assert.equal(ignoreVersion(dir, 'v9.9.9'), 'v9.9.9');
   assert.equal(readAutoUpdateState(dir).ignoredVersion, 'v9.9.9');

@@ -16,6 +16,7 @@ import {
   normalizeUpdateNetworkSettings,
   retryUpdateOperation
 } from '../src/update-network.js';
+import { checkForUpdate } from '../src/update-notice.js';
 
 const { values } = parseArgs({
   options: {
@@ -40,6 +41,7 @@ let workDir = '';
 let phase = 'startup';
 let mode = 'scheduled';
 let targetRevision = '';
+let targetVersion = '';
 let cfg = {};
 let repository = '';
 let branch = 'main';
@@ -300,7 +302,7 @@ async function probeConnectivity() {
   return connectivity;
 }
 
-async function fetchTargetBranch() {
+async function fetchReleaseTag(tag) {
   const timeout = networkSettings.fetchTimeoutSeconds * 1000;
   return retryUpdateOperation(async () => {
     git(networkGitArgs([
@@ -311,7 +313,7 @@ async function fetchTargetBranch() {
       '--prune',
       '--depth=1',
       'origin',
-      `+refs/heads/${branch}:refs/remotes/origin/${branch}`
+      `+refs/tags/${tag}:refs/tags/${tag}`
     ]), { timeout });
     return true;
   }, {
@@ -321,6 +323,21 @@ async function fetchTargetBranch() {
     isRetryable: isRetryableUpdateNetworkError,
     onRetry: retryLog('git fetch')
   });
+}
+
+/**
+ * 本次要部署的 Release tag；没有可部署的发布版本时返回 ''。
+ * 判定口径与控制台弹窗共用 checkForUpdate：branch 上的普通提交永远不部署。
+ */
+function releaseTarget(notice) {
+  if (!notice || typeof notice !== 'object') return '';
+  const version = String(notice.version || '').trim();
+  if (!version) return '';
+  if (notice.available === true) return version;
+  // unknown-deployed：当前部署不是 git 提交（例如压缩包安装），没有可比较的基线，
+  // 直接安装最新 Release。
+  if (notice.reason === 'unknown-deployed') return version;
+  return '';
 }
 
 async function run() {
@@ -376,6 +393,7 @@ async function run() {
     ...(mode === 'scheduled' ? { lastCheckAt: now } : {}),
     currentRevision,
     targetRevision: '',
+    targetVersion: '',
     error: '',
     notification: {
       pending: false,
@@ -418,15 +436,36 @@ async function run() {
     lastCheckAt: now,
     connectivity
   });
-  await fetchTargetBranch();
+
+  // 部署目标只认「已发布的 Release」：branch 上的日常提交不部署。
+  // 判定与控制台弹窗共用 checkForUpdate，避免两边口径不一致。
+  const notice = await checkForUpdate(dataDir, cfg, { force: mode === 'manual' });
+  targetVersion = releaseTarget(notice);
+  if (!targetVersion) {
+    console.log(`[auto-update] no released version to deploy (${notice?.reason || 'unknown'})`);
+    writeAutoUpdateState(dataDir, {
+      status: 'no-update',
+      mode,
+      phase: 'complete',
+      completedAt: Date.now(),
+      currentRevision,
+      targetRevision: '',
+      targetVersion: '',
+      error: '',
+      autoDisabled: false
+    });
+    return;
+  }
+
+  await fetchReleaseTag(targetVersion);
   targetRevision = git([
     '--git-dir',
     paths.repository,
     'rev-parse',
-    `refs/remotes/origin/${branch}`
+    `refs/tags/${targetVersion}^{commit}`
   ]).stdout.trim();
   if (!/^[0-9a-f]{40}$/.test(targetRevision)) {
-    throw new Error('GitHub did not return a valid revision');
+    throw new Error(`Release ${targetVersion} did not resolve to a valid revision`);
   }
 
   if (currentRevision === targetRevision) {
@@ -437,6 +476,7 @@ async function run() {
       completedAt: Date.now(),
       currentRevision,
       targetRevision,
+      targetVersion,
       error: '',
       autoDisabled: false
     });
@@ -463,7 +503,8 @@ async function run() {
     status: 'testing',
     mode,
     phase,
-    targetRevision
+    targetRevision,
+    targetVersion
   });
   const npm = String(
     process.env.QQ_AGENT_UPDATE_NPM
@@ -512,7 +553,8 @@ async function run() {
     status: 'deploying',
     mode,
     phase,
-    targetRevision
+    targetRevision,
+    targetVersion
   });
   command('/bin/bash', [
     path.join(workDir, 'deploy.sh'),
@@ -541,6 +583,7 @@ async function run() {
     lastSuccessAt: Date.now(),
     currentRevision: targetRevision,
     targetRevision,
+    targetVersion,
     error: '',
     autoDisabled: false
   });
@@ -591,6 +634,7 @@ try {
       phase,
       completedAt: Date.now(),
       targetRevision,
+      targetVersion,
       error: message,
       autoDisabled: failurePolicy.disableOnFailure,
       ...(phase === 'connectivity' ? {

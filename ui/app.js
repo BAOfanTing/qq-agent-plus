@@ -721,7 +721,8 @@ function serviceUrl(port, path = '/') {
   return `${protocol}//${hostname}:${port}${path}`;
 }
 
-// 「更新部署」里的上次更新检查说明：让"连不上 GitHub"这类失败可见，而不是完全无声。
+// 「更新部署」里的上次更新检查说明：口径是「已发布的 Release」，
+// 让"连不上 GitHub / 没有新 Release / 当前部署领先"这些情况都能看见，而不是完全无声。
 function renderUpdateCheckNote(update = {}) {
   const short = (value) => (value ? String(value).slice(0, 12) : '-');
   const check = update.updateNotice && typeof update.updateNotice === 'object' ? update.updateNotice : null;
@@ -729,17 +730,38 @@ function renderUpdateCheckNote(update = {}) {
     return '更新检查尚未运行：打开控制台时会自动检查一次。';
   }
   const when = check.checkedAt ? `（${esc(fmtTime(check.checkedAt))}）` : '';
-  if (check.reason === 'unreachable' || (!check.available && check.error)) {
-    const detail = String(check.error || '').replace(/^Command failed:.*?:\s*/, '').trim().slice(0, 140);
-    return `上次更新检查${when}：连不上 GitHub${detail ? ` —— ${esc(detail)}` : ''}。`
-      + '打开控制台会自动重试；若持续失败请检查服务器出网，可用下方「测试 GitHub 连通性」定位。';
-  }
   if (check.available) {
     return `上次更新检查${when}：发现新版本${check.version ? ` ${esc(check.version)}` : ''}`
       + `（当前 ${esc(short(check.deployed))} → 最新 ${esc(short(check.revision))}`
       + `${Number(check.commitCount) > 0 ? `，${Number(check.commitCount)} 个新提交` : ''}）。`;
   }
-  return `上次更新检查${when}：已是最新（${esc(short(check.deployed))}）。`;
+  if (check.reason === 'unconfigured') {
+    return '未配置自动更新仓库，无法检查新版本。';
+  }
+  if (check.reason === 'no-release') {
+    return `上次更新检查${when}：仓库尚未发布新的 Release，不提示更新`
+      + '（只有发布 Release 才算新版本，branch 上的日常提交不会提示）。';
+  }
+  if (check.reason === 'ahead-of-release') {
+    return `上次更新检查${when}：当前部署已包含最新 Release`
+      + `${check.version ? ` ${esc(check.version)}` : ''}（${esc(short(check.deployed))}），无需更新。`;
+  }
+  if (check.reason === 'unknown-deployed') {
+    return `上次更新检查${when}：当前部署不是 git 提交（可能是压缩包安装），无法比较版本`
+      + `${check.version ? `；最新 Release 为 ${esc(check.version)}，可用「立即更新」安装该版本` : ''}。`;
+  }
+  if (check.reason === 'compare-failed') {
+    const detail = String(check.error || '').trim().slice(0, 140);
+    return `上次更新检查${when}：无法比较当前版本与该 Release${detail ? ` —— ${esc(detail)}` : ''}。`
+      + '为避免装错版本，本次不提示也不更新；打开控制台会自动重试。';
+  }
+  if (check.reason === 'unreachable' || (!check.available && check.error)) {
+    const detail = String(check.error || '').replace(/^Command failed:.*?:\s*/, '').trim().slice(0, 140);
+    return `上次更新检查${when}：连不上 GitHub${detail ? ` —— ${esc(detail)}` : ''}。`
+      + '打开控制台会自动重试；若持续失败请检查服务器出网，可用下方「测试 GitHub 连通性」定位。';
+  }
+  const latest = check.version ? `Release ${esc(check.version)} · ` : '';
+  return `上次更新检查${when}：已是最新（${latest}当前 ${esc(short(check.deployed))}）。`;
 }
 
 function renderControlHub(data = {}) {
@@ -787,7 +809,7 @@ function renderControlHub(data = {}) {
       </div>
       <div class="update-deploy-summary">
         <div><span>当前版本</span><strong data-hub-deploy="current">${esc(revision(update.currentRevision))}</strong></div>
-        <div><span>目标版本</span><strong data-hub-deploy="target">${esc(revision(update.targetRevision))}</strong></div>
+        <div><span>目标版本</span><strong data-hub-deploy="target">${esc(revision(update.targetRevision))}${update.targetVersion ? ` · ${esc(update.targetVersion)}` : ''}</strong></div>
         <div><span>上次检查</span><strong data-hub-deploy="lastCheck">${update.lastCheckAt ? esc(fmtTime(update.lastCheckAt)) : '-'}</strong></div>
         <div><span>下次检查</span><strong data-hub-deploy="nextCheck">${update.nextCheckAt ? esc(fmtTime(update.nextCheckAt)) : '-'}</strong></div>
       </div>

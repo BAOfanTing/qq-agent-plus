@@ -14,6 +14,28 @@ qq-agent-linux-update.timer
 timer 每小时唤醒一次，应用配置中的 `intervalHours` 决定是否已经到达实际检查时间。
 默认每 6 小时检查一次，功能默认关闭。更新器不复用聊天 Session，也不调用模型。
 
+## 更新依据：只认已发布的 Release
+
+更新提示与部署目标都以 GitHub 上**已发布的 Release** 为准，不会因为 branch 上多了一个提交就更新，
+避免用户装上未经发布的中间状态：
+
+1. 读取仓库最新 Release（草稿、预发布都不算）。仓库还没有 Release 时不提示、不更新。
+2. 用「当前部署 revision...Release tag」的比较结果判断方向：
+
+   | 比较结果 | 含义 | 行为 |
+   | --- | --- | --- |
+   | `ahead` | Release 领先当前部署 | 提示新版本，部署目标即该 tag 的提交 |
+   | `diverged` | 两条线各有提交 | 按 Release 部署（以发布版本为准） |
+   | `behind` | 当前部署已经包含该 Release | 提示“已是最新”，不回退 |
+   | `identical` | 就是同一个提交 | 提示“已是最新” |
+
+3. 比较接口不可用时既不提示也不部署，等下次检查——不猜方向，避免装错版本。
+4. 当前部署 revision 不是 git 提交（压缩包安装等）时无法比较方向：控制台只说明不弹窗，
+   但「立即更新」和自动更新会直接安装最新 Release（装完基线就变成 git 提交）。
+
+发布流程：推送 `v*` tag 会触发 `.github/workflows/release.yml`，它先跑一遍与 CI 相同的检查，
+再创建**草稿** Release。确认无误并发布后，控制台的“发现新版本”弹窗与自动更新才会看到这个版本。
+
 ## 配置
 
 ```json
@@ -49,14 +71,15 @@ timer 每小时唤醒一次，应用配置中的 `intervalHours` 决定是否已
 
 1. 使用 `data/update-repository.git` 作为持久 bare 仓库，保留 Git 对象缓存。
 2. 先执行目标仓库 + 目标分支的 `git ls-remote` 轻量连通性测试；失败时按配置重试。
-3. 连通性正常后浅拉取目标分支最新提交；`git fetch` 同样按配置重试。
-4. 与 `data/deployed-revision` 比较；相同则记录“已是最新”并结束。
+3. 连通性正常后读取最新已发布 Release，并按上一节的口径判断方向；没有可部署的版本时记录“已是最新”并结束。
+4. 浅拉取该 Release 的 tag（`refs/tags/<tag>:refs/tags/<tag>`），解析出它指向的提交；
+   与 `data/deployed-revision` 相同则记录“已是最新”并结束。`git fetch` 同样按配置重试。
 5. 将目标提交检出到 `data/update-work/` 的临时目录。
 6. 在独立临时数据目录中执行 `npm ci`、全部 `node:test` 单元测试及关键语法检查，不读取或修改生产数据。
    `npm ci` 使用 `--prefer-offline` 优先复用 npm cache，并把同一组重试参数传给 npm 的 fetch 层。
 7. 调用目标提交中的 `deploy.sh`。部署脚本创建代码快照、保留数据和凭据、重装依赖、
    校验 systemd 单元、启动服务并检查 `/healthz`。
-8. 成功后记录目标提交；失败时由 `deploy.sh` 恢复旧代码和服务。
+8. 成功后记录目标提交（`currentRevision`）与 Release tag（`targetVersion`）；失败时由 `deploy.sh` 恢复旧代码和服务。
 
 `deploy.sh` 会同时安装和校验更新 service/timer，并在部署失败时恢复旧单元及原启用状态。
 
@@ -88,15 +111,24 @@ timer 每小时唤醒一次，应用配置中的 `intervalHours` 决定是否已
 
 通知发送失败时保留 pending 状态，Agent 启动或 OneBot 重连后继续发送。不会因为告警失败再次触发部署，也不会递归创建异常。
 
+“没有新 Release”“当前部署已包含最新 Release”“比较接口不可用”都不算失败：不发送告警、
+不触发 `disableOnFailure`，只在状态文件与控制页“更新部署”面板里说明原因。
+
 ## 状态与运维
 
 状态文件：
 
 ```text
-data/auto-update.json
-data/auto-update-request.json
-data/deployed-revision
+data/auto-update.json          # 状态、连通性、updateNotice（弹窗判定结果）、ignoredVersion
+data/auto-update-request.json  # 一次性请求（manual / scheduled / probe）
+data/deployed-revision         # 当前部署的 git 提交，deploy.sh 写入
 ```
+
+`updateNotice` 里 `reason` 的取值：`no-release`（还没有 Release）、`ahead-of-release`（当前部署已包含最新 Release）、
+`unknown-deployed`（部署基线不是 git 提交）、`compare-failed`（无法比较方向）、`unreachable`（连不上 GitHub）、
+`unconfigured`（没配仓库）。`available=true` 时才弹窗，`version` 即要部署的 Release tag。
+
+判定用的 GitHub API 默认是 `api.github.com`；只有测试桩或自建镜像才需要设置 `QQ_AGENT_GITHUB_API` 覆盖它。
 
 接口：
 
