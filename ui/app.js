@@ -721,6 +721,26 @@ function serviceUrl(port, path = '/') {
   return `${protocol}//${hostname}:${port}${path}`;
 }
 
+// 「更新部署」里的上次更新检查说明：让"连不上 GitHub"这类失败可见，而不是完全无声。
+function renderUpdateCheckNote(update = {}) {
+  const short = (value) => (value ? String(value).slice(0, 12) : '-');
+  const check = update.updateNotice && typeof update.updateNotice === 'object' ? update.updateNotice : null;
+  if (!check || (!check.checkedAt && !check.error)) {
+    return '更新检查尚未运行：打开控制台时会自动检查一次。';
+  }
+  const when = check.checkedAt ? `（${esc(fmtTime(check.checkedAt))}）` : '';
+  if (check.reason === 'unreachable' || (!check.available && check.error)) {
+    const detail = String(check.error || '').replace(/^Command failed:.*?:\s*/, '').trim().slice(0, 140);
+    return `上次更新检查${when}：连不上 GitHub${detail ? ` —— ${esc(detail)}` : ''}。`
+      + '打开控制台会自动重试；若持续失败请检查服务器出网，可用下方「测试 GitHub 连通性」定位。';
+  }
+  if (check.available) {
+    return `上次更新检查${when}：发现新版本${check.version ? ` ${esc(check.version)}` : ''}`
+      + `（当前 ${esc(short(check.deployed))} → 最新 ${esc(short(check.revision))}）。`;
+  }
+  return `上次更新检查${when}：已是最新（${esc(short(check.deployed))}）。`;
+}
+
 function renderControlHub(data = {}) {
   const box = $('#control-page');
   if (!box) return;
@@ -770,6 +790,7 @@ function renderControlHub(data = {}) {
         <div><span>上次检查</span><strong data-hub-deploy="lastCheck">${update.lastCheckAt ? esc(fmtTime(update.lastCheckAt)) : '-'}</strong></div>
         <div><span>下次检查</span><strong data-hub-deploy="nextCheck">${update.nextCheckAt ? esc(fmtTime(update.nextCheckAt)) : '-'}</strong></div>
       </div>
+      <div class="muted" data-hub-update-check style="margin-top:6px;font-size:12px;line-height:1.5">${renderUpdateCheckNote(update)}</div>
       <div class="update-deploy-settings">
         <label><span>告警管理员 QQ</span><input type="text" id="auto-update-owner" inputmode="numeric" value="${esc(update.ownerUin || '')}" /></label>
         <label><span>检查间隔（小时）</span><input type="number" id="auto-update-interval" min="1" max="168" value="${esc(update.intervalHours || 6)}" /></label>
@@ -1041,6 +1062,16 @@ async function checkUpdateNotice() {
   openUpdateNoticeDialog(notice);
 }
 
+// Release 说明是 markdown；先整体转义，再把标题/加粗/列表替换成最小样式，
+// 避免把 --- 之类的分隔线与标题混在一起时出现乱码感。
+function formatReleaseNotes(body) {
+  return esc(String(body || '').trim())
+    .replace(/^#{1,6}\s*(.+)$/gm, '<strong>$1</strong>')
+    .replace(/^[*-]\s+/gm, '• ')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+}
+
 function openUpdateNoticeDialog(notice) {
   const dialog = $('#update-notice');
   if (!dialog) return;
@@ -1051,8 +1082,9 @@ function openUpdateNoticeDialog(notice) {
     String(notice.name || '').trim(),
     `当前 ${short(notice.deployed) || '未知'} → 最新 ${short(notice.revision) || '未知'}`
   ].filter(Boolean).join(' · ');
-  $('#update-notice-notes').textContent = String(notice.body || '').trim()
-    || '本次更新还没有发布说明，可以先到仓库看提交记录。';
+  $('#update-notice-notes').innerHTML = String(notice.body || '').trim()
+    ? formatReleaseNotes(notice.body)
+    : '本次更新还没有发布说明，可以先到仓库看提交记录。';
   const result = $('#update-notice-result');
   if (result) { result.textContent = ''; result.className = 'control-result muted'; }
   const runBtn = $('#update-notice-run');

@@ -2654,6 +2654,9 @@ body, #sidebar, #topbar, #tabs, .view, .list-pane, .detail-pane, .chat-item, .se
 }
 
 /* ── 发现新版本弹窗 ── */
+/* 顶部全局 reset（* { margin:0 }）把 dialog 默认的 margin:auto 也清掉了，
+   弹窗会被钉在左上角；这里恢复居中，并限制高度避免长文溢出屏幕。 */
+dialog { margin: auto; max-height: 88vh; }
 #update-notice {
   border: 1px solid var(--border); border-radius: 16px; padding: 20px 22px;
   background: var(--bg-2); box-shadow: var(--shadow-lg);
@@ -2668,6 +2671,10 @@ body, #sidebar, #topbar, #tabs, .view, .list-pane, .detail-pane, .chat-item, .se
   font-family: inherit; font-size: 13px; line-height: 1.55;
   background: var(--bg-1, transparent); border: 1px solid var(--border);
   border-radius: 10px; padding: 10px 12px;
+}
+#update-notice-notes strong { color: var(--text); }
+#update-notice-notes code {
+  background: var(--bg-3); border-radius: 4px; padding: 1px 4px; font-size: 12px;
 }
 #update-notice-result { margin: 0; font-size: 12px; }
 #update-notice-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
