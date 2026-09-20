@@ -78,6 +78,7 @@ function normalizedConfig(cfg = getConfig().dailyMoments || {}) {
     hour: Math.min(23, Math.max(0, Number(cfg.hour) || 0)),
     minute: Math.min(59, Math.max(0, Number(cfg.minute) || 0)),
     scheduleWindows: normalizeMomentWindows(cfg.scheduleWindows),
+    intervalDays: Math.min(30, Math.max(1, Math.round(Number(cfg.intervalDays) || 1))),
     startupCatchup: cfg.startupCatchup !== false,
     minMessagesPerGroup: Math.min(100, Math.max(0, Number(cfg.minMessagesPerGroup) || 0)),
     maxGroups: Math.min(50, Math.max(1, Number(cfg.maxGroups) || 12)),
@@ -112,6 +113,29 @@ function scheduledDayAt(now, cfg, startup) {
   if (now >= target) return todayKey(now);
   if (startup && cfg.startupCatchup) return todayKey(todayStart - 1);
   return '';
+}
+
+// 固定时刻模式的发送间隔：以上次成功发布为基准，满 intervalDays 天才到期。
+// 没有发布记录（或间隔为 1）时视为到期；失败与跳过不重置基准，次日照常重试。
+export function momentIntervalDue(now = Date.now(), cfg = getConfig().dailyMoments || {}, records = []) {
+  const c = normalizedConfig(cfg);
+  if (c.intervalDays <= 1) return true;
+  let lastPublished = 0;
+  for (const record of records || []) {
+    if (!record || record.status !== 'published') continue;
+    let at = Number(record.publishedAt) || Number(record.publishStartedAt) || 0;
+    if (!at && record.dayKey) {
+      try {
+        at = dayStartFromKey(record.dayKey);
+      } catch {
+        at = 0;
+      }
+    }
+    if (at > lastPublished) lastPublished = at;
+  }
+  if (!lastPublished) return true;
+  const days = Math.round((shanghaiDayStart(now) - shanghaiDayStart(lastPublished)) / DAY_MS);
+  return days >= c.intervalDays;
 }
 
 function cleanText(value, max = 500) {
@@ -324,6 +348,7 @@ export class DailyMomentsManager {
       enabled: cfg.enabled,
       running: Boolean(this.running),
       task: this.task || null,
+      intervalDays: cfg.intervalDays,
       nextRunAt: !cfg.enabled ? 0 : cfg.scheduleWindows
         ? (nextSlot ? Math.max(nextSlot.at, this.nextRunAt || 0) : 0)
         : (this.nextRunAt || nextDailyMomentAt(this.now(), cfg)),
@@ -407,6 +432,11 @@ export class DailyMomentsManager {
           dayKey, status: blocked ? 'blocked' : 'missed',
           reason: blocked ? `定时任务已处理或发布结果待核对：${blocked.status}` : '启动时已错过固定时刻，未开启补跑',
           recordId: blocked?.id || ''
+        });
+      } else if (dayKey && !momentIntervalDue(this.now(), cfg, this.state.records)) {
+        this.#scheduleCheck({
+          dayKey, status: 'waiting',
+          reason: `未到发送间隔（每 ${cfg.intervalDays} 天）`
         });
       } else if (dayKey) {
         try {

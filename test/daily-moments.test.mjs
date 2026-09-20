@@ -8,7 +8,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-daily-moments-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 
 const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
-const { DailyMomentsManager, nextDailyMomentAt } = await import('../src/daily-moments.js');
+const { DailyMomentsManager, nextDailyMomentAt, momentIntervalDue } = await import('../src/daily-moments.js');
 
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
@@ -18,6 +18,36 @@ test('calculates the next daily run from the Shanghai wall clock', () => {
   const cfg = { hour: 23, minute: 30 };
   assert.equal(nextDailyMomentAt(before, cfg), Date.parse('2026-09-12T15:30:00Z'));
   assert.equal(nextDailyMomentAt(afterTarget, cfg), Date.parse('2026-09-13T15:30:00Z'));
+});
+
+test('daily moment interval anchors on the last successful publish', () => {
+  const now = Date.parse('2026-09-12T15:31:00Z'); // 上海时间 2026-09-12 23:31
+  const day = 24 * 60 * 60 * 1000;
+  const publishedDaysAgo = (days) => [{
+    id: 'r1', status: 'published', dayKey: '2026-09-09', publishedAt: now - days * day
+  }];
+
+  // 间隔为 1（每天）：永远到期，保持既有行为
+  assert.equal(momentIntervalDue(now, { intervalDays: 1 }, publishedDaysAgo(1)), true);
+  // 没有任何发布记录：视为到期
+  assert.equal(momentIntervalDue(now, { intervalDays: 3 }, []), true);
+  // 距上次成功发布 2 天、间隔 3：未到期
+  assert.equal(momentIntervalDue(now, { intervalDays: 3 }, publishedDaysAgo(2)), false);
+  // 距上次成功发布 3 天、间隔 3：到期
+  assert.equal(momentIntervalDue(now, { intervalDays: 3 }, publishedDaysAgo(3)), true);
+  // 今天刚成功发布过：未到期
+  assert.equal(momentIntervalDue(now, { intervalDays: 3 }, publishedDaysAgo(0)), false);
+  // 失败与跳过不重置基准（次日仍然到期）
+  assert.equal(momentIntervalDue(now, { intervalDays: 3 }, [
+    { id: 'r1', status: 'failed', dayKey: '2026-09-12', publishedAt: now },
+    { id: 'r2', status: 'skipped', dayKey: '2026-09-11' }
+  ]), true);
+  // publishedAt 缺失时退回到 dayKey 计算
+  assert.equal(momentIntervalDue(now, { intervalDays: 3 }, [
+    { id: 'r1', status: 'published', dayKey: '2026-09-11' }
+  ]), false);
+  // 非法间隔值按 1 处理
+  assert.equal(momentIntervalDue(now, { intervalDays: 'x' }, publishedDaysAgo(1)), true);
 });
 
 test('summarizes once, publishes an optional refreshed image, and prevents duplicate daily runs', async () => {

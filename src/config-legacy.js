@@ -193,6 +193,7 @@ export const DEFAULT_CONFIG = {
     hour: 23,                    // 上海时间
     minute: 30,
     scheduleWindows: null,       // null 保留固定时刻；数组为 {start, end, count}
+    intervalDays: 1,             // 固定时刻模式的发送间隔（天）：1=每天；以上次成功发布为基准
     startupCatchup: true,        // 错过定时点后，服务恢复时补一次
     minMessagesPerGroup: 3,
     maxGroups: 12,

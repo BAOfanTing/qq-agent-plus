@@ -6112,6 +6112,8 @@ function renderDailyMomentsSection(c) {
   const randomMode = Array.isArray(moments.scheduleWindows);
   const hour = Number(moments.hour ?? 23);
   const minute = String(moments.minute ?? 30).padStart(2, '0');
+  const interval = Math.min(30, Math.max(1, Math.round(Number(moments.intervalDays) || 1)));
+  const intervalIsPreset = [1, 2, 3, 5, 7].includes(interval);
   const windows = moments.scheduleWindows || [{
     start: `${String(hour).padStart(2, '0')}:${minute}`,
     end: `${String((hour + 1) % 24).padStart(2, '0')}:${minute}`, count: 1
@@ -6128,10 +6130,27 @@ function renderDailyMomentsSection(c) {
         <option value="fixed" ${randomMode ? '' : 'selected'}>固定时刻</option>
       </select>
     </div>
-    <div id="moment-fixed-time" ${randomMode ? 'hidden' : ''}><div class="field-row">
-      <div class="field"><label>执行小时（上海时间）</label><input type="number" id="cfg-moments-hour" min="0" max="23" value="${esc(moments.hour ?? 23)}" /></div>
-      <div class="field"><label>执行分钟</label><input type="number" id="cfg-moments-minute" min="0" max="59" value="${esc(moments.minute ?? 30)}" /></div>
-    </div></div>
+    <div id="moment-fixed-time" ${randomMode ? 'hidden' : ''}>
+      <div class="field-row">
+        <div class="field"><label>执行小时（上海时间）</label><input type="number" id="cfg-moments-hour" min="0" max="23" value="${esc(moments.hour ?? 23)}" /></div>
+        <div class="field"><label>执行分钟</label><input type="number" id="cfg-moments-minute" min="0" max="59" value="${esc(moments.minute ?? 30)}" /></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="cfg-moments-interval">发送间隔</label>
+          <select id="cfg-moments-interval">
+            <option value="1" ${interval === 1 ? 'selected' : ''}>每天</option>
+            <option value="2" ${interval === 2 ? 'selected' : ''}>每 2 天</option>
+            <option value="3" ${interval === 3 ? 'selected' : ''}>每 3 天</option>
+            <option value="5" ${interval === 5 ? 'selected' : ''}>每 5 天</option>
+            <option value="7" ${interval === 7 ? 'selected' : ''}>每 7 天</option>
+            <option value="custom" ${intervalIsPreset ? '' : 'selected'}>自定义</option>
+          </select></div>
+        <div class="field" id="moment-interval-custom-wrap" ${intervalIsPreset ? 'hidden' : ''}>
+          <label for="cfg-moments-interval-custom">自定义天数（1-30）</label>
+          <input type="number" id="cfg-moments-interval-custom" min="1" max="30" value="${esc(interval)}" /></div>
+      </div>
+      <div class="hint">发送间隔以上次成功发布为基准：满 N 天才发下一篇；没到期的日子不读群聊、不调模型。失败不顺延，次日重试。</div>
+    </div>
     <div id="moment-random-windows" ${randomMode ? '' : 'hidden'}>
       <div id="moment-window-rows">${windows.map(renderMomentWindowRow).join('')}</div>
       <button type="button" class="btn btn-small" id="moment-window-add" title="添加时间范围" aria-label="添加时间范围">+</button>
@@ -6932,6 +6951,12 @@ function bindSettingsEvents(c) {
       $('#cfg-moments-catchup-label').textContent = randomMode
         ? '重启后在未结束的范围内补跑' : '服务错过固定时刻后补跑';
     });
+    const syncIntervalCustom = () => {
+      const wrap = $('#moment-interval-custom-wrap');
+      if (wrap) wrap.hidden = $('#cfg-moments-interval')?.value !== 'custom';
+    };
+    $('#cfg-moments-interval')?.addEventListener('change', syncIntervalCustom);
+    syncIntervalCustom();
     const refreshWindowButtons = () => {
       const rows = $$('#moment-window-rows .moment-window-row');
       $('#moment-window-add').disabled = rows.length >= 8;
@@ -8338,6 +8363,12 @@ async function saveConfig({ quiet = false } = {}) {
           count: Number(row.querySelector('.moment-window-count').value)
         }))
         : null,
+      intervalDays: (() => {
+        const picked = val('#cfg-moments-interval', String(c.dailyMoments?.intervalDays || 1));
+        return picked === 'custom'
+          ? clampInt(val('#cfg-moments-interval-custom', c.dailyMoments?.intervalDays), 1, 30, 3)
+          : clampInt(picked, 1, 30, 1);
+      })(),
       minMessagesPerGroup: clampInt(
         val('#cfg-moments-min-messages', c.dailyMoments?.minMessagesPerGroup),
         0, 100, 3
