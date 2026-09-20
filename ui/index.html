@@ -197,6 +197,20 @@
       <button class="btn" type="submit">登录</button>
     </form>
   </dialog>
+
+  <dialog id="update-notice">
+    <div id="update-notice-panel">
+      <h2 id="update-notice-title">发现新版本</h2>
+      <p class="muted" id="update-notice-sub"></p>
+      <pre id="update-notice-notes"></pre>
+      <p class="control-result muted" id="update-notice-result" role="status" aria-live="polite"></p>
+      <div id="update-notice-actions">
+        <button class="btn btn-primary" type="button" id="update-notice-run">立即更新</button>
+        <button class="btn" type="button" id="update-notice-later">稍后</button>
+        <button class="btn" type="button" id="update-notice-ignore">忽略这个版本</button>
+      </div>
+    </div>
+  </dialog>
   <script src="/app.js"></script>
   <script src="/stable-features.js"></script>
   <script src="/status-refresh.js"></script>

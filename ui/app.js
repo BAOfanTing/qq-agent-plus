@@ -1025,6 +1025,73 @@ async function runManualUpdate() {
   }
 }
 
+// ── 发现新版本提示（只在控制台打开时检查一次；失败静默）───────────────────────
+async function checkUpdateNotice() {
+  let payload = null;
+  try {
+    payload = await api('/api/auto-update/check');
+  } catch {
+    return;
+  }
+  const notice = payload?.notice || {};
+  if (!notice.available) return;
+  const version = String(notice.version || '');
+  // 「忽略」只屏蔽这一个版本；出现新的 tag 时照常提示
+  if (version && version === String(payload.ignoredVersion || '')) return;
+  openUpdateNoticeDialog(notice);
+}
+
+function openUpdateNoticeDialog(notice) {
+  const dialog = $('#update-notice');
+  if (!dialog) return;
+  const short = (value) => String(value || '').slice(0, 7);
+  state.updateNoticeVersion = String(notice.version || '');
+  $('#update-notice-title').textContent = notice.version ? `发现新版本 ${notice.version}` : '发现新版本';
+  $('#update-notice-sub').textContent = [
+    String(notice.name || '').trim(),
+    `当前 ${short(notice.deployed) || '未知'} → 最新 ${short(notice.revision) || '未知'}`
+  ].filter(Boolean).join(' · ');
+  $('#update-notice-notes').textContent = String(notice.body || '').trim()
+    || '本次更新还没有发布说明，可以先到仓库看提交记录。';
+  const result = $('#update-notice-result');
+  if (result) { result.textContent = ''; result.className = 'control-result muted'; }
+  const runBtn = $('#update-notice-run');
+  if (runBtn) runBtn.disabled = false;
+  const ignoreBtn = $('#update-notice-ignore');
+  if (ignoreBtn) ignoreBtn.hidden = !notice.version; // 没有 tag 时没法精确忽略
+  if (!dialog.open) dialog.showModal();
+}
+
+async function runUpdateFromNotice() {
+  const result = $('#update-notice-result');
+  const runBtn = $('#update-notice-run');
+  if (runBtn) runBtn.disabled = true;
+  if (result) { result.textContent = '正在提交更新任务…'; result.className = 'control-result muted'; }
+  try {
+    const response = await api('/api/auto-update/run', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true })
+    });
+    state.autoUpdateStatus = response.status;
+    if (result) {
+      result.textContent = '更新任务已提交：先跑测试再部署，失败自动回滚；进度见「控制 → 更新部署」。';
+      result.className = 'control-result';
+    }
+  } catch (error) {
+    if (runBtn) runBtn.disabled = false;
+    if (result) { result.textContent = `启动失败：${error.message}`; result.className = 'control-result error'; }
+  }
+}
+
+async function ignoreUpdateVersion() {
+  const version = String(state.updateNoticeVersion || '');
+  if (!version) return;
+  try {
+    await api('/api/auto-update/ignore', { method: 'POST', body: JSON.stringify({ version }) });
+  } catch { /* 忽略失败就当作稍后处理，下次打开仍会提示 */ }
+  $('#update-notice')?.close();
+}
+
 async function changeSnowLumaPassword(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -8879,6 +8946,11 @@ $$('.tab').forEach((tab) => {
   } catch { /* 老浏览器不支持 addEventListener，忽略 */ }
   $('#theme-btn')?.addEventListener('click', cycleTheme);
 
+  // 「发现新版本」弹窗的三个按钮
+  $('#update-notice-later')?.addEventListener('click', () => $('#update-notice')?.close());
+  $('#update-notice-run')?.addEventListener('click', runUpdateFromNotice);
+  $('#update-notice-ignore')?.addEventListener('click', ignoreUpdateVersion);
+
   // 地址栏带 ?token= 时先自动登录（供快捷方式/脚本免输令牌）；
   // 成功后清掉地址栏里的明文令牌再重载，避免留在浏览历史里。
   try {
@@ -8915,6 +8987,9 @@ $$('.tab').forEach((tab) => {
     }
     else if (cfg0 && !('ui' in cfg0)) { /* 后端还没这个字段，保持本地值 */ }
   } catch { /* 接口不可用就用本地的 */ }
+
+  // 发现新版本提示：打开控制台时查一次（后端缓存 30 分钟），失败静默
+  checkUpdateNotice().catch(() => {});
 
   // 首启引导：关键配置（模型/白名单）没填就直接带去设置页
   try {

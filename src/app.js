@@ -35,7 +35,8 @@ import {
 } from './incident-pilot.js';
 import { safeFetchBinary } from './safe-fetch.js';
 import { integrationStatus, updateSnowLumaPassword } from './integrations.js';
-import { AutoUpdateManager } from './auto-update.js';
+import { AutoUpdateManager, readAutoUpdateState } from './auto-update.js';
+import { checkForUpdate, ignoreVersion } from './update-notice.js';
 
 // /healthz 用：只暴露名称、版本与运行状态，不含任何配置内容
 const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -1203,6 +1204,29 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       if (pathname === '/api/auto-update/notify-pending' && method === 'POST') {
         const status = await autoUpdate.handlePendingFailure();
         return json(res, 200, { ok: true, status });
+      }
+
+      if (pathname === '/api/auto-update/check' && method === 'GET') {
+        // 「发现新版本」提示：只读检查 + Release 说明，结果缓存 30 分钟。
+        // 点「立即更新」不走这里，仍由 /api/auto-update/run 触发既有部署链路。
+        try {
+          const notice = await checkForUpdate(DATA_DIR, getConfig());
+          const state = readAutoUpdateState(DATA_DIR);
+          return json(res, 200, {
+            ok: true,
+            notice,
+            ignoredVersion: String(state.ignoredVersion || '')
+          });
+        } catch (error) {
+          return json(res, 500, { error: String(error?.message ?? error) });
+        }
+      }
+
+      if (pathname === '/api/auto-update/ignore' && method === 'POST') {
+        const body = await readBody(req);
+        const version = ignoreVersion(DATA_DIR, body.version);
+        if (!version) return json(res, 400, { error: '缺少要忽略的版本号' });
+        return json(res, 200, { ok: true, ignoredVersion: version });
       }
 
       if (pathname === '/api/runtime' && method === 'POST') {
