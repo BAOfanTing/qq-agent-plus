@@ -5,7 +5,7 @@
 # 已提交文件如需重新规范化：git add --renormalize .
 * text=auto eol=lf
 
-# Windows 批处理必须 CRLF，否则 cmd.exe 解析会出错（历史上在 ops/qq-console.bat 上踩过；
-# 该脚本已由 src/ops.js console 取代，规则保留备用）。
+# Windows 批处理必须 CRLF，否则 cmd.exe 解析会出错（历史上在 ops/qq-console.bat 上踩过）。
+# 当前用途：根目录 console-tunnel.bat（Windows 一键控制台隧道；同功能 Node 版见 src/ops.js console）。
 *.bat text eol=crlf
 *.cmd text eol=crlf

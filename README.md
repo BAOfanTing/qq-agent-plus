@@ -264,6 +264,12 @@ node src/ops.js console --open           # 建 SSH 隧道并打开控制台
 每个子命令都支持 `--help`；环境变量、常用示例与远程执行说明见
 [运维工具文档](docs/OPS.md)。
 
+> **本机看控制台不用碰公网端口**：控制台只监听服务器的 `127.0.0.1:3210`。
+> Windows 用户直接双击仓库里的 [`console-tunnel.bat`](console-tunnel.bat)——首次输入一次
+> `user@host` 并记住，它会自动从服务器读取控制台令牌、建好 SSH 隧道并免登录打开浏览器
+> （同时转发 5099 SnowLuma WebUI 与 6081 QQ 扫码登录）。macOS / Linux 或有 Node 的机器
+> 用上面的 `node src/ops.js console --open`，效果相同。
+
 控制台默认端口为 `3210`。Token 可在
 `设置 -> 系统 -> 控制台安全` 中轮换。
 
