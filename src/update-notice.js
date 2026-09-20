@@ -118,6 +118,47 @@ export async function fetchLatestRelease(repository, options = {}) {
   }
 }
 
+/** 比较 部署基线..目标 之间的提交差集（本次更新实际会带来的改动）。 */
+export async function fetchComparison(repository, base, head, options = {}) {
+  const fetchImpl = options.fetchImpl || fetch;
+  const slug = parseGithubRepo(repository);
+  if (!slug || !base || !head) return { ok: false, commits: [] };
+  try {
+    const data = await fetchJson(
+      `https://api.github.com/repos/${slug.owner}/${slug.repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+      fetchImpl
+    );
+    if (!data || !Array.isArray(data.commits)) return { ok: false, commits: [] };
+    const commits = data.commits
+      .map((item) => ({
+        sha: cleanText(item?.sha, REVISION_LENGTH),
+        subject: cleanText(item?.commit?.message, 200).split('\n')[0].trim()
+      }))
+      .filter((item) => item.sha && item.subject)
+      // GitHub 按时间正序返回；展示时让最新的在最上面。
+      .reverse();
+    return { ok: true, commits, total: Number(data.total_commits) || commits.length, status: String(data.status || '') };
+  } catch {
+    return { ok: false, commits: [] };
+  }
+}
+
+/** 解析某个 ref（如 release 的 tag）指向的提交 sha；查不到返回 ''。 */
+export async function fetchCommitSha(repository, ref, options = {}) {
+  const fetchImpl = options.fetchImpl || fetch;
+  const slug = parseGithubRepo(repository);
+  if (!slug || !ref) return '';
+  try {
+    const data = await fetchJson(
+      `https://api.github.com/repos/${slug.owner}/${slug.repo}/commits/${encodeURIComponent(ref)}`,
+      fetchImpl
+    );
+    return cleanText(data?.sha, REVISION_LENGTH);
+  } catch {
+    return '';
+  }
+}
+
 /** 没有发布说明时的兜底：把最近若干提交标题列成要点。 */
 export async function fetchRecentCommitSubjects(repository, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
@@ -176,10 +217,26 @@ export async function checkForUpdate(dataDir, config = {}, { force = false, now 
 
   const available = Boolean(deployedNow) && probe.revision !== deployedNow;
   let release = null;
+  let releaseInDelta = false;
   let body = '';
+  let commitCount = 0;
   if (available) {
+    // 更新目标是分支最新提交：主体内容用「部署基线..目标」的提交差集，
+    // Release 说明只在它本身也落在这次差集里时才附上（否则是过期的旧发行说明）。
+    const compare = await fetchComparison(repository, deployedNow, probe.revision, { fetchImpl });
+    if (compare.ok) {
+      commitCount = compare.commits.length;
+      body = compare.commits.map((item) => `- ${item.subject}`).join('\n');
+    }
     release = await fetchLatestRelease(repository, { fetchImpl });
-    body = release?.body || '';
+    if (release?.version) {
+      const releaseSha = await fetchCommitSha(repository, release.version, { fetchImpl });
+      releaseInDelta = Boolean(releaseSha) && compare.ok
+        && compare.commits.some((item) => item.sha === releaseSha);
+    }
+    if (releaseInDelta && release?.body) {
+      body = `【${release.version} 发布说明】\n${release.body}\n\n【本次包含的提交】\n${body}`;
+    }
     if (!body) body = await fetchRecentCommitSubjects(repository, { fetchImpl });
   }
   const notice = {
@@ -189,11 +246,16 @@ export async function checkForUpdate(dataDir, config = {}, { force = false, now 
     branch,
     revision: cleanText(probe.revision, REVISION_LENGTH),
     deployed: deployedNow,
-    version: release?.version || '',
-    name: release?.name || '',
+    version: available
+      ? (releaseInDelta && release?.version
+        ? release.version
+        : cleanText(probe.revision, REVISION_LENGTH).slice(0, 7))
+      : '',
+    name: releaseInDelta ? (release?.name || '') : '',
     body,
-    publishedAt: release?.publishedAt || 0,
-    url: release?.url || '',
+    commitCount,
+    publishedAt: releaseInDelta ? (release?.publishedAt || 0) : 0,
+    url: releaseInDelta ? (release?.url || '') : '',
     checkedAt: now,
     error: ''
   };

@@ -736,7 +736,8 @@ function renderUpdateCheckNote(update = {}) {
   }
   if (check.available) {
     return `上次更新检查${when}：发现新版本${check.version ? ` ${esc(check.version)}` : ''}`
-      + `（当前 ${esc(short(check.deployed))} → 最新 ${esc(short(check.revision))}）。`;
+      + `（当前 ${esc(short(check.deployed))} → 最新 ${esc(short(check.revision))}`
+      + `${Number(check.commitCount) > 0 ? `，${Number(check.commitCount)} 个新提交` : ''}）。`;
   }
   return `上次更新检查${when}：已是最新（${esc(short(check.deployed))}）。`;
 }
@@ -1080,7 +1081,8 @@ function openUpdateNoticeDialog(notice) {
   $('#update-notice-title').textContent = notice.version ? `发现新版本 ${notice.version}` : '发现新版本';
   $('#update-notice-sub').textContent = [
     String(notice.name || '').trim(),
-    `当前 ${short(notice.deployed) || '未知'} → 最新 ${short(notice.revision) || '未知'}`
+    `当前 ${short(notice.deployed) || '未知'} → 最新 ${short(notice.revision) || '未知'}`,
+    Number(notice.commitCount) > 0 ? `${Number(notice.commitCount)} 个新提交` : ''
   ].filter(Boolean).join(' · ');
   $('#update-notice-notes').innerHTML = String(notice.body || '').trim()
     ? formatReleaseNotes(notice.body)
