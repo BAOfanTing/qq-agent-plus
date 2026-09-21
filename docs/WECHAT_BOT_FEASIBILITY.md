@@ -93,7 +93,7 @@ qq-agent-linux.service（单 Node 进程）
 | 审计与成本 | `sessions.js`、`model-prices.js`、`price-feed.js` | 每轮模型输入/输出/工具轨迹、Token、缓存与计价 |
 | 控制台 | `ui/`、`integrations.js` | 配置、存档、运行详情、资产、状态和旧组件入口 |
 
-当前人设运行时来自新 Agent 的 `data/config.json` 中 `persona.roleText` 等字段，内置模板位于 `src/personas.js`。旧项目的 `qq-bridge-linux/roles/小鲸鱼.md` 不是新服务运行时自动读取的角色卡文件。
+当前人设运行时来自新 Agent 的 `data/config.json` 中 `persona.roleText` 等字段，内置模板是 `roles/` 下的 markdown（`src/personas.js` 只做登记加载）。旧项目的 `qq-bridge-linux/roles/小鲸鱼.md` 不是新服务运行时自动读取的角色卡文件。
 
 ### 3.2 一条消息的完整路径
 

@@ -3,9 +3,15 @@
 ## 角色来源
 
 内置模板 `xiaojingyu_game_client` 的名称为“小鲸鱼（游戏客户端开发者）”。
-正文的唯一源码是 [roles/xiaojingyu-game-client.md](../roles/xiaojingyu-game-client.md)，
-由 `src/personas.js` 使用相对模块 URL 加载，不依赖启动工作目录。
-部署时必须带上 `roles/`；仓库的完整部署同步会包含该目录。
+**内置角色卡的正文统一放在 [`roles/`](../roles) 目录，一张卡一个 markdown 文件**：
+
+- [`roles/xiaojingyu.md`](../roles/xiaojingyu.md) —— 默认人设“小鲸鱼（默认）”，legacy 档；
+- [`roles/xiaojingyu-game-client.md`](../roles/xiaojingyu-game-client.md) —— 本文这张，grounded 档。
+
+`src/personas.js` 只做登记（id → 文件 / 显示名 / 语气档位），用相对模块 URL 读取，
+不依赖启动工作目录。部署时必须带上 `roles/`；仓库的完整部署同步会包含该目录。
+控制台里改的是**当前生效的那份拷贝**（`config.json` 的 `persona.roleText`）；
+改 `roles/` 下的文件只影响内置模板（新装实例，以及更新后的模板列表）。
 
 这是 [初步方向稿](GAME_CLIENT_PERSONA_DIRECTION.md) 的第一阶段：人格与交流策略接入。
 没有新增自主开发工具、长期自身状态、跨群情绪状态或定时承诺系统。

@@ -44,7 +44,7 @@ OneBot 消息事件
 重要实现依据：
 
 - 旧参考人设：[小鲸鱼.md](../../qq-bridge-linux/roles/小鲸鱼.md)。
-- qq-agent 内置适配模板：[personas.js](../src/personas.js)。
+- qq-agent 内置适配模板：[roles/](../roles)（登记与加载在 [personas.js](../src/personas.js)）。
 - 默认配置与持久配置加载：[config.js](../src/config.js)，持久配置可以覆盖内置模板；修改旧 Bridge 的 Markdown 不会自动更新 qq-agent 人设。
 - 通用行为与上下文注入：[prompt.js](../src/prompt.js)，特别是 `antiAiFlavor`、`memoryRules`、`buildSystemPrompt`、`buildUserPrompt`。
 - 实际生命周期实现：[orchestrator.js](../src/orchestrator.js)、[对话模式](CONVERSATION_MODES.md)。不能依据旧注释把当前全部模式理解为完全无历史。
