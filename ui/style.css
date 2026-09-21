@@ -1976,6 +1976,9 @@ html.boot-show .loading-overlay { opacity: 1; }
 .pc-row input[type=number]:focus { border-color: var(--accent); }
 .pc-row input[type=number]:disabled { opacity: .6; cursor: not-allowed; }
 .pc-unit { font-size: 11px; color: var(--muted); }
+/* 生效价：只读展示（与下面可编辑的「自填单价」是两组控件） */
+.pc-effective { font-size: 13px; font-family: var(--mono); color: var(--text); }
+.pc-subhead { font-size: 11.5px; color: var(--muted); margin: 12px 0 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .pc-note { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin-top: 10px; }
 .bp-del {
   border: 1px solid var(--border); background: none; color: var(--muted);

@@ -35,16 +35,37 @@ function writeFile() {
   } catch { /* 写不进去不影响查价（内存里已经有表） */ }
 }
 
-/** 把内存里的表注入查价层。 */
+/**
+ * 已经注入查价层的渠道（键集合）。
+ * 用来在配置里删掉某个渠道时把注入**撤销**：只按 feeds 重新注入是不够的，
+ * 删掉的那家会一直留在查价层里按老价算钱，直到重启。
+ */
+let injected = new Set();
+
+/** 注入/撤销一个渠道（同时维护 injected）。 */
+function injectOne(vendor, prices) {
+  const v = String(vendor || '').trim();
+  if (!v) return;
+  setChannelPrices(v, prices);
+  const table = prices && typeof prices === 'object' && Object.keys(prices).length ? prices : null;
+  if (table) injected.add(v);
+  else injected.delete(v);
+}
+
+/** 把内存里的表注入查价层，并撤销已经不在表里的渠道。 */
 function injectAll() {
+  const keep = new Set(Object.keys(feeds));
+  for (const vendor of injected) {
+    if (!keep.has(vendor)) injectOne(vendor, null);
+  }
   for (const [vendor, feed] of Object.entries(feeds)) {
-    setChannelPrices(vendor, feed?.prices || null);
+    injectOne(vendor, feed?.prices || null);
   }
 }
 
 /** 启动时调用：先吃磁盘缓存（同步注入），再按需后台刷新。 */
 export function initChannelPrices(feedsConfig = []) {
-  // 1) 读缓存（配置里已经删掉的渠道不再注入）
+  // 1) 读缓存（配置里已经删掉的渠道不再注入，已经注入过的还要撤销 —— 见 injectAll）
   const wanted = new Set((Array.isArray(feedsConfig) ? feedsConfig : [])
     .map((f) => String(f?.vendor || '').trim())
     .filter(Boolean));
@@ -58,7 +79,11 @@ export function initChannelPrices(feedsConfig = []) {
       feeds[vendor] = feed;
     }
   } catch {
-    feeds = {};
+    // 读不到缓存（首次启动 / 文件坏了）：保留内存里已有的表 —— "失败不清表"，
+    // 但同样按配置过滤，删掉的渠道不能因为缓存读不出来就继续生效。
+    for (const vendor of Object.keys(feeds)) {
+      if (!wanted.has(vendor)) delete feeds[vendor];
+    }
   }
   injectAll();
 
@@ -128,7 +153,7 @@ export async function refreshChannelFeed(vendor, url, options = {}) {
       dropped: loaded.dropped,
       prices: loaded.prices
     };
-    setChannelPrices(v, loaded.prices);
+    injectOne(v, loaded.prices);
   } else {
     const previous = feeds[v] || {};
     feeds[v] = {
@@ -140,8 +165,7 @@ export async function refreshChannelFeed(vendor, url, options = {}) {
       dropped: previous.dropped || 0,
       prices: previous.prices || {}   // 失败不清表：继续用上一次拉到的
     };
-    if (feeds[v].prices && Object.keys(feeds[v].prices).length) setChannelPrices(v, feeds[v].prices);
-    else setChannelPrices(v, null);
+    injectOne(v, feeds[v].prices);
   }
   writeFile();
   return channelPriceStatus();
@@ -157,7 +181,7 @@ export function removeChannelFeed(vendor) {
   const v = String(vendor || '').trim();
   if (!v) return channelPriceStatus();
   delete feeds[v];
-  setChannelPrices(v, null);
+  injectOne(v, null);
   writeFile();
   return channelPriceStatus();
 }
@@ -242,7 +266,7 @@ export async function maybeAutoProbeChannel({ baseUrl, vendor, feedsConfig = [],
       auto: true,
       source: probe.kind
     };
-    setChannelPrices(channel, probe.prices);
+    injectOne(channel, probe.prices);
     writeFile();
     return { probed: true, ok: true, count: Object.keys(probe.prices).length, kind: probe.kind };
   } catch (error) {

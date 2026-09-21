@@ -413,3 +413,56 @@ test('兜底估算（按当前模型估价）不能拿"现在"的别名规则改
   assert.equal(before9.source, 'fallback-model');
   assert.equal(before9.in, 4.5, '9-14 之前 v4-pro 还是它自己的价（带 from 的别名不回溯）');
 });
+
+/* ── 0 是合法价，不是"没填" ── */
+
+test('手填全 0 的价 = 明确写出来的免费，不再回落到官方表', () => {
+  const free = { api: { model: CURRENT, useOfficialPrice: true, modelPrices: { 'free-model': { in: 0, out: 0 } } } };
+  const p = prices.resolveModelPrice('free-model', free, null, {});
+  assert.equal(p.source, 'custom', '0/0 是用户写的价，不能被当成"没填"');
+  assert.equal(p.in, 0);
+  assert.equal(p.out, 0);
+  assert.equal(p.unpriced, false, '免费 ≠ 未定价');
+
+  // 渠道价同理
+  const channelFree = {
+    api: { useOfficialPrice: true, modelPrices: { '某渠道：free-model': { in: 0, out: 0 } } }
+  };
+  const c = prices.resolveModelPrice('free-model', channelFree, null, { vendor: '某渠道' });
+  assert.equal(c.source, 'channel');
+  assert.equal(c.in, 0);
+
+  // 空条目 / 没写字段的条目仍然算"没填"（回落到价格表，而不是变成免费）
+  const empty = { api: { useOfficialPrice: true, modelPrices: { [CURRENT]: { note: '还没填价' } } } };
+  assert.notEqual(prices.resolveModelPrice(CURRENT, empty, null, {}).source, 'custom');
+});
+
+test('渠道倍率填 0 = 这个渠道不花钱（不再被当成没填而按原价算）', () => {
+  const cfg = { api: { model: CURRENT, useOfficialPrice: true, costMode: 'multiplier', costMultiplier: 0 } };
+  const p = priceOf(CURRENT, cfg, { vendor: 'cmd' });
+  assert.equal(p.source, 'multiplier');
+  assert.equal(p.in, 0);
+  assert.equal(p.out, 0);
+  assert.match(p.via, /官方价 ×0/);
+
+  // 没填 / 写坏仍然是 1 倍
+  assert.equal(prices.parseMultiplier(undefined), 1);
+  assert.equal(prices.parseMultiplier(''), 1);
+  assert.equal(prices.parseMultiplier('abc'), 1);
+  assert.equal(prices.parseMultiplier(-2), 1);
+  assert.equal(prices.parseMultiplier(0), 0);
+  assert.equal(prices.parseMultiplier('0.5'), 0.5);
+});
+
+test('别名的时间边界写错：整条别名叫它失效，不按"没有边界"处理', () => {
+  const ok = { to: 'flash', until: '2026-09-14T00:00:00+08:00' };
+  assert.equal(prices.aliasTargetAt(ok, Date.parse('2026-09-10T00:00:00+08:00')), 'flash');
+  assert.equal(prices.aliasTargetAt(ok, Date.parse('2026-09-20T00:00:00+08:00')), '');
+
+  // until 写错（垃圾字符串）：不能"永不失效"，而是整条别名不可用
+  assert.equal(prices.aliasTargetAt({ to: 'flash', until: '不是时间' }, Date.parse('2026-09-20T00:00:00+08:00')), '');
+  // from 写错：不能回溯到全部历史
+  assert.equal(prices.aliasTargetAt({ to: 'flash', from: '2026-13-45' }, Date.parse('2020-01-01T00:00:00+08:00')), '');
+  // 没写边界 = 永久别名，照常生效
+  assert.equal(prices.aliasTargetAt({ to: 'flash' }, Date.parse('2020-01-01T00:00:00+08:00')), 'flash');
+});

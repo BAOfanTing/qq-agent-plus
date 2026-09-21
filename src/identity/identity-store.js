@@ -453,6 +453,32 @@ export class IdentityStore {
         updated_at=?
       WHERE status IN ('queued','reviewing')
     `).run(now, now);
+    // 每次进程启动清一次台账（见 pruneLedgers）：这三张表只增不删会一直涨
+    try { this.pruneLedgers(); } catch { /* 清理失败不影响启动 */ }
+  }
+
+  /**
+   * 台账保留期清理：删掉 N 天前**已了结**的行。
+   * 三张表都是"每次事件写一行"的账本（好友机会 / 提议 / 收到的加好友请求），
+   * 没有保留策略的话会无限增长：设置页要一直翻、备份也跟着变大。
+   * 未决状态不删 —— 那是等管理员处理的待办，删掉等于把它丢掉。
+   */
+  pruneLedgers(retentionDays = 90) {
+    const cutoff = Date.now() - Math.max(1, Number(retentionDays) || 90) * 24 * 60 * 60 * 1000;
+    try {
+      this.db.prepare(`
+        DELETE FROM friend_opportunities
+        WHERE created_at < ? AND status NOT IN ('queued','reviewing')
+      `).run(cutoff);
+      this.db.prepare(`
+        DELETE FROM friend_proposals
+        WHERE created_at < ? AND status NOT IN ('pending','deciding','approved','held_unknown')
+      `).run(cutoff);
+      this.db.prepare(`
+        DELETE FROM incoming_friend_requests
+        WHERE created_at < ? AND status NOT IN ('pending','deciding')
+      `).run(cutoff);
+    } catch { /* 清理失败不影响运行 */ }
   }
 
   close() {

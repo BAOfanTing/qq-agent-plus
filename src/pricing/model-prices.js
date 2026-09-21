@@ -322,6 +322,17 @@ export const MODEL_ALIASES = {
 };
 
 /**
+ * 别名的时间边界：没写 = 0（这一侧不设边界）；写了解析不出来 = null。
+ * 不能把解析失败当成"没写边界" —— until 写错的别名会永不失效、from 写错的会回溯到
+ * 全部历史，两种都是拿错价算钱，所以解析失败时整条别名作废（FAIL_CLOSED）。
+ */
+function parseAliasTime(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return 0;
+  const t = Date.parse(String(value));
+  return Number.isFinite(t) ? t : null;
+}
+
+/**
  * 解析别名在某个时刻指向谁：
  *   - 字符串 = 永久别名
  *   - { to, from?, until? } = 只在区间内生效（历史成本要按当时的规则算）
@@ -334,8 +345,9 @@ export function aliasTargetAt(value, at = 0) {
   if (typeof value !== 'object') return '';
   const to = String(value.to || '').trim();
   if (!to) return '';
-  const from = value.from ? Date.parse(value.from) : 0;
-  const until = value.until ? Date.parse(value.until) : 0;
+  const from = parseAliasTime(value.from);
+  const until = parseAliasTime(value.until);
+  if (from === null || until === null) return '';
   if (from) {
     const ref = t || Date.now();
     if (ref < from) return '';
@@ -752,9 +764,19 @@ export function costModeOf(cfg) {
   const mode = ['multiplier', 'subscription'].includes(raw) ? raw : 'official';
   return {
     mode,
-    multiplier: Math.max(0.0001, Number(api.costMultiplier) || 1),
+    multiplier: parseMultiplier(api.costMultiplier),
     monthlyFee: Math.max(0, Number(api.costMonthlyFee) || 0)
   };
+}
+
+/**
+ * 渠道倍率：没填 = 1；填了 0 就是 0（免费渠道）。
+ * 不能用 `Number(x) || 1` —— 0 是合法值，会被当成"没填"变成原价。
+ */
+export function parseMultiplier(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return 1;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
 }
 
 /** 把价格表条目按倍率打折（multiplier 模式：用户声明的渠道价）。 */
@@ -785,7 +807,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
   if (vendor && id) {
     const key = channelPriceKey(vendor, id);
     const hit = customMap[key];
-    if (hit && (Number(hit.in) || Number(hit.out) || hit.billing)) {
+    if (hasManualPrice(hit)) {
       return customPrice(hit, {
         source: 'channel',
         matched: key,
@@ -797,7 +819,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
 
   // ② 模型自定义价（不分渠道）—— 手填的价永远优先于自动拉到的价目表
   const own = customMap[id];
-  if (id && own && (Number(own.in) || Number(own.out) || own.billing)) {
+  if (id && hasManualPrice(own)) {
     return customPrice(own, { source: 'custom', matched: id, via: '自定义价', locked: false });
   }
 
@@ -950,6 +972,23 @@ export function billingOf(entry) {
   }
   if (raw === 'none') return { billing: 'none', amount: 0, period: 'month' };
   return { billing: 'token', amount: 0, period: 'month' };
+}
+
+/**
+ * 手填的一条价目算不算"填了价"。
+ * 判据是"写没写 in/out 字段"，不是"算出来非 0" —— `{in:0,out:0}` 是用户明确写的
+ * 免费价（本地模型、赠送额度），用 `Number(x) || ...` 判断会把它当成没填而回落到
+ * 官方价，报出来的钱比实际高的多。billing 写了照样算填了（包月/不计费）。
+ */
+function hasManualPrice(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (String(entry.billing ?? '').trim()) return true;
+  for (const key of ['in', 'out']) {
+    const value = entry[key];
+    if (value === undefined || value === null || String(value).trim() === '') continue;
+    if (Number.isFinite(Number(value))) return true;
+  }
+  return false;
 }
 
 function customPrice(entry, { source, matched, via, locked }) {

@@ -768,3 +768,47 @@ test('incoming friend request keeps an unknown result and never retries automati
   assert.equal(recovered.status, 'held_unknown');
   assert.match(recovered.actionError, /结果确认前重启/);
 });
+
+test('台账保留期清理：90 天前已了结的删掉，未决的留着', (t) => {
+  const dir = fs.mkdtempSync(path.join(root, 'prune-ledgers-'));
+  const store = new IdentityStore({ dataDir: dir });
+  t.after(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const old = Date.now() - 120 * 24 * 60 * 60 * 1000;
+  const fresh = Date.now() - 5 * 24 * 60 * 60 * 1000;
+  const addOpportunity = store.db.prepare(`
+    INSERT INTO friend_opportunities (id, account_uin, uin, source_chat_key, trigger_key, status, created_at, updated_at)
+    VALUES (?, '1000', '2000', 'group:1', ?, ?, ?, ?)
+  `);
+  addOpportunity.run('fo_old_done', 'k1', 'proposed', old, old);
+  addOpportunity.run('fo_old_open', 'k2', 'queued', old, old);
+  addOpportunity.run('fo_new_done', 'k3', 'proposed', fresh, fresh);
+  store.db.prepare(`
+    INSERT INTO friend_proposals (id, uin, source_chat_key, reason_code, reason, status, created_at, updated_at)
+    VALUES ('fp_old_done', '2000', 'group:1', 'manual', 'r', 'rejected', ?, ?)
+  `).run(old, old);
+  const addRequest = store.db.prepare(`
+    INSERT INTO incoming_friend_requests (id, request_flag, uin, status, created_at, updated_at)
+    VALUES (?, ?, '2000', ?, ?, ?)
+  `);
+  addRequest.run('ifr_old_decided', 'flag-decided', 'accepted', old, old);
+  addRequest.run('ifr_old_pending', 'flag-pending', 'pending', old, old);
+
+  store.pruneLedgers();
+
+  const idsOf = (sql) => store.db.prepare(sql).all().map((row) => row.id).sort();
+  assert.deepEqual(
+    idsOf('SELECT id FROM friend_opportunities'),
+    ['fo_new_done', 'fo_old_open'],
+    '过期的已了结机会要删掉；未过期的、以及还在排队的不许动'
+  );
+  assert.deepEqual(idsOf('SELECT id FROM friend_proposals'), [], '90 天前已了结的提议应被清掉');
+  assert.deepEqual(
+    idsOf('SELECT id FROM incoming_friend_requests'),
+    ['ifr_old_pending'],
+    '未决的入站请求必须留着（那是等管理员处理的待办）'
+  );
+});

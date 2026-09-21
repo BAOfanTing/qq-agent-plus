@@ -64,6 +64,8 @@ const status = {
 };
 
 let timer = null;
+/** 正在跑的刷新：{ key, promise }。同一组地址的重复调用复用同一次请求。 */
+let inFlight = null;
 
 /**
  * 取一个价格数字：只接受"真的写了非负数字"（数字或数字串）。
@@ -208,11 +210,33 @@ function writeDiskCache(tag, url, prices, aliases = null) {
 }
 
 /**
- * 立即拉取一次远程价格表（按候选地址依次尝试）。
+ * 立即拉取一次远程价格表。
+ *
+ * 同一组地址已有请求在飞时复用那一次（手动「立即拉取」撞上启动/24h 定时那次时，
+ * 后返回的旧结果会把新结果覆盖掉）；地址变了则等前一次结束再跑，
+ * 免得新地址的配置被旧地址的结果盖回去。
+ *
  * @param {string} configured 配置里的值：URL / ''（用默认地址）/ 'none'（关闭）
  * @returns {Promise<object>} 最新状态
  */
-export async function refreshPriceFeed(configured, options = {}) {
+export function refreshPriceFeed(configured, options = {}) {
+  const key = priceFeedTargets(configured).join(',');
+  if (inFlight && inFlight.key === key) return inFlight.promise;
+  // 没有人在飞时**同步启动**（跟以前一样，"调用即发请求"，不额外拖一个微任务）；
+  // 地址换了才排队等前一次结束 —— 不然新地址的结果会被旧地址盖回去。
+  const promise = inFlight
+    ? inFlight.promise.catch(() => {}).then(() => refreshOnce(configured, options))
+    : refreshOnce(configured, options);
+  inFlight = { key, promise };
+  // 结束（无论成败）都要把坑位让出来；这里同时充当 rejection 处理器，避免未捕获的 rejection
+  promise.then(
+    () => { if (inFlight?.promise === promise) inFlight = null; },
+    () => { if (inFlight?.promise === promise) inFlight = null; }
+  );
+  return promise;
+}
+
+async function refreshOnce(configured, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
   const timeoutMs = Number(options.timeoutMs) || FETCH_TIMEOUT_MS;
   const targets = priceFeedTargets(configured);
@@ -288,5 +312,11 @@ export function initPriceFeed(configured) {
 
 /** 当前状态（给 /api/model-prices 与设置页展示）。 */
 export function priceFeedStatus() {
-  return { ...status };
+  // 换了地址、新地址又没拉成功时，生效的还是上一组地址拉到的表（status.sourceUrl 是旧地址）：
+  // 界面必须能说出"新地址还没生效"，否则看起来像新地址已经生效了。
+  const targets = priceFeedTargets(status.url);
+  return {
+    ...status,
+    sourceStale: Boolean(status.sourceUrl) && !targets.includes(status.sourceUrl)
+  };
 }

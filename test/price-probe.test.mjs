@@ -169,6 +169,9 @@ test('渠道价目表落盘 + 拉取失败时保留上一次的表', async () =>
   // 配置里删掉这个渠道 → 不再注入
   channel.initChannelPrices([]);
   assert.equal(channel.channelPriceCounts()['落盘渠道'], undefined);
+  // 光"不再注入"不够：已经在查价层里的那张表也必须撤掉（手工改 config 删渠道时不能等重启）
+  const revoked = prices.resolveModelPrice('keep-model', { api: { useOfficialPrice: true } }, null, { vendor: '落盘渠道' });
+  assert.equal(revoked.unpriced, true, '配置里删掉的渠道，注入要当场撤销');
 
   channel.removeChannelFeed('落盘渠道');
   assert.equal(channel.channelPriceStatus().length, 0);

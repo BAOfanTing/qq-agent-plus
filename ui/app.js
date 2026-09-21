@@ -1259,7 +1259,7 @@ async function refreshStatus() {
     // 按账户口径换个说法：倍率=你的渠道价、按月付=包月（不按 token 算）
     const modeTxt = c?.costMode === 'subscription'
       ? (Number(c.costMonthlyFee) > 0 ? ` · 包月 ¥${Number(c.costMonthlyFee)}/月` : ' · 按月付')
-      : (c?.costMode === 'multiplier' ? `（官方价 ×${Number(c.costMultiplier) || 1}）` : '');
+      : (c?.costMode === 'multiplier' ? `（官方价 ×${mulOf(c.costMultiplier)}）` : '');
     const unpricedTxt = c && c.unpriced ? ' · 含未定价调用' : '';
     const rate = s.cacheHitRate;
     const rateTxt = rate > 0 ? ` · 缓存 ${Math.round(rate * 100)}%` : '';
@@ -2877,7 +2877,7 @@ function renderUsagePage(stats, st, prices) {
     guide.querySelector('#cost-guide-save')?.addEventListener('click', () => {
       const picked = guide.querySelector('input[name="guide-mode"]:checked')?.value || 'official';
       const patch = { costMode: picked, costGuideDismissed: true };
-      if (picked === 'multiplier') patch.costMultiplier = Number(guide.querySelector('#guide-multiplier')?.value) || 1;
+      if (picked === 'multiplier') patch.costMultiplier = mulOf(guide.querySelector('#guide-multiplier')?.value);
       if (picked === 'subscription') patch.costMonthlyFee = Number(guide.querySelector('#guide-monthly')?.value) || 0;
       writeMode(patch, '已按这个口径计算');
     });
@@ -2950,7 +2950,7 @@ function updateUsagePage(stats, st, prices) {
   if (Number(billingInfo.localCalls) > 0) split.push(`本地模型 ${Number(billingInfo.localCalls)} 次不计费`);
   // 账户口径 + 兜底估算的说明（人话，不用用户理解"口径"两个字）
   const costMode = String((state.config?.api?.costMode) || 'official');
-  const multiplier = Number(state.config?.api?.costMultiplier) || 1;
+  const multiplier = mulOf(state.config?.api?.costMultiplier);
   if (!flatTxt && hasEstimate && costMode !== 'multiplier') split.push('按官方价估算，不是账单');
   if (!flatTxt && hasActual && costMode === 'multiplier') split.push(`官方价 ×${multiplier}（你的渠道价）`);
   if (Number(t.fallbackCalls) > 0) split.push(`${Number(t.fallbackCalls)} 次按当前模型估算`);
@@ -4717,6 +4717,7 @@ function renderPriceFeedStatus() {
   const el = $('#price-feed-status');
   if (!el) return;
   const r = state.modelPrices?.remote;
+  el.className = 'hint';
   if (!r || !r.enabled) {
     el.textContent = '远程价格表已关闭（只用内置表）。想用项目默认表就把输入框清空保存，或填自己的表 URL。';
     return;
@@ -4724,6 +4725,14 @@ function renderPriceFeedStatus() {
   const when = r.fetchedAt ? fmtTime(r.fetchedAt) : '-';
   const droppedTxt = r.dropped ? `，${r.dropped} 条不合格被丢弃` : '';
   const from = r.sourceUrl ? ` · ${r.sourceUrl}` : (r.url ? '' : ' · 项目默认地址');
+  // 地址改了、新地址还没拉成功：生效的仍是上一组地址拉到的表。
+  // 这条必须排在"生效中"前面 —— 否则界面会拿新地址 + 旧数据说"已生效"。
+  if (r.sourceStale) {
+    el.className = 'hint error';
+    el.textContent = `新地址还没拉到（${r.error || '拉取失败'}），当前生效的仍是上一次成功拉取的 ${r.sourceUrl}`
+      + `（${when}${droppedTxt}）。想彻底改用新地址，先把它调通。`;
+    return;
+  }
   if (r.ok && r.source === 'remote') {
     el.textContent = `远程表生效中：${r.count} 条覆盖内置表 · 上次拉取 ${when}${from}${droppedTxt}`;
   } else if (!r.ok && r.source === 'cache') {
@@ -4735,18 +4744,6 @@ function renderPriceFeedStatus() {
   }
 }
 
-/**
- * 刷新「当前模型单价」卡片。
- *
- * ── 规则（只跟开关绑定，绝不依赖保存状态）──
- *   开关开 → 展示内置官方价，输入框**只读**
- *            匹配不到就是 0，提示关掉开关自填
- *   开关关 → 输入框**可编辑**，优先该模型的自定义价，没设则用全局兜底
- *
- * 匹配判断在本地用 state.modelPrices.prices 直接算，
- * 不读 state.modelPrices.current —— 那是后端按「当时请求的模型」算的，
- * 切换模型后若不重新请求就会拿到旧值。
- */
 /**
  * 在内置价格表里匹配模型（前端版）。
  *
@@ -4823,6 +4820,36 @@ function matchPriceTable(modelId, table, aliases = null) {
 }
 
 /**
+ * 渠道倍率：没填 = 1；填了 0 就是 0（免费渠道）。与后端 parseMultiplier 保持一致 ——
+ * 不能用 `Number(x) || 1`，那会把用户填的 0 悄悄变成原价。
+ */
+function mulOf(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return 1;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
+/** 价格展示：最多 4 位小数并去掉尾随 0（0.0500 → 0.05）。 */
+function priceTxt(value) {
+  return (Number(value) || 0).toFixed(4).replace(/\.?0+$/, '') || '0';
+}
+
+/**
+ * 手填的一条价目算不算"填了价\"：判据是写没写 in/out 字段（0 是合法价，代表免费），
+ * 与后端 hasManualPrice 保持一致。
+ */
+function hasOwnPrice(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (String(entry.billing ?? '').trim()) return true;
+  for (const key of ['in', 'out']) {
+    const value = entry[key];
+    if (value === undefined || value === null || String(value).trim() === '') continue;
+    if (Number.isFinite(Number(value))) return true;
+  }
+  return false;
+}
+
+/**
  * 刷新「当前模型单价」卡片。
  *
  * ── 规则（只跟开关绑定，绝不依赖保存状态）──
@@ -4837,9 +4864,12 @@ function matchPriceTable(modelId, table, aliases = null) {
  * 匹配判断在本地用 state.modelPrices.prices 算，不读 state.modelPrices.current
  * —— 后者是后端按「当时请求的模型」算的，切换模型后不重新请求就会拿到旧值。
  */
+
 function refreshModelPriceCard() {
   const modelEl = $('#pc-model');
   const noteEl = $('#pc-note');
+  const effEl = $('#pc-effective');
+  const inputNoteEl = $('#pc-input-note');
   const inEl = $('#cfg-price-in');
   const outEl = $('#cfg-price-out');
   const cachedEl = $('#cfg-price-cached');
@@ -4857,9 +4887,22 @@ function refreshModelPriceCard() {
 
   modelEl.textContent = model ? (vendor ? `${model} · ${vendor}` : model) : '（未选择模型）';
 
+  // ── 两组控件的分工（2026-09-21 拆开，别再合并）──
+  //   #pc-effective   生效价：查价链路算出来的结果，只读展示
+  //   #cfg-price-*    自填单价：只在"保存真的会生效"时可编辑 ——
+  //                   官方价开关开着、或这个模型走渠道价时，保存会被守卫跳过，
+  //                   那就不该让用户以为改了有用（判据与 collectConfig 的 priceEditable 一致）。
+  const customMap = api.modelPrices || {};
+  const ownPrice = (model && hasOwnPrice(customMap[model])) ? customMap[model] : null;
+  const channelKey = model && vendor ? `${vendor}：${model}` : '';
+  const hasChannelPrice = Boolean(channelKey && hasOwnPrice(customMap[channelKey]));
+  const editable = !useOfficial && !hasChannelPrice;
+
   if (!model) {
+    if (effEl) effEl.textContent = '—';
     [inEl, outEl, cachedEl].forEach((el) => { if (el) { el.value = 0; el.disabled = true; } });
     if (noteEl) noteEl.textContent = '先在上方选择一个模型，才能查看/设定它的单价。';
+    if (inputNoteEl) inputNoteEl.textContent = '';
     return;
   }
 
@@ -4871,8 +4914,6 @@ function refreshModelPriceCard() {
   const eff = useOfficial === savedOfficial
     ? effectivePriceFor(model, vendor)
     : effectivePriceFor(model, vendor, { useOfficialPrice: useOfficial });
-  const shown = { in: eff.in ?? 0, out: eff.out ?? 0, cached: eff.cached ?? 0 };
-  const locked = eff.locked === true || eff.billing === 'flat' || eff.billing === 'none';
   let sourceTxt = '';
 
   if (eff.billing === 'flat') {
@@ -4890,7 +4931,7 @@ function refreshModelPriceCard() {
   } else if (eff.source === 'remote') {
     sourceTxt = '这个价来自远程价格表（你配置的那份），可以直接改；改完就变成你自己的价。';
   } else if (eff.source === 'multiplier') {
-    sourceTxt = `正在按「${eff.via || `官方价 ×${Number(api.costMultiplier) || 1}`}」折算（你声明的渠道价）——`
+    sourceTxt = `正在按「${eff.via || `官方价 ×${mulOf(api.costMultiplier)}`}」折算（你声明的渠道价）——`
       + '这是实付口径的估算，不是账单原样；换口径在下面的「成本怎么算」。';
   } else if (eff.source === 'manual') {
     sourceTxt = '官方价格表没有命中，正在用「全局兜底单价」估算 —— 想让这个模型更准，用下面的「给这个模型定价」。';
@@ -4920,11 +4961,34 @@ function refreshModelPriceCard() {
     }
   }
 
-  if (inEl) { inEl.value = shown.in ?? 0; inEl.disabled = locked; }
-  if (outEl) { outEl.value = shown.out ?? 0; outEl.disabled = locked; }
-  if (cachedEl) { cachedEl.value = shown.cached ?? 0; cachedEl.disabled = locked; }
+  // 生效价：只读展示（包月/不计费/未定价直接写字，不摆一排数字）
+  if (effEl) {
+    effEl.textContent = eff.billing === 'flat'
+      ? `包月 ¥${Number(eff.amount) || 0}/${eff.period === 'day' ? '天' : '月'}`
+      : eff.billing === 'none'
+        ? '不计费（只统计 token）'
+        : eff.unpriced
+          ? '未定价（价格表里没有这个模型）'
+          : `输入 ${priceTxt(eff.in)} · 输出 ${priceTxt(eff.out)} · 缓存命中 ${priceTxt(eff.cached)}（元/百万）`;
+  }
+
+  // 自填单价：只放"用户自己填的数"（该模型的自定义价 → 全局兜底），
+  // 不再把生效价填进来 —— 那正是过去"一个控件兼两种含义"的根源。
+  const savedIn = ownPrice ? ownPrice.in : api.priceInputPerM;
+  const savedOut = ownPrice ? ownPrice.out : api.priceOutputPerM;
+  const savedCached = ownPrice ? ownPrice.cached : api.priceCachedPerM;
+  if (inEl) { inEl.value = Number(savedIn) || 0; inEl.disabled = !editable; }
+  if (outEl) { outEl.value = Number(savedOut) || 0; outEl.disabled = !editable; }
+  if (cachedEl) { cachedEl.value = Number(savedCached) || 0; cachedEl.disabled = !editable; }
   const card = $('#model-price-card');
-  if (card) card.classList.toggle('locked', locked);
+  if (card) card.classList.toggle('locked', !editable);
+  if (inputNoteEl) {
+    inputNoteEl.textContent = editable
+      ? '填你的实付价，保存后覆盖上面的价格表；三项全 0 = 清除自定义。'
+      : hasChannelPrice
+        ? `这个模型用的是「${vendor}」的渠道价（只对该渠道生效），所以这三个框停用；要改就用下面的「给这个模型定价」另存一条。`
+        : '「用内置官方价格表估算」开着，这三个框保存时会被忽略；走中转站要自填，先关掉上面那个开关。';
+  }
   if (noteEl) noteEl.textContent = sourceTxt;
 }
 
@@ -4985,10 +5049,10 @@ function effectivePriceFor(model, vendor, overrides = null) {
   if (vendor) {
     const key = `${vendor}：${id}`;
     const hit = customMap[key];
-    if (hit && (Number(hit.in) || Number(hit.out) || hit.billing)) return customShape(hit, 'channel', key, `渠道价（${vendor}）`);
+    if (hasOwnPrice(hit)) return customShape(hit, 'channel', key, `渠道价（${vendor}）`);
   }
   const own = customMap[id];
-  if (own && (Number(own.in) || Number(own.out) || own.billing)) return customShape(own, 'custom', id, '自定义价');
+  if (hasOwnPrice(own)) return customShape(own, 'custom', id, '自定义价');
 
   // 账户口径：按月付（与后端 ③ 一致）—— 固定月费，不按 token 算
   const costMode = String(api.costMode || 'official');
@@ -5008,7 +5072,7 @@ function effectivePriceFor(model, vendor, overrides = null) {
       const remote = hit.remote === true;
       // 渠道倍率（与后端 ⑤ 一致）：官方/远程表的价按用户声明的倍率折算，
       // 折算后是"实付"口径，所以卡片不能再按"官方估算"解释。
-      const mul = costMode === 'multiplier' ? Math.max(0.0001, Number(api.costMultiplier) || 1) : 1;
+      const mul = costMode === 'multiplier' ? mulOf(api.costMultiplier) : 1;
       const discounted = mul !== 1;
       const scale = (value) => Number((((Number(value) || 0) * mul)).toFixed(6));
       const peak = hit.peak
@@ -5717,8 +5781,8 @@ function renderApiSection(c) {
       <label class="radio-row"><input type="radio" name="cost-mode" value="multiplier"
         ${c.api.costMode === 'multiplier' ? 'checked' : ''} />
         <span>我按渠道价：官方价 ×
-          <input type="number" id="cfg-cost-multiplier" step="0.01" min="0.01" value="${esc(c.api.costMultiplier ?? 1)}" style="width:80px" />
-          （例如 0.5 = 打五折；中转站常用）</span></label>
+          <input type="number" id="cfg-cost-multiplier" step="0.01" min="0" value="${esc(c.api.costMultiplier ?? 1)}" style="width:80px" />
+          （例如 0.5 = 打五折；中转站常用；填 0 = 这个渠道不花钱）</span></label>
       <label class="radio-row"><input type="radio" name="cost-mode" value="subscription"
         ${c.api.costMode === 'subscription' ? 'checked' : ''} />
         <span>我按月付 ¥
@@ -5775,6 +5839,12 @@ function renderApiSection(c) {
         <span class="pc-model" id="pc-model">${esc(c.api.model || '（未选择模型）')}</span>
       </div>
       <div class="pc-rows">
+        <div class="pc-row"><span class="pc-label">生效价</span>
+          <span class="pc-effective" id="pc-effective">—</span></div>
+      </div>
+      <div class="pc-note" id="pc-note"></div>
+      <div class="pc-subhead">自填单价（元/百万 token）</div>
+      <div class="pc-rows">
         <div class="pc-row"><span class="pc-label">输入</span>
           <input type="number" id="cfg-price-in" step="0.01" min="0" value="0" /><span class="pc-unit">元/百万</span></div>
         <div class="pc-row"><span class="pc-label">输出</span>
@@ -5782,7 +5852,7 @@ function renderApiSection(c) {
         <div class="pc-row"><span class="pc-label">缓存命中</span>
           <input type="number" id="cfg-price-cached" step="0.01" min="0" value="0" /><span class="pc-unit">元/百万</span></div>
       </div>
-      <div class="pc-note" id="pc-note"></div>
+      <div class="pc-note" id="pc-input-note"></div>
     </div>
 
     <div style="display:flex;gap:8px;margin:8px 0">
@@ -8430,7 +8500,7 @@ function bindSettingsEvents(c) {
     const status = $('#cost-mode-status');
     if (status) {
       status.textContent = picked === 'multiplier'
-        ? `官方价 ×${Number(mult?.value) || 1} = 你的渠道价（按实付口径显示）`
+        ? `官方价 ×${mulOf(mult?.value)} = 你的渠道价（按实付口径显示）`
         : picked === 'subscription'
           ? `按 ¥${Number(monthly?.value) || 0}/月 固定支出显示，不再按 token 算`
           : '按内置官方价格表估算：数字是估算，不是你的账单';
@@ -9523,12 +9593,17 @@ async function saveConfig({ quiet = false } = {}) {
     // 用户可能改了模型/开关但还没保存过，用旧值会把价格存到错误的模型名下。
     const curModel = String(($('#cfg-model')?.value ?? c.api?.model) || '').trim();
     const officialOn = ($('#cfg-useofficialprice')?.checked) ?? (c.api?.useOfficialPrice !== false);
-    // 当前模型单价卡片会把"生效价"写进这三个输入框，官方价开关打开时它们还是禁用的 ——
-    // 那种情况下读回来的是官方价/渠道价的展示值，写进配置就等于凭空造出一条
-    // 「全局兜底单价」（且对所有未定价模型生效）。开关打开时保持配置里的原值不变。
-    const priceIn = officialOn ? (Number(c.api.priceInputPerM) || 0) : (Number(val('#cfg-price-in', 0)) || 0);
-    const priceOut = officialOn ? (Number(c.api.priceOutputPerM) || 0) : (Number(val('#cfg-price-out', 0)) || 0);
-    const priceCached = officialOn ? (Number(c.api.priceCachedPerM) || 0) : (Number(val('#cfg-price-cached', 0)) || 0);
+    // 卡片上的「自填单价」三个框只在真能生效时可编辑（与 refreshModelPriceCard 同一判据）：
+    // 官方价开关开着、或这个模型走渠道价时它们停用，这时保持配置里的原值 ——
+    // 读停用框里的值写进配置，会凭空造出一条「全局兜底单价」（对所有未定价模型生效）。
+    const vendorNow = String(state.modelPrices?.currentVendor || '').trim();
+    const hasChannelPrice = Boolean(
+      vendorNow && curModel && hasOwnPrice((c.api?.modelPrices || {})[`${vendorNow}：${curModel}`])
+    );
+    const priceEditable = !officialOn && !hasChannelPrice;
+    const priceIn = priceEditable ? (Number(val('#cfg-price-in', 0)) || 0) : (Number(c.api.priceInputPerM) || 0);
+    const priceOut = priceEditable ? (Number(val('#cfg-price-out', 0)) || 0) : (Number(c.api.priceOutputPerM) || 0);
+    const priceCached = priceEditable ? (Number(val('#cfg-price-cached', 0)) || 0) : (Number(c.api.priceCachedPerM) || 0);
     patch.api = {
       vision: chk('#cfg-vision', c.api.vision !== false),
       temperature: Number(val('#cfg-temperature', c.api.temperature)) || 0.8,
@@ -9548,7 +9623,7 @@ async function saveConfig({ quiet = false } = {}) {
         const picked = $('input[name="cost-mode"]:checked')?.value;
         return ['official', 'multiplier', 'subscription'].includes(picked) ? picked : (c.api.costMode || 'official');
       })(),
-      costMultiplier: Number(val('#cfg-cost-multiplier', c.api.costMultiplier ?? 1)) || 1,
+      costMultiplier: mulOf(val('#cfg-cost-multiplier', c.api.costMultiplier ?? 1)),
       costMonthlyFee: Number(val('#cfg-cost-monthly', c.api.costMonthlyFee ?? 0)) || 0,
       // 没有价格的模型按当前模型的价估算（默认开）
       fallbackToCurrentModel: chk('#cfg-fallback-current', c.api.fallbackToCurrentModel !== false),
@@ -9563,9 +9638,7 @@ async function saveConfig({ quiet = false } = {}) {
     // 官方价开关打开时不写（那时输入框禁用，读到的就是官方价，写进去会凭空多一条自定义价）；
     // 这个模型已经有**渠道价**时也不写 —— 卡片显示的正是那条渠道价，
     // 存成 modelPrices[模型] 会把"只对这个渠道生效"悄悄扩大成所有渠道。
-    const vendorNow = String(state.modelPrices?.currentVendor || '').trim();
-    const hasChannelPrice = !!vendorNow && !!((c.api?.modelPrices || {})[`${vendorNow}：${curModel}`]);
-    if (curModel && !officialOn && !hasChannelPrice) {
+    if (curModel && priceEditable) {
       const nextMap = { ...(c.api?.modelPrices || {}) };
       const i = Number(val('#cfg-price-in', 0)) || 0;
       const o = Number(val('#cfg-price-out', 0)) || 0;
