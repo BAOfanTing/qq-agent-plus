@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   AutoUpdateManager,
   autoUpdatePaths,
+  autoUpdatePending,
   consumeAutoUpdateRequest,
   readAutoUpdateState,
   writeAutoUpdateState
@@ -134,6 +135,38 @@ test('manual update queues the independent systemd updater', (t) => {
   assert.ok(Math.abs(request.requestedAt - status.startedAt) < 1000);
   assert.ok(f.systemctlCalls.some((args) =>
     args.includes('qq-agent-test-update.service') && args.includes('--no-block')));
+});
+
+test('已提交未跑完的更新要能被认出来（控制台据此不再重复弹提示）', (t) => {
+  const f = fixture(t);
+  const stateFile = autoUpdatePaths(f.dataDir).state;
+  const writeRaw = (patch) => fs.writeFileSync(stateFile, JSON.stringify({
+    ...readAutoUpdateState(f.dataDir),
+    ...patch
+  }));
+
+  // 点过「立即更新」→ queued：要认出来（不然部署完成前每次刷新都会再弹一次"发现新版本"）
+  f.manager.requestManual();
+  const pending = autoUpdatePending(f.dataDir);
+  assert.equal(pending.status, 'queued');
+  assert.equal(pending.mode, 'manual');
+
+  // 跑完 / 失败：都不再抑制，失败时得让用户能再点一次
+  writeRaw({ status: 'succeeded' });
+  assert.equal(autoUpdatePending(f.dataDir), null);
+  writeRaw({ status: 'failed' });
+  assert.equal(autoUpdatePending(f.dataDir), null);
+
+  // 活跃状态卡住超过 30 分钟：当成没在跑，别把提示永久压住
+  writeRaw({ status: 'deploying', targetVersion: 'v9.9.9', updatedAt: Date.now() - 31 * 60 * 1000 });
+  assert.equal(autoUpdatePending(f.dataDir), null);
+
+  // 还在跑：带上目标版本，前端拿它跟提示里的版本比对
+  writeRaw({ status: 'testing', mode: 'scheduled', targetVersion: 'v9.9.9', updatedAt: Date.now() });
+  assert.deepEqual(
+    { status: autoUpdatePending(f.dataDir).status, version: autoUpdatePending(f.dataDir).version },
+    { status: 'testing', version: 'v9.9.9' }
+  );
 });
 
 test('connectivity probe is one-shot, does not require an administrator and never changes enable state', (t) => {

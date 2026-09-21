@@ -7,6 +7,8 @@ const STATE_FILE = 'auto-update.json';
 const REQUEST_FILE = 'auto-update-request.json';
 const ACTIVE_STATES = new Set(['queued', 'checking', 'testing', 'deploying']);
 const REQUEST_MODES = new Set(['manual', 'scheduled', 'probe']);
+// 活跃状态超过这个时长还不动，就当它卡住了：不再抑制"发现新版本"提示，让人能再点一次
+const PENDING_TTL_MS = 30 * 60 * 1000;
 
 function cleanText(value, max = 1200) {
   return String(value ?? '')
@@ -114,6 +116,29 @@ export function writeAutoUpdateRequest(dataDir, mode = 'manual') {
   };
   writeObject(autoUpdatePaths(dataDir).request, request);
   return request;
+}
+
+/**
+ * 有没有一个"已经提交、还没跑完"的更新。
+ * 控制台的「发现新版本」提示要用它：用户点过「立即更新」之后就别再弹同一个版本了 ——
+ * 部署完成前 deployed-revision 还是旧的，光比版本永远会认为"有新版本没装"，
+ * 于是每次刷新都弹一遍，看起来像"更新没生效"（2026-09-21 反馈）。
+ * 超过 PENDING_TTL_MS 还停在活跃状态就当卡住了，返回 null，让人能再点一次。
+ * @returns {{status: string, mode: string, version: string, revision: string, updatedAt: number} | null}
+ */
+export function autoUpdatePending(dataDir) {
+  const state = readAutoUpdateState(dataDir);
+  const status = String(state.status || '');
+  if (!ACTIVE_STATES.has(status)) return null;
+  const updatedAt = Number(state.updatedAt || 0);
+  if (!updatedAt || Date.now() - updatedAt > PENDING_TTL_MS) return null;
+  return {
+    status,
+    mode: String(state.mode || ''),
+    version: String(state.targetVersion || ''),
+    revision: String(state.targetRevision || ''),
+    updatedAt
+  };
 }
 
 export function consumeAutoUpdateRequest(dataDir) {

@@ -1125,6 +1125,11 @@ async function checkUpdateNotice() {
   const version = String(notice.version || '');
   // 「忽略」只屏蔽这一个版本；出现新的 tag 时照常提示
   if (version && version === String(payload.ignoredVersion || '')) return;
+  // 这个版本的更新已经提交过、还没跑完（队列里/正在跑）：别再弹。
+  // 部署完成前 deployed-revision 还是旧的，光比版本会一直认为"有新版本没装"，
+  // 于是每次刷新都弹一遍，看着像"点了更新没反应"（2026-09-21 反馈）。
+  const pending = payload?.pending || null;
+  if (version && pending && String(pending.version || '') === version) return;
   openUpdateNoticeDialog(notice);
 }
 

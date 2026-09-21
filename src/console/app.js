@@ -40,7 +40,7 @@ import {
 } from '../pilots/incident-pilot.js';
 import { safeFetchBinary } from '../llm/safe-fetch.js';
 import { integrationStatus, updateSnowLumaPassword } from './integrations.js';
-import { AutoUpdateManager, readAutoUpdateState } from '../auto-update.js';
+import { AutoUpdateManager, autoUpdatePending, readAutoUpdateState } from '../auto-update.js';
 import { checkForUpdate, ignoreVersion } from '../update-notice.js';
 
 // /healthz 用：只暴露名称、版本与运行状态，不含任何配置内容
@@ -1255,7 +1255,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           return json(res, 200, {
             ok: true,
             notice,
-            ignoredVersion: String(state.ignoredVersion || '')
+            ignoredVersion: String(state.ignoredVersion || ''),
+            // 已经提交、还没跑完的更新（见 autoUpdatePending）：前端据此不再重复弹同一个版本
+            pending: autoUpdatePending(DATA_DIR)
           });
         } catch (error) {
           return json(res, 500, { error: String(error?.message ?? error) });
