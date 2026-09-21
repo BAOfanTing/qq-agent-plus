@@ -829,19 +829,28 @@ async function run() {
     .sort()
     .map((name) => path.join('test', name));
   const testDataDir = path.join(workDir, '.auto-update-test-data');
+  // 用例自己的临时目录走 os.tmpdir()：指到工作目录里，随工作目录一起删掉。
+  // 不然每次更新都会给系统 /tmp 留十几个 qq-* 残渣目录（用例跑挂了就没有 after 钩子清理）。
+  const testTmpDir = path.join(workDir, '.auto-update-test-tmp');
   fs.mkdirSync(testDataDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(testTmpDir, { recursive: true, mode: 0o700 });
   command(process.execPath, ['--test', ...tests], {
     cwd: workDir,
     timeout: 20 * 60 * 1000,
     env: {
       ...runtimeEnv,
       NODE_ENV: 'test',
-      QQ_AGENT_DATA_DIR: testDataDir
+      QQ_AGENT_DATA_DIR: testDataDir,
+      TMPDIR: testTmpDir,
+      TMP: testTmpDir,
+      TEMP: testTmpDir
     }
   });
   command(process.execPath, ['--check', 'src/server.js'], { cwd: workDir });
   command(process.execPath, ['--check', 'scripts/auto-update.mjs'], { cwd: workDir });
+  // 两个目录必须在 deploy.sh 之前删掉：它 rsync 的是整个 checkout（根目录多什么就被部署什么）
   fs.rmSync(testDataDir, { recursive: true, force: true });
+  fs.rmSync(testTmpDir, { recursive: true, force: true });
 
   phase = 'deploying';
   writeAutoUpdateState(dataDir, {
