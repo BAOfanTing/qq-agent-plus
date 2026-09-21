@@ -65,6 +65,7 @@ import { formatStickerList } from './stickers.js';
 import { validateImageUrl, safeFetchBinary } from './safe-fetch.js';
 import { webSearch, webFetch } from './web-search.js';
 import { expandForwardNodes, extractMediaFromSegments } from './onebot.js';
+import { readForwardMessages } from './forward-reader.js';
 
 async function downloadImageAsDataUrl(url, signal) {
   signal?.throwIfAborted();
@@ -567,8 +568,7 @@ export function buildToolDefs() {
           if (String(entry.text || '').startsWith('[合并转发 共')) {
             return ok({ messageId: entry.mid, text: entry.text, note: '该转发已展开（读的是存档）' });
           }
-          const r = await ctx.onebot.call('get_forward_msg', { message_id: Number(entry.mid) });
-          const nodes = Array.isArray(r?.messages) ? r.messages : [];
+          const nodes = await readForwardMessages(ctx.onebot, entry.mid);
           const ex = await expandForwardNodes(nodes);
           if (!ex || !ex.text) return err('转发内容为空或已被 QQ 服务端丢弃（发送时间太久）');
           // 写回存档：一次展开，永久升级这条记录（模型/存档页/金句墙都受益）
