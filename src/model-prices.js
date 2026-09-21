@@ -460,6 +460,30 @@ export function listModelAliases() {
   return { ...EFFECTIVE_ALIASES };
 }
 
+/* ══════════════════════════════════════════════════════════════
+   渠道价目表（每渠道一份，见 src/channel-prices.js）
+
+   用户自己那家渠道公布/拉到的价目，按渠道分开存：
+       CHANNEL_PRICES = { [渠道名]: { [模型id]: { in, out, cached } } }
+   它在查价链里排在"用户手填的渠道价"之后、"用户手填的通用价"之前 ——
+   渠道身份比通用模型身份更具体，而用户手填永远可以覆盖它。
+   ══════════════════════════════════════════════════════════════ */
+let CHANNEL_PRICES = {};
+
+/** 注入某个渠道的价目（传 null/{} 即撤掉）。 */
+export function setChannelPrices(vendor, prices) {
+  const key = String(vendor || '').trim();
+  if (!key) return;
+  const table = (prices && typeof prices === 'object' && Object.keys(prices).length) ? prices : null;
+  if (table) CHANNEL_PRICES[key] = table;
+  else delete CHANNEL_PRICES[key];
+}
+
+/** 某个渠道的价目条数（状态展示/测试用）。 */
+export function channelPriceCount(vendor) {
+  return Object.keys(CHANNEL_PRICES[String(vendor || '').trim()] || {}).length;
+}
+
 /** 列出全部价格条目（给设置页展示/提示用）。远程覆盖的条目带 remote:true。 */
 export function listOfficialPrices() {
   return Object.entries(EFFECTIVE_PRICES).map(([id, p]) => (
@@ -645,14 +669,16 @@ export function supportsImage(price) {
 /**
  * 查价主入口：按"谁最懂这个价"的顺序解析。
  *
- *   ① 渠道价   api.modelPrices[渠道：模型]  —— 用户在中转站/自建渠道的实付价
- *   ② 自定义价 api.modelPrices[模型]        —— 用户填的通用价
- *   ③ 价格表   官方表 / 远程表（同一个查询：远程条目优先，来源标出来）
- *              —— 模型商的参考价，是"估算"不是账单
- *   ④ 兜底单价 api.priceInputPerM/...       —— 只在关掉官方价时用（老行为）
- *   ⑤ 未定价   —— unpriced，界面显式提示（不是 0 元）
+ *   ① 渠道价     api.modelPrices[渠道：模型]  —— 用户在中转站/自建渠道手填的实付价
+ *   ② 自定义价   api.modelPrices[模型]        —— 用户填的通用价
+ *   ③ 渠道价目表 该渠道拉到的价目（src/channel-prices.js）—— 同属实付口径
+ *   ④ 价格表     官方表 / 远程表（同一个查询：远程条目优先，来源标出来）
+ *                —— 模型商的参考价，是"估算"不是账单
+ *   ⑤ 兜底单价   api.priceInputPerM/...       —— 只在关掉官方价时用（老行为）
+ *   ⑥ 未定价     —— unpriced，界面显式提示（不是 0 元）
  *
- * 口径（kind）：① ②=实付 actual；③ ④=估算 estimate；⑤=未定价 unpriced。
+ * 口径（kind）：① ② ③=实付 actual；④ ⑤=估算 estimate；⑥=未定价 unpriced。
+ * 排序原则：手填的价 > 自动拉到的渠道价目 > 公共参考表 —— 用户明确输入的数字永远优先。
  *
  * ⚠️ unpriced=true 表示"没有价格"，和"免费（单价 0）"是两回事：
  *    统计时要单独标出来，不能显示成 ¥0.00 让用户以为免费。
@@ -680,13 +706,35 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
     }
   }
 
-  // ② 模型自定义价（不分渠道）
+  // ② 模型自定义价（不分渠道）—— 手填的价永远优先于自动拉到的价目表
   const own = customMap[id];
   if (id && own && (Number(own.in) || Number(own.out))) {
     return customPrice(own, { source: 'custom', matched: id, via: '自定义价', locked: false });
   }
 
-  // ③ 价格表（官方 + 远程）。远程条目优先，来源要标出来让界面区分"参考"与"渠道表"
+  // ③ 渠道价目表（该渠道自动拉取/用户配置的价目，见 channel-prices.js）：
+  //    比公共参考表更具体（就是这个渠道的价），但比不过上面两条手填的价。
+  if (vendor && id && CHANNEL_PRICES[vendor]) {
+    const hit = matchPriceTable(id, CHANNEL_PRICES[vendor], EFFECTIVE_ALIASES);
+    if (hit && (Number(hit.in) || Number(hit.out))) {
+      return {
+        in: Number(hit.in) || 0,
+        out: Number(hit.out) || 0,
+        cached: hit.cached == null ? Number(hit.in) || 0 : Number(hit.cached) || 0,
+        peak: hit.peak || null,
+        image: null,
+        source: 'channel-table',
+        matched: hit.matched || id,
+        locked: false,
+        unpriced: false,
+        kind: 'actual',
+        confidence: 'channel-table',
+        via: `渠道价目表（${vendor}）`
+      };
+    }
+  }
+
+  // ④ 价格表（官方 + 远程）。远程条目优先，来源要标出来让界面区分"参考"与"渠道表"
   if (officialEnabled) {
     const p = id ? (priceTable ? matchPriceTable(id, priceTable) : resolveOfficialPrice(id)) : null;
     if (p) {
@@ -710,7 +758,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
     return unpricedPrice({ locked: true });
   }
 
-  // ④ 全局兜底单价：老配置在"不用官方价"模式下的主力路径
+  // ⑤ 全局兜底单价：老配置在"不用官方价"模式下的主力路径
   const fi = Number(api.priceInputPerM) || 0;
   const fo = Number(api.priceOutputPerM) || 0;
   if (fi || fo) {
@@ -729,7 +777,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
     };
   }
 
-  // ⑤ 未定价
+  // ⑥ 未定价
   return unpricedPrice({ locked: false });
 }
 

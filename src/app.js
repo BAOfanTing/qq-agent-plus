@@ -18,6 +18,8 @@ import { QzoneInteractionManager } from './qzone-interactions.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from './llm.js';
 import { resolveOfficialPrice, listOfficialPrices, listModelAliases, isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, vendorOfConfig, UNKNOWN_VENDOR } from './model-prices.js';
 import { initPriceFeed, refreshPriceFeed, priceFeedStatus } from './price-feed.js';
+import { probeChannelPrices, capPrices } from './price-probe.js';
+import { initChannelPrices, refreshChannelFeed, removeChannelFeed, channelPriceStatus } from './channel-prices.js';
 import { currentProviders, setProviderKey, testAllProviders, testOneProvider, testModelChat, fetchModelsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider } from './providers.js';
 import { scanModelsVision, visionResults, modelImageVerdict } from './vision-scan.js';
 import { builtinVisionResults } from './model-vision-docs.js';
@@ -500,6 +502,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
 
   // 远程价格表：启动即初始化（内部幂等；URL 为空则完全不动）
   initPriceFeed(cfg.api?.priceRemoteUrl || '');
+
+  // 每渠道一份价目表：先吃磁盘缓存，缓存缺失/过旧的按需后台刷新（同样幂等、不阻塞启动）
+  initChannelPrices(cfg.api?.channelPriceFeeds || []);
 
   // OneBot 连接状态推送
   onebot.onStatus((status) => {
@@ -1427,6 +1432,82 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         }
       }
 
+      // 从渠道自动拉价（探测）：只做预览，不写配置。
+      // 支持 one-api / new-api 家族的 /api/pricing（倍率换算）与自家价目表形状。
+      if (pathname === '/api/model-prices/probe' && method === 'POST') {
+        const body = await readBody(req);
+        const cfgNow = getConfig();
+        const target = String(body.url || cfgNow.api?.baseUrl || '').trim();
+        const probe = await probeChannelPrices({
+          url: target,
+          usdRate: body.usdRate,
+          fetchImpl: undefined,
+          timeoutMs: Math.min(30000, Math.max(3000, Number(body.timeoutMs) || 12000))
+        });
+        return json(res, 200, {
+          ok: probe.ok,
+          kind: probe.kind,
+          sourceUrl: probe.sourceUrl,
+          usdRate: probe.usdRate,
+          group: probe.group,
+          groupRatio: probe.groupRatio,
+          modelCount: probe.modelCount,
+          skipped: probe.skipped,
+          tried: probe.tried,
+          error: probe.error,
+          vendor: vendorOfConfig(cfgNow) || '',
+          prices: capPrices(probe.prices || {})
+        });
+      }
+
+      // 渠道价目表（每渠道一份，自动拉取）
+      if (pathname === '/api/channel-prices' && method === 'GET') {
+        return json(res, 200, { ok: true, feeds: channelPriceStatus() });
+      }
+
+      if (pathname === '/api/channel-prices' && method === 'POST') {
+        const body = await readBody(req);
+        const vendor = String(body.vendor || '').trim();
+        const feedUrl = String(body.url || '').trim();
+        if (!vendor) return json(res, 400, { error: '缺少渠道名（vendor）' });
+        if (!/^https?:\/\//i.test(feedUrl)) return json(res, 400, { error: '价目表 URL 必须以 http(s):// 开头' });
+        // 先写配置（意图），再拉一次（结果）
+        const current = getConfig();
+        const feeds = Array.isArray(current.api?.channelPriceFeeds) ? current.api.channelPriceFeeds : [];
+        const next = feeds.filter((f) => String(f?.vendor || '').trim() !== vendor);
+        next.push({ vendor, url: feedUrl });
+        updateConfig({ api: { ...(current.api || {}), channelPriceFeeds: next } });
+        const status = await refreshChannelFeed(vendor, feedUrl);
+        return json(res, 200, { ok: true, feeds: status });
+      }
+
+      if (pathname === '/api/channel-prices/refresh' && method === 'POST') {
+        const body = await readBody(req);
+        const vendor = String(body.vendor || '').trim();
+        const current = getConfig();
+        const feeds = Array.isArray(current.api?.channelPriceFeeds) ? current.api.channelPriceFeeds : [];
+        const hit = feeds.find((f) => String(f?.vendor || '').trim() === vendor);
+        if (!hit) return json(res, 404, { error: `没有这个渠道的价目表：${vendor}` });
+        const status = await refreshChannelFeed(vendor, String(hit.url || '').trim());
+        return json(res, 200, { ok: true, feeds: status });
+      }
+
+      if (pathname === '/api/channel-prices/remove' && method === 'POST') {
+        const body = await readBody(req);
+        const vendor = String(body.vendor || '').trim();
+        if (!vendor) return json(res, 400, { error: '缺少渠道名（vendor）' });
+        const current = getConfig();
+        const feeds = Array.isArray(current.api?.channelPriceFeeds) ? current.api.channelPriceFeeds : [];
+        updateConfig({
+          api: {
+            ...(current.api || {}),
+            channelPriceFeeds: feeds.filter((f) => String(f?.vendor || '').trim() !== vendor)
+          }
+        });
+        const status = removeChannelFeed(vendor);
+        return json(res, 200, { ok: true, feeds: status });
+      }
+
       if (pathname === '/api/model-prices' && method === 'GET') {
         const cfg = getConfig();
         const model = String(url.searchParams.get('model') || cfg.api?.model || '');
@@ -1439,6 +1520,7 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           currentVendor: vendor,
           currentDetail: { model, vendor, ...resolveModelPrice(model, cfg, null, { vendor }) },
           aliases: listModelAliases(),
+          channelFeeds: channelPriceStatus(),   // 每渠道一份价目表的状态
           remote: priceFeedStatus()   // 远程价格表状态（设置页展示：来源/时间/条目数/错误）
         });
       }
@@ -1928,6 +2010,7 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           }
         }
         initPriceFeed(next.api?.priceRemoteUrl || '');   // 远程价格表 URL 可能改了（内部幂等）
+        initChannelPrices(next.api?.channelPriceFeeds || []);   // 渠道价目表同理
         emit('status', { configUpdated: true });
         return json(res, 200, { ok: true, config: sanitizeConfig(next) });
       }

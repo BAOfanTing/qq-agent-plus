@@ -63,6 +63,23 @@
 - 导出给其它程序的字段：`resolveModelPrice()` 返回 `source` / `kind` / `unpriced` / `confidence` / `via`；
   控制台 `/api/model-prices` 额外给出 `currentVendor` 与 `currentDetail`（当前模型的完整解析链路）。
 
+## 渠道价目表与「从渠道自动拉价」
+
+**渠道价目表**（`api.channelPriceFeeds = [{ vendor, url }]`）：每个渠道一份价目表，启动时读磁盘缓存、
+缓存缺失或超过 24 小时就后台刷新；拉到的价只在该渠道的调用上生效。存储见
+`data/channel-prices.json`（失败不清表，继续用上一次的）。控制台「设置 → 模型价格」里可增删/立即拉取。
+
+**从渠道自动拉价（探测）**：控制台上填渠道地址点「探测」，先预览、确认后再写入 —— 写的是
+「渠道：模型」形式的自定义价（也就是查价链最高优先级那一层），官方价格表不动。支持两类来源：
+
+| 来源 | 识别方式 | 换算 |
+|---|---|---|
+| one-api / new-api 家族 | `/api/pricing` 返回 `data[].model_ratio` | 每 1M 输入 = `model_ratio × 2 × 分组倍率 × 站点汇率`（输出再乘 `completion_ratio`）；汇率取 `/api/status` 的 `usd_exchange_rate`，取不到用 7.2 并注明；`quota_type ≠ 0`（按次计费）的条目跳过 |
+| 自家价目表 | 载荷本身就是 `{ 模型: { in, out, cached } }`（本文档的表结构） | 直接采用，元/百万 token |
+
+探测失败的常见原因：站点不是 one-api 系（没有 `/api/pricing`）、需要登录、或返回结构不认识 ——
+这时按提示手填即可（「给这个模型定价」/ 批量编辑）。探测与拉取都只做只读请求，不会改动任何配置。
+
 ## DeepSeek（10 条，8 条 official）
 
 | 模型 id | 输入 | 输出 | 缓存命中 | 高峰价 | 图片 | 来源 | 备注 |

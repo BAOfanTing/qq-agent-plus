@@ -2315,8 +2315,29 @@ button.uu-chip:hover { border-color: var(--accent); color: var(--text); }
 .uu-hint { margin-top: 7px; font-size: 11.5px; color: var(--muted); }
 .uu-hint b { color: var(--text); }
 
-/* ── 「给模型定价」弹窗 ── */
-#price-dialog {
+/* ── 渠道价目表 / 探测结果 ── */
+.hint.success { color: var(--green, #2fd07a); }
+.hint.error { color: var(--red, #ff6b6b); }
+.cf-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  margin-bottom: 6px;
+}
+.cf-main { display: flex; flex-direction: column; min-width: 180px; flex: 1; font-size: 12.5px; }
+.cf-main span { font-size: 11.5px; word-break: break-all; }
+.cf-state { font-size: 11.5px; color: var(--muted); flex: 2; min-width: 160px; }
+.cf-state.ok { color: var(--green, #2fd07a); }
+.cf-state.bad { color: var(--orange, #f7b955); }
+.cf-actions { display: flex; gap: 6px; }
+#probe-result .usage-table { width: 100%; }
+
+/* ── 「给模型定价」弹窗 ── */#price-dialog {
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 20px 22px;

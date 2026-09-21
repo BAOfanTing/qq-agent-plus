@@ -4337,6 +4337,195 @@ async function loadSettings() {
 }
 
 /** 设置页「远程价格表」状态行：来源（在线/缓存/内置）、时间、条目数、错误。 */
+/**
+ * 渠道价目表列表（设置页）：每个渠道的地址、条数、上次时间、错误 + 拉取/删除。
+ * 数据来自 /api/model-prices 的 channelFeeds（后端 src/channel-prices.js）。
+ */
+function renderChannelFeeds() {
+  const box = $('#channel-feeds');
+  if (!box) return;
+  const feeds = state.modelPrices?.channelFeeds || [];
+  if (!feeds.length) {
+    box.innerHTML = '<div class="muted" style="font-size:12px">还没有配置渠道价目表。用下面的「从渠道自动拉价」探测一次，或直接填 URL。</div>';
+    return;
+  }
+  box.innerHTML = feeds.map((f) => {
+    const when = f.fetchedAt ? fmtTime(f.fetchedAt) : '-';
+    const state1 = f.ok
+      ? `生效中：${f.count} 条 · 上次拉取 ${when}${f.dropped ? ` · ${f.dropped} 条不合格` : ''}`
+      : `拉取失败：${esc(f.error || '未知错误')}${f.count ? ` · 仍在用上次的 ${f.count} 条` : ''}`;
+    return `<div class="cf-row">
+      <div class="cf-main"><strong>${esc(f.vendor)}</strong><span class="muted">${esc(f.url)}</span></div>
+      <div class="cf-state ${f.ok ? 'ok' : 'bad'}">${state1}</div>
+      <div class="cf-actions">
+        <button class="btn btn-small" data-feed-refresh="${esc(f.vendor)}">立即拉取</button>
+        <button class="btn btn-small" data-feed-remove="${esc(f.vendor)}">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/** 探测渠道价：只预览，不写配置。 */
+async function runChannelProbe() {
+  const statusEl = $('#probe-status');
+  const resultEl = $('#probe-result');
+  const btn = $('#probe-btn');
+  const url = String($('#probe-url')?.value || '').trim();
+  if (btn) btn.disabled = true;
+  if (resultEl) { resultEl.classList.add('hidden'); resultEl.innerHTML = ''; }
+  if (statusEl) { statusEl.textContent = '探测中…（读渠道的 /api/pricing）'; statusEl.className = 'hint'; }
+  try {
+    const res = await api('/api/model-prices/probe', { method: 'POST', body: JSON.stringify({ url }) });
+    state.probeResult = res;
+    renderProbeResult(res);
+  } catch (error) {
+    if (statusEl) { statusEl.textContent = `探测失败：${error.message}`; statusEl.className = 'hint error'; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/** 渲染探测结果：识别方式 + 预览表 + 写入按钮（只写入在用的 / 全部写入）。 */
+async function renderProbeResult(res) {
+  const statusEl = $('#probe-status');
+  const resultEl = $('#probe-result');
+  if (!resultEl) return;
+  if (!res?.ok) {
+    if (statusEl) {
+      statusEl.textContent = res?.error || '探测失败';
+      statusEl.className = 'hint error';
+    }
+    if (Array.isArray(res?.tried) && res.tried.length) {
+      resultEl.classList.remove('hidden');
+      resultEl.innerHTML = `<div class="muted" style="font-size:12px">试过的地址：<br>${res.tried.map((u) => esc(u)).join('<br>')}</div>`;
+    }
+    return;
+  }
+  const entries = Object.entries(res.prices || {});
+  const kindTxt = res.kind === 'one-api'
+    ? `按 one-api/new-api 倍率换算（分组 ${esc(res.group || 'default')} ×${res.groupRatio} · 汇率 ${res.usdRate}）`
+    : '直接读到的价目表（元/百万 token）';
+  const vendor = String(res.vendor || state.modelPrices?.currentVendor || '');
+  if (statusEl) {
+    statusEl.textContent = `识别到 ${res.modelCount} 个模型：${kindTxt}`
+      + `${res.skipped ? `；${res.skipped} 条按次计费已跳过` : ''}`;
+    statusEl.className = 'hint';
+  }
+
+  // 在用的模型：当前模型 + 最近 30 天用量里出现过的
+  const used = new Set();
+  const current = String(state.config?.api?.model || '').trim();
+  if (current) used.add(current);
+  try {
+    const stats = await api('/api/usage/stats?range=30');
+    for (const m of (stats?.models || [])) if (m?.model) used.add(String(m.model));
+  } catch { /* 拿不到用量就只按当前模型 */ }
+  const usedHits = entries.filter(([model]) => used.has(model));
+
+  const preview = entries.slice(0, 12).map(([model, p]) => (
+    `<tr><td>${esc(model)}${used.has(model) ? '<span class="uc-chip">在用</span>' : ''}</td>`
+    + `<td class="r">${p.in}</td><td class="r">${p.out}</td><td class="r">${p.cached ?? '-'}</td></tr>`
+  )).join('');
+  resultEl.classList.remove('hidden');
+  resultEl.innerHTML = `
+    <table class="usage-table" style="margin-top:4px">
+      <thead><tr><th>模型</th><th class="r">输入</th><th class="r">输出</th><th class="r">缓存命中</th></tr></thead>
+      <tbody>${preview}</tbody>
+    </table>
+    ${entries.length > 12 ? `<div class="muted" style="font-size:12px;margin-top:4px">…等共 ${entries.length} 个模型</div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-small" id="probe-apply-used"
+        ${usedHits.length ? '' : 'disabled'}>写入在用的 ${usedHits.length} 个</button>
+      <button class="btn btn-small" id="probe-apply-all">全部写入（${entries.length} 个）</button>
+    </div>
+    <div class="hint" style="margin-top:4px">写入后价格以「${esc(vendor || '当前渠道')}：模型」为键存进自定义价格，只对该渠道生效；官方表不动。</div>`;
+
+  const write = async (rows) => {
+    if (!rows.length) return;
+    const hx = $('#probe-status');
+    const vendorLabel = vendor || state.modelPrices?.currentVendor || '';
+    if (!vendorLabel) {
+      if (hx) { hx.textContent = '拿不到当前渠道名，无法写成渠道价：请先在「手动添加提供商」里配好渠道。'; hx.className = 'hint error'; }
+      return;
+    }
+    const patch = {};
+    for (const [model, p] of rows) {
+      patch[`${vendorLabel}：${model}`] = { in: p.in, out: p.out, cached: p.cached ?? p.in, note: p.note || '' };
+    }
+    try {
+      const saved = await api('/api/config', { method: 'POST', body: JSON.stringify({ api: { modelPrices: patch } }) });
+      if (saved?.config) state.config = saved.config;
+      else {
+        state.config = state.config || {};
+        state.config.api = state.config.api || {};
+        state.config.api.modelPrices = { ...(state.config.api.modelPrices || {}), ...patch };
+      }
+      if (hx) { hx.textContent = `已写入 ${rows.length} 条渠道价（${vendorLabel}）。用量页会按新价重算。`; hx.className = 'hint success'; }
+      await loadSettings();
+      if (state.tab === 'usage') loadUsageView({ force: true });
+    } catch (error) {
+      if (hx) { hx.textContent = `写入失败：${error.message}`; hx.className = 'hint error'; }
+    }
+  };
+  $('#probe-apply-used')?.addEventListener('click', () => write(usedHits));
+  $('#probe-apply-all')?.addEventListener('click', () => write(entries));
+}
+
+/** 添加/更新一个渠道价目表并立即拉取。 */
+async function addChannelFeed() {
+  const hint = $('#channel-feed-hint');
+  const vendor = String($('#channel-feed-vendor')?.value || '').trim()
+    || String(state.modelPrices?.currentVendor || '');
+  const url = String($('#channel-feed-url')?.value || '').trim();
+  if (!vendor || !url) {
+    if (hint) { hint.textContent = '渠道名（或先在提供商里配好当前渠道）与价目表 URL 都要填。'; hint.className = 'hint error'; }
+    return;
+  }
+  if (hint) { hint.textContent = `正在拉取 ${vendor} 的价目表…`; hint.className = 'hint'; }
+  try {
+    const res = await api('/api/channel-prices', { method: 'POST', body: JSON.stringify({ vendor, url }) });
+    if (state.modelPrices) state.modelPrices.channelFeeds = res.feeds || [];
+    renderChannelFeeds();
+    const hit = (res.feeds || []).find((f) => f.vendor === vendor);
+    if (hint) {
+      hint.textContent = hit?.ok
+        ? `已生效：${hit.count} 条（${vendor}）`
+        : `配置已保存，但拉取失败：${hit?.error || '未知错误'}`;
+      hint.className = `hint ${hit?.ok ? 'success' : 'error'}`;
+    }
+    if ($('#channel-feed-url')) $('#channel-feed-url').value = '';
+  } catch (error) {
+    if (hint) { hint.textContent = `添加失败：${error.message}`; hint.className = 'hint error'; }
+  }
+}
+
+/** 渠道价目表行上的「立即拉取」「删除」。 */
+async function onChannelFeedAction(event) {
+  const refreshBtn = event.target.closest('[data-feed-refresh]');
+  const removeBtn = event.target.closest('[data-feed-remove]');
+  if (!refreshBtn && !removeBtn) return;
+  const hint = $('#channel-feed-hint');
+  const vendor = refreshBtn ? refreshBtn.dataset.feedRefresh : removeBtn.dataset.feedRemove;
+  try {
+    const res = refreshBtn
+      ? await api('/api/channel-prices/refresh', { method: 'POST', body: JSON.stringify({ vendor }) })
+      : await api('/api/channel-prices/remove', { method: 'POST', body: JSON.stringify({ vendor }) });
+    if (state.modelPrices) state.modelPrices.channelFeeds = res.feeds || [];
+    renderChannelFeeds();
+    if (hint) {
+      if (removeBtn) { hint.textContent = `已删除 ${vendor} 的价目表`; hint.className = 'hint'; }
+      else {
+        const hit = (res.feeds || []).find((f) => f.vendor === vendor);
+        hint.textContent = hit?.ok ? `${vendor}：拉取成功，${hit.count} 条` : `${vendor}：拉取失败（${hit?.error || '未知错误'}）`;
+        hint.className = `hint ${hit?.ok ? 'success' : 'error'}`;
+      }
+    }
+    if (state.tab === 'usage') loadUsageView({ force: true });
+  } catch (error) {
+    if (hint) { hint.textContent = `操作失败：${error.message}`; hint.className = 'hint error'; }
+  }
+}
+
 function renderPriceFeedStatus() {
   const el = $('#price-feed-status');
   if (!el) return;
@@ -5224,6 +5413,31 @@ function renderApiSection(c) {
         <button class="btn btn-small" id="price-feed-refresh-btn" title="不等定时，立即拉一次">立即拉取</button>
       </div>
       <div class="hint" id="price-feed-status" style="margin-top:4px"></div>
+    </div>
+
+    <!-- 从渠道自动拉价（探测）：把中转站/自建渠道公布的价格拉下来，写成"渠道价" -->
+    <div class="settings-divider"></div>
+    <h3>从渠道自动拉价</h3>
+    <div class="field">
+      <label>渠道地址（默认用上面的 Base URL；one-api / new-api 站会读它的 /api/pricing 倍率）</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="probe-url" placeholder="https://api.example.com/provider/v1"
+          value="${esc(c.api.baseUrl || '')}" style="flex:1" />
+        <button class="btn btn-small" id="probe-btn">探测</button>
+      </div>
+      <div class="hint" id="probe-status" style="margin-top:4px">探测只做预览，不会改动任何配置；确认后才写成"渠道价"。</div>
+      <div id="probe-result" class="hidden" style="margin-top:8px"></div>
+    </div>
+
+    <!-- 渠道价目表：每个渠道一份，自动拉取（配置里的 channelPriceFeeds） -->
+    <div class="field" style="margin-top:10px"><label>渠道价目表（每个渠道一份，启动时自动刷新）</label>
+      <div id="channel-feeds"></div>
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <input type="text" id="channel-feed-vendor" placeholder="渠道名（留空用当前渠道）" style="flex:1;min-width:160px" />
+        <input type="text" id="channel-feed-url" placeholder="价目表 URL（http(s)://…/pricing.json）" style="flex:2;min-width:200px" />
+        <button class="btn btn-small" id="channel-feed-add">添加并拉取</button>
+      </div>
+      <div class="hint" id="channel-feed-hint" style="margin-top:4px">拉到的价只在该渠道的调用上生效；手填的价仍然优先。</div>
     </div>
 
     <!-- 当前模型的价格卡片：切换模型时内容跟着变 -->
@@ -7869,6 +8083,12 @@ function bindSettingsEvents(c) {
     model: String($('#cfg-model')?.value || state.config?.api?.model || '').trim(),
     vendor: state.modelPrices?.currentVendor || ''
   }));
+
+  // ── 从渠道自动拉价（探测）+ 渠道价目表管理 ──
+  renderChannelFeeds();
+  $('#probe-btn')?.addEventListener('click', runChannelProbe);
+  $('#channel-feed-add')?.addEventListener('click', addChannelFeed);
+  $('#channel-feeds')?.addEventListener('click', onChannelFeedAction);
 
   // ── 远程价格表：状态展示 + 立即拉取 ──
   renderPriceFeedStatus();

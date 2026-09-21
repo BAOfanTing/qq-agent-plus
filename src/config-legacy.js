@@ -40,9 +40,13 @@ export const DEFAULT_CONFIG = {
     // 远程条目按模型 id 覆盖内置表，内置表其余条目仍是兜底。
     priceRemoteUrl: '',
     // 按模型单独设定的价格：{ [模型 id]: { in, out, cached } }
-    // 优先级最高 —— 一旦这里有记录，就不再用内置官方表，也不受全局默认单价影响。
-    // 改动只存在这里，不会回写内置价格表（src/model-prices.js）。
-    modelPrices: {}
+    // 键可以是模型 id，也可以是「渠道：模型 id」（全角冒号）—— 后者只对该渠道生效。
+    // 用户填的价优先于官方价格表；改动只存在这里，不回写内置价格表。
+    modelPrices: {},
+    // 每渠道一份价目表（自动拉取）：[{ vendor: '渠道名', url: 'https://.../pricing.json' }]
+    // 拉到的价只在该渠道的调用上生效，优先级在"手填的渠道价"之后、官方表之前。
+    // 见 src/channel-prices.js；探测渠道倍率用控制台的「从渠道自动拉价」。
+    channelPriceFeeds: []
   },
   // 多提供商模型目录（设置页手动维护）
   providers: [],
