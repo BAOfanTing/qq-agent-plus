@@ -333,7 +333,7 @@ export class GlobalPersonMemoryStore {
       map.delete(uid);
       try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
     } else this.#persist(member);
-    return touched || true;
+    return touched;
   }
 
   markConsolidated(userIds, at = Date.now()) {

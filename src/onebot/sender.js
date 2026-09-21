@@ -67,13 +67,24 @@ export class SendQueue {
           break;
         } catch (error) {
           const message = String(error?.message ?? error);
-          // 只有"能证明请求没被对方收到"的错误才自动重试。
-          // 超时 / 连接被重置 / socket hang up / fetch failed 都可能发生在
-          // "对方已经收下并发出去了"之后——重发会让群里出现两条一样的消息，
-          // 而 outbox 只记一条，人工核对时也看不到重复。这类一律按结果未知走 held。
-          const notDelivered = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|Unexpected status code: 5\d\d/i.test(message);
-          const uncertain = /timeout|timed out|ETIMEDOUT|ECONNRESET|EPIPE|socket hang up|fetch failed|network/i.test(message);
-          if (attempt >= 2 || !notDelivered || uncertain || options.signal?.aborted) throw error;
+          // undici 的网络错误 message 恒为 "fetch failed"，真因在 cause 上（ECONNREFUSED / ENOTFOUND /
+          // socket hang up…），所以必须连 cause 一起看，否则这条判定在生产路径上永远不命中。
+          const causeText = String(error?.cause?.code || error?.cause?.message || '');
+          const all = `${message} ${causeText}`;
+          // 只有"能证明请求没被对方收到"的错误才自动重试：连不上 / 解析不了 / 网络不可达 / 5xx。
+          // 超时、连接被重置、socket hang up、"fetch failed" 都可能发生在"对方已经收下并发出去了"
+          // 之后——重发会让群里出现两条一样的消息，而 outbox 只记一条，人工核对也看不到重复。
+          // 判定必须以 cause 为准：undici 的外层 message 恒为 "fetch failed"，
+          // 拿它当依据会把"连接被拒"也误判成"结果未知"，于是该重试的永远不重试。
+          const evidence = causeText || message;
+          // "确定没送达"：连不上 / 域名解析不了 / 网络不可达 —— 这些不可能已经投递。
+          const definite = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH/i.test(evidence);
+          // 其余都算"结果未知"：超时、连接被重置、socket hang up，以及**协议端 5xx**
+          // （网关出错时请求可能已经转到 QQ 侧）。这类重发会让群里出现两条一样的话，
+          // 而 outbox 只记一条，人工核对也看不到重复。
+          const uncertain = !definite
+            && /timeout|timed out|ETIMEDOUT|ECONNRESET|EPIPE|socket hang up|fetch failed|network|HTTP 5\d\d|Unexpected status code: 5\d\d/i.test(evidence);
+          if (attempt >= 2 || !definite || uncertain || options.signal?.aborted) throw error;
           console.log(`[sender] 发送失败（可确认未送达），1.5 秒后重试一次（${message.slice(0, 80)}）`);
           await sleep(1500);
         }

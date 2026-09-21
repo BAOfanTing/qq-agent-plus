@@ -1391,6 +1391,7 @@ export class Orchestrator {
     const maxRounds = Math.max(1, Number(cfg.api.maxRounds) || 12);
     let finish = false;
     let completed = false;
+    let roundBudgetExceeded = false;   // 轮次用尽（见下方收尾逻辑，写进 session.roundBudgetStopped）
     let webSearchCount = 0;
     session.activity = '';
     session.webSearchCount = 0;
@@ -1605,9 +1606,17 @@ export class Orchestrator {
     }
 
     signal.throwIfAborted();
-    // 与 token 预算同口径：这是"干不完活"的护栏，不是"需要人工核对"的故障。
-    // 标成可重试，让它按 attempts 预算重来，而不是直接 failed（只能从控制台捞）。
-    if (!finish && !completed) throw Object.assign(new Error('Run round budget exceeded'), { retryable: true });
+    // 轮次用尽是"干不完活"的护栏，不是"需要人工核对"的故障：与 token 预算同口径，
+    // 当作本轮正常收尾（已经说的话照常发出、消息正常 ack），并在会话里标注原因。
+    // 不能标成可重试去重跑整轮：一条跑满 maxRounds 的会话重跑同样会跑满，成本放大且无解。
+    if (!finish && !completed) {
+      completed = true;
+      roundBudgetExceeded = true;
+      session.roundBudgetStopped = true;
+      session.finishReason ||= session.sent.length
+        ? '已发送内容，因本轮模型轮数用尽安全结束'
+        : '本轮模型轮数用尽，已安全结束';
+    }
     const providerTranscriptDelta = conversationCfg.mode === 'lifecycle'
       ? structuredClone(messages.slice(transcriptStart))
       : [];
@@ -1931,6 +1940,8 @@ export class Orchestrator {
       : '';
 
     if (!targets.length) {
+      // 没对象也要记一次时间戳，否则零印象的会话每次运行都会重扫一遍聊天记录
+      try { this.memory.markConsolidated?.(chatKey); } catch { /* 锦上添花 */ }
       return {
         ok: true,
         note: `没有可整理的群友${skippedNote || (only ? '（未指定有效群友）' : '（该群还没有任何群友印象，且聊天记录里没有发言足够多的活跃成员）')}`,

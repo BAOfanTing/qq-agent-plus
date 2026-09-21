@@ -1,4 +1,5 @@
 // 本地回归：sender 只对"能确认未送达"的错误重试一次；结果未知的错误不自动重发。
+// 用例里的错误用**生产真实形态**（undici: TypeError('fetch failed', { cause })，真因在 cause 上）。
 //
 // 背景（真实缺陷）：超时 / 连接被重置 / socket hang up / fetch failed 都可能发生在
 // "对方已经收下并发出去了"之后；自动重发会让群里出现两条一样的消息，而 outbox 只记一条。
@@ -47,7 +48,12 @@ let calls1 = 0;
 const onebot1 = {
   async sendText(kind, id, text) {
     calls1 += 1;
-    if (calls1 === 1) throw new Error('connect ECONNREFUSED 127.0.0.1:3390');
+    // 真实形态：undici 的网络错误 message 恒为 fetch failed，真因在 cause 上
+    if (calls1 === 1) {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3390'), { code: 'ECONNREFUSED' })
+      });
+    }
     return { message_id: 999 };
   }
 };
@@ -70,7 +76,14 @@ console.log('用例2（非网络错误）: 调用次数=%d 报错=%s', calls2, e
 
 // 用例 3：两次都连接被拒 → 只重试一次，最终抛错
 let calls3 = 0;
-const onebot3 = { async sendText() { calls3 += 1; throw new Error('connect ECONNREFUSED 127.0.0.1:3390'); } };
+const onebot3 = {
+  async sendText() {
+    calls3 += 1;
+    throw new TypeError('fetch failed', {
+      cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3390'), { code: 'ECONNREFUSED' })
+    });
+  }
+};
 const q3 = new SendQueue({ onebot: onebot3, store });
 let err3 = '';
 try { await q3.sendTextBatch('private:100000001', ['一直失败'], {}); } catch (e) { err3 = String(e.message); }
@@ -81,16 +94,26 @@ let calls4 = 0;
 const onebot4 = {
   async sendText() {
     calls4 += 1;
-    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    throw new TypeError('fetch failed', {
+      cause: Object.assign(new Error('The operation was aborted due to timeout'), { code: 'UND_ERR_CONNECT_TIMEOUT' })
+    });
   }
 };
 const q4 = new SendQueue({ onebot: onebot4, store });
 try { await q4.sendTextBatch('private:100000001', ['超时不该重发'], {}); } catch { /* 预期抛错 */ }
 console.log('用例4（超时=结果未知）: 调用次数=%d（应为 1）', calls4);
 
+// 用例 5：协议端 5xx —— 对方可能已经收下请求，属"结果未知"，不该自动重发
+let calls5 = 0;
+const onebot5 = { async sendText() { calls5 += 1; throw new Error('OneBot send_group_msg HTTP 502'); } };
+const q5 = new SendQueue({ onebot: onebot5, store });
+try { await q5.sendTextBatch('private:100000001', ['5xx 不该重发'], {}); } catch { /* 预期抛错 */ }
+console.log('用例5（5xx=结果未知）: 调用次数=%d（应为 1）', calls5);
+
 console.log(
   (calls1 === 2 && r1.sent.length === 1 ? 'PASS' : 'FAIL') + ' 可确认未送达的错误重试一次; ' +
   (calls2 === 1 ? 'PASS' : 'FAIL') + ' 非网络错误不重试; ' +
   (calls3 === 2 ? 'PASS' : 'FAIL') + ' 最多重试一次; ' +
-  (calls4 === 1 ? 'PASS' : 'FAIL') + ' 超时（结果未知）不自动重发'
+  (calls4 === 1 ? 'PASS' : 'FAIL') + ' 超时（结果未知）不自动重发; ' +
+  (calls5 === 1 ? 'PASS' : 'FAIL') + ' 5xx（结果未知）不自动重发'
 );

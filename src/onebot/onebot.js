@@ -207,9 +207,12 @@ export class OneBotClient {
         cause
       });
     }
-    // fail-closed：只有明确的 ok/async 或 retcode 0 才算成功
-    // （原来 status:'failed' 且 retcode:0 会被当成成功，消息没发却记为 sent）
-    if (body.status !== 'ok' && body.status !== 'async' && Number(body.retcode) !== 0) {
+    // fail-closed：给了 status 就按 status 判（failed 一律算失败），只有没有 status 时才看 retcode。
+    // 原来写成 `status !== 'ok' && status !== 'async' && retcode !== 0`，于是
+    // {status:'failed', retcode:0} 这种自相矛盾的响应会被当成成功，消息没发却记为 sent。
+    const statusFailed = body.status != null && body.status !== 'ok' && body.status !== 'async';
+    const retcodeFailed = body.status == null && body.retcode != null && Number(body.retcode) !== 0;
+    if (statusFailed || retcodeFailed) {
       throw new OneBotActionError(
         `OneBot ${action} 失败: retcode=${body.retcode ?? body.status} ${body.wording ?? ''}`,
         {
