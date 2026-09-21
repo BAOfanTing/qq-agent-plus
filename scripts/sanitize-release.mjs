@@ -7,6 +7,9 @@
 //   - sk- / ghp_ 之类的密钥前缀
 //   - 非私网、非文档示例的公网 IPv4
 //   - 非 noreply 的邮箱地址
+//   - 本机个人串（QQ 号、域名、业务标识……）：值放在 data/sanitize-patterns.json
+//     （一个 JSON 字符串数组，data/ 本来就不进版本库，所以仓库里只有机制、没有值）。
+//     2026-09-21 加：用例里写了一次真管理员 QQ，扫描器当时不认这类号，发布了才被发现。
 //
 // 用法：
 //   node scripts/sanitize-release.mjs                 # 输出到 ../qq-agent-clean
@@ -37,13 +40,28 @@ const IPV4_CONTEXT = /(?:\b(?:https?|ssh|git|ftp):\/\/|@)(\d{1,3}(?:\.\d{1,3}){3
 // 通用示例不算泄露：文档里出现 /home/user、/home/ubuntu、C:\Users\user 这类占位是正常的。
 const EXAMPLE_USER_PATH = /(?:\/(?:home|Users)\/(?:user|ubuntu|deploy|sourcecode|example|<[^>]+>)|[A-Za-z]:\\Users\\(?:user|public|Public|example|<[^>]+>))/i;
 
+/**
+ * 本机个人串：`data/sanitize-patterns.json` 里写一个字符串数组。
+ * 只读本地文件，不写进仓库、也不打印原值（命中时打码）—— 这份输出经常被贴到 issue 里。
+ */
+function loadPersonalPatterns() {
+  try {
+    const list = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'sanitize-patterns.json'), 'utf8'));
+    if (!Array.isArray(list)) return [];
+    return list.map((item) => String(item).trim()).filter((item) => item.length >= 4);
+  } catch {
+    return [];
+  }
+}
+
 const SCANNERS = [
   { name: '长十六进制串（疑似令牌）', re: /\b[0-9a-f]{40,}\b/gi },
   { name: '本机真实用户目录', re: /(?:\/(?:home|Users)\/[A-Za-z0-9._-]{2,}|[A-Za-z]:\\Users\\[^\\\s"']{2,})/g , filter: (hit) => !EXAMPLE_USER_PATH.test(hit) },
   { name: 'Token: 行', re: /^\s*Token\s*[:=]\s*["']?[0-9a-f]{16,}["']?\s*$/gim },
   { name: 'API 密钥前缀', re: /\b(sk|ghp|gho|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b/g },
   { name: '公网 IPv4', re: null },
-  { name: '非 noreply 邮箱', re: null }
+  { name: '非 noreply 邮箱', re: null },
+  { name: '个人串（data/sanitize-patterns.json）', list: loadPersonalPatterns() }
 ];
 
 function listTrackedFiles() {
@@ -84,6 +102,12 @@ function scanFile(rel, text) {
         if (!hit || PRIVATE_IPV4.test(hit) || DOC_IPV4.test(hit)) continue;
         findings.push(`${rel}: 公网 IPv4 -> ${hit}`);
       }
+    }
+    if (scanner.list) {
+      for (const needle of scanner.list) {
+        if (text.includes(needle)) findings.push(`${rel}: ${scanner.name} -> ${needle.slice(0, 2)}***${needle.slice(-2)}`);
+      }
+      continue;
     }
     if (scanner.name === '非 noreply 邮箱') {
       for (const hit of new Set(text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [])) {
@@ -133,7 +157,7 @@ function main() {
     }
     return 1;
   }
-  console.log('扫描通过：未发现令牌 / 密钥 / 公网 IP / 真实邮箱 / 本机用户目录。');
+  console.log('扫描通过：未发现令牌 / 密钥 / 公网 IP / 真实邮箱 / 本机用户目录 / 本机个人串。');
   console.log('注意：这是粗筛，不保证覆盖所有敏感形态（域名、业务标识、截图内容等），外发前建议再人工过一遍。');
   console.log('（data/、config.json、console-access.txt 等本地文件本来就不在受跟踪文件里。）');
   return 0;

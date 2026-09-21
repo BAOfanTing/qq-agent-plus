@@ -87,7 +87,7 @@ let modelCalls = 0;
 let failFeeds = false;
 const onebot = {
   selfId: '10000001',
-  selfNickname: '犊子',
+  selfNickname: '测试昵称',
   async call(method) {
     if (method === 'get_qzone_feeds') {
       calls.feed += 1;

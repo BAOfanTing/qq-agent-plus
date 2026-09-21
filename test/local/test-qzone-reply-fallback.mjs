@@ -71,17 +71,17 @@ fs.writeFileSync(path.join(dataDir, 'qzone-interactions.json'), JSON.stringify({
     status: 'reviewed',
     discoveredAt: fakeNow - 3000000,
     updatedAt: fakeNow - 2900000,
-    post: { uin: '10000001', tid: 'tidA', nickname: '犊子', content: '说说内容', time: postTime },
+    post: { uin: '10000001', tid: 'tidA', nickname: '测试昵称', content: '说说内容', time: postTime },
     comment: { ...comment1 },
     rootComment: { ...comment1 },
     context: [{ ...comment1, self: false }]
   }],
   watchedPosts: [{
-    key: POST_KEY, uin: '10000001', tid: 'tidA', nickname: '犊子', content: '说说内容',
+    key: POST_KEY, uin: '10000001', tid: 'tidA', nickname: '测试昵称', content: '说说内容',
     time: postTime, commentCount: 2, scannedCommentCount: 1, own: true, updatedAt: fakeNow - 60000
   }, {
     // 安静的说说：评论数没变化，且从未进入过会话
-    key: '10000001:tidB', uin: '10000001', tid: 'tidB', nickname: '犊子', content: '另一条',
+    key: '10000001:tidB', uin: '10000001', tid: 'tidB', nickname: '测试昵称', content: '另一条',
     time: postTime - 7200, commentCount: 1, scannedCommentCount: 1, own: true, updatedAt: fakeNow - 60000
   }],
   runs: []
@@ -94,7 +94,7 @@ let replyCalls = [];
 let modelCalls = 0;
 const onebot = {
   selfId: '10000001',
-  selfNickname: '犊子',
+  selfNickname: '测试昵称',
   async call(method) {
     if (method === 'get_qzone_msg_list') {
       msgListAttempts += 1;
@@ -114,12 +114,12 @@ const qzoneWeb = {
     detailCallsByTid[tid] = (detailCallsByTid[tid] || 0) + 1;
     if (tid === 'tidB') {
       return {
-        tid, uin, nickname: '犊子', content: '另一条', time: postTime - 7200, commentCount: 1,
+        tid, uin, nickname: '测试昵称', content: '另一条', time: postTime - 7200, commentCount: 1,
         comments: [{ commentId: 'b1', tid: 'b1', parentTid: '', uin: '10000002', nickname: '老哥', content: '顶', targetUin: '', time: postTime - 7000 }]
       };
     }
     return {
-      tid, uin, nickname: '犊子', content: '说说内容', time: postTime, commentCount: 2,
+      tid, uin, nickname: '测试昵称', content: '说说内容', time: postTime, commentCount: 2,
       comments: [{ ...comment1 }, { ...comment2 }]
     };
   },
