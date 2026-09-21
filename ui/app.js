@@ -7538,10 +7538,12 @@ function renderPersonaSection(c) {
           <option value="high" ${c.persona.participation === 'high' ? 'selected' : ''}>活跃型</option>
         </select></div>
     </div>
+    <div class="hint">交流策略：「原版群友」那套允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据。嫌它冲或想让它听话，选后者。</div>
     <div class="field"><label>角色设定</label>
       <textarea id="cfg-roletext" class="persona-role-text" placeholder="例如：你是运维群里的老油条……">${esc(c.persona.roleText || '')}</textarea></div>
-    <div class="field"><label>管理员附加规则（可选，追加到系统提示）</label>
-      <textarea id="cfg-customrules" class="persona-role-text" style="min-height:100px">${esc(c.persona.customRules || '')}</textarea></div>
+    <div class="field"><label>管理员附加规则（可选；排在所有平台规则之后 —— 想压过默认风格就写这里）</label>
+      <textarea id="cfg-customrules" class="persona-role-text" style="min-height:100px" placeholder="例如：别装傻、别反问，不接话就安静；称呼固定用「老板」；被怼只淡淡带过">${esc(c.persona.customRules || '')}</textarea>
+      <div class="hint">冲突时优先级：安全规则 &gt; 这里 &gt; 角色设定 &gt; 平台默认风格。角色的口吻/称呼/脾气写在「角色设定」里就行，这里的硬要求会盖过平台默认风格。</div></div>
     ${renderPersonaSaveBar()}`;
 }
 
