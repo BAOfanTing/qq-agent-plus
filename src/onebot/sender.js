@@ -67,11 +67,14 @@ export class SendQueue {
           break;
         } catch (error) {
           const message = String(error?.message ?? error);
-          // 只有网络层抖动才值得重试（协议端进程重启、连接被掐、5xx）；
-          // 参数错/限频/被拒绝重试也一样失败，直接抛给上层。
-          const transient = /fetch failed|ECONNRESET|ECONNREFUSED|EPIPE|socket hang up|ETIMEDOUT|network|Unexpected status code: 5\d\d|timeout/i.test(message);
-          if (attempt >= 2 || !transient || options.signal?.aborted) throw error;
-          console.log(`[sender] 发送失败，1.5 秒后重试一次（${message.slice(0, 80)}）`);
+          // 只有"能证明请求没被对方收到"的错误才自动重试。
+          // 超时 / 连接被重置 / socket hang up / fetch failed 都可能发生在
+          // "对方已经收下并发出去了"之后——重发会让群里出现两条一样的消息，
+          // 而 outbox 只记一条，人工核对时也看不到重复。这类一律按结果未知走 held。
+          const notDelivered = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|Unexpected status code: 5\d\d/i.test(message);
+          const uncertain = /timeout|timed out|ETIMEDOUT|ECONNRESET|EPIPE|socket hang up|fetch failed|network/i.test(message);
+          if (attempt >= 2 || !notDelivered || uncertain || options.signal?.aborted) throw error;
+          console.log(`[sender] 发送失败（可确认未送达），1.5 秒后重试一次（${message.slice(0, 80)}）`);
           await sleep(1500);
         }
       }

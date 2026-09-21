@@ -13,6 +13,13 @@ function normalizeMid(value) {
   return String(value ?? '').trim().replace(/^(?:#+|collected_)+/, '').trim();
 }
 
+/** 印象条目去掉"来自哪个会话"：工具契约写明不泄露其他群/私聊的来源。 */
+function stripMemorySources(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  const { sourceChatKeys, ...rest } = entry;
+  return rest;
+}
+
 // QQ 系统表情：中文名 → 编号。表由 /home/ubuntu/export-face-names.sh 从 SnowLuma 容器导出到数据目录。
 let FACE_INDEX = null;
 function faceIndex() {
@@ -420,7 +427,9 @@ export function buildToolDefs() {
           if (!entry) return err(`在当前会话找不到消息 ${args.messageId}。${midHint(ctx)}`);
           const imageMedia = (entry.media || []).find((m) => m.kind === 'image' && m.url);
           if (!imageMedia) return err('该消息没有可收藏的图片');
-          const saved = ctx.stickers.collect(args.messageId, { url: imageMedia.url, note: String(args.note ?? '') });
+          // 与 send_message/send_sticker 一样归一化：模型常传 "#123"，直接当 id 会生成
+          // collected_#123，而刷新逻辑只认 collected_123，收藏的表情链接就永远不刷新。
+          const saved = ctx.stickers.collect(normalizeMid(args.messageId), { url: imageMedia.url, note: String(args.note ?? '') });
           return ok({ collected: true, id: saved.id, note: saved.localNote });
         } catch (error) {
           return err(error?.message ?? error);
@@ -705,7 +714,9 @@ export function buildToolDefs() {
         const list = userId
           ? mem.memberImpression.filter((e) => String(e.userId) === userId)
           : mem.memberImpression;
-        return ok({ memberImpression: list });
+        // 印象是跨群共享的，但"来自哪个会话"不能交给模型：sourceChatKeys 里含 private:<QQ>，
+        // 等于告诉模型"对方和机器人私聊过"。控制台的人物记忆页照旧能看来源。
+        return ok({ memberImpression: list.map(stripMemorySources) });
       }
     },
     {
@@ -732,7 +743,13 @@ export function buildToolDefs() {
         if (!person) {
           return err('只能查询当前私聊对象或当前群中已经出现过的成员');
         }
-        return ok(person);
+        // 与工具描述一致：只给印象正文 + 跨会话计数，不给"来自哪个会话"。
+        const { memorySourceChatKeys, ...rest } = person;
+        return ok({
+          ...rest,
+          globalMemories: (person.globalMemories || []).map(stripMemorySources),
+          currentContextMemories: (person.currentContextMemories || []).map(stripMemorySources)
+        });
       }
     },
     {

@@ -24,9 +24,12 @@ function writeJsonAtomic(file, value) {
  *   memory/backups/<group_...|private_...>/<QQ>.json
  * 这份兼容副本允许旧管理工具继续读取，但真正的历史审计以新路径为准。
  */
+const KEEP_PER_PERSON = 20;
+
 export function backupPersonBeforeConsolidation(person, {
   sourceChatKey = '',
-  at = Date.now()
+  at = Date.now(),
+  reason = 'consolidation'
 } = {}) {
   const userId = String(person?.userId || '').trim();
   const impressions = Array.isArray(person?.impressions) ? person.impressions : [];
@@ -38,7 +41,7 @@ export function backupPersonBeforeConsolidation(person, {
   const file = path.join(dir, `${when}-${crypto.randomUUID()}.json`);
   writeJsonAtomic(file, {
     version: 1,
-    reason: 'consolidation',
+    reason: String(reason || 'consolidation'),
     sourceChatKey: String(sourceChatKey || ''),
     backedUpAt: when,
     person: snapshot
@@ -48,5 +51,12 @@ export function backupPersonBeforeConsolidation(person, {
   if (/^(group|private)_\d+$/.test(chatDir)) {
     writeJsonAtomic(path.join(MEMORY_BACKUP_ROOT, chatDir, `${userId}.json`), snapshot);
   }
+  // 只增不删会一直占盘：每人只保留最近 KEEP_PER_PERSON 份（文件名前缀是时间戳）
+  try {
+    const kept = fs.readdirSync(dir).filter((name) => name.endsWith('.json')).sort();
+    for (const stale of kept.slice(0, Math.max(0, kept.length - KEEP_PER_PERSON))) {
+      try { fs.rmSync(path.join(dir, stale), { force: true }); } catch { /* 删不掉不影响本次备份 */ }
+    }
+  } catch { /* 目录读不到就算了 */ }
   return file;
 }

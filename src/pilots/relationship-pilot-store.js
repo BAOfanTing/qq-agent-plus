@@ -238,6 +238,8 @@ export class RelationshipPilotStore {
       CREATE INDEX IF NOT EXISTS relationship_evaluations_person
         ON relationship_evaluations(uin, created_at DESC);
     `);
+    // 每次进程启动清一次历史账本（events/evaluations 只增不删会一直涨；90 天够回看评估依据）
+    try { this.pruneHistory(); } catch { /* 清理失败不影响启动 */ }
   }
 
   close() {
@@ -340,6 +342,15 @@ export class RelationshipPilotStore {
       now
     );
     return id;
+  }
+
+  /** 账本保留期清理：只留最近 N 天（events/evaluations 只增不删会一直涨）。 */
+  pruneHistory(retentionDays = 90) {
+    const cutoff = Date.now() - Math.max(1, Number(retentionDays) || 90) * 24 * 60 * 60 * 1000;
+    try {
+      this.db.prepare('DELETE FROM relationship_events WHERE created_at < ?').run(cutoff);
+      this.db.prepare('DELETE FROM relationship_evaluations WHERE created_at < ?').run(cutoff);
+    } catch { /* 清理失败不影响评估 */ }
   }
 
   finishEvaluation(id, { status = 'done', usage = {}, error = '' } = {}) {

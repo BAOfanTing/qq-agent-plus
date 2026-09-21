@@ -215,7 +215,8 @@ function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal } = {
     }, (res) => {
       const statusCode = res.statusCode || 0;
       if ([301, 302, 303, 307, 308].includes(statusCode)) {
-        res.resume();
+        // 不要 resume() 排空响应体：它不计入 maxBytes，恶意目标可以一直吐数据把连接占住
+        res.destroy();
         resolve({ statusCode, redirect: String(res.headers.location || '') });
         return;
       }
@@ -243,7 +244,9 @@ export async function safeFetch(urlString) {
       continue;
     }
     const body = result.body || '';
-    return { url: url.toString(), statusCode: result.statusCode, truncated: body.length >= 50000, body };
+    // maxBytes 是字节，body.length 是字符数：中文页按字符比会误报"没截断"，
+    // 让模型把只有一半的正文当成完整内容。
+    return { url: url.toString(), statusCode: result.statusCode, truncated: Buffer.byteLength(body, 'utf8') >= 50000, body };
   }
   throw new Error('重定向次数过多，已停止');
 }

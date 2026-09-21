@@ -875,8 +875,10 @@ export class ChatStore {
     for (const v of appendMedia) {
       if (v?.url && !seen.has(v.url)) { media.push(v); seen.add(v.url); }
     }
+    // 查找用的是归一化后的 mid，更新也必须用同一个值，
+    // 否则传 "#123" 时会"找到条目、更新 0 行、却返回 true"。
     this.db.prepare('UPDATE messages SET text=?,media=? WHERE chat_key=? AND mid=?')
-      .run(text == null ? m.text : String(text), JSON.stringify(media), chatKey, String(mid));
+      .run(text == null ? m.text : String(text), JSON.stringify(media), chatKey, normalizeMid(mid));
     return true;
   }
 

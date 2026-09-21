@@ -187,9 +187,12 @@ export class OneBotClient {
       const hint = res.status === 426
         ? '（HTTP 426：httpUrl 可能指向了 WebSocket 端口，请检查 onebot.httpUrl）'
         : '';
+      // 4xx = 请求被对方拒绝（令牌错、参数错、路径错、被限频），可以确定没有投递，
+      // 不能标成 unknown —— 那会把整批消息压成 held 等人工核对。
+      // 5xx / 网络中断才是真正"不知道对方有没有收到"。
       throw new OneBotActionError(`OneBot ${action} HTTP ${res.status}${hint}`, {
         action,
-        outcome: 'unknown',
+        outcome: res.status >= 400 && res.status < 500 ? 'failed' : 'unknown',
         httpStatus: res.status
       });
     }
@@ -204,7 +207,9 @@ export class OneBotClient {
         cause
       });
     }
-    if (body.status !== 'ok' && body.retcode !== 0) {
+    // fail-closed：只有明确的 ok/async 或 retcode 0 才算成功
+    // （原来 status:'failed' 且 retcode:0 会被当成成功，消息没发却记为 sent）
+    if (body.status !== 'ok' && body.status !== 'async' && Number(body.retcode) !== 0) {
       throw new OneBotActionError(
         `OneBot ${action} 失败: retcode=${body.retcode ?? body.status} ${body.wording ?? ''}`,
         {

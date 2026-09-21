@@ -153,7 +153,9 @@ export function normalizePriceFeed(data) {
     if (!key || !e) { dropped++; continue; }
     prices[key] = e;
   }
-  if (!Object.keys(prices).length && dropped) return null;   // 全是垃圾 → 判失败
+  // 空表一律判失败：返回 {} / {prices:[]} / 只有元数据键时，若当成成功就会
+  // setRemotePrices({}) 清掉已生效的远程覆盖价，还会把空表写进磁盘缓存跨重启保留。
+  if (!Object.keys(prices).length) return null;
 
   const aliases = {};
   if (rawAliases && typeof rawAliases === 'object' && !Array.isArray(rawAliases)) {

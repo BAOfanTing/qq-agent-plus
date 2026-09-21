@@ -116,7 +116,16 @@ export class MemoryStore {
     return { ...member, note: n };
   }
   replaceMember(chatKey, userId, name, contents) { return this.people.replace(chatKey, userId, name, contents); }
-  removeMember(chatKey, userId) { return this.people.removeMember(userId); }
+  removeMember(chatKey, userId) {
+    // 语义修正：调用方（控制台记忆页按群删除、资产页删除）以为只影响这个会话，
+    // 原来却直接删掉 memory/people/<QQ>.json —— 这个人**在所有会话**的印象一起消失。
+    // 现在按"清掉这个来源"处理：该人在别处留下的印象不受影响。
+    const uid = String(userId || '').trim();
+    if (!uid) return false;
+    const source = String(chatKey || '').trim();
+    if (!source) return this.people.removeMember(uid);
+    return this.people.clearPersonSource(uid, source);
+  }
   remove(chatKey, category, options = {}) {
     if (category !== 'memberImpression') return false;
     if (!String(options.userId || '').trim() && !String(options.target || '').trim()) { const any = this.members(chatKey).length > 0; this.clear(chatKey); return any; }

@@ -1583,7 +1583,9 @@ export class Orchestrator {
     }
 
     signal.throwIfAborted();
-    if (!finish && !completed) throw new Error('Run round budget exceeded');
+    // 与 token 预算同口径：这是"干不完活"的护栏，不是"需要人工核对"的故障。
+    // 标成可重试，让它按 attempts 预算重来，而不是直接 failed（只能从控制台捞）。
+    if (!finish && !completed) throw Object.assign(new Error('Run round budget exceeded'), { retryable: true });
     const providerTranscriptDelta = conversationCfg.mode === 'lifecycle'
       ? structuredClone(messages.slice(transcriptStart))
       : [];
@@ -1998,6 +2000,9 @@ export class Orchestrator {
   /** 批量整理时是否跳过某人（指定群友 / 强制模式不跳过）。 */
   #shouldSkip(resolved, force) {
     if (force) return false;
+    // 没有数字 QQ 号的条目（旧数据里"按名字存"的遗留）无法写回：replaceMember 只接受数字 uid。
+    // 必须在**调模型之前**跳过，否则每轮整理都白烧一次调用、再在写回时抛错记成 failed。
+    if (!/^\d{1,15}$/.test(String(resolved.userId || '').trim())) return true;
     if (resolved.msgCount < Orchestrator.MEMBER_MIN_MESSAGES && !String(resolved.name || '').trim()) return true;
     if (resolved.msgCount < Orchestrator.MEMBER_MIN_MESSAGES && !resolved.impressions.length) return true;
     if (resolved.impressions.length < Orchestrator.MEMBER_MIN_IMPRESSIONS) return true;
@@ -2005,6 +2010,9 @@ export class Orchestrator {
   }
 
   #skipReason(resolved) {
+    if (!/^\d{1,15}$/.test(String(resolved.userId || '').trim())) {
+      return '这条历史印象只有名字、没有 QQ 号，无法合并（不消耗模型调用）';
+    }
     if (resolved.impressions.length < Orchestrator.MEMBER_MIN_IMPRESSIONS) return '没有印象';
     if (resolved.msgCount < Orchestrator.MEMBER_MIN_MESSAGES) return '聊天记录出现不足 3 条';
     return '无法确认身份';

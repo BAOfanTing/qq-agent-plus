@@ -321,6 +321,16 @@ export class StickerManager {
     const cap = Math.max(1, Number(cfg.maxCollectPerHour) || 10);
     if (this.judgeTimes.length >= cap) return null;
     this.judgedKeys.add(srcKey);
+    // 只增不减会随判过的图片数无限涨（约 10 张/小时封顶也一样）；超上限时丢最旧的一批
+    if (this.judgedKeys.size > 2000) {
+      const drop = this.judgedKeys.size - 1500;
+      let removed = 0;
+      for (const key of this.judgedKeys) {
+        if (removed >= drop) break;
+        this.judgedKeys.delete(key);
+        removed += 1;
+      }
+    }
     this.judgeTimes.push(now);
 
     let pick = null;
@@ -554,6 +564,7 @@ export class StickerManager {
 
   /** 收藏一条消息里的图片（本地新增条目，不入 QQ 收藏）。 */
   collect(messageId, { url, note = '', srcKey = '' } = {}) {
+    note = String(note ?? '').slice(0, 300);
     if (!getConfig().sticker?.collectEnabled) throw new Error('收藏表情功能未开启');
     // 限频
     const now = Date.now();

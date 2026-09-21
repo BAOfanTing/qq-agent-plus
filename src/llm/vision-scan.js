@@ -16,10 +16,12 @@ function joinUrl(base, path) {
   return `${String(base).replace(/\/+$/, '')}${path}`;
 }
 
-function authHeaders(apiKey, baseUrl = '') {
+function authHeaders(apiKey, baseUrl = '', model = '') {
   const h = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
-  // 与 llm.js 一致：OpenCode Go 需要 x-opencode-session 路由头
-  if (/opencode\.ai/i.test(String(baseUrl))) {
+  // 与 llm.js / providers.js 一致：OpenCode Go 需要 x-opencode-session 路由头。
+  // 中转站转发时域名不是 opencode.ai，只能靠模型 id 的 opencode-go/ 前缀识别 —
+  // 少了这个分支，探测会被网关按"缺头"拒成 400，进而误判成"不支持图片"并写盘。
+  if (/opencode\.ai/i.test(String(baseUrl)) || /^opencode-go\//i.test(String(model))) {
     h['x-opencode-session'] = `qqagent-vision-${process.pid}`;
   }
   return h;
@@ -61,7 +63,7 @@ async function detectModelVisionRequest({ baseUrl, apiKey, model }, timeoutMs, s
   try {
     res = await fetch(joinUrl(baseUrl, '/chat/completions'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...authHeaders(apiKey, baseUrl) },
+      headers: { 'content-type': 'application/json', ...authHeaders(apiKey, baseUrl, model) },
       body: JSON.stringify({
         model,
         messages: [{
@@ -95,8 +97,19 @@ async function detectModelVisionRequest({ baseUrl, apiKey, model }, timeoutMs, s
     return { verdict: 'unknown', note: `无法判定：${errText.slice(0, 80) || `HTTP ${res.status}`}`, httpStatus: res.status, latencyMs };
   }
   if ([400, 404, 422, 415].includes(res.status)) {
-    // 4xx 且不像鉴权/模型名问题 → 视为网关拒绝该请求形态（典型：文本模型拒图片）
-    return { verdict: 'no-vision', note: `HTTP ${res.status}${errText ? `：${errText.slice(0, 80)}` : ''}`, httpStatus: res.status, latencyMs };
+    // 只有错误信息本身指向图片/多模态，才算"这个模型明确不接受图片"。
+    // 其它 4xx（网关负载饱和、额度不足、路由头缺失、非 JSON 错误页）一律 unknown：
+    // 写成 no-vision 会持久化进 config.modelVision，把内置资料表的结论无条件压掉，
+    // 而重扫还是同样的 400 —— 表现为"看图能力被永久摘掉"。
+    if (looksImageRelated) {
+      return { verdict: 'no-vision', note: `HTTP ${res.status}${errText ? `：${errText.slice(0, 80)}` : ''}`, httpStatus: res.status, latencyMs };
+    }
+    return {
+      verdict: 'unknown',
+      note: `HTTP ${res.status}，但错误信息与图片无关，未判定${errText ? `：${errText.slice(0, 60)}` : ''}`,
+      httpStatus: res.status,
+      latencyMs
+    };
   }
   return { verdict: 'unknown', note: `HTTP ${res.status}${errText ? `：${errText.slice(0, 80)}` : ''}`, httpStatus: res.status, latencyMs };
 }

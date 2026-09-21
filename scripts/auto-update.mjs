@@ -619,10 +619,12 @@ function combinedTransportError(stage, failures) {
  * 本次要部署的 Release tag；没有可部署的发布版本时返回 ''。
  * 判定口径与控制台弹窗共用 checkForUpdate：branch 上的普通提交永远不部署。
  */
-function releaseTarget(notice) {
+function releaseTarget(notice, ignoredVersion = '') {
   if (!notice || typeof notice !== 'object') return '';
   const version = String(notice.version || '').trim();
   if (!version) return '';
+  // 控制台"忽略该版本"以前只压弹窗，定时更新照样部署；这里让它真正生效
+  if (ignoredVersion && version === String(ignoredVersion).trim()) return '';
   if (notice.available === true) return version;
   // unknown-deployed：当前部署不是 git 提交（例如压缩包安装），没有可比较的基线，
   // 直接安装最新 Release。
@@ -746,7 +748,7 @@ async function run() {
   // 部署目标只认「已发布的 Release」：branch 上的日常提交不部署。
   // 判定与控制台弹窗共用 checkForUpdate，避免两边口径不一致。
   const notice = await checkForUpdate(dataDir, cfg, { force: mode === 'manual' });
-  targetVersion = releaseTarget(notice);
+  targetVersion = releaseTarget(notice, previous?.ignoredVersion);
   if (!targetVersion) {
     console.log(`[auto-update] no released version to deploy (${notice?.reason || 'unknown'})`);
     writeAutoUpdateState(dataDir, {

@@ -294,7 +294,15 @@ export class IncidentPilotManager {
       Math.max(1, Number(this.config()?.incidentPilot?.duplicateWindowMinutes) || 10)
     ) * 60000;
     let incident;
-    this.db.exec('BEGIN IMMEDIATE');
+    // 拿不到写锁（别的连接占着）时直接放弃这次记录：
+    // 绝不能让"记录异常"本身抛出去，把会话收尾也一起弄坏。
+    let inTransaction = false;
+    try {
+      this.db.exec('BEGIN IMMEDIATE');
+      inTransaction = true;
+    } catch {
+      return null;
+    }
     try {
       const existing = this.db.prepare(`
         SELECT * FROM incidents
@@ -348,7 +356,7 @@ export class IncidentPilotManager {
       }
       this.db.exec('COMMIT');
     } catch (captureError) {
-      this.db.exec('ROLLBACK');
+      if (inTransaction) { try { this.db.exec('ROLLBACK'); } catch { /* 已回滚 */ } }
       this.lastError = String(captureError?.message ?? captureError);
       this.log(`[incident-pilot] 异常记录失败：${this.lastError}`);
       return null;

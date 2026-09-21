@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, getConfig } from '../core/config.js';
+import { backupPersonBeforeConsolidation } from './memory-consolidation-backup.js';
 
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 const PEOPLE_DIR = path.join(MEMORY_DIR, 'people');
@@ -257,6 +258,14 @@ export class GlobalPersonMemoryStore {
     }
     for (const [key, candidate] of [...map.entries()]) {
       if (key === uid || candidate.userId || candidate.name !== finalName) continue;
+      // 同名但没 QQ 号的旧条目：印象必须先并进来再删文件。原来只并了 sourceChatKeys
+      // 就 rmSync，那份历史印象会静默消失，而且不在"整理前快照"的覆盖范围内（快照按数字 uid 找）。
+      for (const entry of (candidate.impressions || [])) {
+        const content = String(entry?.content || '').trim();
+        if (!content) continue;
+        if ((member.impressions || []).some((v) => v.content === content)) continue;
+        member.impressions.push({ ...entry, sourceChatKeys: sourceKeys(entry?.sourceChatKeys) });
+      }
       member.sourceChatKeys = sourceKeys([...member.sourceChatKeys, ...candidate.sourceChatKeys]);
       try { fs.rmSync(globalMemberFile(candidate.userId, candidate.name), { force: true }); } catch {}
       map.delete(key);
@@ -268,6 +277,8 @@ export class GlobalPersonMemoryStore {
     const uid = String(userId || '').trim();
     const map = this.#ensure(); const member = map.get(uid);
     if (!member) return false;
+    // 破坏性删除前留一份快照（与整理前快照同一套目录，可回滚）
+    try { backupPersonBeforeConsolidation(member, { sourceChatKey: '', at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
     map.delete(uid); try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
     return true;
   }
@@ -282,6 +293,7 @@ export class GlobalPersonMemoryStore {
         removed ||= member.impressions.length !== n;
       } else { member.impressions = []; removed = true; }
       if (!member.impressions.length) {
+        try { backupPersonBeforeConsolidation(member, { sourceChatKey: '', at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
         map.delete(key); try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
       } else { member.updatedAt = Date.now(); this.#persist(member); }
       if (userId || target) break;
@@ -301,6 +313,29 @@ export class GlobalPersonMemoryStore {
       } else this.#persist(member);
     }
   }
+  /** 只清掉某个人在某个会话里的印象：控制台"按群删除某个成员"的语义。 */
+  clearPersonSource(userId, chatKey) {
+    const uid = String(userId || '').trim();
+    const source = String(chatKey || '').trim();
+    const map = this.#ensure();
+    const member = map.get(uid);
+    if (!member || !source) return false;
+    let touched = false;
+    for (const entry of member.impressions) {
+      if (!(entry.sourceChatKeys || []).includes(source)) continue;
+      entry.sourceChatKeys = entry.sourceChatKeys.filter((x) => x !== source);
+      touched = true;
+    }
+    member.impressions = member.impressions.filter((x) => (x.sourceChatKeys || []).length);
+    member.sourceChatKeys = sourceKeys(member.impressions.flatMap((x) => x.sourceChatKeys));
+    member.updatedAt = Date.now();
+    if (!member.impressions.length) {
+      map.delete(uid);
+      try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
+    } else this.#persist(member);
+    return touched || true;
+  }
+
   markConsolidated(userIds, at = Date.now()) {
     const map = this.#ensure();
     for (const uid of userIds || []) {
