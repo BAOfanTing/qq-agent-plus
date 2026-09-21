@@ -4644,15 +4644,16 @@ function renderPriceFeedStatus() {
   if (!el) return;
   const r = state.modelPrices?.remote;
   if (!r || !r.enabled) {
-    el.textContent = '未配置远程价格表 —— 当前使用内置表。填上 URL 并保存后，启动时与每 24 小时自动拉取。';
+    el.textContent = '远程价格表已关闭（只用内置表）。想用项目默认表就把输入框清空保存，或填自己的表 URL。';
     return;
   }
   const when = r.fetchedAt ? fmtTime(r.fetchedAt) : '-';
   const droppedTxt = r.dropped ? `，${r.dropped} 条不合格被丢弃` : '';
+  const from = r.sourceUrl ? ` · ${r.sourceUrl}` : (r.url ? '' : ' · 项目默认地址');
   if (r.ok && r.source === 'remote') {
-    el.textContent = `远程表生效中：${r.count} 条覆盖内置表 · 上次拉取 ${when}${droppedTxt}`;
+    el.textContent = `远程表生效中：${r.count} 条覆盖内置表 · 上次拉取 ${when}${from}${droppedTxt}`;
   } else if (!r.ok && r.source === 'cache') {
-    el.textContent = `服务器暂时拉不到（${r.error || '未知错误'}），正在用上次缓存的远程表（${r.count} 条）· ${when}`;
+    el.textContent = `暂时拉不到（${r.error || '未知错误'}），正在用上次缓存的远程表（${r.count} 条）· ${when}`;
   } else if (!r.ok) {
     el.textContent = `拉取失败（${r.error || '未知错误'}），暂用内置表 · ${when}`;
   } else {
@@ -5618,7 +5619,7 @@ function renderApiSection(c) {
 
       <div class="field" style="margin-top:6px"><label>远程价格表 URL</label>
         <div style="display:flex;gap:8px">
-          <input type="text" id="cfg-price-remote-url" placeholder="例如 https://你的服务器/prices.json" value="${esc(c.api.priceRemoteUrl || '')}" style="flex:1" />
+          <input type="text" id="cfg-price-remote-url" placeholder="留空 = 项目默认价格表；none = 关闭" value="${esc(c.api.priceRemoteUrl || '')}" style="flex:1" />
           <button class="btn btn-small" id="price-feed-refresh-btn" title="不等定时，立即拉一次">立即拉取</button>
         </div>
         <div class="hint" id="price-feed-status" style="margin-top:4px"></div>

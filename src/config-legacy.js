@@ -46,7 +46,8 @@ export const DEFAULT_CONFIG = {
     fallbackToCurrentModel: true,
     // 用量页那张"成本想更准？三选一"的引导卡是否已经处理过（选过或点过"以后再说"）
     costGuideDismissed: false,
-    // 远程价格表 URL（可选）：指向与 prices.json 相同结构的自托管 JSON。
+    // 远程价格表 URL：留空 = 用项目自己的价格表（jsDelivr → raw.githubusercontent 兜底）；
+    // 填 'none' = 完全关闭（只用内置表）；填 URL = 用你自己的表（同 prices.json 结构）。
     // 启动时拉取一次，之后每 24 小时自动刷新（失败过 3 小时重试）；
     // 拉取全程异步、失败不清表 —— 对正常使用零影响。
     // 远程条目按模型 id 覆盖内置表，内置表其余条目仍是兜底。

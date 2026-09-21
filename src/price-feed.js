@@ -30,6 +30,25 @@ const SUCCESS_INTERVAL_MS = 24 * 3600 * 1000;        // 成功后 24h 再拉
 const FAILURE_RETRY_MS = 3 * 3600 * 1000;            // 失败过 3 小时重试
 const TICK_MS = 3600 * 1000;                         // 每小时检查一次是否该拉
 
+/**
+ * 默认远程价格表：项目自己的 prices.json（仓库根目录那份，与内置表同结构）。
+ * 留空即用这两个候选：优先 jsDelivr CDN（国内一般可达），raw.githubusercontent 只作兜底。
+ * 想用自己的表就填 URL；`none` 表示完全不用远程表（只用内置表）。
+ */
+const DEFAULT_FEED_URLS = [
+  'https://cdn.jsdelivr.net/gh/sakurawwwxh/qq-agent-plus@main/prices.json',
+  'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/prices.json'
+];
+const DISABLED_VALUES = new Set(['none', 'off', 'false', '0', 'disabled']);
+
+/** 配置值 → 候选地址列表（空 = 项目默认；'none' = 关闭）。 */
+export function priceFeedTargets(configured) {
+  const raw = String(configured ?? '').trim();
+  if (DISABLED_VALUES.has(raw.toLowerCase())) return [];
+  if (raw) return [raw];
+  return [...DEFAULT_FEED_URLS];
+}
+
 const status = {
   url: '',
   enabled: false,
@@ -37,6 +56,8 @@ const status = {
   fetchedAt: 0,           // 上次拉取（尝试）时间
   ok: false,              // 上次拉取是否成功
   error: '',
+  sourceUrl: '',         // 实际生效的那个地址（默认会给两个候选）
+  tag: '',                // 候选地址组合的指纹（缓存校验用）
   count: 0,               // 生效的远程条目数
   aliasCount: 0,          // 生效的远程别名数
   dropped: 0              // 校验被丢弃的条目数
@@ -120,8 +141,14 @@ export function normalizePriceFeed(data) {
   if (rawAliases && typeof rawAliases === 'object' && !Array.isArray(rawAliases)) {
     for (const [from, to] of Object.entries(rawAliases)) {
       const key = String(from ?? '').trim().toLowerCase();
-      const value = String(to ?? '').trim().toLowerCase();
-      if (key && value && key !== value) aliases[key] = value;
+      if (!key) continue;
+      // 字符串 = 永久别名；对象 = 带时间区间，原样透传给查价层
+      if (typeof to === 'string') {
+        const value = to.trim().toLowerCase();
+        if (value && key !== value) aliases[key] = value;
+        continue;
+      }
+      if (to && typeof to === 'object' && to.to) aliases[key] = { ...to, to: String(to.to).trim().toLowerCase() };
     }
   }
   return { prices, aliases, dropped };
@@ -135,84 +162,98 @@ function applyPrices(prices, source, aliases = null) {
   status.aliasCount = aliases ? Object.keys(aliases).length : 0;
 }
 
-/** 启动时先吃磁盘缓存（URL 对得上才用）。 */
-function applyDiskCache(url) {
+/** 启动时先吃磁盘缓存（地址组合对得上才用）。 */
+function applyDiskCache(targets, tag) {
   try {
     const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-    if (data?.url !== url) return false;   // 缓存是另一个 URL 的，不能用
+    if (data?.tag !== tag) return false;   // 缓存是另一组地址的，不能用
     const norm = normalizePriceFeed({ prices: data.prices, aliases: data.aliases });
     if (!norm) return false;
     applyPrices(norm.prices, 'cache', norm.aliases);
     status.dropped = norm.dropped;
+    status.sourceUrl = String(data.url || '');
     return true;
   } catch {
     return false;
   }
 }
 
-function writeDiskCache(url, prices, aliases = null) {
+function writeDiskCache(tag, url, prices, aliases = null) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = `${CACHE_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ url, fetchedAt: Date.now(), prices, aliases: aliases || {} }), 'utf8');
+    fs.writeFileSync(tmp, JSON.stringify({ tag, url, fetchedAt: Date.now(), prices, aliases: aliases || {} }), 'utf8');
     fs.renameSync(tmp, CACHE_FILE);
   } catch { /* 缓存写不进去不影响使用 */ }
 }
 
 /**
- * 立即拉取一次远程价格表。
- * @param {string} url
+ * 立即拉取一次远程价格表（按候选地址依次尝试）。
+ * @param {string} configured 配置里的值：URL / ''（用默认地址）/ 'none'（关闭）
  * @returns {Promise<object>} 最新状态
  */
-export async function refreshPriceFeed(url) {
-  url = String(url || '').trim();
-  status.url = url;
+export async function refreshPriceFeed(configured, options = {}) {
+  const fetchImpl = options.fetchImpl || fetch;
+  const timeoutMs = Number(options.timeoutMs) || FETCH_TIMEOUT_MS;
+  const targets = priceFeedTargets(configured);
+  status.url = String(configured ?? '').trim();
   status.fetchedAt = Date.now();
-  if (!url) {
+  status.tag = targets.join(',');
+  if (!targets.length) {
     status.enabled = false;
+    status.sourceUrl = '';
     return priceFeedStatus();
   }
   status.enabled = true;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json().catch(() => { throw new Error('返回的不是合法 JSON'); });
-    const norm = normalizePriceFeed(data);
-    if (!norm) throw new Error('JSON 里没有可用的价格条目');
-    applyPrices(norm.prices, 'remote', norm.aliases);
-    status.ok = true;
-    status.error = '';
-    status.dropped = norm.dropped;
-    writeDiskCache(url, norm.prices, norm.aliases);
-  } catch (error) {
-    status.ok = false;
-    status.error = String(error?.cause?.message ?? error?.message ?? error);
-    // 失败不清表：继续用远程缓存/内置表，下次重试
+  const failures = [];
+  for (const url of targets) {
+    try {
+      const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json().catch(() => { throw new Error('返回的不是合法 JSON'); });
+      const norm = normalizePriceFeed(data);
+      if (!norm) throw new Error('JSON 里没有可用的价格条目');
+      applyPrices(norm.prices, 'remote', norm.aliases);
+      status.ok = true;
+      status.error = '';
+      status.dropped = norm.dropped;
+      status.sourceUrl = url;
+      writeDiskCache(targets.join(','), url, norm.prices, norm.aliases);
+      return priceFeedStatus();
+    } catch (error) {
+      failures.push(`${url}：${String(error?.cause?.message ?? error?.message ?? error)}`);
+    }
   }
+  // 全都失败：不清表，继续用远程缓存/内置表，下次重试
+  status.ok = false;
+  status.error = failures.join('；');
   return priceFeedStatus();
 }
 
 /**
  * 初始化远程价格表：吃缓存 → 立即拉 → 起定时检查。
- * 幂等：URL 没变就什么都不做（配置保存时会再次调这里）。
+ * 幂等：配置值没变就什么都不做（配置保存时会再次调这里）。
+ * 配置值：URL / ''（用项目默认价格表）/ 'none'（关闭）。
  *
  * ⚠️ 所有不带 await 的调用都挂 .catch(() => {})：
  *    refreshPriceFeed 内部已全 catch，这里是第二道保险 ——
  *    这个模块绝不允许以任何方式影响主程序（未捕获的 rejection 也算）。
  */
-export function initPriceFeed(url) {
-  url = String(url || '').trim();
+export function initPriceFeed(configured) {
+  const targets = priceFeedTargets(configured);
+  const key = targets.join(',') || 'disabled';
   if (timer) { clearInterval(timer); timer = null; }
-  if (!url) {
-    status.url = '';
+  status.url = String(configured ?? '').trim();
+  if (!targets.length) {
     status.enabled = false;
+    status.sourceUrl = '';
     return;
   }
-  if (status.url === url && status.enabled) return;   // 同 URL 已初始化过
-  status.url = url;
+  if (status.tag === key && status.enabled) return;   // 同一组地址已初始化过
+  status.tag = key;
   status.enabled = true;
-  applyDiskCache(url);            // 先用缓存顶上，拉到新的再覆盖
-  refreshPriceFeed(url).catch(() => {});   // 启动即拉（异步，不阻塞启动）
+  applyDiskCache(targets, key);            // 先用缓存顶上，拉到新的再覆盖
+  refreshPriceFeed(configured).catch(() => {});   // 启动即拉（异步，不阻塞启动）
   timer = setInterval(() => {
     const age = Date.now() - (status.fetchedAt || 0);
     if (status.ok && age < SUCCESS_INTERVAL_MS) return;

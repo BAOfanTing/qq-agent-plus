@@ -311,8 +311,41 @@ export const MODEL_ALIASES = {
   // 聚合站对新版 DeepSeek 用点号写法；表里 V4.1-Flash 的条目名是 deepseek-flash
   'deepseek-v4.1-flash': 'deepseek-flash',
   'deepseek-v4.1-flash-0731': 'deepseek-flash',
-  'deepseek-v41-flash': 'deepseek-flash'
+  'deepseek-v41-flash': 'deepseek-flash',
+  // 带时间区间的别名：某天起官方把 v4-pro 路由到 V4.1-Flash 并按 Flash 价计费。
+  // 之前的历史调用仍按 v4-pro 自己的价（表里那条）算，不会算错。
+  'deepseek-v4-pro': {
+    to: 'deepseek-flash',
+    from: '2026-09-14T12:00:00+08:00',
+    note: '该日起路由到 V4.1-Flash，按 Flash 价计费'
+  }
 };
+
+/**
+ * 解析别名在某个时刻指向谁：
+ *   - 字符串 = 永久别名
+ *   - { to, from?, until? } = 只在区间内生效（历史成本要按当时的规则算）
+ * 传 at（调用时刻）时严格判定；不传时只排除"已经过期"的别名（界面预览场景）。
+ */
+export function aliasTargetAt(value, at = 0) {
+  if (!value) return '';
+  const t = Number(at) || 0;
+  if (typeof value === 'string') return value.trim();
+  if (typeof value !== 'object') return '';
+  const to = String(value.to || '').trim();
+  if (!to) return '';
+  const from = value.from ? Date.parse(value.from) : 0;
+  const until = value.until ? Date.parse(value.until) : 0;
+  if (from) {
+    const ref = t || Date.now();
+    if (ref < from) return '';
+  }
+  if (until) {
+    const ref = t || Date.now();
+    if (ref >= until) return '';
+  }
+  return to;
+}
 
 /** 只是"叫法"、不影响型号判断的后缀：去掉再查。 */
 const COSMETIC_SUFFIXES = [
@@ -367,15 +400,21 @@ export function modelIdCandidates(modelId) {
  * 候选顺序即优先级：别名 → 精确 → 归一化 → 模糊 → 前缀匹配。
  * 返回条目副本并带上 matched / confidence / via，取不到返回 null。
  */
-function matchModelId(modelId, table, aliases) {
+function matchModelId(modelId, table, aliases, at = 0) {
   const candidates = modelIdCandidates(modelId);
   const keys = Object.keys(table || {});
   if (!candidates.length || !keys.length) return null;
 
   for (const cand of candidates) {
-    const alias = aliases[cand.id];
+    const alias = aliasTargetAt(aliases[cand.id], at);
     if (alias && table[alias]) {
-      return { ...table[alias], matched: alias, confidence: 'alias', via: `${cand.id} → ${alias}` };
+      const ranged = typeof aliases[cand.id] === 'object';
+      return {
+        ...table[alias],
+        matched: alias,
+        confidence: 'alias',
+        via: `${cand.id} → ${alias}${ranged ? '（按该时段的别名规则）' : ''}`
+      };
     }
     if (table[cand.id]) {
       return { ...table[cand.id], matched: cand.id, confidence: cand.confidence, via: cand.via };
@@ -403,8 +442,8 @@ function matchModelId(modelId, table, aliases) {
  * 按模型 id 查官方价格。
  * 查不到返回 null —— 调用方按"未定价"处理（不要当成 0 元）。
  */
-export function resolveOfficialPrice(modelId) {
-  return matchModelId(modelId, EFFECTIVE_PRICES, EFFECTIVE_ALIASES);
+export function resolveOfficialPrice(modelId, options = {}) {
+  return matchModelId(modelId, EFFECTIVE_PRICES, EFFECTIVE_ALIASES, Number(options.at) || 0);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -434,8 +473,22 @@ export function setRemotePrices(map, aliases = null) {
   if (aliases && typeof aliases === 'object' && !Array.isArray(aliases)) {
     for (const [from, to] of Object.entries(aliases)) {
       const key = String(from ?? '').trim().toLowerCase();
-      const value = String(to ?? '').trim().toLowerCase();
-      if (key && value && key !== value) nextAliases[key] = value;
+      if (!key) continue;
+      // 字符串 = 永久别名；对象 = 带时间区间（{ to, from?, until?, note? }）
+      if (typeof to === 'string') {
+        const value = to.trim().toLowerCase();
+        if (value && key !== value) nextAliases[key] = value;
+        continue;
+      }
+      if (to && typeof to === 'object') {
+        const value = String(to.to ?? '').trim().toLowerCase();
+        if (!value || key === value) continue;
+        const entry = { to: value };
+        if (to.from) entry.from = String(to.from);
+        if (to.until) entry.until = String(to.until);
+        if (to.note) entry.note = String(to.note);
+        nextAliases[key] = entry;
+      }
     }
   }
   REMOTE_ALIASES = nextAliases;
@@ -768,7 +821,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
   // ④ 渠道价目表（该渠道自动拉取/用户配置的价目，见 channel-prices.js）：
   //    比公共参考表更具体（就是这个渠道的价），但比不过上面几条手填的价。
   if (cost.mode !== 'subscription' && vendor && id && CHANNEL_PRICES[vendor]) {
-    const hit = matchPriceTable(id, CHANNEL_PRICES[vendor], EFFECTIVE_ALIASES);
+    const hit = matchPriceTable(id, CHANNEL_PRICES[vendor], EFFECTIVE_ALIASES, Number(options.at) || 0);
     if (hit && (Number(hit.in) || Number(hit.out) || hit.billing)) {
       const { billing, amount, period } = billingOf(hit);
       const perToken = billing === 'token';
@@ -798,7 +851,8 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
   //    表里没有**不直接判未定价**：继续往下走 ⑥ 兜底单价 / ⑦ 按当前模型估算。
   let tableMissed = false;
   if (officialEnabled) {
-    const hit = id ? (priceTable ? matchPriceTable(id, priceTable) : resolveOfficialPrice(id)) : null;
+    const at = Number(options.at) || 0;
+    const hit = id ? (priceTable ? matchPriceTable(id, priceTable, null, at) : resolveOfficialPrice(id, { at })) : null;
     if (hit) {
       const remote = isRemoteEntry(hit.matched);
       const discounted = cost.mode === 'multiplier' && cost.multiplier !== 1;
@@ -948,14 +1002,14 @@ export function priceKind(price) {
 }
 
 /** 在一张价格表里匹配模型（供前端用本地数据算，不依赖接口往返）。 */
-export function matchPriceTable(modelId, table, aliases = null) {
+export function matchPriceTable(modelId, table, aliases = null, at = 0) {
   const list = Array.isArray(table) ? table : Object.entries(table || {}).map(([id, e]) => ({ id, ...e }));
   const map = {};
   for (const entry of list) {
     const key = String(entry?.id ?? '').trim().toLowerCase();
     if (key) map[key] = entry;
   }
-  return matchModelId(modelId, map, aliases || EFFECTIVE_ALIASES);
+  return matchModelId(modelId, map, aliases || EFFECTIVE_ALIASES, Number(at) || 0);
 }
 
 /* ══════════════════════════════════════════════════════════════

@@ -3415,8 +3415,9 @@ function collectUsageRows({ range }) {
  *
  * ⚠️ 必须与前端展示/批量编辑用的身份一致，否则用户设的渠道价永远不会生效。
  */
-function priceOf(model, vendor) {
-  return resolveModelPrice(model, getConfig(), null, { vendor });
+function priceOf(model, vendor, at = 0) {
+  // at = 这次调用的时刻：带时间区间的别名（如某日起路由到新模型）要按当时规则算
+  return resolveModelPrice(model, getConfig(), null, { vendor, at });
 }
 
 /** 对一批行计价，返回总额与峰谷拆分。 */
@@ -3437,7 +3438,7 @@ function costOfRows(rows) {
   // 按"当前模型"的价估算的调用（没有自己价格的模型，避免变成用户的作业）
   let fallbackCalls = 0, fallbackTokens = 0;
   for (const r of rows) {
-    const p = priceOf(r.model, r.vendor);
+    const p = priceOf(r.model, r.vendor, r.at);
     if (p.peak) hasPeakModel = true;
     const tier = p.peak ? priceAt({ in: p.in, out: p.out, cached: p.cached, peak: p.peak }, r.at) : p;
     const prompt = Number(r.promptTokens) || 0;
@@ -3534,7 +3535,7 @@ function buildUsageStats({ range = '7' } = {}) {
   // 页面顶部要把这件事说清楚，否则用户会以为这些调用是免费的。
   const unpricedByModel = new Map();
   for (const r of rows) {
-    if (priceOf(r.model, r.vendor).unpriced !== true) continue;
+    if (priceOf(r.model, r.vendor, r.at).unpriced !== true) continue;
     const cur = unpricedByModel.get(r.modelKey) || { key: r.modelKey, calls: 0, tokens: 0 };
     cur.calls += 1;
     cur.tokens += (Number(r.promptTokens) || 0) + (Number(r.completionTokens) || 0);

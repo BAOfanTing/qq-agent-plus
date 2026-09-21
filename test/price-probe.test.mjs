@@ -10,6 +10,7 @@ process.env.QQ_AGENT_DATA_DIR = root;
 const probe = await import('../src/price-probe.js');
 const channel = await import('../src/channel-prices.js');
 const prices = await import('../src/model-prices.js');
+const feed = await import('../src/price-feed.js');
 
 after(() => {
   prices.setChannelPrices('demo-渠道', null);
@@ -237,4 +238,53 @@ test('自动探测：已配过或刚探过就跳过', async () => {
   const noUrl = await channel.maybeAutoProbeChannel({ baseUrl: '', vendor: '空地址', feedsConfig: [] });
   assert.equal(noUrl.probed, false);
   assert.equal(noUrl.reason, 'no-target');
+});
+
+/* ── 远程价格表：默认用项目自己的表，候选依次兜底 ── */
+
+test('远程价格表默认地址：jsDelivr 优先、raw 兜底；填 none 关闭', async () => {
+  assert.deepEqual(feed.priceFeedTargets(''), [
+    'https://cdn.jsdelivr.net/gh/sakurawwwxh/qq-agent-plus@main/prices.json',
+    'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/prices.json'
+  ]);
+  assert.deepEqual(feed.priceFeedTargets('https://mine.example.com/prices.json'), ['https://mine.example.com/prices.json']);
+  assert.deepEqual(feed.priceFeedTargets('none'), []);
+  assert.deepEqual(feed.priceFeedTargets('OFF'), []);
+
+  const calls = [];
+  const fake = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes('jsdelivr')) return { ok: false, status: 502, json: async () => ({}) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        prices: { 'from-feed': { in: 3, out: 9 } },
+        aliases: { 'old-name': { to: 'from-feed', from: '2026-01-01T00:00:00+08:00' } }
+      })
+    };
+  };
+  const st = await feed.refreshPriceFeed('', { fetchImpl: fake });
+  assert.equal(calls.length, 2, '第一个候选失败后要试第二个');
+  assert.equal(st.ok, true);
+  assert.match(st.sourceUrl, /raw\.githubusercontent\.com/);
+  assert.equal(st.count, 1);
+  assert.equal(st.aliasCount, 1);
+
+  // 远程表带的"带时间区间别名"也要生效（生效期内指过去，生效前不指）
+  const inRange = prices.resolveOfficialPrice('old-name', { at: Date.parse('2026-06-01T00:00:00+08:00') });
+  assert.equal(inRange.matched, 'from-feed');
+  const beforeRange = prices.resolveOfficialPrice('old-name', { at: Date.parse('2025-12-01T00:00:00+08:00') });
+  assert.equal(beforeRange, null, '区间之外不该套用别名');
+  prices.setRemotePrices({});
+});
+
+test('远程价格表：所有候选都失败时报错但不影响内置表', async () => {
+  const fake = async (url) => ({ ok: false, status: 503, json: async () => ({}) });
+  const st = await feed.refreshPriceFeed('', { fetchImpl: fake, timeoutMs: 1000 });
+  assert.equal(st.ok, false);
+  assert.match(st.error, /jsdelivr/);
+  assert.match(st.error, /raw\.githubusercontent/);
+  // 内置表仍然可用
+  assert.equal(prices.resolveOfficialPrice('deepseek-flash').in, 1);
 });

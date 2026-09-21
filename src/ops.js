@@ -22,6 +22,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { resolveModelPrice, modelLabel } from './model-prices.js';
 
 const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const IS_WINDOWS = process.platform === 'win32';
@@ -258,6 +259,45 @@ function sqliteIntegrity(file) {
   } finally {
     try { db.close(); } catch { /* 忽略 */ }
   }
+}
+
+/**
+ * 价格缺口（只读）：扫会话留档，找出"没有价格"的模型。
+ * 与用量页同一条判价链（含账户口径、渠道价、"按当前模型估算"），
+ * 所以这里剩下的就是真正没算进成本的调用。没有留档时返回 null。
+ */
+function priceGapReport(cfg) {
+  // 用配置文件的完整内容判价（ops 自己的 cfg 是扁平结构，缺 api.* 会让
+  // 账户口径与按当前模型估算失效，报出的缺口就跟控制台对不上）
+  let priceCfg = {};
+  try { priceCfg = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'config.json'), 'utf8')); } catch { priceCfg = {}; }
+  const dir = path.join(cfg.dataDir, 'sessions');
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return null; }
+  const counts = new Map();
+  for (const name of files) {
+    let session;
+    try { session = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
+    const vendor = String(session?.vendor || '').trim();
+    for (const message of (session?.messages || [])) {
+      const raw = message?.raw;
+      if (!raw || typeof raw !== 'object') continue;
+      const usage = raw.usage || {};
+      const promptTokens = Number(usage.prompt_tokens) || 0;
+      const completionTokens = Number(usage.completion_tokens) || 0;
+      if (!promptTokens && !completionTokens) continue;
+      const model = String(raw.model || session?.model || '').trim();
+      const at = Number(raw.created) ? Number(raw.created) * 1000 : (Number(session?.startedAt) || 0);
+      const price = resolveModelPrice(model, priceCfg, null, { vendor, at });
+      if (price.unpriced !== true) continue;
+      const key = modelLabel(vendor, model);
+      const current = counts.get(key) || { key, calls: 0, tokens: 0 };
+      current.calls += 1;
+      current.tokens += promptTokens + completionTokens;
+      counts.set(key, current);
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.calls - a.calls);
 }
 
 // ───────────────────────── 未定义调用扫描（原 scan-undefined-calls.py） ─────────────────────────
@@ -885,6 +925,23 @@ async function auditServer(args) {
     try { sessionCount = fs.readdirSync(sessionsDir).length; } catch { sessionCount = 0; }
   }
   noteLine(`会话文件: ${sessionCount} 个`);
+
+  // 价格缺口（只读）：出现过的模型里，哪些没有价格。
+  // 判价逻辑与用量页一致（含账户口径与"按当前模型估算"），所以这里报出来的
+  // 是真正没算进成本的那些调用 —— 免得用户过几天才发现成本少算了。
+  section('7.1 价格缺口（模型有没有价）');
+  const gaps = priceGapReport(cfg);
+  if (gaps === null) skipLine('没有会话留档，无法判定');
+  else if (!gaps.length) okLine('出现过的模型都有价格（或已按当前模型估算）');
+  else {
+    const calls = gaps.reduce((sum, g) => sum + g.calls, 0);
+    const tokens = gaps.reduce((sum, g) => sum + g.tokens, 0);
+    badWarn(`有 ${gaps.length} 个模型没有价格：`
+      + gaps.slice(0, 5).map((g) => `${g.key}（${g.calls} 次）`).join('、')
+      + `${gaps.length > 5 ? ' 等' : ''}`);
+    noteLine(`  → 共 ${calls} 次调用 / ${tokens} token 没算进成本`);
+    noteLine('  → 到控制台「设置 → 模型价格」定价，或打开"按当前模型估算"（默认已开）');
+  }
 
   section('8. 运行态');
   if (!consoleInfo.token) skipLine('未设置 QQ_AGENT_CONSOLE_TOKEN，且 config.json 无 server.token，跳过控制台状态接口');

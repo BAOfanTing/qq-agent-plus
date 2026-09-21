@@ -290,6 +290,42 @@ test('costModeOf 归一化', () => {
   assert.deepEqual(prices.costModeOf({ api: { costMode: '乱填的' } }), { mode: 'official', multiplier: 1, monthlyFee: 0 });
 });
 
+/* ── 带时间区间的别名：历史成本要按当时的规则算 ── */
+
+test('aliasTargetAt：区间内/区间外/过期/无时间上下文', () => {
+  const ranged = { to: 'flash', from: '2026-09-14T12:00:00+08:00' };
+  const from = Date.parse('2026-09-14T12:00:00+08:00');
+  assert.equal(prices.aliasTargetAt(ranged, from - 1000), '', '区间之前不生效');
+  assert.equal(prices.aliasTargetAt(ranged, from + 1000), 'flash', '区间之后生效');
+  assert.equal(prices.aliasTargetAt(ranged, 0), 'flash', '没有时间上下文（界面预览）时按"还没过期"处理');
+
+  const expired = { to: 'old-flash', until: '2026-01-01T00:00:00+08:00' };
+  assert.equal(prices.aliasTargetAt(expired, Date.parse('2026-06-01T00:00:00+08:00')), '', '过期别名不用');
+  assert.equal(prices.aliasTargetAt(expired, 0), '', '没有时间上下文时，已过期的别名也不该用');
+
+  assert.equal(prices.aliasTargetAt('plain', 0), 'plain', '字符串形式永远生效');
+  assert.equal(prices.aliasTargetAt({ to: '' }, 0), '');
+  assert.equal(prices.aliasTargetAt(null, 0), '');
+});
+
+test('内置的时间区间别名：deepseek-v4-pro 在 2026-09-14 之后按 Flash 价算', () => {
+  const before = prices.resolveOfficialPrice('deepseek-v4-pro', { at: Date.parse('2026-09-10T10:00:00+08:00') });
+  assert.equal(before.matched, 'deepseek-v4-pro', '路由之前用 v4-pro 自己的条目');
+  assert.equal(before.in, 4.5);
+
+  const after = prices.resolveOfficialPrice('deepseek-v4-pro', { at: Date.parse('2026-09-18T10:00:00+08:00') });
+  assert.equal(after.matched, 'deepseek-flash', '路由之后按 Flash 价');
+  assert.equal(after.in, 1);
+  assert.match(after.via, /该时段的别名规则/);
+
+  // 逐条计价时也要按各自发生时间判：同一批行里前后两天的价不一样
+  const cfg = { api: { useOfficialPrice: true } };
+  const oldRow = priceOf('deepseek-v4-pro', cfg, { vendor: '', at: Date.parse('2026-09-10T10:00:00+08:00') });
+  const newRow = priceOf('deepseek-v4-pro', cfg, { vendor: '', at: Date.parse('2026-09-18T10:00:00+08:00') });
+  assert.equal(oldRow.in, 4.5);
+  assert.equal(newRow.in, 1);
+});
+
 test('自定义价与全局兜底单价都算"已定价"', () => {
   const custom = priceOf('my-private-model', {
     api: { useOfficialPrice: false, modelPrices: { 'my-private-model': { in: 2, out: 8 } } }
