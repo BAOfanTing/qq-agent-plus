@@ -7,8 +7,8 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-daily-moments-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 
-const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
-const { DailyMomentsManager, nextDailyMomentAt, momentIntervalDue } = await import('../src/daily-moments.js');
+const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
+const { DailyMomentsManager, nextDailyMomentAt, momentIntervalDue } = await import('../src/features/daily-moments.js');
 
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 

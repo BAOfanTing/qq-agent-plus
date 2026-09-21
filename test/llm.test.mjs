@@ -6,8 +6,8 @@ import {
   chatCompletion,
   chatCompletionWithRetry,
   isRetryableError
-} from '../src/llm.js';
-import { DEFAULT_CONFIG, setRuntimeConfig } from '../src/config.js';
+} from '../src/llm/llm.js';
+import { DEFAULT_CONFIG, setRuntimeConfig } from '../src/core/config.js';
 
 describe('LLM client', () => {
   it('reads cached input tokens from supported provider response shapes', () => {

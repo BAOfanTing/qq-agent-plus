@@ -7,8 +7,8 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-model-prices-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 
-const prices = await import('../src/model-prices.js');
-const feed = await import('../src/price-feed.js');
+const prices = await import('../src/pricing/model-prices.js');
+const feed = await import('../src/pricing/price-feed.js');
 
 after(() => {
   prices.setRemotePrices({});   // 还原全局状态，别影响其他用例

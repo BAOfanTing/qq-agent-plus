@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { buildToolDefs, executeTool } = await import('../src/tools.js');
+const { buildToolDefs, executeTool } = await import('../src/tools/tools.js');
 
 function tool(name) {
   return buildToolDefs().find((entry) => entry.name === name);

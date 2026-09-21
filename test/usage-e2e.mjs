@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import { createApp } from '../src/app.js';
+import { createApp } from '../src/console/app.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');

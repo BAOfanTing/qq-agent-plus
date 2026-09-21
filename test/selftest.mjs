@@ -287,7 +287,7 @@ async function main() {
   };
   fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify(cfg));
 
-  const { createApp } = await import('../src/app.js');
+  const { createApp } = await import('../src/console/app.js');
   const app = createApp({ log: () => {} });
   await app.start();
 
@@ -1632,7 +1632,7 @@ async function main() {
 
   // ── 场景 28：出错自动重试（可重试错误重试两次，4xx 不重试）──
   {
-    const { isRetryableError } = await import('../src/llm.js');
+    const { isRetryableError } = await import('../src/llm/llm.js');
     // 可重试：网络/超时/5xx/429
     for (const msg of [
       '模型请求失败：fetch failed',
@@ -1657,7 +1657,7 @@ async function main() {
     }
     // 重试次数上限：持续 500 应尝试 3 次（1 次 + 2 次重试）后抛错
     // 注意：每次子测试前清空 script，否则上一测试没消耗完的脚本项会污染下一次调用
-    const { chatCompletionWithRetry } = await import('../src/llm.js');
+    const { chatCompletionWithRetry } = await import('../src/llm/llm.js');
     llm.state.forceStatus = [500, 500, 500];   // 连续三次 500
     const before = llm.state.requests.length;
     let threw = false;
@@ -1692,7 +1692,7 @@ async function main() {
 
   // ── 场景 29：响应档位（是否响应 + 各档条数独立）──
   {
-    const { resolveContextTier, isAtMe, hitKeyword } = await import('../src/prompt.js');
+    const { resolveContextTier, isAtMe, hitKeyword } = await import('../src/llm/prompt.js');
     const OPT = { selfNickname: '小鲸鱼', botName: '小鲸鱼', selfId: '3113678561' };
     // 各档条数刻意设成不同值，便于验证"触发原因决定条数"
     const CFG = {
@@ -1853,8 +1853,8 @@ async function main() {
 
   // ── 场景 30：群名 / 存档倒序 / 表情包频率 ──
   {
-    const { buildUserPrompt, buildSystemPrompt } = await import('../src/prompt.js');
-    const { setRuntimeConfig, getConfig } = await import('../src/config.js');
+    const { buildUserPrompt, buildSystemPrompt } = await import('../src/llm/prompt.js');
+    const { setRuntimeConfig, getConfig } = await import('../src/core/config.js');
 
     // 群名：/api/chats 每个条目都带 chatName 字段（拿不到时为空串）
     const cRes = await (await fetch(`http://127.0.0.1:${cfg.server.port}/api/chats`)).json();
@@ -1924,7 +1924,7 @@ async function main() {
 
   // ── 场景 32：未命中标记已读（档位控制是否响应的核心机制）──
   {
-    const { ChatStore } = await import('../src/store.js');
+    const { ChatStore } = await import('../src/core/store.js');
     const fs = await import('node:fs');
     const path = await import('node:path');
     const store2 = new ChatStore(100);
@@ -1959,7 +1959,7 @@ async function main() {
 
   // ── 场景 33：响应档位滑条（位置↔档位/概率）──
   {
-    const { sliderToTier, tierToSlider } = await import('../src/tier-slider.js');
+    const { sliderToTier, tierToSlider } = await import('../src/core/tier-slider.js');
 
     // 分区边界
     for (const [pos, want] of [[0, 1], [5, 1], [10, 1], [15, 2], [20, 2], [30, 3], [55, 3], [90, 3], [95, 4], [100, 4]]) {
@@ -1993,7 +1993,7 @@ async function main() {
     assert.equal(sliderToTier(NaN).tier, 4, 'NaN 应回落到 4 档');
 
     // 后端权威派生：只传滑条位置，后端应算出档位与概率
-    const { updateConfig } = await import('../src/config.js');
+    const { updateConfig } = await import('../src/core/config.js');
     const fs2 = await import('node:fs');
     const configPath = path.join(dataDir, 'config.json');
     const backup = fs2.readFileSync(configPath, 'utf8');
@@ -2048,8 +2048,8 @@ async function main() {
 
   // ── 场景 35：远程价格表（校验/规范化 + 覆盖优先级 + 接口）──
   {
-    const { normalizePriceFeed, refreshPriceFeed, priceFeedStatus } = await import('../src/price-feed.js');
-    const { resolveOfficialPrice, setRemotePrices, listOfficialPrices } = await import('../src/model-prices.js');
+    const { normalizePriceFeed, refreshPriceFeed, priceFeedStatus } = await import('../src/pricing/price-feed.js');
+    const { resolveOfficialPrice, setRemotePrices, listOfficialPrices } = await import('../src/pricing/model-prices.js');
 
     // ① 四种外形都能解析
     const bareMap = { 'test-feed-model': { in: 9, out: 99, cached: 0.9 } };
@@ -2138,7 +2138,7 @@ async function main() {
       mid: 9400, ts: Date.now(), senderId: '115', senderName: '孙七',
       text: '[转发消息 id=oldExpiredResId]'
     });
-    const { buildToolDefs } = await import('../src/tools.js');
+    const { buildToolDefs } = await import('../src/tools/tools.js');
     const tool = buildToolDefs().find((t) => t.name === 'read_forward');
     assert.ok(tool, 'read_forward 工具必须存在');
     const ctx = { chatKey: 'group:456', store: app.store, onebot: app.onebot };

@@ -4,7 +4,7 @@
 //   node test/local/test-sticker-lookup.mjs
 //
 // 说明：纯函数用例，不读写任何数据目录、不连网，直接用内存里的条目数组。
-const { findSticker } = await import(new URL('../../src/stickers.js', import.meta.url).href);
+const { findSticker } = await import(new URL('../../src/onebot/stickers.js', import.meta.url).href);
 
 const entries = [
   { id: 'collected_1', desc: '自动收藏 · 王八蛋的爸子', localNote: '躺平猫', tags: ['猫'], hidden: false },

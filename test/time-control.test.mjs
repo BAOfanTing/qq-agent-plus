@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_TIME_CONTROL, normalizeTimeControl, timeControlState } from '../src/time-control.js';
+import { DEFAULT_TIME_CONTROL, normalizeTimeControl, timeControlState } from '../src/core/time-control.js';
 
 const offPeak = { ...DEFAULT_TIME_CONTROL, enabled: true };
 const at = (time, config = offPeak, chat = '') =>

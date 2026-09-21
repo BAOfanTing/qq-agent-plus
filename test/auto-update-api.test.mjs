@@ -7,8 +7,8 @@ import path from 'node:path';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-auto-update-api-'));
 process.env.QQ_AGENT_DATA_DIR = dataDir;
-const { DEFAULT_CONFIG, updateConfig } = await import('../src/config.js');
-const { createApp } = await import('../src/app.js');
+const { DEFAULT_CONFIG, updateConfig } = await import('../src/core/config.js');
+const { createApp } = await import('../src/console/app.js');
 const { consumeAutoUpdateRequest } = await import('../src/auto-update.js');
 
 async function freePort() {

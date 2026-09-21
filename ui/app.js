@@ -4526,7 +4526,7 @@ async function loadSettings() {
 /** 设置页「远程价格表」状态行：来源（在线/缓存/内置）、时间、条目数、错误。 */
 /**
  * 渠道价目表列表（设置页）：每个渠道的地址、条数、上次时间、错误 + 拉取/删除。
- * 数据来自 /api/model-prices 的 channelFeeds（后端 src/channel-prices.js）。
+ * 数据来自 /api/model-prices 的 channelFeeds（后端 src/pricing/channel-prices.js）。
  */
 function renderChannelFeeds() {
   const box = $('#channel-feeds');
@@ -4750,7 +4750,7 @@ function renderPriceFeedStatus() {
 /**
  * 在内置价格表里匹配模型（前端版）。
  *
- * 前端是无模块单文件，拿不到 src/model-prices.js 的导出，所以这里实现一份
+ * 前端是无模块单文件，拿不到 src/pricing/model-prices.js 的导出，所以这里实现一份
  * 与后端 matchModelId 完全相同的逻辑（改后端时这里要一起改）：
  *   候选名（原样 → 去渠道前缀 → 去叫法后缀/日期后缀 → 点号归并）
  *   → 别名 → 表内精确 → 前缀匹配（取最长）
@@ -7540,7 +7540,7 @@ function clampInt(raw, min, max, fallback) {
 /*
  * 滑条换算（前端显示用）。
  *
- * ⚠️ 必须与 src/tier-slider.js 保持完全一致 —— 后端保存配置时会用它
+ * ⚠️ 必须与 src/core/tier-slider.js 保持完全一致 —— 后端保存配置时会用它
  *    **重新权威换算**档位与概率，所以前端即使算错也不会影响实际行为；
  *    但两边不一致会让"界面显示的档位"和"实际生效的档位"对不上，造成困惑。
  *    ui/app.js 是普通 script（非 ES module），无法 import，只能镜像一份。

@@ -9,20 +9,20 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-identity-store-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 process.on('exit', () => fs.rmSync(root, { recursive: true, force: true }));
 
-const { ChatStore } = await import('../src/store.js');
+const { ChatStore } = await import('../src/core/store.js');
 const {
   IdentityStore,
   identityDatabasePath,
   readLegacyIdentityMemories
-} = await import('../src/identity-store.js');
-const { IdentityPilotManager } = await import('../src/identity-pilot.js');
+} = await import('../src/identity/identity-store.js');
+const { IdentityPilotManager } = await import('../src/identity/identity-pilot.js');
 
 function fileDigest(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
 test('identity pilot is promoted: legacy enabled:false no longer gates it', async (t) => {
-  // 稳定特性策略（src/stable-feature-policy.js）把身份基建转正：
+  // 稳定特性策略（src/core/stable-feature-policy.js）把身份基建转正：
   // config.js 的 identityPilotEnabled() 恒为 true，旧的 enabled:false 只会
   // 留在原始配置里被忽略，不再阻止建库或索引。
   const dir = fs.mkdtempSync(path.join(root, 'promoted-'));

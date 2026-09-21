@@ -39,7 +39,7 @@ test('auto update uses global admin once migrated and only falls back for pre-ad
 });
 
 test('retired slang research has no canonical owner or tuning configuration', async () => {
-  const mod = await import(`../src/stable-feature-policy.js?test=${Date.now()}`);
+  const mod = await import(`../src/core/stable-feature-policy.js?test=${Date.now()}`);
   const cfg = {
     admin: { ownerUin: '12345678' },
     slangPilot: {

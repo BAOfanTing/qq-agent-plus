@@ -22,7 +22,7 @@ fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
   allow: { private: ['100000001'] },
   allowAllWhenEmpty: true
 }));
-const { SendQueue } = await import(new URL('../../src/sender.js', import.meta.url).href);
+const { SendQueue } = await import(new URL('../../src/onebot/sender.js', import.meta.url).href);
 
 function makeStore() {
   const sent = [];

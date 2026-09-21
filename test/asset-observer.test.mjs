@@ -14,10 +14,10 @@ const {
   buildSlangContextForChat,
   readMemoryAssetSummary,
   readSlangAssets
-} = await import('../src/asset-observer.js');
-const { IdentityStore } = await import('../src/identity-store.js');
-const { MemoryStore } = await import('../src/memory.js');
-const { StickerManager } = await import('../src/sticker-manager.js');
+} = await import('../src/console/asset-observer.js');
+const { IdentityStore } = await import('../src/identity/identity-store.js');
+const { MemoryStore } = await import('../src/memory/memory.js');
+const { StickerManager } = await import('../src/onebot/sticker-manager.js');
 
 function digest(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');

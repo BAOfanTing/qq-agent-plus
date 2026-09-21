@@ -1,6 +1,6 @@
 # 内置模型价格表（完整导出）
 
-> 与 `src/model-prices.js` 同步，数据核对时间 2026-09-11。
+> 与 `src/pricing/model-prices.js` 同步，数据核对时间 2026-09-11。
 > 单位：**元 / 每百万 token**。美元价按 1 USD ≈ 7.2 CNY 换算。
 
 共 **140** 条：**42** 条官方直取（official），**98** 条二手折算（derived）。

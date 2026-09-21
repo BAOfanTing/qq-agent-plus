@@ -22,7 +22,7 @@ fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ qzoneIntera
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const repoRoot = path.resolve(here, '..', '..');
 const { QzoneInteractionManager } = await import(
-  pathToFileURL(path.join(repoRoot, 'src', 'qzone-interactions.js')).href
+  pathToFileURL(path.join(repoRoot, 'src', 'features', 'qzone-interactions.js')).href
 );
 
 const realSetTimeout = globalThis.setTimeout;

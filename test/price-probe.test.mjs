@@ -7,10 +7,10 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-price-probe-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 
-const probe = await import('../src/price-probe.js');
-const channel = await import('../src/channel-prices.js');
-const prices = await import('../src/model-prices.js');
-const feed = await import('../src/price-feed.js');
+const probe = await import('../src/pricing/price-probe.js');
+const channel = await import('../src/pricing/channel-prices.js');
+const prices = await import('../src/pricing/model-prices.js');
+const feed = await import('../src/pricing/price-feed.js');
 
 after(() => {
   prices.setChannelPrices('demo-渠道', null);

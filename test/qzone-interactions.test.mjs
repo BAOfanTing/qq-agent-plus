@@ -9,14 +9,14 @@ process.env.QQ_AGENT_DATA_DIR = root;
 const nowMs = Date.parse('2026-09-12T06:00:00Z');
 const nowSec = Math.floor(nowMs / 1000);
 
-const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
+const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
 const {
   parseQzoneFeed,
   parseQzoneRawComments,
   QzoneWebClient
-} = await import('../src/qzone-feed.js');
-const { QzoneInteractionManager } = await import('../src/qzone-interactions.js');
-const { buildQzoneInteractionPrompt } = await import('../src/qzone-interaction-prompt.js');
+} = await import('../src/onebot/qzone-feed.js');
+const { QzoneInteractionManager } = await import('../src/features/qzone-interactions.js');
+const { buildQzoneInteractionPrompt } = await import('../src/llm/qzone-interaction-prompt.js');
 
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 

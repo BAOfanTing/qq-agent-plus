@@ -6,10 +6,10 @@ import path from 'node:path';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-moment-publish-'));
 process.env.QQ_AGENT_DATA_DIR = root;
-const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
-const { DailyMomentsManager } = await import('../src/daily-moments.js');
-const { buildMomentSystemPrompt, momentPersonaHash } = await import('../src/moment-prompt.js');
-const { SessionRegistry } = await import('../src/sessions.js');
+const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
+const { DailyMomentsManager } = await import('../src/features/daily-moments.js');
+const { buildMomentSystemPrompt, momentPersonaHash } = await import('../src/llm/moment-prompt.js');
+const { SessionRegistry } = await import('../src/core/sessions.js');
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const now = Date.parse('2026-09-12T08:00:00Z');

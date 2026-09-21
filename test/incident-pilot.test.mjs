@@ -7,7 +7,7 @@ import { test } from 'node:test';
 const {
   IncidentPilotManager,
   incidentDatabasePath
-} = await import('../src/incident-pilot.js');
+} = await import('../src/pilots/incident-pilot.js');
 
 function fixture(t, patch = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-incident-pilot-'));

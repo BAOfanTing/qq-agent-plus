@@ -6,14 +6,14 @@ import path from 'node:path';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-time-control-'));
 process.env.QQ_AGENT_DATA_DIR = root;
-const { DEFAULT_CONFIG, getConfig, setRuntimeConfig, updateConfig } = await import('../src/config.js');
-const { createApp } = await import('../src/app.js');
-const { chatCompletion, chatCompletionWithRetry } = await import('../src/llm.js');
-const { canRun } = await import('../src/access.js');
-const { withTimeScope, watchTimeWindow } = await import('../src/time-gate.js');
-const { testModelChat } = await import('../src/providers.js');
-const { detectModelVision } = await import('../src/vision-scan.js');
-const { deepSeekSearch, customSearch } = await import('../src/web-search.js');
+const { DEFAULT_CONFIG, getConfig, setRuntimeConfig, updateConfig } = await import('../src/core/config.js');
+const { createApp } = await import('../src/console/app.js');
+const { chatCompletion, chatCompletionWithRetry } = await import('../src/llm/llm.js');
+const { canRun } = await import('../src/core/access.js');
+const { withTimeScope, watchTimeWindow } = await import('../src/core/time-gate.js');
+const { testModelChat } = await import('../src/core/providers.js');
+const { detectModelVision } = await import('../src/llm/vision-scan.js');
+const { deepSeekSearch, customSearch } = await import('../src/llm/web-search.js');
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 function fixture(t, mode = 'legacy') {

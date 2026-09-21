@@ -6,7 +6,7 @@ import {
   FriendRequestProtocolError,
   getFriendRequestSetting,
   sendFriendRequestViaSnowLuma
-} from '../src/friend-request-protocol.js';
+} from '../src/identity/friend-request-protocol.js';
 
 function encodeStruct(fields) {
   return jce.encode([jce.encodeNested(fields)]);

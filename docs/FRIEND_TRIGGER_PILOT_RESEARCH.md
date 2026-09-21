@@ -33,18 +33,18 @@
 
 | 位置 | 现状 | 对方案的影响 |
 | --- | --- | --- |
-| `src/prompt.js:125-146` | `memoryRules()` 常驻交友指引 | 新模式需移除该指引 |
-| `src/tools.js:468-524` | 普通 Agent 可调用 `friend_request_propose` | 新模式需关闭这条自由提名入口 |
-| `src/identity-store.js:1058-1129` | 检查已出现、好友状态、累计消息数、候选与冷却 | 可复用状态机，但资格口径要拆开 |
-| `src/identity-store.js:603-642` | `message_count` 随用户发言累计 | 当前“50 条”不是与机器人交流 50 次 |
-| `src/orchestrator.js:245-296,539-681` | 多次预判、防抖聚批、消息租约、失败重试 | 不可在预判中抽签，不可只取批次第一人 |
-| `src/orchestrator.js:964-1000` | System 和工具列表一起参与前缀 hash | 临时切换工具会关闭原生命周期 |
-| `src/orchestrator.js:1031-1088,1321` | 后续批次增量追加并保存 transcript | 内部交友材料不应进入群聊长上下文 |
-| `src/store.js:776-839` | 有最近消息、消息定位、身份活动索引 | 缺按人筛选并关联机器人回复的有界检索接口 |
-| `src/app.js:428-496` | 消息去重后索引身份；引用保留作者 ID | 可取得可靠消息作者及部分直接互动证据 |
-| `src/app.js:626-665` | 拍一拍是合成消息，可能无平台消息 ID | 首期排除，不能与普通消息等价抽签 |
-| `src/identity-pilot.js:75-121` | 初次好友列表失败后仍允许身份索引启动 | 新资格检查要区分“非好友”和“好友状态未知” |
-| `src/llm.js:113-129` | 通用模型调用默认会额外重试两次 | 单次评估不能不加说明地变成三次网络请求 |
+| `src/llm/prompt.js:125-146` | `memoryRules()` 常驻交友指引 | 新模式需移除该指引 |
+| `src/tools/tools.js:468-524` | 普通 Agent 可调用 `friend_request_propose` | 新模式需关闭这条自由提名入口 |
+| `src/identity/identity-store.js:1058-1129` | 检查已出现、好友状态、累计消息数、候选与冷却 | 可复用状态机，但资格口径要拆开 |
+| `src/identity/identity-store.js:603-642` | `message_count` 随用户发言累计 | 当前“50 条”不是与机器人交流 50 次 |
+| `src/core/orchestrator.js:245-296,539-681` | 多次预判、防抖聚批、消息租约、失败重试 | 不可在预判中抽签，不可只取批次第一人 |
+| `src/core/orchestrator.js:964-1000` | System 和工具列表一起参与前缀 hash | 临时切换工具会关闭原生命周期 |
+| `src/core/orchestrator.js:1031-1088,1321` | 后续批次增量追加并保存 transcript | 内部交友材料不应进入群聊长上下文 |
+| `src/core/store.js:776-839` | 有最近消息、消息定位、身份活动索引 | 缺按人筛选并关联机器人回复的有界检索接口 |
+| `src/console/app.js:428-496` | 消息去重后索引身份；引用保留作者 ID | 可取得可靠消息作者及部分直接互动证据 |
+| `src/console/app.js:626-665` | 拍一拍是合成消息，可能无平台消息 ID | 首期排除，不能与普通消息等价抽签 |
+| `src/identity/identity-pilot.js:75-121` | 初次好友列表失败后仍允许身份索引启动 | 新资格检查要区分“非好友”和“好友状态未知” |
+| `src/llm/llm.js:113-129` | 通用模型调用默认会额外重试两次 | 单次评估不能不加说明地变成三次网络请求 |
 
 现有管理员审批、`dispatching/sent/held_unknown/accepted` 状态和入站申请审批均保留。
 

@@ -127,7 +127,7 @@ try {
 
   // 直接用后端的 DEFAULT_CONFIG 做桩 —— 不要手敲字段名，
   // 手敲容易猜错层级（我刚把 minGapMs 放错层，误报了一个不存在的问题）。
-  const { DEFAULT_CONFIG } = await import('../src/config.js');
+  const { DEFAULT_CONFIG } = await import('../src/core/config.js');
   const cfg = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   // 再叠加上本轮关心的档位字段（默认值里没有 contextSliderPos）
   cfg.store = {
@@ -1241,7 +1241,7 @@ try {
     // 没有任何测试真正调用它，所以删了也没人发现。这是测试盲区。
     console.log('\n=== 用量页加载（loadUsageView）===');
     {
-      const { DEFAULT_CONFIG: DC2 } = await import('../src/config.js');
+      const { DEFAULT_CONFIG: DC2 } = await import('../src/core/config.js');
       const loadUsage = ctx.loadUsageView || sandbox.loadUsageView;
       if (typeof loadUsage !== 'function') {
         fail++; console.log('  FAIL loadUsageView 未定义（用量页会一直空白）');
@@ -1331,7 +1331,7 @@ try {
 
           // ★ 用量页请求的接口必须真实存在（不能在测试里 mock 掉 404）
           //   上一轮就是凭空捏造了 /api/usage/prices，测试绿、线上白屏。
-          const { createApp: createApp2 } = await import('../src/app.js');
+          const { createApp: createApp2 } = await import('../src/console/app.js');
           const http = await import('node:http');
           const realApp = createApp2({ log: () => {} });
           const realPort = await realApp.start(40991);

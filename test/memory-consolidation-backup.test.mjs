@@ -6,8 +6,8 @@ import { after, test } from 'node:test';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-memory-backup-'));
 process.env.QQ_AGENT_DATA_DIR = dataDir;
-const { backupPersonBeforeConsolidation } = await import('../src/memory-consolidation-backup.js');
-const { MemoryStore } = await import('../src/memory.js');
+const { backupPersonBeforeConsolidation } = await import('../src/memory/memory-consolidation-backup.js');
+const { MemoryStore } = await import('../src/memory/memory.js');
 
 after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
 

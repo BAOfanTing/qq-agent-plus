@@ -11,10 +11,10 @@ const {
   estimateNextPromptTokens,
   randomWakeDelay,
   triggerKindForTier
-} = await import('../src/orchestrator.js');
-const { ChatStore } = await import('../src/store.js');
-const { SessionRegistry } = await import('../src/sessions.js');
-const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/config.js');
+} = await import('../src/core/orchestrator.js');
+const { ChatStore } = await import('../src/core/store.js');
+const { SessionRegistry } = await import('../src/core/sessions.js');
+const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
 
 describe('Orchestrator', () => {
   it('draws the debounce delay inside the configured range', () => {

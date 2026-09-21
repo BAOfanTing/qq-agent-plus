@@ -7,11 +7,11 @@
 //       但会在 /tmp/qz-behavior/ 下写一个状态文件。不要把它指向生产数据目录。
 import fs from 'node:fs';
 
-const { parseInlineToolCalls, resolveToolCalls } = await import(new URL('../../src/inline-tools.js', import.meta.url).href);
-const { parseRelationshipResponse } = await import(new URL('../../src/relationship-pilot.js', import.meta.url).href);
-const { parseFriendReview } = await import(new URL('../../src/identity-pilot-core.js', import.meta.url).href);
-const { parseManualFriendReview } = await import(new URL('../../src/identity-pilot.js', import.meta.url).href);
-const { QzoneInteractionManager } = await import(new URL('../../src/qzone-interactions.js', import.meta.url).href);
+const { parseInlineToolCalls, resolveToolCalls } = await import(new URL('../../src/tools/inline-tools.js', import.meta.url).href);
+const { parseRelationshipResponse } = await import(new URL('../../src/pilots/relationship-pilot.js', import.meta.url).href);
+const { parseFriendReview } = await import(new URL('../../src/identity/identity-pilot-core.js', import.meta.url).href);
+const { parseManualFriendReview } = await import(new URL('../../src/identity/identity-pilot.js', import.meta.url).href);
+const { QzoneInteractionManager } = await import(new URL('../../src/features/qzone-interactions.js', import.meta.url).href);
 
 let pass = 0, fail = 0;
 const check = (name, ok, extra = '') => {

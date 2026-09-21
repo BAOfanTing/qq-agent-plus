@@ -11,7 +11,7 @@ if (!process.env.QQ_AGENT_DATA_DIR || !fs.existsSync(process.env.QQ_AGENT_DATA_D
   process.exit(2);
 }
 
-const { segmentsToText } = await import(new URL('../../src/onebot.js', import.meta.url).href);
+const { segmentsToText } = await import(new URL('../../src/onebot/onebot.js', import.meta.url).href);
 
 const SELF = '10000001';
 

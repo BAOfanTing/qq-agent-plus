@@ -8,9 +8,9 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-manual-friend-review-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 process.env.NODE_TEST_CONTEXT = '1';
 
-const { ChatStore } = await import('../src/store.js');
-const { SessionRegistry } = await import('../src/sessions.js');
-const { IdentityPilotManager } = await import('../src/identity-pilot.js');
+const { ChatStore } = await import('../src/core/store.js');
+const { SessionRegistry } = await import('../src/core/sessions.js');
+const { IdentityPilotManager } = await import('../src/identity/identity-pilot.js');
 
 function config() {
   return {

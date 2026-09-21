@@ -8,10 +8,10 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-stable-infra-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 process.env.NODE_TEST_CONTEXT = '1';
 
-const { DEFAULT_CONFIG } = await import('../src/config.js');
-const { ChatStore } = await import('../src/store.js');
-const { IdentityPilotManager } = await import('../src/identity-pilot.js');
-const { IncidentPilotManager } = await import('../src/incident-pilot.js');
+const { DEFAULT_CONFIG } = await import('../src/core/config.js');
+const { ChatStore } = await import('../src/core/store.js');
+const { IdentityPilotManager } = await import('../src/identity/identity-pilot.js');
+const { IncidentPilotManager } = await import('../src/pilots/incident-pilot.js');
 
 test('identity, automatic friends and incident infrastructure start without an approval owner', async (t) => {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

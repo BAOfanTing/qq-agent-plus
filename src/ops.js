@@ -22,7 +22,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { resolveModelPrice, modelLabel, setRemotePrices, setChannelPrices } from './model-prices.js';
+import { resolveModelPrice, modelLabel, setRemotePrices, setChannelPrices } from './pricing/model-prices.js';
 
 const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const IS_WINDOWS = process.platform === 'win32';
@@ -265,7 +265,7 @@ function sqliteIntegrity(file) {
  * 把磁盘上的价格表缓存注入查价层（只读，不发网络请求）。
  *   - data/price-feed-cache.json → 远程价格表（项目/社区公共参考价）
  *   - data/channel-prices.json   → 每渠道价目表（只注入 config 里还配着的渠道）
- * 与服务进程启动时的行为一致（src/price-feed.js / src/channel-prices.js 也是先吃缓存）。
+ * 与服务进程启动时的行为一致（src/pricing/price-feed.js / src/pricing/channel-prices.js 也是先吃缓存）。
  */
 function injectCachedPriceTables(dataDir, priceCfg) {
   try {
@@ -466,15 +466,16 @@ function scanDirectory(dir, ignore) {
   const lines = [];
   let total = 0;
   if (!exists(dir)) return { lines, total, files: 0 };
-  const files = fs.readdirSync(dir).filter((name) => name.endsWith('.js')).sort();
+  // 递归（src/ 按领域分了子目录）：漏掉子目录会让这个门禁静默只扫一部分代码
+  const files = findJsFiles(dir);
   for (const name of files) {
-    const missing = scanSourceFile(path.join(dir, name), ignore);
+    const missing = scanSourceFile(name, ignore);
     if (missing.size === 0) continue;
     total += missing.size;
     const items = [...missing.entries()]
       .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
       .map(([key, line]) => `${key}(第${line}行)`);
-    lines.push(`${name} → ${items.join(', ')}`);
+    lines.push(`${path.relative(dir, name).split(path.sep).join('/')} → ${items.join(', ')}`);
   }
   return { lines, total, files: files.length };
 }
@@ -723,30 +724,30 @@ function auditHost(args) {
 // ─────────────────────────── 服务体检（原 audit-server.sh） ───────────────────────────
 
 const AUDIT_MARKERS = [
-  ['normalizeMid 定义', 1, 'src/tools-core.js', '^function normalizeMid\\(value\\)'],
-  ['normalizeMid 调用点', 3, 'src/tools-core.js', 'replyToMessageId: normalizeMid\\(args'],
-  ['store.findByMid 归一化', 1, 'src/store.js', 'normalizeMid\\(mid\\)'],
-  ['贴纸同步防清空守卫', 1, 'src/stickers.js', 'if \\(!fetchedIds\\.size\\) return out'],
-  ['主动间隔守卫', 1, 'src/orchestrator.js', 'minGapMs'],
-  ['主动判定落盘', 1, 'src/orchestrator.js', 'writeProactiveLastAttempt\\(nowTick\\)'],
-  ['多窗口工具函数', 1, 'src/orchestrator.js', 'function proactiveWindowState'],
-  ['补话安排', 1, 'src/orchestrator.js', 'maybeScheduleFollowUp\\(chatKey'],
-  ['重连补课', 2, 'src/app.js', 'catchUpMissedMessages|scheduleCatchUp'],
-  ['空间互动失败退避', 2, 'src/qzone-interactions.js', 'failStreak|backoff'],
-  ['发送网络级重试', 1, 'src/sender.js', 'isTransient|transient'],
-  ['QQ表情标签', 1, 'src/onebot.js', 'QQ表情'],
-  ['看图先读情绪', 1, 'src/prompt.js', '看图先读情绪'],
-  ['表情编号≠stickerId 提醒', 1, 'src/prompt.js', '别拿这个编号去 get_sticker_image'],
-  ['发言唯一通道提示', 1, 'src/prompt.js', '发言的唯一通道'],
-  ['收尾自检段', 2, 'src/prompt.js', '沉默就是零输出|每次结束前必读'],
-  ['多气泡鼓励', 1, 'src/prompt.js', '别把一轮压成一句点评'],
-  ['一轮说完', 1, 'src/prompt.js', '有想法就一轮里说完'],
-  ['贴纸选图提示', 1, 'src/stickers.js', '选图很简单'],
-  ['审核拦截重试', 1, 'src/llm.js', '审核拦截整次请求'],
-  ['兜底模型接入', 1, 'src/llm.js', '改用兜底模型'],
+  ['normalizeMid 定义', 1, 'src/tools/tools-core.js', '^function normalizeMid\\(value\\)'],
+  ['normalizeMid 调用点', 3, 'src/tools/tools-core.js', 'replyToMessageId: normalizeMid\\(args'],
+  ['store.findByMid 归一化', 1, 'src/core/store.js', 'normalizeMid\\(mid\\)'],
+  ['贴纸同步防清空守卫', 1, 'src/onebot/stickers.js', 'if \\(!fetchedIds\\.size\\) return out'],
+  ['主动间隔守卫', 1, 'src/core/orchestrator.js', 'minGapMs'],
+  ['主动判定落盘', 1, 'src/core/orchestrator.js', 'writeProactiveLastAttempt\\(nowTick\\)'],
+  ['多窗口工具函数', 1, 'src/core/orchestrator.js', 'function proactiveWindowState'],
+  ['补话安排', 1, 'src/core/orchestrator.js', 'maybeScheduleFollowUp\\(chatKey'],
+  ['重连补课', 2, 'src/console/app.js', 'catchUpMissedMessages|scheduleCatchUp'],
+  ['空间互动失败退避', 2, 'src/features/qzone-interactions.js', 'failStreak|backoff'],
+  ['发送网络级重试', 1, 'src/onebot/sender.js', 'isTransient|transient'],
+  ['QQ表情标签', 1, 'src/onebot/onebot.js', 'QQ表情'],
+  ['看图先读情绪', 1, 'src/llm/prompt.js', '看图先读情绪'],
+  ['表情编号≠stickerId 提醒', 1, 'src/llm/prompt.js', '别拿这个编号去 get_sticker_image'],
+  ['发言唯一通道提示', 1, 'src/llm/prompt.js', '发言的唯一通道'],
+  ['收尾自检段', 2, 'src/llm/prompt.js', '沉默就是零输出|每次结束前必读'],
+  ['多气泡鼓励', 1, 'src/llm/prompt.js', '别把一轮压成一句点评'],
+  ['一轮说完', 1, 'src/llm/prompt.js', '有想法就一轮里说完'],
+  ['贴纸选图提示', 1, 'src/onebot/stickers.js', '选图很简单'],
+  ['审核拦截重试', 1, 'src/llm/llm.js', '审核拦截整次请求'],
+  ['兜底模型接入', 1, 'src/llm/llm.js', '改用兜底模型'],
   ['人设·别当评委', 1, 'config.json', '聊天是双向的，别当评委'],
-  ['闲聊带自己', 1, 'src/prompt.js', '把自己的那半句补上'],
-  ['表情清单常驻', 1, 'src/prompt.js', '表情清单常驻系统提示']
+  ['闲聊带自己', 1, 'src/llm/prompt.js', '把自己的那半句补上'],
+  ['表情清单常驻', 1, 'src/llm/prompt.js', '表情清单常驻系统提示']
 ];
 
 function loadConfigJson(dataDir) {
@@ -895,9 +896,8 @@ async function auditServer(args) {
   const inlineDir = path.join(cfg.appDir, 'src');
   let inlineFiles = 0;
   if (exists(inlineDir)) {
-    inlineFiles = fs.readdirSync(inlineDir)
-      .filter((name) => name.endsWith('.js'))
-      .filter((name) => readFileSafe(path.join(inlineDir, name)).includes('import { resolveToolCalls }'))
+    inlineFiles = findJsFiles(inlineDir)
+      .filter((file) => readFileSafe(file).includes('import { resolveToolCalls }'))
       .length;
   }
   if (inlineFiles >= 5) okLine(`内联工具兜底接入（${inlineFiles} 个文件）`);

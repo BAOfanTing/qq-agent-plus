@@ -3,14 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, test } from 'node:test';
-import { IdentityPilotManager } from '../src/identity-pilot.js';
+import { IdentityPilotManager } from '../src/identity/identity-pilot.js';
 import {
   parseRelationshipResponse,
   RelationshipPilotManager,
   relationshipPilotConfig
-} from '../src/relationship-pilot.js';
-import { relationshipDatabasePath } from '../src/relationship-pilot-store.js';
-import '../src/relationship-runtime-integration.js';
+} from '../src/pilots/relationship-pilot.js';
+import { relationshipDatabasePath } from '../src/pilots/relationship-pilot-store.js';
+import '../src/pilots/relationship-runtime-integration.js';
 
 const dirs = [];
 afterEach(() => {

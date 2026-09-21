@@ -6,8 +6,8 @@ import path from 'node:path';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-memory-handoff-'));
 process.env.QQ_AGENT_DATA_DIR = root;
-const { MemoryStore } = await import('../src/memory.js');
-const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
+const { MemoryStore } = await import('../src/memory/memory.js');
+const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
 
 test('persists, updates and clears structured session handoff state', (t) => {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

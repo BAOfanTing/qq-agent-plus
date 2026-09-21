@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   integrationStatus,
   updateSnowLumaPassword
-} from '../src/integrations.js';
+} from '../src/console/integrations.js';
 
 function response(status, body = {}) {
   return {

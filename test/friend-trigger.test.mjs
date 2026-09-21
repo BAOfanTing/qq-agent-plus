@@ -8,8 +8,8 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-friend-trigger-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 process.env.NODE_TEST_CONTEXT = '1';
 
-const { ChatStore } = await import('../src/store.js');
-const { IdentityPilotManager } = await import('../src/identity-pilot.js');
+const { ChatStore } = await import('../src/core/store.js');
+const { IdentityPilotManager } = await import('../src/identity/identity-pilot.js');
 
 function config(probability = 1) {
   return {

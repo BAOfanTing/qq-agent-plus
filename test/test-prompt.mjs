@@ -6,10 +6,10 @@ import os from 'node:os';
 const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-prompt-'));
 process.env.QQ_AGENT_DATA_DIR = testDir;
 process.on('exit', () => fs.rmSync(testDir, { recursive: true, force: true }));
-const { ChatStore } = await import('../src/store.js');
-const { MemoryStore } = await import('../src/memory.js');
-const { buildSystemPrompt, buildUserPrompt, buildPastState } = await import('../src/prompt.js');
-const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/config.js');
+const { ChatStore } = await import('../src/core/store.js');
+const { MemoryStore } = await import('../src/memory/memory.js');
+const { buildSystemPrompt, buildUserPrompt, buildPastState } = await import('../src/llm/prompt.js');
+const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
 
 // 注入测试配置
 const cfg = structuredClone(DEFAULT_CONFIG);

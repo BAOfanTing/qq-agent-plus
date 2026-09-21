@@ -25,7 +25,7 @@ if (faceSrc) {
     if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmp, f));
   }
 }
-const { buildToolDefs, executeTool } = await import(new URL('../../src/tools-core.js', import.meta.url).href);
+const { buildToolDefs, executeTool } = await import(new URL('../../src/tools/tools-core.js', import.meta.url).href);
 const calls = [];
 const sender = new Proxy({}, {
   get(_t, name) {

@@ -39,7 +39,7 @@ fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
 const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
 const repoRoot = path.resolve(here, '..', '..');
 const { QzoneInteractionManager } = await import(
-  pathToFileURL(path.join(repoRoot, 'src', 'qzone-interactions.js')).href
+  pathToFileURL(path.join(repoRoot, 'src', 'features', 'qzone-interactions.js')).href
 );
 
 const realSetTimeout = globalThis.setTimeout;
@@ -55,7 +55,7 @@ const check = (name, ok, detail = '') => {
 // 活跃时段按配置时区（time-control 的 TIME_ZONE，固定 Asia/Shanghai）判读钟点，跟跑测机器的
 // 时区无关：CI 跑在 UTC 上，直接 new Date(2026, 8, 19, 2, 0) 造出来的"凌晨两点"在那边是上午十点，
 // 断言就会莫名其妙地挂。所以时间戳一律按那个时区造。
-const { TIME_ZONE } = await import(pathToFileURL(path.join(repoRoot, 'src', 'time-control.js')).href);
+const { TIME_ZONE } = await import(pathToFileURL(path.join(repoRoot, 'src', 'core', 'time-control.js')).href);
 const zonedMs = (y, m, d, hh, mm) => {
   const guess = Date.UTC(y, m - 1, d, hh, mm);
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -213,7 +213,7 @@ try {
       activeHours: { start: '07:00', end: '01:00' }
     }
   }));
-  const { updateConfig } = await import(pathToFileURL(path.join(repoRoot, 'src', 'config.js')).href);
+  const { updateConfig } = await import(pathToFileURL(path.join(repoRoot, 'src', 'core', 'config.js')).href);
   updateConfig({ qzoneInteractions: { activeHours: { start: '07:00', end: '01:00' } } });
   const beforeQuiet = { ...calls };
   fakeNow = zonedMs(2026, 9, 19, 2, 0); // 该时区凌晨 2 点，落在 01:00–07:00 的静默段

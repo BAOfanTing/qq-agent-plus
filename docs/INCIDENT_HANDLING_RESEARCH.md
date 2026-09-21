@@ -37,7 +37,7 @@
 
 当前不足：
 
-- `src/orchestrator.js` 在唤醒前检查 `chatMeta.held > 0`，一个未知写入会停止整个群。
+- `src/core/orchestrator.js` 在唤醒前检查 `chatMeta.held > 0`，一个未知写入会停止整个群。
 - 没有统一异常 ID、分类、严重度、状态、去重和通知记录。
 - 同一错误可能同时出现在工具结果、Session、SQLite 和 journal，无法关联。
 - 普通业务拒绝、模型参数错误和真正未知外部写入没有统一策略表。

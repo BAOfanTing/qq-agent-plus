@@ -10,7 +10,7 @@ const { values } = parseArgs({ options: {
 } });
 if (!values['data-dir']) throw new Error('--data-dir is required');
 process.env.QQ_AGENT_DATA_DIR = path.resolve(values['data-dir']);
-const { getConfig, updateConfig, CONFIG_FILE } = await import('../src/config.js');
+const { getConfig, updateConfig, CONFIG_FILE } = await import('../src/core/config.js');
 const exists = fs.existsSync(CONFIG_FILE);
 const patch = {
   server: { host: values.host, port: Number(values.port), strictPort: true }

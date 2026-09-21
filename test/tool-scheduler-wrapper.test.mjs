@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
-import { DEFAULT_CONFIG, setRuntimeConfig } from '../src/config.js';
+import { DEFAULT_CONFIG, setRuntimeConfig } from '../src/core/config.js';
 import {
   executeTool as coreExecuteTool,
   toOpenAiTools as coreToOpenAiTools
-} from '../src/tools-core.js';
+} from '../src/tools/tools-core.js';
 import {
   executeTool as wrappedExecuteTool,
   toOpenAiTools as wrappedToOpenAiTools
-} from '../src/tools.js';
+} from '../src/tools/tools.js';
 
 function cfg(enabled, maxParallelReads = 4) {
   const value = structuredClone(DEFAULT_CONFIG);

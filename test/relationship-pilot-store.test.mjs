@@ -8,7 +8,7 @@ import {
   decayFriction,
   familiarityFromStats,
   RelationshipPilotStore
-} from '../src/relationship-pilot-store.js';
+} from '../src/pilots/relationship-pilot-store.js';
 
 const dirs = [];
 afterEach(() => {

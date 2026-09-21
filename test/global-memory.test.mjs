@@ -7,8 +7,8 @@ import path from 'node:path';
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-global-memory-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 
-const { MemoryStore } = await import('../src/memory.js');
-const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
+const { MemoryStore } = await import('../src/memory/memory.js');
+const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
 
 const cfg = structuredClone(DEFAULT_CONFIG);
 cfg.memory.handoffEnabled = true;

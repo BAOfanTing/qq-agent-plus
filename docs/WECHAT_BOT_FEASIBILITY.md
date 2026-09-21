@@ -316,14 +316,14 @@ WeComBotAdapter ---------+                         |
 
 本地关键代码入口：
 
-- [应用装配与接入](../src/app.js)
-- [权限与数字 ID 限制](../src/access.js)
-- [QQ 协议客户端](../src/onebot.js)
-- [SQLite 消息状态机](../src/store.js)
-- [会话编排与生命周期](../src/orchestrator.js)
-- [工具定义](../src/tools.js)
-- [发送队列](../src/sender.js)
-- [记忆存储](../src/memory.js)
+- [应用装配与接入](../src/console/app.js)
+- [权限与数字 ID 限制](../src/core/access.js)
+- [QQ 协议客户端](../src/onebot/onebot.js)
+- [SQLite 消息状态机](../src/core/store.js)
+- [会话编排与生命周期](../src/core/orchestrator.js)
+- [工具定义](../src/tools/tools.js)
+- [发送队列](../src/onebot/sender.js)
+- [记忆存储](../src/memory/memory.js)
 - [对话模式说明](CONVERSATION_MODES.md)
 
 公开来源均于 2026-09-13 查询。对接口能力优先采用官方文档和实际发布源码；GitHub README 只能证明项目宣称/适配记录，不能证明用户当前账号可登录。

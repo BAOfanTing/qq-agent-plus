@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
 
-const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
-const { safeFetchBinary } = await import('../src/safe-fetch.js');
+const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
+const { safeFetchBinary } = await import('../src/llm/safe-fetch.js');
 
 function listen(server) {
   return new Promise((resolve) => {

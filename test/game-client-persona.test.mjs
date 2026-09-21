@@ -11,12 +11,12 @@ process.env.DEBUG_SERVER_URL = 'http://127.0.0.1:1/event';
 process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
 
 const { PERSONAS, normalizeBehaviorProfile } = await import('../src/personas.js');
-const { DEFAULT_CONFIG, getConfig, setRuntimeConfig, updateConfig, loadConfig } = await import('../src/config.js');
-const { buildSystemPrompt } = await import('../src/prompt.js');
-const { buildMomentSystemPrompt, momentPersonaHash } = await import('../src/moment-prompt.js');
-const { buildQzoneInteractionPrompt, qzoneInteractionPersonaHash } = await import('../src/qzone-interaction-prompt.js');
-const { buildFriendReviewSystemPrompt } = await import('../src/friend-review-prompt.js');
-const { mdToPlain } = await import('../src/md-to-plain.js');
+const { DEFAULT_CONFIG, getConfig, setRuntimeConfig, updateConfig, loadConfig } = await import('../src/core/config.js');
+const { buildSystemPrompt } = await import('../src/llm/prompt.js');
+const { buildMomentSystemPrompt, momentPersonaHash } = await import('../src/llm/moment-prompt.js');
+const { buildQzoneInteractionPrompt, qzoneInteractionPersonaHash } = await import('../src/llm/qzone-interaction-prompt.js');
+const { buildFriendReviewSystemPrompt } = await import('../src/llm/friend-review-prompt.js');
+const { mdToPlain } = await import('../src/llm/md-to-plain.js');
 
 function developerPersona() {
   const template = PERSONAS.xiaojingyu_game_client;
@@ -120,10 +120,10 @@ test('grounded formatting preserves code operators, indentation and inline code'
 });
 
 test('a developer Agent sends intact code through its session-bound tool and durable outbox', async (t) => {
-  const { ChatStore } = await import('../src/store.js');
-  const { SessionRegistry } = await import('../src/sessions.js');
-  const { Orchestrator } = await import('../src/orchestrator.js');
-  const { SendQueue } = await import('../src/sender.js');
+  const { ChatStore } = await import('../src/core/store.js');
+  const { SessionRegistry } = await import('../src/core/sessions.js');
+  const { Orchestrator } = await import('../src/core/orchestrator.js');
+  const { SendQueue } = await import('../src/onebot/sender.js');
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.persona = developerPersona();
   cfg.runtime.mode = 'active';
@@ -184,7 +184,7 @@ test('console APIs expose, select, customize and roll back the developer persona
   cfg.server = { ...cfg.server, host: '127.0.0.1', port, token: '' };
   cfg.memory.consolidateEnabled = false;
   setRuntimeConfig(cfg);
-  const { createApp } = await import('../src/app.js');
+  const { createApp } = await import('../src/console/app.js');
   const app = createApp({ log: () => {} });
   app.onebot.connect = async () => {};
   t.after(async () => { await app.stop(); });

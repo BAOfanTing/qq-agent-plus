@@ -1,0 +1,592 @@
+// 运行期表情库管理：同步 QQ 收藏表情 + 本地认知层（备注/笔记/使用计数）。
+// 纯函数在 stickers.js；这里管缓存、TTL 和 OneBot 交互。
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { OneBotClient, extractMediaFromSegments } from './onebot.js';
+import { DATA_DIR, getConfig } from '../core/config.js';
+import {
+  loadStickerStore, saveStickerStore, mergeStickerLibrary,
+  findSticker, formatStickerList, applyStickerNote, markStickerUsed,
+  normalizeStickerEntry
+} from './stickers.js';
+
+const STICKER_ASSET_DIR = path.join(DATA_DIR, 'sticker-assets');
+const MAX_STICKER_BYTES = 8 * 1024 * 1024;
+const IMAGE_EXTENSIONS = Object.freeze({
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp'
+});
+
+function imageType(buffer) {
+  if (
+    buffer.length >= 8
+    && buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))
+  ) return 'image/png';
+  if (
+    buffer.length >= 3
+    && buffer[0] === 0xFF
+    && buffer[1] === 0xD8
+    && buffer[2] === 0xFF
+  ) return 'image/jpeg';
+  if (buffer.length >= 6 && /^GIF8[79]a$/.test(buffer.subarray(0, 6).toString('ascii'))) {
+    return 'image/gif';
+  }
+  if (
+    buffer.length >= 12
+    && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
+    && buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) return 'image/webp';
+  return '';
+}
+
+function cleanMetadata(value, max) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+/** 图片地址里的稳定标识（fileid 参数），用于自动收藏去重。 */
+function stickerSourceKey(url) {
+  const text = String(url || '');
+  const fileid = /[?&]fileid=([^&]+)/.exec(text)?.[1];
+  return fileid || text.slice(0, 120);
+}
+
+import { chatCompletionWithRetry } from '../llm/llm.js';
+import { safeFetchBinary, validateImageUrl } from '../llm/safe-fetch.js';
+import { resolveToolCalls } from '../tools/inline-tools.js';
+
+export class StickerManager {
+  constructor(onebot) {
+    this.onebot = onebot;
+    this.storageError = null;
+    try {
+      this.entries = loadStickerStore(undefined, { strict: true });
+    } catch (error) {
+      this.entries = [];
+      this.storageError = error;
+    }
+    this.syncedAt = 0;
+    this.syncing = null;
+    this.collectTimes = [];
+  }
+
+  get enabled() {
+    return getConfig().sticker?.enabled !== false;
+  }
+
+  assertStorageWritable() {
+    try {
+      loadStickerStore(undefined, { strict: true });
+      this.storageError = null;
+    } catch (error) {
+      this.storageError = error;
+      throw error;
+    }
+  }
+
+  saveEntries(entries) {
+    this.assertStorageWritable();
+    saveStickerStore(entries);
+    this.entries = entries;
+  }
+
+  /** 同步 QQ 收藏表情（带 TTL 缓存；force 立即刷新）。失败时退回本地缓存。 */
+  async sync(force = false) {
+    if (!this.enabled) return { entries: this.entries, fromCache: true, disabled: true };
+    try {
+      this.assertStorageWritable();
+    } catch (error) {
+      return {
+        entries: this.entries,
+        fromCache: true,
+        error: String(error?.message ?? error)
+      };
+    }
+    const ttl = 60000;
+    const now = Date.now();
+    if (!force && this.syncedAt && now - this.syncedAt < ttl) {
+      return { entries: this.entries, fromCache: true };
+    }
+    if (this.syncing) return this.syncing;
+    this.syncing = (async () => {
+      try {
+        const count = Math.min(500, Math.max(1, Number(getConfig().sticker?.promptMaxStickers) * 10 || 100));
+        const data = await this.onebot.call('fetch_custom_face_detail', { count });
+        const fetched = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : null);
+        if (!fetched) throw new Error('fetch_custom_face_detail 返回 data 不是数组');
+        // 只有拿到合法数组才合并，避免异常响应清空本地库
+        const nextEntries = mergeStickerLibrary(this.entries, fetched);
+        this.saveEntries(nextEntries);
+        this.syncedAt = Date.now();
+        return { entries: this.entries, fromCache: false };
+      } catch (error) {
+        // 同步失败不致命：本地缓存继续用
+        return { entries: this.entries, fromCache: true, error: String(error?.message ?? error) };
+      } finally {
+        this.syncing = null;
+      }
+    })();
+    return this.syncing;
+  }
+
+  async list(query = '', limit = 48, force = false) {
+    const synced = await this.sync(force);
+    return formatStickerList(synced.entries, query, limit);
+  }
+
+  /** 只读查看当前本地快照，不触发 QQ 同步或刷新临时 URL。 */
+  peek(ref) {
+    return findSticker(this.entries, ref);
+  }
+
+  async find(ref) {
+    const synced = await this.sync(false);
+    return findSticker(synced.entries, ref);
+  }
+
+  /** QQ 消息图片 URL 带短期 rkey；发送 AI 收藏图前按原消息刷新。 */
+  async findForSend(ref) {
+    const sticker = await this.find(ref);
+    if (sticker?.localFile) {
+      const image = this.readImage(ref);
+      if (!image) return null;
+      return {
+        ...sticker,
+        url: `base64://${image.buffer.toString('base64')}`
+      };
+    }
+    const messageId = /^collected_(-?\d+)$/.exec(String(sticker?.id || ''))?.[1];
+    if (!sticker || sticker.source !== 'ai' || !messageId) return sticker;
+    try {
+      const data = await this.onebot.getMsg(Number(messageId));
+      const segments = Array.isArray(data?.message) ? data.message : [];
+      const image = segments.find((segment) => segment?.type === 'image');
+      const freshUrl = String(image?.data?.url || image?.data?.file || '').trim();
+      if (!/^https?:\/\//i.test(freshUrl)) return sticker;
+      if (freshUrl === sticker.url) return sticker;
+      const refreshed = { ...sticker, url: freshUrl, updatedAt: new Date().toISOString() };
+      this.saveEntries(
+        this.entries.map((entry) => entry.id === sticker.id ? refreshed : entry)
+      );
+      return refreshed;
+    } catch {
+      return sticker;
+    }
+  }
+
+  note(id, patch) {
+    const result = applyStickerNote(this.entries, id, patch);
+    if (result.entry) this.saveEntries(result.entries);
+    return result.entry;
+  }
+
+  addManual({
+    imageBuffer,
+    desc = '',
+    localNote = '',
+    tags = [],
+    usage = ''
+  }) {
+    this.assertStorageWritable();
+    const buffer = Buffer.isBuffer(imageBuffer)
+      ? imageBuffer
+      : Buffer.from(imageBuffer || []);
+    if (!buffer.length) throw new Error('请选择表情图片');
+    if (buffer.length > MAX_STICKER_BYTES) throw new Error('表情图片不能超过 8 MiB');
+    const contentType = imageType(buffer);
+    if (!contentType) throw new Error('仅支持 PNG、JPEG、GIF 或 WebP 图片');
+    const id = `manual_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
+    const relativeFile = `sticker-assets/${id}.${IMAGE_EXTENSIONS[contentType]}`;
+    const file = path.join(DATA_DIR, relativeFile);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, buffer, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+    const now = new Date().toISOString();
+    const entry = normalizeStickerEntry({
+      id,
+      resId: id,
+      localFile: relativeFile,
+      desc: cleanMetadata(desc, 80),
+      localNote: cleanMetadata(localNote, 300),
+      tags: Array.isArray(tags)
+        ? tags.map((tag) => cleanMetadata(tag, 40)).filter(Boolean).slice(0, 20)
+        : [],
+      usage: cleanMetadata(usage, 300),
+      source: 'manual',
+      metadataEdited: true,
+      createdAt: now,
+      updatedAt: now
+    });
+    const nextEntries = [...this.entries, entry];
+    try {
+      this.saveEntries(nextEntries);
+    } catch (error) {
+      try { fs.rmSync(file, { force: true }); } catch { /* ignore */ }
+      throw error;
+    }
+    return entry;
+  }
+
+  update(id, patch = {}) {
+    const target = findSticker(this.entries, id);
+    if (!target) return null;
+    const index = this.entries.findIndex((entry) => entry.id === target.id);
+    const next = normalizeStickerEntry({
+      ...target,
+      desc: patch.desc !== undefined ? cleanMetadata(patch.desc, 80) : target.desc,
+      localNote: patch.localNote !== undefined
+        ? cleanMetadata(patch.localNote, 300)
+        : target.localNote,
+      tags: patch.tags !== undefined
+        ? (Array.isArray(patch.tags) ? patch.tags : [])
+        : target.tags,
+      usage: patch.usage !== undefined ? cleanMetadata(patch.usage, 300) : target.usage,
+      metadataEdited: true,
+      updatedAt: new Date().toISOString()
+    });
+    const nextEntries = [...this.entries];
+    nextEntries[index] = next;
+    this.saveEntries(nextEntries);
+    return next;
+  }
+
+  remove(id) {
+    const target = findSticker(this.entries, id);
+    if (!target) return null;
+    const nextEntries = target.source === 'qq'
+      ? this.entries.map((entry) =>
+        entry.id === target.id
+          ? normalizeStickerEntry({ ...entry, hidden: true, updatedAt: new Date().toISOString() })
+          : entry)
+      : this.entries.filter((entry) => entry.id !== target.id);
+    this.saveEntries(nextEntries);
+    let cleanupPending = false;
+    let warning = '';
+    if (target.localFile) {
+      try {
+        fs.rmSync(path.join(DATA_DIR, target.localFile), { force: true });
+      } catch (error) {
+        cleanupPending = true;
+        warning = `表情已从资产库移除，但图片文件清理失败：${String(error?.message ?? error)}`;
+      }
+    }
+    return { removed: true, cleanupPending, warning };
+  }
+
+  readImage(ref) {
+    const sticker = findSticker(this.entries, ref);
+    if (!sticker?.localFile) return null;
+    const file = path.resolve(DATA_DIR, sticker.localFile);
+    const root = `${path.resolve(STICKER_ASSET_DIR)}${path.sep}`;
+    if (!file.startsWith(root)) return null;
+    try {
+      const buffer = fs.readFileSync(file);
+      const contentType = imageType(buffer);
+      return contentType ? { buffer, contentType } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  markUsed(id, context = '') {
+    const result = markStickerUsed(this.entries, id, context);
+    if (result.entry) this.saveEntries(result.entries);
+    return result.entry;
+  }
+
+  /**
+   * 让模型自己挑图：看一眼这张图，判断值不值得收进表情库（像人挑表情包）。
+   * 只处理别人发来的图片，同一张图只判断一次，每小时判断次数受限；
+   * 判断失败/图片取不到就安静放弃，绝不影响聊天。
+   */
+  async autoCollect(chatKey, message) {
+    const cfg = getConfig().sticker || {};
+    if (cfg.autoCollect !== true || cfg.enabled === false || !this.enabled) return null;
+    const media = (message?.media || []).find((item) => item?.kind === 'image' && item.url);
+    if (!media) return null;
+    const srcKey = String(media.file || '').trim() || stickerSourceKey(media.url);
+    const urlKey = stickerSourceKey(media.url);
+    if (!srcKey) return null;
+    const fileKey = String(media.file || '').replace(/\.[a-z0-9]+$/i, '').toUpperCase();
+    if (this.entries.some((entry) => entry.hidden !== true
+      && (entry.srcKey === srcKey || entry.srcKey === urlKey
+        || (fileKey && String(entry.md5 || '').toUpperCase() === fileKey)))) return null;
+    if (!this.judgedKeys) this.judgedKeys = new Set();
+    if (this.judgedKeys.has(srcKey)) return null;
+    const now = Date.now();
+    this.judgeTimes = (this.judgeTimes || []).filter((t) => now - t < 3600000);
+    const cap = Math.max(1, Number(cfg.maxCollectPerHour) || 10);
+    if (this.judgeTimes.length >= cap) return null;
+    this.judgedKeys.add(srcKey);
+    this.judgeTimes.push(now);
+
+    let pick = null;
+    let usedUrl = media.url;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      // 图片链接是一次性的：每次重新取一条新链接再下载，失败就再来一次
+      const url = await this.#refreshImageUrl(message, media.url);
+      usedUrl = url;
+      try {
+        pick = await this.#judgeSticker({ ...media, url }, message);
+        break;
+      } catch (error) {
+        if (attempt < 3) {
+          await new Promise((resolve) => {
+            const timer = setTimeout(resolve, 800 * attempt);
+            timer.unref?.();
+          });
+          continue;
+        }
+        // 三次都拿不到图就安静放弃，不要打扰群聊
+        console.log('[sticker] 取图或判断失败（已重试 3 次），这次跳过：' + (error?.message ?? error));
+        return null;
+      }
+    }
+    if (!pick) {
+      console.log('[sticker] 判断没有返回结果，这次跳过');
+      return null;
+    }
+    console.log('[sticker] 判断：' + (pick.save ? '收下' : '不收') + ' —— ' + (pick.reason || '（没说理由）'));
+    if (pick.save !== true) return null;
+    const sender = String(message?.senderName || '').trim().slice(0, 12);
+    const note = String(pick.note || '').trim() || (sender ? `自动收藏 · ${sender}` : '自动收藏');
+    // 优先加进 QQ 收藏表情：链接稳定、QQ 客户端里也能用、发出去更可靠
+    if (cfg.saveToQqFavorites !== false && !(await this.#qqFavoritesFull())) {
+      const qq = await this.#addToQqFavorites(usedUrl);
+      if (qq?.emojiId) {
+        try {
+          await this.sync(true);
+        } catch { /* 拉不到就等下一次同步 */ }
+        try {
+          if (this.peek(qq.emojiId)) this.note(qq.emojiId, { note });
+        } catch { /* 备注失败不影响收藏 */ }
+        console.log('[sticker] 已加进 QQ 收藏表情：' + note);
+        return this.peek(qq.emojiId) || { id: qq.emojiId, localNote: note, source: 'qq' };
+      }
+    }
+    const entry = this.collect(message?.mid, { url: usedUrl, srcKey, note });
+    if (entry && !entry.srcKey) {
+      entry.srcKey = srcKey;
+      this.saveEntries(this.entries);
+    }
+    return entry;
+  }
+
+  /** QQ 收藏表情有上限（非会员 500 个）；满了就改存本地库。结果缓存 10 分钟。 */
+  async #qqFavoritesFull() {
+    const now = Date.now();
+    if (this.qqCountAt && now - this.qqCountAt < 600000) return this.qqFull === true;
+    if (typeof this.onebot?.call !== 'function') return false;
+    try {
+      const data = await this.onebot.call('fetch_custom_face_detail', { count: 500 }, 30000, null);
+      const list = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : null);
+      if (!list) return false;
+      this.qqCountAt = now;
+      this.qqCount = list.length;
+      this.qqFull = list.length >= 500;
+      if (this.qqFull) console.log('[sticker] QQ 收藏表情已满（' + list.length + '/500），这张改存本地库');
+      return this.qqFull;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 把图加进 QQ 收藏表情（协议端 add_custom_face）；成功返回 emojiId。 */
+  async #addToQqFavorites(url) {
+    if (typeof this.onebot?.call !== 'function' || !/^https?:\/\//i.test(String(url || ''))) return null;
+    try {
+      const res = await this.onebot.call('add_custom_face', { file: url }, 60000, null);
+      const emojiId = String(res?.emoji_id || res?.resId || res?.data?.emoji_id || '').trim();
+      return emojiId ? { emojiId } : null;
+    } catch (error) {
+      const msg = String(error?.message ?? error);
+      const maybeFull = /full|limit|上限|超过|超出|500/i.test(msg);
+      console.log('[sticker] 加进 QQ 收藏失败' + (maybeFull ? '（可能收藏已满）' : '') + '，改存本地库：' + msg);
+      return null;
+    }
+  }
+
+  /** 存档链接会过期：能刷新就刷新一次（拿最新一条带图消息的地址），限时 20 秒。 */
+  async #refreshImageUrl(message, fallback) {
+    if (message?.mid == null || typeof this.onebot?.getMsg !== 'function') return fallback;
+    try {
+      const data = await Promise.race([
+        this.onebot.getMsg(message.mid),
+        new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(null), 20000);
+          timer.unref?.();
+        })
+      ]);
+      const segments = Array.isArray(data?.message) ? data.message : [];
+      const item = extractMediaFromSegments(segments).find((x) => x.kind === 'image' && x.url);
+      return item?.url ? item.url : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  /** 把图片转成 data URL（视觉模型看的就是它）。 */
+  async #stickerDataUrl(url, signal) {
+    const safeUrl = await validateImageUrl(url);
+    const { buffer, contentType } = await safeFetchBinary(safeUrl, 4 * 1024 * 1024, signal);
+    if (!buffer?.length) throw new Error('图片内容为空');
+    const mime = /^image\//.test(String(contentType || '')) ? String(contentType) : 'image/jpeg';
+    return `data:${mime};base64,${buffer.toString('base64')}`;
+  }
+
+  /** 一次极小的视觉判断：这张图收不收？收的话备注写什么？ */
+  async #judgeSticker(media, message) {
+    const signal = AbortSignal.timeout(90000);
+    const dataUrl = await this.#stickerDataUrl(media.url, signal);
+    const botName = String(getConfig().persona?.botName || '我');
+    const sender = String(message?.senderName || '群友').trim().slice(0, 20) || '群友';
+    const tool = {
+      type: 'function',
+      function: {
+        name: 'submit_sticker_pick',
+        description: '提交对这张图的收藏决定。',
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            save: { type: 'boolean', description: 'true=值得收进表情库；false=不值得' },
+            note: { type: 'string', maxLength: 24, description: 'save=true 时写一句简短备注（画的是什么/适合什么场合）；save=false 留空' },
+            reason: { type: 'string', maxLength: 40, description: '一句话说明为什么收/不收（给日志看）' }
+          },
+          required: ['save']
+        }
+      }
+    };
+    const messagesUsed = [
+      {
+        role: 'system',
+        content: `你是「${botName}」，一个混在 QQ 群里的普通群友，正在看群友刚发的一张图。`
+          + '判断标准只有一条：以后聊天时用得上吗。'
+          + '值得收：真正的表情包——带字的梗图、猫猫狗狗、卡通形象、抽象搞笑图，能拿来表达情绪、吐槽或怼人的。'
+          + '不值得收：本人或朋友的生活照、随手拍、自拍，以及跟聊天无关的截图（游戏、聊天记录、网页）、二维码、证件、广告、纯风景照。'
+          + '拿不准就问自己一句：以后聊天时真会用上吗。会就用得上才收，不会就别收。'
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: `${sender} 发的这张图，收还是不收？` },
+          { type: 'image_url', image_url: { url: dataUrl } }
+        ]
+      }
+    ];
+    const ask = (messages) => chatCompletionWithRetry({
+      messages,
+      tools: [tool],
+      toolChoice: { type: 'function', function: { name: 'submit_sticker_pick' } },
+      temperature: 0.3,
+      signal,
+      // 思考会先吃掉 80~595 个 token，200 会把它截断到一个字段都收不到
+      maxTokens: 600
+    });
+    // 模型有时不用结构化 tool_calls，而是写成 <tool_call> Hermes 文本或裸 JSON。
+    // 只认结构化调用会把这些决定整条丢掉（线上出现过"两次都没提交决定，这次跳过"）。
+    const pickFromText = (text) => {
+      const raw = String(text || '');
+      const key = (name) => {
+        const m = new RegExp('<parameter\\s*=\\s*' + name + '\\s*>([\\s\\S]*?)(?=<parameter\\s*=|</function>|</tool_call>|$)', 'i').exec(raw);
+        return m ? m[1].trim() : undefined;
+      };
+      if (/<function\s*=\s*submit_sticker_pick/i.test(raw)) {
+        const save = key('save');
+        return { save: /^(true|是|收|yes)$/i.test(String(save ?? '')), note: key('note') || '', reason: key('reason') || '' };
+      }
+      const jsonMatch = raw.match(/\{[\s\S]*?"save"[\s\S]*?\}/);
+      if (jsonMatch) {
+        try {
+          const obj = JSON.parse(jsonMatch[0]);
+          if (typeof obj?.save === 'boolean') return obj;
+        } catch { /* 不是合法 JSON，放弃 */ }
+      }
+      return null;
+    };
+    const pickArgs = (resp) => {
+      const call = (resp?.message?.tool_calls || [])[0];
+      if (call) {
+        try { return JSON.parse(call.function?.arguments || '{}'); } catch { /* 参数坏了就落到文本解析 */ }
+      }
+      const fromText = pickFromText(resp?.message?.content) || pickFromText(resp?.message?.reasoning_content);
+      if (fromText) return fromText;
+      // 共享解析器兜住更多内联格式（<tool_call> 包裹的 JSON、带 name 的 JSON 等）
+      const inline = resolveToolCalls(resp?.message)[0];
+      if (inline?.function?.name === 'submit_sticker_pick') {
+        try { return JSON.parse(inline.function.arguments || '{}'); } catch { return null; }
+      }
+      return null;
+    };
+
+    // 最多试 3 次：服务商的内容过滤是概率性的（同一张图多数时候能过），多给一次机会；
+    // 同时把"被内容过滤"和"模型没提交"在日志里分开，便于判断到底是哪种原因。
+    let response = null;
+    let args = null;
+    let filtered = 0;
+    for (let attempt = 1; attempt <= 3 && !args; attempt += 1) {
+      response = await ask(attempt === 1
+        ? messagesUsed
+        : [
+          ...messagesUsed,
+          { role: 'assistant', content: String(response?.message?.content || '（无内容）').slice(0, 200) },
+          { role: 'user', content: '请用 submit_sticker_pick 工具正式提交你的决定（save: true/false）。' }
+        ]);
+      if (String(response?.finishReason || '') === 'content_filter') filtered += 1;
+      args = pickArgs(response);
+    }
+    if (!args) {
+      console.log('[sticker] 三次都没拿到决定'
+        + (filtered ? `（其中 ${filtered} 次被服务商内容过滤：图片含敏感内容，属正常拦截）` : '')
+        + '，这张跳过：' + String(response?.message?.content || '').slice(0, 100));
+      return null;
+    }
+    if (!args) args = {};
+    return {
+      save: args.save === true,
+      note: String(args.note || '').slice(0, 24),
+      reason: String(args.reason || '').slice(0, 40)
+    };
+  }
+
+  /** 收藏一条消息里的图片（本地新增条目，不入 QQ 收藏）。 */
+  collect(messageId, { url, note = '', srcKey = '' } = {}) {
+    if (!getConfig().sticker?.collectEnabled) throw new Error('收藏表情功能未开启');
+    // 限频
+    const now = Date.now();
+    this.collectTimes = this.collectTimes.filter((t) => now - t < 3600000);
+    if (this.collectTimes.length >= Math.max(1, Number(getConfig().sticker?.maxCollectPerHour) || 10)) {
+      throw new Error('收藏太频繁了，一小时后再试');
+    }
+    url = String(url || '');
+    if (!url) throw new Error('该消息没有可收藏的图片地址');
+    const id = `collected_${messageId}`;
+    const existing = this.entries.find((e) => e.id === id);
+    if (existing) {
+      return this.note(id, { note: String(note || '') });
+    }
+    const entry = {
+      id,
+      resId: id,
+      url,
+      md5: '',
+      srcKey: String(srcKey || '').trim() || stickerSourceKey(url),
+      desc: String(note || '').slice(0, 20),
+      localNote: String(note || ''),
+      tags: [],
+      usage: '',
+      source: 'ai',
+      useCount: 0,
+      lastUsedAt: 0,
+      lastContext: '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    this.saveEntries([...this.entries, entry]);
+    this.collectTimes.push(now);
+    return entry;
+  }
+}

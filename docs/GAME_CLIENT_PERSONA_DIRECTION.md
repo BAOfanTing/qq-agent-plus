@@ -45,11 +45,11 @@ OneBot 消息事件
 
 - 旧参考人设：[小鲸鱼.md](../../qq-bridge-linux/roles/小鲸鱼.md)。
 - qq-agent 内置适配模板：[roles/](../roles)（登记与加载在 [personas.js](../src/personas.js)）。
-- 默认配置与持久配置加载：[config.js](../src/config.js)，持久配置可以覆盖内置模板；修改旧 Bridge 的 Markdown 不会自动更新 qq-agent 人设。
-- 通用行为与上下文注入：[prompt.js](../src/prompt.js)，特别是 `antiAiFlavor`、`memoryRules`、`buildSystemPrompt`、`buildUserPrompt`。
-- 实际生命周期实现：[orchestrator.js](../src/orchestrator.js)、[对话模式](CONVERSATION_MODES.md)。不能依据旧注释把当前全部模式理解为完全无历史。
-- 记忆：[memory.js](../src/memory.js)，`append` 只接收成员印象；handoff 默认有效期为一天，可配置，并非长期自身履历。
-- 各社交场景提示词：[moment-prompt.js](../src/moment-prompt.js)、[qzone-interaction-prompt.js](../src/qzone-interaction-prompt.js)、[friend-review-prompt.js](../src/friend-review-prompt.js)。
+- 默认配置与持久配置加载：[config.js](../src/core/config.js)，持久配置可以覆盖内置模板；修改旧 Bridge 的 Markdown 不会自动更新 qq-agent 人设。
+- 通用行为与上下文注入：[prompt.js](../src/llm/prompt.js)，特别是 `antiAiFlavor`、`memoryRules`、`buildSystemPrompt`、`buildUserPrompt`。
+- 实际生命周期实现：[orchestrator.js](../src/core/orchestrator.js)、[对话模式](CONVERSATION_MODES.md)。不能依据旧注释把当前全部模式理解为完全无历史。
+- 记忆：[memory.js](../src/memory/memory.js)，`append` 只接收成员印象；handoff 默认有效期为一天，可配置，并非长期自身履历。
+- 各社交场景提示词：[moment-prompt.js](../src/llm/moment-prompt.js)、[qzone-interaction-prompt.js](../src/llm/qzone-interaction-prompt.js)、[friend-review-prompt.js](../src/llm/friend-review-prompt.js)。
 
 ## 3. 初步人物画像
 

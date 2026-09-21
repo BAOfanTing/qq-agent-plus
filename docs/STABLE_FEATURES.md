@@ -14,7 +14,7 @@
 
 ## 配置架构
 
-当前 `src/config.js` 是生产配置适配层，`src/config-legacy.js` 暂时承担历史配置格式的归一化、迁移和持久化。生产层把已经固化的旧 gate 规范成常量语义：
+当前 `src/core/config.js` 是生产配置适配层，`src/core/config-legacy.js` 暂时承担历史配置格式的归一化、迁移和持久化。生产层把已经固化的旧 gate 规范成常量语义：
 
 - `identityPilot.enabled = true`
 - `identityPilot.incomingFriendRequest.enabled = true`
@@ -79,7 +79,7 @@
 - 研究 worker 不会随服务启动，不会扫描消息，也不会创建新的研究任务；
 - 已有研究数据库不会在升级时被破坏性删除。
 
-`src/slang-pilot.js` 目前只保留不可运行的兼容 tombstone，因为当前单体 `src/app.js` 仍有静态 import 和旧 API 兼容分支。真正的检测器、研究存储与研究实现已经删除。后续若拆分 `app.js` 路由，可以连同 tombstone 和旧 `/api/slang-pilot/*` 兼容路由一起物理删除。
+`src/pilots/slang-pilot.js` 目前只保留不可运行的兼容 tombstone，因为当前单体 `src/console/app.js` 仍有静态 import 和旧 API 兼容分支。真正的检测器、研究存储与研究实现已经删除。后续若拆分 `app.js` 路由，可以连同 tombstone 和旧 `/api/slang-pilot/*` 兼容路由一起物理删除。
 
 手工黑话资产仍可以在“观测”相关能力中维护；这不会启动任何自动研究流程。
 

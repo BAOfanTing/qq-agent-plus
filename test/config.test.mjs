@@ -62,7 +62,7 @@ const {
   slangPilotEnabled,
   triggeredFriendProposalEnabled,
   updateConfig
-} = await import('../src/config.js');
+} = await import('../src/core/config.js');
 
 test('promoted capabilities share one admin and retired slang config is purged', async (t) => {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

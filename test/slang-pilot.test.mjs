@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { inactiveSlangPilotStatus, SlangPilotManager } from '../src/slang-pilot.js';
+import { inactiveSlangPilotStatus, SlangPilotManager } from '../src/pilots/slang-pilot.js';
 
 test('retired slang research keeps only a non-operational compatibility surface', async () => {
   const status = inactiveSlangPilotStatus({ enabled: true });

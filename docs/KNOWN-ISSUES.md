@@ -10,7 +10,7 @@
 下面这些是复审中发现、但判断"不影响主链路"而先记录的：
 
 1. **换了远程价格表地址、新地址又拉失败时，界面显示的来源与实际生效的表可能不一致。**
-   `src/price-feed.js` 按"失败不清表"保留上一份数据是对的，但 `status.url` 已是新地址、
+   `src/pricing/price-feed.js` 按"失败不清表"保留上一份数据是对的，但 `status.url` 已是新地址、
    `status.sourceUrl` 还是旧的 —— 设置页会看起来像新地址生效了。
 2. **两次刷新重叠时没有并发保护。** 手动「立即拉取」与启动/24h 定时那次撞上时，
    后返回的旧结果会覆盖新结果。触发窗口很窄（24 小时一次 + 手动点击）。
@@ -32,9 +32,9 @@
 历史上这里记录过 5 个随底座带来的基线失败用例（2026-09-19 已全部清零）：
 
 - `configure-linux` 生成的 `config.json` 权限被防抖保存打回 0664 → 修复：所有写盘路径
-  统一 `mode: 0o600`（`src/config-legacy.js` 的 `scheduleConfigSave`）。
+  统一 `mode: 0o600`（`src/core/config-legacy.js` 的 `scheduleConfigSave`）。
 - "禁用身份基建后不建库" → 该用例测的是旧契约。身份/事件基建已按
-  `src/stable-feature-policy.js` 转正常开，用例改写为"转正后旧的 enabled:false 被忽略"。
+  `src/core/stable-feature-policy.js` 转正常开，用例改写为"转正后旧的 enabled:false 被忽略"。
 - 好友候选批准分发 → 分发链路同样已转正，测试桩补上 `get_login_info` 与
   `sendFriendRequest` 桩件，断言改为"批准即发送"。
 - 事件列表计数 `2 !== 1` → `app.start()` 连不上 OneBot 时会自动捕获一条连接事件，

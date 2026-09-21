@@ -7,8 +7,8 @@ import { test } from 'node:test';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-incident-api-'));
 process.env.QQ_AGENT_DATA_DIR = root;
-const { DEFAULT_CONFIG, updateConfig } = await import('../src/config.js');
-const { createApp } = await import('../src/app.js');
+const { DEFAULT_CONFIG, updateConfig } = await import('../src/core/config.js');
+const { createApp } = await import('../src/console/app.js');
 
 async function freePort() {
   const server = http.createServer();
