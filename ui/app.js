@@ -3024,7 +3024,9 @@ function updateUsagePage(stats, st, prices) {
     }
     if (!wanted.length) {
       if (tbody.dataset.empty !== '1') {
-        tbody.innerHTML = '<tr><td colspan="7" class="muted">无</td></tr>';
+        // 列数按表头算：按日期是 7 列、按会话/按模型是 6 列，写死会让空表多出一列
+        const cols = tbody.closest('table')?.querySelectorAll('thead th').length || 6;
+        tbody.innerHTML = `<tr><td colspan="${cols}" class="muted">无</td></tr>`;
         tbody.dataset.empty = '1';
       }
       return;
