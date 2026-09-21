@@ -1365,8 +1365,16 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           breakdown: totals.breakdown,
           // 口径：实付（用户自己填的价）/ 估算（官方表、兜底）/ 未定价
           kind: currentPrice.kind || 'estimate',
+          billing: currentPrice.billing || 'token',
+          billingAmount: Number(currentPrice.amount) || 0,
+          billingPeriod: currentPrice.period === 'day' ? 'day' : 'month',
           actualCost: totals.actualCost || 0,
           estimateCost: totals.estimateCost || 0,
+          flatCost: (totals.flatItems || []).reduce((sum, item) => (
+            item.period === 'month' ? sum + (Number(item.amount) || 0) : sum
+          ), 0),
+          flatCalls: totals.flatCalls || 0,
+          localCalls: totals.localCalls || 0,
           prices: {
             in: currentTier.in,
             out: currentTier.out,
@@ -3410,6 +3418,10 @@ function costOfRows(rows) {
   // 口径拆分：实付（用户自己填的渠道价/自定义价）vs 估算（官方表/兜底）。
   // 面板要能说清"这个数字里有多少是真价、多少是估的"。
   let actualCost = 0, estimateCost = 0, actualCalls = 0, estimateCalls = 0;
+  // 包月/本地：不按 token 计价，成本以"固定支出"单独呈现（不计入区间成本）
+  let flatCalls = 0, flatTokens = 0;
+  const flatItems = new Map();
+  let localCalls = 0, localTokens = 0;
   for (const r of rows) {
     const p = priceOf(r.model, r.vendor);
     if (p.peak) hasPeakModel = true;
@@ -3433,7 +3445,24 @@ function costOfRows(rows) {
     cachedTokens += cached;
     if (r.exact) exactCalls += 1;
     if (p.unpriced === true) { unpricedCalls += 1; unpricedTokens += tk; }
-    else if (p.kind === 'actual') { actualCost += c; actualCalls += 1; }
+    else if (p.billing === 'flat') {
+      flatCalls += 1;
+      flatTokens += tk;
+      const key = r.modelKey || r.model || '(未知)';
+      const item = flatItems.get(key) || {
+        key,
+        amount: Number(p.amount) || 0,
+        period: p.period === 'day' ? 'day' : 'month',
+        calls: 0,
+        tokens: 0
+      };
+      item.calls += 1;
+      item.tokens += tk;
+      flatItems.set(key, item);
+    } else if (p.billing === 'none') {
+      localCalls += 1;
+      localTokens += tk;
+    } else if (p.kind === 'actual') { actualCost += c; actualCalls += 1; }
     else { estimateCost += c; estimateCalls += 1; }
   }
   return {
@@ -3445,7 +3474,9 @@ function costOfRows(rows) {
     peakRatio: (peakTokens + offPeakTokens) ? peakTokens / (peakTokens + offPeakTokens) : 0,
     exactCalls, hasPeakModel, runs: rows.length,
     unpricedCalls, unpricedTokens,
-    actualCost, estimateCost, actualCalls, estimateCalls
+    actualCost, estimateCost, actualCalls, estimateCalls,
+    flatCalls, flatTokens, flatItems: [...flatItems.values()],
+    localCalls, localTokens
   };
 }
 
@@ -3507,6 +3538,14 @@ function buildUsageStats({ range = '7' } = {}) {
     days: byDay,
     chats,
     models,
+    // 包月/本地：不按 token 计价，单独列出（不计入上面的区间成本）
+    billing: {
+      flatCalls: totals.flatCalls || 0,
+      flatTokens: totals.flatTokens || 0,
+      flatItems: (totals.flatItems || []).slice(0, 20),
+      localCalls: totals.localCalls || 0,
+      localTokens: totals.localTokens || 0
+    },
     unpriced: {
       calls: totals.unpricedCalls || 0,
       tokens: totals.unpricedTokens || 0,

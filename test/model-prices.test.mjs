@@ -165,6 +165,61 @@ test('priceKind 把三种口径分开', () => {
   assert.equal(prices.priceKind(null), 'unpriced');
 });
 
+test('包月/订阅条目：不按 token 计价，作为固定支出（实付口径）', () => {
+  const cfg = {
+    api: {
+      useOfficialPrice: true,
+      modelPrices: { 'cmd：deepseek/deepseek-v4.1-flash': { billing: 'flat', amount: 68, period: 'month' } }
+    }
+  };
+  const p = priceOf('deepseek/deepseek-v4.1-flash', cfg, { vendor: 'cmd' });
+  assert.equal(p.billing, 'flat');
+  assert.equal(p.amount, 68);
+  assert.equal(p.period, 'month');
+  assert.equal(p.in, 0, '包月条目不该给出 token 单价');
+  assert.equal(p.out, 0);
+  assert.equal(p.unpriced, false, '包月是"已定价"，不是未定价');
+  assert.equal(p.kind, 'actual', '用户自己声明的计费方式属于实付口径');
+  assert.equal(p.source, 'channel');
+});
+
+test('本地/自建条目：只统计 token，不计费', () => {
+  const cfg = { api: { useOfficialPrice: true, modelPrices: { 'local-qwen': { billing: 'none' } } } };
+  const p = priceOf('local-qwen', cfg);
+  assert.equal(p.billing, 'none');
+  assert.equal(p.in, 0);
+  assert.equal(p.out, 0);
+  assert.equal(p.unpriced, false);
+  assert.equal(p.kind, 'actual');
+
+  // 如果只写了 billing 而没有单价，仍然算"已定价"（不会掉进未定价）
+  const bare = priceOf('whatever-local', { api: { useOfficialPrice: true, modelPrices: { 'whatever-local': { billing: 'none' } } } });
+  assert.equal(bare.unpriced, false);
+});
+
+test('billingOf 归一化：大小写/周期/金额', () => {
+  assert.deepEqual(prices.billingOf({ billing: 'FLAT', amount: '30', period: 'DAY' }), { billing: 'flat', amount: 30, period: 'day' });
+  assert.deepEqual(prices.billingOf({ billing: 'none', amount: 99 }), { billing: 'none', amount: 0, period: 'month' });
+  assert.deepEqual(prices.billingOf({}), { billing: 'token', amount: 0, period: 'month' });
+  assert.deepEqual(prices.billingOf({ billing: 'flat', amount: -5 }), { billing: 'flat', amount: 0, period: 'month' });
+});
+
+test('远程/渠道价目表也能带计费方式', () => {
+  const norm = feed.normalizePriceFeed({
+    prices: {
+      'sub-model': { billing: 'flat', amount: 20, period: 'month', in: 0, out: 0 },
+      'local-model': { billing: 'none', in: 0, out: 0 },
+      'plain-model': { in: 1, out: 4 }
+    }
+  });
+  assert.ok(norm);
+  assert.equal(norm.prices['sub-model'].billing, 'flat');
+  assert.equal(norm.prices['sub-model'].amount, 20);
+  assert.equal(norm.prices['sub-model'].period, 'month');
+  assert.equal(norm.prices['local-model'].billing, 'none');
+  assert.equal(norm.prices['plain-model'].billing, undefined, '没写 billing 的条目不硬塞字段');
+});
+
 test('自定义价与全局兜底单价都算"已定价"', () => {
   const custom = priceOf('my-private-model', {
     api: { useOfficialPrice: false, modelPrices: { 'my-private-model': { in: 2, out: 8 } } }

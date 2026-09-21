@@ -217,9 +217,20 @@
       <p class="muted" id="price-dialog-sub"></p>
       <div class="pd-rows">
         <label class="pd-row"><span>渠道</span><select id="price-dialog-channel"></select></label>
-        <label class="pd-row"><span>输入</span><input type="number" id="price-dialog-in" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
-        <label class="pd-row"><span>输出</span><input type="number" id="price-dialog-out" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
-        <label class="pd-row"><span>缓存命中</span><input type="number" id="price-dialog-cached" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
+        <label class="pd-row"><span>计费</span><select id="price-dialog-billing">
+          <option value="token">按 token 计价</option>
+          <option value="flat">包月 / 订阅（固定支出）</option>
+          <option value="none">本地 / 不计费</option>
+        </select></label>
+        <label class="pd-row" id="price-dialog-flat-row" style="display:none"><span>金额</span>
+          <input type="number" id="price-dialog-amount" step="0.01" min="0" />
+          <select id="price-dialog-period" style="max-width:110px">
+            <option value="month">元 / 月</option>
+            <option value="day">元 / 天</option>
+          </select></label>
+        <label class="pd-row" id="price-dialog-token-row"><span>输入</span><input type="number" id="price-dialog-in" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
+        <label class="pd-row" id="price-dialog-token-row-2"><span>输出</span><input type="number" id="price-dialog-out" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
+        <label class="pd-row" id="price-dialog-token-row-3"><span>缓存命中</span><input type="number" id="price-dialog-cached" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
       </div>
       <p class="muted" id="price-dialog-hint">只写这一条价：同一个模型在不同渠道可以分别定价；官方价格表不会被改动，用量页会立刻按新价重算。</p>
       <p class="control-result muted" id="price-dialog-result" role="status" aria-live="polite"></p>

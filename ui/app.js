@@ -2812,12 +2812,25 @@ function updateUsagePage(stats, st, prices) {
   const estimate = Number(t.estimateCost) || 0;
   const hasActual = actual > 1e-9;
   const hasEstimate = estimate > 1e-9;
-  set('cost-label', hasActual && !hasEstimate
-    ? '实付成本'
-    : (hasActual && hasEstimate ? '成本（含估算）' : '估算成本'));
+  // 包月/本地：不按 token 计价，作为固定支出单列，不计入上面的按量成本
+  const billingInfo = stats?.billing || {};
+  const flatItems = billingInfo.flatItems || [];
+  const flatMonthly = flatItems.reduce((sum, item) => (item.period === 'month' ? sum + (Number(item.amount) || 0) : sum), 0);
+  const flatDaily = flatItems.reduce((sum, item) => (item.period === 'day' ? sum + (Number(item.amount) || 0) : sum), 0);
+  const hasFlat = flatItems.length > 0;
+  const variable = hasActual || hasEstimate;
+  set('cost-label', !variable && hasFlat
+    ? '固定支出'
+    : (hasActual && hasEstimate ? '成本（含估算）' : (hasActual ? '实付成本' : '估算成本')));
   const split = [];
   if (hasActual) split.push(`实付 ${fmtYuan(actual)}`);
   if (hasEstimate) split.push(`估算 ${fmtYuan(estimate)}`);
+  const flatTxt = [
+    flatMonthly > 0 ? `包月 ¥${flatMonthly}/月` : '',
+    flatDaily > 0 ? `按天 ¥${flatDaily}/天` : ''
+  ].filter(Boolean).join(' + ');
+  if (flatTxt) split.push(`另有${flatTxt}`);
+  if (Number(billingInfo.localCalls) > 0) split.push(`本地模型 ${Number(billingInfo.localCalls)} 次不计费`);
   set('cost-sub', [stats?.rangeLabel || '', ...split].filter(Boolean).join(' · '));
 
   // 未定价提示条：多少调用没算钱、分别是哪些模型
@@ -2894,12 +2907,34 @@ function updateUsagePage(stats, st, prices) {
   const costCell = (row) => {
     const calls = Number(row.runs) || 0;
     const unpriced = Number(row.unpricedCalls) || 0;
-    if (unpriced <= 0) return fmtYuan(row.cost);
+    const flat = Number(row.flatCalls) || 0;
+    const local = Number(row.localCalls) || 0;
+    // 包月/本地不按 token 计价：金额没有意义，显示"—"+ 计费方式徽标
+    if (calls > 0 && flat + local >= calls) {
+      return `<span class="muted">—</span>${billingChip(row)}`;
+    }
+    if (unpriced <= 0) return fmtYuan(row.cost) + billingChip(row);
     const title = `其中有 ${unpriced} 次调用在价格表里查不到单价，未计入成本`;
     if (calls > 0 && unpriced >= calls) {
       return `<span class="uc-chip warn" title="${esc(title)}">未定价</span>`;
     }
     return `${fmtYuan(row.cost)}<span class="uc-chip warn" title="${esc(title)}">未定价 ${unpriced}</span>`;
+  };
+
+  // 计费方式徽标：包月（固定支出）/ 本地（不计费）
+  const billingChip = (row) => {
+    const items = Array.isArray(row.flatItems) ? row.flatItems : [];
+    const monthly = items.reduce((sum, item) => (item.period === 'month' ? sum + (Number(item.amount) || 0) : sum), 0);
+    const daily = items.reduce((sum, item) => (item.period === 'day' ? sum + (Number(item.amount) || 0) : sum), 0);
+    const parts = [];
+    if (Number(row.flatCalls) > 0) {
+      const amountTxt = [monthly > 0 ? `¥${monthly}/月` : '', daily > 0 ? `¥${daily}/天` : ''].filter(Boolean).join(' + ');
+      parts.push(`<span class="uc-chip" title="包月/订阅：按固定支出计，不按 token 计价">包月${amountTxt ? ` ${amountTxt}` : ''}</span>`);
+    }
+    if (Number(row.localCalls) > 0) {
+      parts.push('<span class="uc-chip" title="本地/自建模型：只统计 token，不计费">本地</span>');
+    }
+    return parts.join('');
   };
 
   // 实付标记：这一行的价全部来自用户自己填的价（渠道价 / 自定义价），不是官方价估算
@@ -4679,11 +4714,19 @@ function refreshModelPriceCard() {
   // 界面上的开关是实时值，所以这里临时覆盖一份 cfg 再算，避免"按了没反应"。
   const eff = effectivePriceFor(model, vendor, { useOfficialPrice: useOfficial });
   const shown = { in: eff.in ?? 0, out: eff.out ?? 0, cached: eff.cached ?? 0 };
-  const locked = eff.locked === true;
+  const locked = eff.locked === true || eff.billing === 'flat' || eff.billing === 'none';
   let sourceTxt = '';
 
-  if (eff.source === 'channel') {
+  if (eff.billing === 'flat') {
+    const periodTxt = eff.period === 'day' ? '元/天' : '元/月';
+    sourceTxt = `包月/订阅：¥${Number(eff.amount) || 0}${periodTxt} —— 这些调用不按 token 计价，`
+      + '用量页把订阅费作为固定支出单列，不计入按量成本。改计费方式用下面的「给这个模型定价」。';
+  } else if (eff.billing === 'none') {
+    sourceTxt = '本地/自建模型：只统计 token，不计费（也不算"未定价"）。';
+  } else if (eff.source === 'channel') {
     sourceTxt = `正在使用你为「${vendor}」这个渠道单独填的价（实付口径，覆盖官方价）。`;
+  } else if (eff.source === 'channel-table') {
+    sourceTxt = `正在使用「${vendor}」这个渠道拉到的价目表（实付口径）。`;
   } else if (eff.source === 'custom') {
     sourceTxt = '正在使用你为这个模型填的价（实付口径，覆盖官方价）。';
   } else if (eff.source === 'remote') {
@@ -4739,41 +4782,65 @@ function effectivePriceFor(model, vendor, overrides = null) {
   const customMap = api.modelPrices || {};
   const id = String(model || '').trim();
   if (!id) {
-    return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: true };
+    return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: true, billing: 'token' };
   }
 
-  const customShape = (entry, source, matched, via) => ({
-    in: Number(entry.in) || 0,
-    out: Number(entry.out) || 0,
-    cached: entry.cached == null ? Number(entry.in) || 0 : Number(entry.cached) || 0,
-    peak: entry.peak || null,
-    source,
-    matched,
-    via,
-    confidence: source,
-    kind: 'actual',
-    unpriced: false,
-    locked: false
-  });
+  // 没有临时覆盖时，优先用后端算好的权威结果（渠道价目表那层只有后端知道）
+  const detail = state.modelPrices?.currentDetail;
+  if (!overrides && detail && String(detail.model || '') === id
+    && String(detail.vendor || '') === String(vendor || '')) {
+    return { ...detail };
+  }
+
+  // 计费方式（与后端 billingOf 一致）
+  const billingShape = (entry) => {
+    const raw = String(entry?.billing ?? '').trim().toLowerCase();
+    if (raw === 'flat') {
+      return { billing: 'flat', amount: Number(entry.amount) || 0, period: String(entry.period) === 'day' ? 'day' : 'month' };
+    }
+    if (raw === 'none') return { billing: 'none', amount: 0, period: 'month' };
+    return { billing: 'token', amount: 0, period: 'month' };
+  };
+
+  const customShape = (entry, source, matched, via) => {
+    const bill = billingShape(entry);
+    const perToken = bill.billing === 'token';
+    return {
+      in: perToken ? Number(entry.in) || 0 : 0,
+      out: perToken ? Number(entry.out) || 0 : 0,
+      cached: perToken ? (entry.cached == null ? Number(entry.in) || 0 : Number(entry.cached) || 0) : 0,
+      peak: perToken ? (entry.peak || null) : null,
+      source,
+      matched,
+      via,
+      confidence: source,
+      kind: 'actual',
+      unpriced: false,
+      locked: false,
+      ...bill
+    };
+  };
 
   if (vendor) {
     const key = `${vendor}：${id}`;
     const hit = customMap[key];
-    if (hit && (Number(hit.in) || Number(hit.out))) return customShape(hit, 'channel', key, `渠道价（${vendor}）`);
+    if (hit && (Number(hit.in) || Number(hit.out) || hit.billing)) return customShape(hit, 'channel', key, `渠道价（${vendor}）`);
   }
   const own = customMap[id];
-  if (own && (Number(own.in) || Number(own.out))) return customShape(own, 'custom', id, '自定义价');
+  if (own && (Number(own.in) || Number(own.out) || own.billing)) return customShape(own, 'custom', id, '自定义价');
 
   if (api.useOfficialPrice !== false) {
     const hit = matchPriceTable(id, state.modelPrices?.prices || [], state.modelPrices?.aliases || null);
     if (hit) {
       const remote = hit.remote === true;
+      const bill = billingShape(hit);
+      const perToken = bill.billing === 'token';
       return {
-        in: Number(hit.in) || 0,
-        out: Number(hit.out) || 0,
-        cached: hit.cached == null ? Number(hit.in) || 0 : Number(hit.cached) || 0,
-        peak: hit.peak || null,
-        image: hit.image || null,
+        in: perToken ? Number(hit.in) || 0 : 0,
+        out: perToken ? Number(hit.out) || 0 : 0,
+        cached: perToken ? (hit.cached == null ? Number(hit.in) || 0 : Number(hit.cached) || 0) : 0,
+        peak: perToken ? (hit.peak || null) : null,
+        image: perToken ? (hit.image || null) : null,
         src: hit.src || '',
         source: remote ? 'remote' : 'official',
         matched: hit.matched,
@@ -4781,10 +4848,11 @@ function effectivePriceFor(model, vendor, overrides = null) {
         via: hit.via || '',
         kind: 'estimate',
         unpriced: false,
-        locked: !remote
+        locked: !remote,
+        ...bill
       };
     }
-    return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: true };
+    return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: true, billing: 'token' };
   }
 
   const fi = Number(api.priceInputPerM) || 0;
@@ -4800,14 +4868,36 @@ function effectivePriceFor(model, vendor, overrides = null) {
       confidence: 'manual',
       kind: 'estimate',
       unpriced: false,
-      locked: false
+      locked: false,
+      billing: 'token',
+      amount: 0,
+      period: 'month'
     };
   }
-  return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: false };
+  return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: false, billing: 'token' };
 }
 
 /** 定价弹窗当前编辑的对象：{ model, vendor }。 */
 let priceDialogState = null;
+
+/** 计费方式切换时：包月只显示"金额"，token 只显示三档单价。 */
+function syncPriceDialogBilling() {
+  const billing = String($('#price-dialog-billing')?.value || 'token');
+  const flatRow = $('#price-dialog-flat-row');
+  for (const id of ['#price-dialog-token-row', '#price-dialog-token-row-2', '#price-dialog-token-row-3']) {
+    const el = $(id);
+    if (el) el.style.display = billing === 'flat' ? 'none' : '';
+  }
+  if (flatRow) flatRow.style.display = billing === 'flat' ? '' : 'none';
+  const hint = $('#price-dialog-hint');
+  if (hint) {
+    hint.textContent = billing === 'flat'
+      ? '包月/订阅：这些调用不按 token 计价，面板把它作为固定支出单列（不计入按量成本）。'
+      : billing === 'none'
+        ? '本地/自建模型：只统计 token，不计费（也不再算"未定价"）。'
+        : '只写这一条价：同一个模型在不同渠道可以分别定价；官方价格表不会被改动，用量页会立刻按新价重算。';
+  }
+}
 
 /**
  * 打开「给这个模型定价」弹窗。
@@ -4845,6 +4935,13 @@ function openPriceDialog({ model, vendor } = {}) {
     const el = $(id);
     if (el) el.value = Number(value) || 0;
   }
+  const billingSel = $('#price-dialog-billing');
+  if (billingSel) billingSel.value = eff.billing === 'flat' ? 'flat' : (eff.billing === 'none' ? 'none' : 'token');
+  const amountEl = $('#price-dialog-amount');
+  if (amountEl) amountEl.value = Number(eff.amount) || '';
+  const periodEl = $('#price-dialog-period');
+  if (periodEl) periodEl.value = eff.period === 'day' ? 'day' : 'month';
+  syncPriceDialogBilling();
 
   const title = $('#price-dialog-title');
   if (title) title.textContent = modelId ? `给「${modelId}」定价` : '给模型定价';
@@ -4867,16 +4964,28 @@ async function savePriceDialog() {
   const result = $('#price-dialog-result');
   if (!st?.model) return;
   const vendor = String($('#price-dialog-channel')?.value || '');
+  const billing = String($('#price-dialog-billing')?.value || 'token');
   const num = (sel) => Number(String($(sel)?.value ?? '').trim()) || 0;
-  const inV = num('#price-dialog-in');
-  const outV = num('#price-dialog-out');
-  const cachedV = num('#price-dialog-cached');
-  if (!inV && !outV) {
-    if (result) { result.textContent = '输入/输出至少要填一个非 0 的数。'; result.className = 'control-result error'; }
-    return;
-  }
   const key = vendor ? `${vendor}：${st.model}` : st.model;
-  const entry = { in: inV, out: outV, cached: cachedV };
+  let entry;
+  if (billing === 'flat') {
+    const amount = num('#price-dialog-amount');
+    if (!(amount > 0)) {
+      if (result) { result.textContent = '包月要填金额（元）。'; result.className = 'control-result error'; }
+      return;
+    }
+    entry = { billing: 'flat', amount, period: String($('#price-dialog-period')?.value || 'month') };
+  } else if (billing === 'none') {
+    entry = { billing: 'none' };
+  } else {
+    const inV = num('#price-dialog-in');
+    const outV = num('#price-dialog-out');
+    if (!inV && !outV) {
+      if (result) { result.textContent = '输入/输出至少要填一个非 0 的数。'; result.className = 'control-result error'; }
+      return;
+    }
+    entry = { in: inV, out: outV, cached: num('#price-dialog-cached') };
+  }
   try {
     const res = await api('/api/config', {
       method: 'POST',
@@ -9595,6 +9704,7 @@ $$('.tab').forEach((tab) => {
   $('#price-dialog-save')?.addEventListener('click', savePriceDialog);
   $('#price-dialog-delete')?.addEventListener('click', deletePriceDialog);
   $('#price-dialog-cancel')?.addEventListener('click', () => $('#price-dialog')?.close());
+  $('#price-dialog-billing')?.addEventListener('change', syncPriceDialogBilling);
 
   // 地址栏带 ?token= 时先自动登录（供快捷方式/脚本免输令牌）；
   // 成功后清掉地址栏里的明文令牌再重载，避免留在浏览历史里。

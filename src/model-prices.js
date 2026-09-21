@@ -696,7 +696,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
   if (vendor && id) {
     const key = channelPriceKey(vendor, id);
     const hit = customMap[key];
-    if (hit && (Number(hit.in) || Number(hit.out))) {
+    if (hit && (Number(hit.in) || Number(hit.out) || hit.billing)) {
       return customPrice(hit, {
         source: 'channel',
         matched: key,
@@ -708,7 +708,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
 
   // ② 模型自定义价（不分渠道）—— 手填的价永远优先于自动拉到的价目表
   const own = customMap[id];
-  if (id && own && (Number(own.in) || Number(own.out))) {
+  if (id && own && (Number(own.in) || Number(own.out) || own.billing)) {
     return customPrice(own, { source: 'custom', matched: id, via: '自定义价', locked: false });
   }
 
@@ -716,13 +716,19 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
   //    比公共参考表更具体（就是这个渠道的价），但比不过上面两条手填的价。
   if (vendor && id && CHANNEL_PRICES[vendor]) {
     const hit = matchPriceTable(id, CHANNEL_PRICES[vendor], EFFECTIVE_ALIASES);
-    if (hit && (Number(hit.in) || Number(hit.out))) {
+    if (hit && (Number(hit.in) || Number(hit.out) || hit.billing)) {
+      const { billing, amount, period } = billingOf(hit);
+      const perToken = billing === 'token';
       return {
-        in: Number(hit.in) || 0,
-        out: Number(hit.out) || 0,
-        cached: hit.cached == null ? Number(hit.in) || 0 : Number(hit.cached) || 0,
-        peak: hit.peak || null,
+        in: perToken ? Number(hit.in) || 0 : 0,
+        out: perToken ? Number(hit.out) || 0 : 0,
+        cached: perToken ? (hit.cached == null ? Number(hit.in) || 0 : Number(hit.cached) || 0) : 0,
+        peak: perToken ? (hit.peak || null) : null,
         image: null,
+        billing,
+        amount,
+        period,
+        note: typeof hit.note === 'string' ? hit.note : '',
         source: 'channel-table',
         matched: hit.matched || id,
         locked: false,
@@ -739,12 +745,19 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
     const p = id ? (priceTable ? matchPriceTable(id, priceTable) : resolveOfficialPrice(id)) : null;
     if (p) {
       const remote = isRemoteEntry(p.matched);
+      // 表里也能标计费方式（例如社区表把某个本地模型标成 none、某个订阅套餐标成 flat）
+      const { billing, amount, period } = billingOf(p);
+      const perToken = billing === 'token';
       return {
-        in: Number(p.in) || 0,
-        out: Number(p.out) || 0,
-        cached: p.cached == null ? Number(p.in) || 0 : Number(p.cached) || 0,
-        peak: p.peak || null,
-        image: p.image || null,
+        in: perToken ? Number(p.in) || 0 : 0,
+        out: perToken ? Number(p.out) || 0 : 0,
+        cached: perToken ? (p.cached == null ? Number(p.in) || 0 : Number(p.cached) || 0) : 0,
+        peak: perToken ? (p.peak || null) : null,
+        image: perToken ? (p.image || null) : null,
+        billing,
+        amount,
+        period,
+        note: typeof p.note === 'string' ? p.note : '',
         source: remote ? 'remote' : 'official',
         matched: p.matched ?? id,
         locked: !remote,
@@ -767,6 +780,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
       out: fo,
       cached: Number(api.priceCachedPerM) || fi,
       peak: null, image: null,
+      billing: 'token', amount: 0, period: 'month',
       source: 'manual',
       matched: null,
       locked: false,
@@ -787,13 +801,37 @@ export function channelPriceKey(vendor, model) {
 }
 
 /** 用户自填价的统一形状（渠道价与自定义价共用）。 */
+/**
+ * 计费方式：token（默认，按量）/ flat（包月、订阅，固定支出）/ none（本地、自建，不计费）。
+ * 只有 token 会算进"按量成本"；flat 单独作为固定支出展示；none 只统计 token。
+ */
+export function billingOf(entry) {
+  const raw = String(entry?.billing ?? '').trim().toLowerCase();
+  if (raw === 'flat') {
+    return {
+      billing: 'flat',
+      amount: Math.max(0, Number(entry?.amount) || 0),
+      period: String(entry?.period ?? '').trim().toLowerCase() === 'day' ? 'day' : 'month'
+    };
+  }
+  if (raw === 'none') return { billing: 'none', amount: 0, period: 'month' };
+  return { billing: 'token', amount: 0, period: 'month' };
+}
+
 function customPrice(entry, { source, matched, via, locked }) {
+  const { billing, amount, period } = billingOf(entry);
+  // 包月/不计费的条目不按 token 计价：单价 0，成本口径由 billing 决定
+  const perToken = billing === 'token';
   return {
-    in: Number(entry.in) || 0,
-    out: Number(entry.out) || 0,
-    cached: entry.cached == null ? Number(entry.in) || 0 : Number(entry.cached) || 0,
-    peak: entry.peak || null,
+    in: perToken ? Number(entry.in) || 0 : 0,
+    out: perToken ? Number(entry.out) || 0 : 0,
+    cached: perToken ? (entry.cached == null ? Number(entry.in) || 0 : Number(entry.cached) || 0) : 0,
+    peak: perToken ? (entry.peak || null) : null,
     image: null,
+    billing,
+    amount,
+    period,
+    note: typeof entry.note === 'string' ? entry.note : '',
     source,
     matched,
     locked,
@@ -808,6 +846,7 @@ function unpricedPrice({ locked }) {
   return {
     in: 0, out: 0, cached: 0,
     peak: null, image: null,
+    billing: 'token', amount: 0, period: 'month',
     source: 'unmatched',
     matched: null,
     locked,

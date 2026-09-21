@@ -66,6 +66,16 @@ function normEntry(v) {
   // 图片计费规则结构各异（capped/pixel/unknown），原样透传，由 imageTokens 解读
   if (v.image && typeof v.image === 'object') e.image = v.image;
   if (typeof v.note === 'string' && v.note) e.note = v.note;
+  // 计费方式（token / flat 包月 / none 本地不计费）也允许由表提供
+  const billing = String(v.billing ?? '').trim().toLowerCase();
+  if (billing === 'flat') {
+    e.billing = 'flat';
+    const amount = Number(v.amount);
+    e.amount = Number.isFinite(amount) && amount > 0 ? amount : 0;
+    e.period = String(v.period ?? '').trim().toLowerCase() === 'day' ? 'day' : 'month';
+  } else if (billing === 'none') {
+    e.billing = 'none';
+  }
   e.src = typeof v.src === 'string' && v.src ? v.src : 'remote';
   return e;
 }
