@@ -52,9 +52,17 @@ function num(value) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** 从 /api/status 或 /api/pricing 里找站点汇率（美元 → 人民币）。 */
+/**
+ * 从 /api/status 或 /api/pricing 里找站点汇率（美元 → 人民币）。
+ * 也接受直接给一个数字/数字串（调用方显式指定汇率，如 probeChannelPrices 的 usdRate）。
+ */
 export function pickUsdRate(...payloads) {
   for (const payload of payloads) {
+    if (typeof payload === 'number' || (typeof payload === 'string' && payload.trim() !== '')) {
+      const direct = num(payload);
+      if (direct > 1 && direct < 20) return direct;
+      continue;
+    }
     const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
     for (const key of ['usd_exchange_rate', 'usd_rate', 'exchange_rate', 'rate']) {
       const rate = num(data?.[key]);

@@ -77,35 +77,64 @@ export function initChannelPrices(feedsConfig = []) {
 
 /** 拉一个渠道的价目并落盘/注入（内部吞异常）。 */
 export async function refreshChannelFeed(vendor, url, options = {}) {
-  const fetchImpl = options.fetchImpl || fetch;
   const v = String(vendor || '').trim();
   const target = String(url || '').trim();
   if (!v || !target) return channelPriceStatus();
+  const fetchImpl = options.fetchImpl || fetch;
+  const timeoutMs = Number(options.timeoutMs) || FETCH_TIMEOUT_MS;
+  let loaded = null;   // { prices, url, dropped }
+  let error = '';
+
+  // ① 先按"价目 JSON"直接拉：用户自己配的地址通常是这种（in/out 价目或倍率表）。
   try {
     const res = await fetchImpl(target, {
       headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(Number(options.timeoutMs) || FETCH_TIMEOUT_MS)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const payload = await res.json().catch(() => { throw new Error('返回的不是合法 JSON'); });
     const norm = normalizePriceFeed(payload);
     if (!norm || !Object.keys(norm.prices).length) throw new Error('没有可用的价格条目（需要 in/out 价目或倍率表）');
+    loaded = { prices: norm.prices, url: target, dropped: norm.dropped || 0 };
+  } catch (err) {
+    error = String(err?.cause?.message ?? err?.message ?? err);
+    // ② 直接拉失败就按"渠道探测"再试一次：中转站的价目常挂在 <base>/api/pricing，
+    //    而且是 one-api 的倍率表（要按汇率/分组换算），直接拉 Base URL 只会拿到
+    //    404 或 HTML。探测成功后记下真正命中的地址，下次少走一遍。
+    try {
+      const probe = await probeChannelPrices({ url: target, timeoutMs, fetchImpl: options.fetchImpl });
+      if (probe.ok && Object.keys(probe.prices || {}).length) {
+        loaded = {
+          prices: probe.prices,
+          url: String(probe.sourceUrl || target).trim(),
+          dropped: probe.skipped || 0
+        };
+        error = '';
+      } else if (probe.error) {
+        error = probe.error;
+      }
+    } catch (err2) {
+      error = String(err2?.message ?? err2);
+    }
+  }
+
+  if (loaded) {
     feeds[v] = {
-      url: target,
+      url: loaded.url,
       ok: true,
       error: '',
       fetchedAt: Date.now(),
-      count: Object.keys(norm.prices).length,
-      dropped: norm.dropped || 0,
-      prices: norm.prices
+      count: Object.keys(loaded.prices).length,
+      dropped: loaded.dropped,
+      prices: loaded.prices
     };
-    setChannelPrices(v, norm.prices);
-  } catch (error) {
+    setChannelPrices(v, loaded.prices);
+  } else {
     const previous = feeds[v] || {};
     feeds[v] = {
       url: target,
       ok: false,
-      error: String(error?.cause?.message ?? error?.message ?? error),
+      error,
       fetchedAt: Date.now(),
       count: previous.count || 0,
       dropped: previous.dropped || 0,
@@ -189,17 +218,21 @@ export async function maybeAutoProbeChannel({ baseUrl, vendor, feedsConfig = [],
     if (!probe.ok || !Object.keys(probe.prices || {}).length) {
       return { probed: true, ok: false, error: probe.error || '没有识别到价目' };
     }
-    // 登记成该渠道的价目表（写 config + 落盘 + 注入）
+    // 登记成该渠道的价目表（写 config + 落盘 + 注入）。
+    // ⚠️ 必须登记**探测命中的那个价目地址**（probe.sourceUrl，通常是 <base>/api/pricing），
+    //    而不是用户填的 Base URL —— 后者拉不到 JSON，后面每次刷新都会失败，
+    //    且因为"该渠道已配置"再也不会自动重探，价格会永久冻结在首次探测的结果上。
+    const priceUrl = String(probe.sourceUrl || url).trim();
     try {
       const current = options.getConfig ? options.getConfig() : null;
       const feeds = Array.isArray(current?.api?.channelPriceFeeds) ? current.api.channelPriceFeeds : [];
       if (!feeds.some((f) => String(f?.vendor || '').trim() === channel)) {
         const write = options.updateConfig || updateConfig;
-        write({ api: { ...(current?.api || {}), channelPriceFeeds: [...feeds, { vendor: channel, url, auto: true }] } });
+        write({ api: { ...(current?.api || {}), channelPriceFeeds: [...feeds, { vendor: channel, url: priceUrl, auto: true }] } });
       }
     } catch { /* 写不进 config 也要把表用起来 */ }
     feeds[channel] = {
-      url,
+      url: priceUrl,
       ok: true,
       error: '',
       fetchedAt: Date.now(),

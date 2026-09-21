@@ -398,3 +398,18 @@ test('前端用的 matchPriceTable 与后端 resolveOfficialPrice 口径一致',
     assert.equal(frontend ? frontend.confidence : 'none', backend ? backend.confidence : 'none');
   }
 });
+
+/* ── 兜底估算也要按"每条调用自己的时间"取别名 ── */
+
+test('兜底估算（按当前模型估价）不能拿"现在"的别名规则改写历史', () => {
+  // 内置别名表：deepseek-v4-pro 从 2026-09-14T12:00(+08:00) 起路由到 flash。
+  // 历史行必须按当时的规则算，否则 9-14 之前那些调用会被按 flash 的价低估数倍。
+  const cfg = { api: { model: 'deepseek-v4-pro', useOfficialPrice: true, fallbackToCurrentModel: true } };
+  const after9 = prices.resolveModelPrice('some-unknown-model', cfg, null, { at: Date.parse('2026-09-18T07:30:00+08:00') });
+  assert.equal(after9.source, 'fallback-model');
+  assert.equal(after9.in, 1, '9-14 之后 v4-pro 已路由到 flash');
+
+  const before9 = prices.resolveModelPrice('some-unknown-model', cfg, null, { at: Date.parse('2026-09-10T07:30:00+08:00') });
+  assert.equal(before9.source, 'fallback-model');
+  assert.equal(before9.in, 4.5, '9-14 之前 v4-pro 还是它自己的价（带 from 的别名不回溯）');
+});

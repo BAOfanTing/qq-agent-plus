@@ -65,23 +65,41 @@ const status = {
 
 let timer = null;
 
+/**
+ * 取一个价格数字：只接受"真的写了非负数字"（数字或数字串）。
+ * null / 空串 / 布尔 / 负数 / 非数字串一律算坏值 —— `Number(null) === 0`、
+ * `Number('') === 0` 会把它们悄悄变成"0 元免费价"，这正是本文档最忌讳的
+ * "未定价 ≠ 免费"（见 docs/model-prices.md）。
+ */
+function priceNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  return null;
+}
+
 /** 校验并规范化一条价格条目；不合格返回 null。 */
 function normEntry(v) {
   if (!v || typeof v !== 'object') return null;
-  const i = Number(v.in), o = Number(v.out);
-  // in/out 至少一个是有限数字（免费模型 0/0 合法；完全没有数字才是坏条目）
-  if (!Number.isFinite(i) && !Number.isFinite(o)) return null;
+  const inVal = priceNumber(v.in), outVal = priceNumber(v.out);
+  // 写了但写坏（null / 空串 / 负数 / 非数字）→ 整条丢弃，绝不当成 0 元
+  if ((Object.hasOwn(v, 'in') && inVal === null) || (Object.hasOwn(v, 'out') && outVal === null)) return null;
+  // 两边都没写数字：坏条目（0/0 是写出来的合法免费价，不算坏）
+  if (inVal === null && outVal === null) return null;
   const e = {
-    in: Number.isFinite(i) ? i : 0,
-    out: Number.isFinite(o) ? o : 0,
-    cached: v.cached == null ? null : (Number.isFinite(Number(v.cached)) ? Number(v.cached) : null)
+    in: inVal ?? 0,
+    out: outVal ?? 0,
+    cached: priceNumber(v.cached)
   };
   if (v.peak && typeof v.peak === 'object') {
-    const pi = Number(v.peak.in), po = Number(v.peak.out), pc = Number(v.peak.cached);
+    const pi = priceNumber(v.peak.in), po = priceNumber(v.peak.out), pc = priceNumber(v.peak.cached);
+    // peak 里某一档写坏时退回基础价即可，不因为一条坏数据丢掉整条价目
     e.peak = {
-      in: Number.isFinite(pi) ? pi : e.in,
-      out: Number.isFinite(po) ? po : e.out,
-      cached: Number.isFinite(pc) ? pc : e.cached
+      in: pi ?? e.in,
+      out: po ?? e.out,
+      cached: pc ?? e.cached
     };
   }
   // 图片计费规则结构各异（capped/pixel/unknown），原样透传，由 imageTokens 解读
@@ -242,14 +260,17 @@ export async function refreshPriceFeed(configured, options = {}) {
 export function initPriceFeed(configured) {
   const targets = priceFeedTargets(configured);
   const key = targets.join(',') || 'disabled';
-  if (timer) { clearInterval(timer); timer = null; }
   status.url = String(configured ?? '').trim();
   if (!targets.length) {
+    if (timer) { clearInterval(timer); timer = null; }
     status.enabled = false;
     status.sourceUrl = '';
     return;
   }
-  if (status.tag === key && status.enabled) return;   // 同一组地址已初始化过
+  // 地址没变就什么都不做 —— 注意要在动定时器**之前**返回：
+  // 配置保存时也会调这里，先 clearInterval 再 return 会让 24h 刷新永久停摆。
+  if (status.tag === key && status.enabled) return;
+  if (timer) { clearInterval(timer); timer = null; }
   status.tag = key;
   status.enabled = true;
   applyDiskCache(targets, key);            // 先用缓存顶上，拉到新的再覆盖

@@ -83,6 +83,29 @@ function decodeImageDataUrl(value) {
   return buffer;
 }
 
+/**
+ * 设置页「模型价格」要的一整组数据。
+ * GET /api/model-prices 与「立即拉取」共用同一个形状 —— 少一个字段，
+ * 前端替换状态后就会当场显示错价（渠道价/别名/渠道价目表丢失）。
+ */
+function modelPricesPayload(modelOverride = null) {
+  const cfg = getConfig();
+  const model = String(modelOverride || cfg.api?.model || '');
+  // currentDetail：完整的解析链路（渠道价 → 自定义价 → 账户口径 → 渠道价目表 →
+  // 官方/远程表 → 兜底 → 未定价，以及走了别名还是近似）。界面据此解释"这个价是哪来的"。
+  const vendor = vendorOfConfig(cfg) || '';
+  return {
+    prices: listOfficialPrices(),
+    current: resolveOfficialPrice(model),
+    currentVendor: vendor,
+    currentDetail: { model, vendor, ...resolveModelPrice(model, cfg, null, { vendor }) },
+    aliases: listModelAliases(),
+    costMode: costModeOf(cfg),
+    channelFeeds: channelPriceStatus(),   // 每渠道一份价目表的状态
+    remote: priceFeedStatus()   // 远程价格表状态（设置页展示：来源/时间/条目数/错误）
+  };
+}
+
 export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
   const cfg = getConfig();
   const bus = createEventBus();
@@ -1528,38 +1551,15 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       }
 
       if (pathname === '/api/model-prices' && method === 'GET') {
-        const cfg = getConfig();
-        const model = String(url.searchParams.get('model') || cfg.api?.model || '');
-        // currentDetail：完整的解析链路（渠道价 → 自定义价 → 表 → 兜底 → 未定价，
-        // 以及走了别名还是近似）。界面据此解释"这个价格是哪来的"。
-        const vendor = vendorOfConfig(cfg) || '';
-        return json(res, 200, {
-          prices: listOfficialPrices(),
-          current: resolveOfficialPrice(model),
-          currentVendor: vendor,
-          currentDetail: { model, vendor, ...resolveModelPrice(model, cfg, null, { vendor }) },
-          aliases: listModelAliases(),
-          costMode: costModeOf(cfg),
-          channelFeeds: channelPriceStatus(),   // 每渠道一份价目表的状态
-          remote: priceFeedStatus()   // 远程价格表状态（设置页展示：来源/时间/条目数/错误）
-        });
+        return json(res, 200, modelPricesPayload(url.searchParams.get('model')));
       }
 
       // 手动触发一次远程价格表拉取（设置页「立即拉取」按钮）
+      // 返回体与 GET 同形（只多一个 ok）：前端拿到后就地替换状态，
+      // 少字段会让价格卡当场显示错价（渠道价/别名/渠道价目表集体丢失）。
       if (pathname === '/api/model-prices/refresh' && method === 'POST') {
-        const cfg = getConfig();
-        const model = String(cfg.api?.model || '');
-        const vendor = vendorOfConfig(cfg) || '';
-        const st = await refreshPriceFeed(cfg.api?.priceRemoteUrl || '');
-        return json(res, 200, {
-          ok: st.ok,
-          remote: st,
-          prices: listOfficialPrices(),
-          current: resolveOfficialPrice(model),
-          currentVendor: vendor,
-          currentDetail: { model, vendor, ...resolveModelPrice(model, cfg, null, { vendor }) },
-          aliases: listModelAliases()
-        });
+        const st = await refreshPriceFeed(getConfig().api?.priceRemoteUrl || '');
+        return json(res, 200, { ok: st.ok, ...modelPricesPayload() });
       }
 
       // ── 体检/引导相关 ──
@@ -3228,7 +3228,10 @@ function buildSessionMetrics(s) {
     estimatedCost: priced.cost,
     costBreakdown: priced.breakdown,
     exactCostCalls: priced.exactCalls,
-    unpricedCalls: priced.unpricedCalls || 0
+    unpricedCalls: priced.unpricedCalls || 0,
+    // 包月/本地也要带给会话上下文面板：只有 unpriced 会漏掉"这次是按月付/不计费"
+    flatCalls: priced.flatCalls || 0,
+    localCalls: priced.localCalls || 0
   };
 }
 
@@ -3463,13 +3466,18 @@ function costOfRows(rows) {
     else if (p.billing === 'flat') {
       flatCalls += 1;
       flatTokens += tk;
-      const key = r.modelKey || r.model || '(未知)';
+      // 账户级包月（订阅制/本地自建）是**一个**固定支出，不能按模型个数各记一份：
+      // 否则面板会把 ¥68/月 显示成 ¥68 × 用过的模型数。按账户口径定价的调用
+      // 统一并到同一个条目里，模型级包月（价格表/自定义价里标 flat 的）仍按模型分开。
+      const accountLevel = p.source === 'subscription';
+      const key = accountLevel ? '(账户月费)' : (r.modelKey || r.model || '(未知)');
       const item = flatItems.get(key) || {
         key,
         amount: Number(p.amount) || 0,
         period: p.period === 'day' ? 'day' : 'month',
         calls: 0,
-        tokens: 0
+        tokens: 0,
+        ...(accountLevel ? { accountLevel: true } : {})
       };
       item.calls += 1;
       item.tokens += tk;
@@ -3605,7 +3613,13 @@ function buildUsageBreakdown({ range = '7', dim = '', key = '', by = '' } = {}) 
       totalTokens: g.totalTokens,
       cacheHitRate: g.cacheHitRate,
       runs: g.runs,
-      exactCalls: g.exactCalls
+      exactCalls: g.exactCalls,
+      // 包月/本地/未定价也要带给明细行：否则这些行的成本列只剩 ¥0.00，
+      // 会被读成"免费"（主表已经用徽标规避了这个问题，明细表同样需要）。
+      flatCalls: g.flatCalls || 0,
+      flatItems: (g.flatItems || []).slice(0, 5),
+      localCalls: g.localCalls || 0,
+      unpricedCalls: g.unpricedCalls || 0
     }))
   };
 }

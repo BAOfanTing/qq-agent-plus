@@ -910,7 +910,7 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
   //    面板会说明有多少次是按它估的（fallbackCalls）。
   const currentModel = String(api.model || '').trim();
   if (fallbackAllowed && api.fallbackToCurrentModel !== false && id && currentModel && currentModel !== id) {
-    const base = resolveModelPrice(currentModel, cfg, priceTable, { vendor, allowFallback: false });
+    const base = resolveModelPrice(currentModel, cfg, priceTable, { vendor, at: Number(options.at) || 0, allowFallback: false });
     if (base && base.unpriced !== true) {
       return {
         ...base,

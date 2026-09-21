@@ -22,7 +22,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { resolveModelPrice, modelLabel } from './model-prices.js';
+import { resolveModelPrice, modelLabel, setRemotePrices, setChannelPrices } from './model-prices.js';
 
 const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const IS_WINDOWS = process.platform === 'win32';
@@ -262,15 +262,46 @@ function sqliteIntegrity(file) {
 }
 
 /**
+ * 把磁盘上的价格表缓存注入查价层（只读，不发网络请求）。
+ *   - data/price-feed-cache.json → 远程价格表（项目/社区公共参考价）
+ *   - data/channel-prices.json   → 每渠道价目表（只注入 config 里还配着的渠道）
+ * 与服务进程启动时的行为一致（src/price-feed.js / src/channel-prices.js 也是先吃缓存）。
+ */
+function injectCachedPriceTables(dataDir, priceCfg) {
+  try {
+    const cache = JSON.parse(fs.readFileSync(path.join(dataDir, 'price-feed-cache.json'), 'utf8'));
+    if (cache?.prices && typeof cache.prices === 'object') {
+      setRemotePrices(cache.prices, cache.aliases && typeof cache.aliases === 'object' ? cache.aliases : null);
+    }
+  } catch { /* 没有缓存就只用内置表 */ }
+  try {
+    const cache = JSON.parse(fs.readFileSync(path.join(dataDir, 'channel-prices.json'), 'utf8'));
+    const feeds = cache?.feeds && typeof cache.feeds === 'object' ? cache.feeds : {};
+    const wanted = new Set((Array.isArray(priceCfg?.api?.channelPriceFeeds) ? priceCfg.api.channelPriceFeeds : [])
+      .map((f) => String(f?.vendor || '').trim())
+      .filter(Boolean));
+    for (const [vendor, feed] of Object.entries(feeds)) {
+      if (!wanted.has(vendor)) continue;
+      const prices = feed?.prices;
+      setChannelPrices(vendor, prices && typeof prices === 'object' ? prices : null);
+    }
+  } catch { /* 同上 */ }
+}
+
+/**
  * 价格缺口（只读）：扫会话留档，找出"没有价格"的模型。
- * 与用量页同一条判价链（含账户口径、渠道价、"按当前模型估算"），
+ * 与用量页同一条判价链（含账户口径、渠道价目表、远程价格表、"按当前模型估算"），
  * 所以这里剩下的就是真正没算进成本的调用。没有留档时返回 null。
+ *
+ * 远程表与渠道价目表用**磁盘缓存**注入（不发网络请求）：体检是只读的，
+ * 而服务进程启动时也是先吃这两份缓存 —— 不在线拉才能既对齐口径又不打扰外部站点。
  */
 function priceGapReport(cfg) {
   // 用配置文件的完整内容判价（ops 自己的 cfg 是扁平结构，缺 api.* 会让
   // 账户口径与按当前模型估算失效，报出的缺口就跟控制台对不上）
   let priceCfg = {};
   try { priceCfg = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'config.json'), 'utf8')); } catch { priceCfg = {}; }
+  injectCachedPriceTables(cfg.dataDir, priceCfg);
   const dir = path.join(cfg.dataDir, 'sessions');
   let files = [];
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return null; }

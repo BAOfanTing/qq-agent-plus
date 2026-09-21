@@ -647,7 +647,7 @@ function onebotIssueText(ob, { withRaw = true } = {}) {
 function onebotStatusLineHtml() {
   const ob = state.status?.onebot;
   return ob?.connected
-    ? `<div class="hint success">当前状态：已连接${ob.self ? `（${ob.self.nickname}）` : '（但没取到登录信息，确认协议端的 QQ 已登录）'}</div>`
+    ? `<div class="hint success">当前状态：已连接${ob.self ? `（${esc(ob.self.nickname)}）` : '（但没取到登录信息，确认协议端的 QQ 已登录）'}</div>`
     : `<div class="hint error">当前状态：未连接 —— ${esc(onebotIssueText(ob) || '正在等待首次连接')}</div>`;
 }
 
@@ -2036,7 +2036,15 @@ function renderSessionContextInspector(s) {
         <div><span>总缓存 Token</span><strong>${fmtTok(metrics.cachedTokens)}</strong><small>token</small></div>
         <div><span>总工具次数</span><strong>${fmtTok(metrics.toolCalls)}</strong><small>次</small></div>
         <div><span>总联网次数</span><strong>${fmtTok(metrics.webSearchCount)}</strong><small>次</small></div>
-        <div><span>预估成本</span><strong>${fmtYuan(metrics.estimatedCost)}</strong><small>${Number(metrics.unpricedCalls) > 0 ? `含 ${Number(metrics.unpricedCalls)} 次未定价调用` : '与用量页同口径'}</small></div>
+        <div><span>预估成本</span><strong>${fmtYuan(metrics.estimatedCost)}</strong><small>${(() => {
+          // 这个数字只含按 token 计价的部分：包月/本地/未定价必须点出来，
+          // 否则 ¥0.00 会被读成"这次没花钱"。
+          const notes = [];
+          if (Number(metrics.unpricedCalls) > 0) notes.push(`含 ${Number(metrics.unpricedCalls)} 次未定价调用`);
+          if (Number(metrics.flatCalls) > 0) notes.push(`${Number(metrics.flatCalls)} 次按包月计（不计入）`);
+          if (Number(metrics.localCalls) > 0) notes.push(`${Number(metrics.localCalls)} 次本地模型（不计费）`);
+          return notes.length ? notes.join('；') : '与用量页同口径';
+        })()}</small></div>
       </div>
       <div class="context-request-summary">
         当前展示第 ${Number(s.inputRound) || Math.max(1, calls.length)} 轮请求快照
@@ -3288,6 +3296,22 @@ function openUsageBreakdown(dim, key) {
       const r = await api(`/api/usage/breakdown?range=${encodeURIComponent(usageRange)}&dim=${dim}&key=${encodeURIComponent(key)}&by=${activeBy}`);
       peakEl.innerHTML = peakSplitHtml(r.totals);
       colEl.textContent = { model: '模型', chat: '会话', day: '日期' }[activeBy] || '项目';
+      // 成本列：包月/本地/未定价不能只显示 ¥0.00（会被读成免费）
+      const costCell = (x) => {
+        const items = Array.isArray(x.flatItems) ? x.flatItems : [];
+        const monthly = items.reduce((s2, it) => (it.period === 'month' ? s2 + (Number(it.amount) || 0) : s2), 0);
+        const daily = items.reduce((s2, it) => (it.period === 'day' ? s2 + (Number(it.amount) || 0) : s2), 0);
+        const chips = [];
+        if (Number(x.flatCalls) > 0) {
+          const amount = [monthly > 0 ? `¥${monthly}/月` : '', daily > 0 ? `¥${daily}/天` : ''].filter(Boolean).join(' + ');
+          chips.push(`<span class="uc-chip" title="包月/订阅：按固定支出计，不按 token 计价">包月${amount ? ` ${amount}` : ''}</span>`);
+        }
+        if (Number(x.localCalls) > 0) chips.push('<span class="uc-chip" title="本地/自建模型：只统计 token，不计费">本地</span>');
+        if (Number(x.unpricedCalls) > 0) chips.push(`<span class="uc-chip warn" title="没有价格：这些调用没算进成本，不是免费">未定价 ${Number(x.unpricedCalls)}</span>`);
+        const money = Number(x.cost) || 0;
+        const head = (money > 0 || !chips.length) ? fmtYuan(money) : '—';
+        return [head, ...chips].join(' ');
+      };
       bodyEl.innerHTML = (r.rows || []).length
         ? r.rows.map((x) => `
             <tr>
@@ -3298,7 +3322,7 @@ function openUsageBreakdown(dim, key) {
               <td class="r">${fmtTok(x.promptTokens)}</td>
               <td class="r">${fmtTok(x.completionTokens)}</td>
               <td class="r">${((x.cacheHitRate || 0) * 100).toFixed(0)}%</td>
-              <td class="r">${fmtYuan(x.cost)}</td>
+              <td class="r">${costCell(x)}</td>
             </tr>`).join('')
         : '<tr><td colspan="6" class="muted">无数据</td></tr>';
     } catch (e) {
@@ -4837,9 +4861,14 @@ function refreshModelPriceCard() {
     return;
   }
 
-  // 生效价按与后端一致的链路算：渠道价 → 自定义价 → 价格表 → 兜底 → 未定价。
-  // 界面上的开关是实时值，所以这里临时覆盖一份 cfg 再算，避免"按了没反应"。
-  const eff = effectivePriceFor(model, vendor, { useOfficialPrice: useOfficial });
+  // 生效价按与后端一致的链路算：渠道价 → 自定义价 → 账户口径 → 渠道价目表 →
+  // 官方/远程表（×倍率）→ 兜底 → 未定价。
+  // 界面开关与已保存配置一致时，直接用后端算好的权威结果（渠道价目表那层只有后端知道）；
+  // 只有用户刚拨了开关还没保存时才临时本地重算，避免"按了没反应"。
+  const savedOfficial = api.useOfficialPrice !== false;
+  const eff = useOfficial === savedOfficial
+    ? effectivePriceFor(model, vendor)
+    : effectivePriceFor(model, vendor, { useOfficialPrice: useOfficial });
   const shown = { in: eff.in ?? 0, out: eff.out ?? 0, cached: eff.cached ?? 0 };
   const locked = eff.locked === true || eff.billing === 'flat' || eff.billing === 'none';
   let sourceTxt = '';
@@ -4858,6 +4887,9 @@ function refreshModelPriceCard() {
     sourceTxt = '正在使用你为这个模型填的价（实付口径，覆盖官方价）。';
   } else if (eff.source === 'remote') {
     sourceTxt = '这个价来自远程价格表（你配置的那份），可以直接改；改完就变成你自己的价。';
+  } else if (eff.source === 'multiplier') {
+    sourceTxt = `正在按「${eff.via || `官方价 ×${Number(api.costMultiplier) || 1}`}」折算（你声明的渠道价）——`
+      + '这是实付口径的估算，不是账单原样；换口径在下面的「成本怎么算」。';
   } else if (eff.source === 'manual') {
     sourceTxt = '官方价格表没有命中，正在用「全局兜底单价」估算 —— 想让这个模型更准，用下面的「给这个模型定价」。';
   } else if (eff.source === 'unmatched') {
@@ -4956,26 +4988,48 @@ function effectivePriceFor(model, vendor, overrides = null) {
   const own = customMap[id];
   if (own && (Number(own.in) || Number(own.out) || own.billing)) return customShape(own, 'custom', id, '自定义价');
 
+  // 账户口径：按月付（与后端 ③ 一致）—— 固定月费，不按 token 算
+  const costMode = String(api.costMode || 'official');
+  const monthlyFee = Number(api.costMonthlyFee) || 0;
+  if (costMode === 'subscription' && monthlyFee > 0) {
+    return {
+      in: 0, out: 0, cached: 0, peak: null, image: null,
+      billing: 'flat', amount: monthlyFee, period: 'month',
+      source: 'subscription', matched: null, via: `按月付 ¥${monthlyFee}/月`,
+      confidence: 'manual', kind: 'actual', unpriced: false, locked: false
+    };
+  }
+
   if (api.useOfficialPrice !== false) {
     const hit = matchPriceTable(id, state.modelPrices?.prices || [], state.modelPrices?.aliases || null);
     if (hit) {
       const remote = hit.remote === true;
+      // 渠道倍率（与后端 ⑤ 一致）：官方/远程表的价按用户声明的倍率折算，
+      // 折算后是"实付"口径，所以卡片不能再按"官方估算"解释。
+      const mul = costMode === 'multiplier' ? Math.max(0.0001, Number(api.costMultiplier) || 1) : 1;
+      const discounted = mul !== 1;
+      const scale = (value) => Number((((Number(value) || 0) * mul)).toFixed(6));
+      const peak = hit.peak
+        ? (discounted
+          ? { in: scale(hit.peak.in), out: scale(hit.peak.out), cached: hit.peak.cached == null ? scale(hit.cached) : scale(hit.peak.cached) }
+          : hit.peak)
+        : null;
       const bill = billingShape(hit);
       const perToken = bill.billing === 'token';
       return {
-        in: perToken ? Number(hit.in) || 0 : 0,
-        out: perToken ? Number(hit.out) || 0 : 0,
-        cached: perToken ? (hit.cached == null ? Number(hit.in) || 0 : Number(hit.cached) || 0) : 0,
-        peak: perToken ? (hit.peak || null) : null,
+        in: perToken ? scale(hit.in) : 0,
+        out: perToken ? scale(hit.out) : 0,
+        cached: perToken ? (hit.cached == null ? scale(hit.in) : scale(hit.cached)) : 0,
+        peak: perToken ? peak : null,
         image: perToken ? (hit.image || null) : null,
         src: hit.src || '',
-        source: remote ? 'remote' : 'official',
+        source: discounted ? 'multiplier' : (remote ? 'remote' : 'official'),
         matched: hit.matched,
-        confidence: hit.confidence || 'exact',
-        via: hit.via || '',
-        kind: 'estimate',
+        confidence: discounted ? 'manual' : (hit.confidence || 'exact'),
+        via: discounted ? `官方价 ×${mul}` : (hit.via || ''),
+        kind: discounted ? 'actual' : 'estimate',
         unpriced: false,
-        locked: !remote,
+        locked: discounted ? false : !remote,
         ...bill
       };
     }
@@ -5247,9 +5301,14 @@ function openBatchPriceModal() {
     const c = edits[m] || {};
     // 官方价不占列（太挤）：placeholder 里有，模型名悬停也有
     const offTitle = off ? `官方价：输入 ${off.in} / 输出 ${off.out} / 缓存 ${off.cached ?? '—'}（元/百万）` : '官方价格表未收录';
+    // 计费方式在这里看不到就会"静默变味"：包月/本地条目必须自己标出来，
+    // 否则用户改一下缓存列，包月就变成了按 token 计价。
+    const billBadge = c.billing === 'flat'
+      ? `<span class="uc-chip" title="包月/订阅：按固定支出计，不按 token 计价">包月 ${Number(c.amount) || 0}${c.period === 'day' ? '/天' : '/月'}</span>`
+      : (c.billing === 'none' ? '<span class="uc-chip" title="本地/自建模型：只统计 token，不计费">本地</span>' : '');
     return `
       <tr data-model="${esc(m)}">
-        <td title="${esc(offTitle)}">${esc(p.names[m] || m)}<div class="muted" style="font-size:11px">${esc(m)}</div></td>
+        <td title="${esc(offTitle)}">${esc(p.names[m] || m)}${billBadge}<div class="muted" style="font-size:11px">${esc(m)}</div></td>
         <td><input type="number" step="0.01" min="0" class="bp-in" value="${esc(c.in ?? '')}" placeholder="${off ? off.in : 0}" /></td>
         <td><input type="number" step="0.01" min="0" class="bp-out" value="${esc(c.out ?? '')}" placeholder="${off ? off.out : 0}" /></td>
         <td><input type="number" step="0.01" min="0" class="bp-cached" value="${esc(c.cached ?? '')}" placeholder="${off ? (off.cached ?? 0) : 0}" /></td>
@@ -5279,8 +5338,17 @@ function openBatchPriceModal() {
           return v === '' ? null : (Number(v) || 0);
         };
         const i = num('.bp-in'), o = num('.bp-out'), c = num('.bp-cached');
-        if (i === null && o === null && c === null) delete edits[m];
-        else edits[m] = { in: i ?? 0, out: o ?? 0, cached: c ?? (i ?? 0) };
+        if (i === null && o === null && c === null) {
+          delete edits[m];
+          return;
+        }
+        // 计费方式不在这张表里编辑：只动缓存列不该把"包月/本地"静默变成按 token 计价。
+        // 只有在输入/输出列写了数字（= 明确要按 token 定价）时才转成 token 口径。
+        const prev = edits[m] || {};
+        const tokenIntent = i !== null || o !== null;
+        const next = { ...prev, in: i ?? 0, out: o ?? 0, cached: c ?? (i ?? 0) };
+        if (tokenIntent) { delete next.billing; delete next.amount; delete next.period; }
+        edits[m] = next;
       };
       tr.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', sync));
     });
@@ -5322,7 +5390,7 @@ function openBatchPriceModal() {
       refreshModelPriceCard();
       $('#provider-action-hint').textContent = `已保存 ${Object.keys(next).length} 个模型的自定义单价。`;
     } catch (e) {
-      hintEl.textContent = `保存失败：${esc(e.message)}`;
+      hintEl.textContent = `保存失败：${e.message}`;   // textContent 不吃 HTML，esc() 会把实体原样显示出来
     }
   });
 }
@@ -5551,7 +5619,7 @@ function renderSettingsSidebar() {
     <div class="settings-runstate">
       <div class="rs-title">机器人运行状态</div>
       <div class="rs-row" ${s?.onebot?.connected ? '' : `title="${esc(onebotIssueText(s?.onebot) || '正在等待首次连接')}"`}><span class="dot ${s?.onebot?.connected ? 'dot-on' : 'dot-off'}"></span><span>${s?.onebot?.connected ? '运行中' : '未就绪'}</span></div>
-      <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${s.orchestrator.model}` : '模型：未设置')}</div>
+      <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${esc(s.orchestrator.model)}` : '模型：未设置')}</div>
     </div>
     <div class="settings-menu">
       ${menu.map(([id, label]) => `<button class="settings-menu-item ${state.settingsSection === id ? 'active' : ''}" data-section="${id}">${label}</button>`).join('')}
@@ -8359,7 +8427,6 @@ function bindSettingsEvents(c) {
     if (monthly) monthly.disabled = picked !== 'subscription';
     const status = $('#cost-mode-status');
     if (status) {
-      const mode = state.modelPrices?.costMode || {};
       status.textContent = picked === 'multiplier'
         ? `官方价 ×${Number(mult?.value) || 1} = 你的渠道价（按实付口径显示）`
         : picked === 'subscription'
@@ -8380,7 +8447,18 @@ function bindSettingsEvents(c) {
     if (statusEl) statusEl.textContent = '正在拉取…';
     try {
       const r = await api('/api/model-prices/refresh', { method: 'POST', body: '{}' });
-      state.modelPrices = { prices: r.prices, current: r.current, remote: r.remote };
+      // 合并而不是整体替换：响应里没有的字段（渠道价目表状态等）必须留住，
+      // 否则这一下会把渠道价、别名、渠道价目表清单全部抹掉，卡片当场显示错价。
+      state.modelPrices = {
+        ...(state.modelPrices || {}),
+        prices: r.prices,
+        current: r.current,
+        remote: r.remote,
+        currentVendor: r.currentVendor ?? state.modelPrices?.currentVendor,
+        currentDetail: r.currentDetail ?? state.modelPrices?.currentDetail,
+        aliases: r.aliases ?? state.modelPrices?.aliases,
+        channelFeeds: r.channelFeeds ?? state.modelPrices?.channelFeeds
+      };
       renderPriceFeedStatus();
       refreshModelPriceCard();   // 价格可能变了，当前模型卡片跟着刷
     } catch (e) {
@@ -9439,6 +9517,16 @@ async function saveConfig({ quiet = false } = {}) {
   }
 
   if (sec === 'api') {
+    // ⚠️ 模型名与开关状态必须读**界面实时值**（c.api 是上次保存的旧值）：
+    // 用户可能改了模型/开关但还没保存过，用旧值会把价格存到错误的模型名下。
+    const curModel = String(($('#cfg-model')?.value ?? c.api?.model) || '').trim();
+    const officialOn = ($('#cfg-useofficialprice')?.checked) ?? (c.api?.useOfficialPrice !== false);
+    // 当前模型单价卡片会把"生效价"写进这三个输入框，官方价开关打开时它们还是禁用的 ——
+    // 那种情况下读回来的是官方价/渠道价的展示值，写进配置就等于凭空造出一条
+    // 「全局兜底单价」（且对所有未定价模型生效）。开关打开时保持配置里的原值不变。
+    const priceIn = officialOn ? (Number(c.api.priceInputPerM) || 0) : (Number(val('#cfg-price-in', 0)) || 0);
+    const priceOut = officialOn ? (Number(c.api.priceOutputPerM) || 0) : (Number(val('#cfg-price-out', 0)) || 0);
+    const priceCached = officialOn ? (Number(c.api.priceCachedPerM) || 0) : (Number(val('#cfg-price-cached', 0)) || 0);
     patch.api = {
       vision: chk('#cfg-vision', c.api.vision !== false),
       temperature: Number(val('#cfg-temperature', c.api.temperature)) || 0.8,
@@ -9465,33 +9553,28 @@ async function saveConfig({ quiet = false } = {}) {
       // 远程价格表 URL：留空 = 只用内置表
       priceRemoteUrl: val('#cfg-price-remote-url', c.api.priceRemoteUrl || '').trim(),
       // 全局兜底单价：仅当没有模型级价格时生效
-      priceInputPerM: Number(val('#cfg-price-in', c.api.priceInputPerM ?? 0)) || 0,
-      priceOutputPerM: Number(val('#cfg-price-out', c.api.priceOutputPerM ?? 0)) || 0,
-      priceCachedPerM: Number(val('#cfg-price-cached', c.api.priceCachedPerM ?? 0)) || 0
+      priceInputPerM: priceIn,
+      priceOutputPerM: priceOut,
+      priceCachedPerM: priceCached
     };
     // 把当前模型的单价存进 modelPrices[模型]（只影响这一个模型，不动内置官方表）。
-    // 若开关是打开的，则不应写入 —— 那时输入框是禁用的，读到的值就是官方价，
-    // 写进去会凭空产生一条自定义价。
-    //
-    // ⚠️ 模型名与开关状态都必须读**界面实时值**（c.api 是上次保存的旧值）：
-    // 用户可能改了模型/开关但还没保存过，用旧值会把价格存到错误的模型名下。
-    const curModel = String(($('#cfg-model')?.value ?? c.api?.model) || '').trim();
-    const officialOn = ($('#cfg-useofficialprice')?.checked) ?? (c.api?.useOfficialPrice !== false);
-    if (curModel) {
-      const isLocked = officialOn;   // 锁定只跟开关绑定
-      if (!isLocked) {
-        const nextMap = { ...(c.api?.modelPrices || {}) };
-        const i = Number(val('#cfg-price-in', 0)) || 0;
-        const o = Number(val('#cfg-price-out', 0)) || 0;
-        const ca = Number(val('#cfg-price-cached', 0)) || 0;
-        if (i || o || ca) {
-          nextMap[curModel] = { in: i, out: o, cached: ca || i };
-        } else {
-          delete nextMap[curModel];   // 全 0 = 清除自定义，回落到官方表
-        }
-        // 同样需要整体替换，否则 delete 掉的那一项会在合并时复活
-        patch.api.modelPrices = { __replace__: nextMap };
+    // 官方价开关打开时不写（那时输入框禁用，读到的就是官方价，写进去会凭空多一条自定义价）；
+    // 这个模型已经有**渠道价**时也不写 —— 卡片显示的正是那条渠道价，
+    // 存成 modelPrices[模型] 会把"只对这个渠道生效"悄悄扩大成所有渠道。
+    const vendorNow = String(state.modelPrices?.currentVendor || '').trim();
+    const hasChannelPrice = !!vendorNow && !!((c.api?.modelPrices || {})[`${vendorNow}：${curModel}`]);
+    if (curModel && !officialOn && !hasChannelPrice) {
+      const nextMap = { ...(c.api?.modelPrices || {}) };
+      const i = Number(val('#cfg-price-in', 0)) || 0;
+      const o = Number(val('#cfg-price-out', 0)) || 0;
+      const ca = Number(val('#cfg-price-cached', 0)) || 0;
+      if (i || o || ca) {
+        nextMap[curModel] = { in: i, out: o, cached: ca || i };
+      } else {
+        delete nextMap[curModel];   // 全 0 = 清除自定义，回落到官方表
       }
+      // 同样需要整体替换，否则 delete 掉的那一项会在合并时复活
+      patch.api.modelPrices = { __replace__: nextMap };
     }
     // 当前 API Key：只有用户在框里输入了非掩码的新值才走 /api/providers/set-key；
     // 掩码/留空都表示不改。

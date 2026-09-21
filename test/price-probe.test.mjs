@@ -197,7 +197,18 @@ test('自动探测：成功就登记成渠道价目表并生效', async () => {
   assert.ok(savedPatch, '要把渠道价目表写进配置');
   assert.equal(savedPatch.api.channelPriceFeeds[0].vendor, '自动渠道');
   assert.equal(savedPatch.api.channelPriceFeeds[0].auto, true);
+  // 登记必须是**探测命中的价目地址**，不是用户填的 Base URL：
+  // 登记 Base URL 的话之后每次刷新都拉不到 JSON，价目表会永久冻结在首次探测那一刻。
+  assert.equal(
+    savedPatch.api.channelPriceFeeds[0].url,
+    'https://auto.example.com/api/pricing',
+    '登记的是价目地址（probe.sourceUrl）'
+  );
   assert.deepEqual(channel.channelPriceCounts()['自动渠道'], 1);
+  // 用登记的地址能正常刷新（Base URL 在这个假站点上只会 404）
+  const again = await channel.refreshChannelFeed('自动渠道', savedPatch.api.channelPriceFeeds[0].url, { fetchImpl: github });
+  assert.equal(again[0].ok, true, '登记后的地址要能正常刷新');
+  assert.equal(again[0].url, 'https://auto.example.com/api/pricing');
   // 价格也真的生效了（该渠道下 1 倍率 = ¥14.4/百万）
   const p = prices.resolveModelPrice('auto-model', { api: { useOfficialPrice: true } }, null, { vendor: '自动渠道' });
   assert.equal(p.source, 'channel-table');
@@ -287,4 +298,57 @@ test('远程价格表：所有候选都失败时报错但不影响内置表', as
   assert.match(st.error, /raw\.githubusercontent/);
   // 内置表仍然可用
   assert.equal(prices.resolveOfficialPrice('deepseek-flash').in, 1);
+});
+
+/* ── 价格表条目校验：未定价 ≠ 免费 ── */
+
+test('价格表条目校验：null/空串/负数不会被当成 0 元免费价', () => {
+  const norm = feed.normalizePriceFeed({
+    prices: {
+      'free-ok': { in: 0, out: 0 },            // 写出来的 0/0：真·免费模型，保留
+      'only-out': { out: 5 },                  // 只写输出：输入按 0
+      'str-num': { in: '3', out: '9' },        // 数字串：接受
+      'null-both': { in: null, out: null },    // 写了但没值 → 丢弃
+      'empty-in': { in: '', out: 3 },          // 空串 → 丢弃（不能当 0 元）
+      'negative': { in: -1, out: 2 },          // 负数 → 丢弃
+      'bool-in': { in: true, out: 2 },         // 布尔 → 丢弃
+      'junk': 'not-an-object'
+    }
+  });
+  assert.ok(norm, '整表仍是合法的');
+  assert.deepEqual(Object.keys(norm.prices).sort(), ['free-ok', 'only-out', 'str-num']);
+  assert.equal(norm.prices['free-ok'].in, 0, '0/0 是合法的免费价');
+  assert.equal(norm.prices['only-out'].out, 5);
+  assert.equal(norm.prices['str-num'].in, 3);
+  assert.equal(norm.dropped, 5, '坏条目要计数（界面能看出有东西被丢了）');
+
+  // 关键：被丢弃的模型在查价链里是"未定价"，而不是"0 元免费"
+  prices.setRemotePrices(norm.prices, norm.aliases);
+  assert.equal(prices.resolveOfficialPrice('null-both'), null);
+  assert.equal(prices.resolveOfficialPrice('negative'), null);
+  assert.ok(prices.resolveOfficialPrice('free-ok'), '免费模型仍要能匹配到');
+  assert.equal(prices.resolveOfficialPrice('free-ok').in, 0);
+  prices.setRemotePrices({});
+});
+
+test('探测：显式给的汇率优先于站点上的 /api/status', async () => {
+  const routes = {
+    '/api/status': { data: { usd_exchange_rate: 7.2 } },
+    '/api/pricing': { data: [{ model_name: 'r-model', quota_type: 0, model_ratio: 1, completion_ratio: 2 }] }
+  };
+  const fake = fakeFetch(routes);
+  // 1 倍率 = 2 美元/百万 → 汇率 8 时 ¥16/百万
+  const res = await probe.probeChannelPrices({
+    url: 'https://rate.example.com',
+    usdRate: 8,
+    fetchImpl: fake
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.usdRate, 8, '显式传入的汇率要被采用');
+  assert.equal(res.prices['r-model'].in, 16);
+
+  // 不给就用站点汇率
+  const auto = await probe.probeChannelPrices({ url: 'https://rate.example.com', fetchImpl: fake });
+  assert.equal(auto.usdRate, 7.2);
+  assert.equal(auto.prices['r-model'].in, 14.4);
 });
