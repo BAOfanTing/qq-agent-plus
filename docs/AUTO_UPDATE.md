@@ -97,10 +97,18 @@ timer 每小时唤醒一次，应用配置中的 `intervalHours` 决定是否已
    （`npm ci` → 单元测试 → `deploy.sh`）完全一致；`deploy.sh` 靠
    `QQ_AGENT_SOURCE_REVISION` 记录版本，不依赖工作目录里有 `.git`。
 4. 解析 tag 与取源码各自都会**先试首选通道、失败再换另一条**：git 通了就用 git，
-   git 不通就走 API，API 中途失败还会回退 git。本次实际走的通道记录在
-   `data/auto-update.json` 的 `transport` 与 `connectivity.transport`（`git` / `api`）。
-5. 源码包设了 64 MiB 上限，避免异常地址把内存吃满。
-6. `QQ_AGENT_CODELOAD` 可覆盖 codeload 基地址（测试桩或自建镜像用），普通部署不需要设置。
+   git 不通就走 API，API 中途失败还会回退 git（回退到 git 取源码时会先 `fetch` 该 tag
+   再 `checkout`，因为 API 解析出来的提交对象本地缓存里没有）。两条都不通时，
+   状态里的错误会同时带上两条通道的原因，不会只留最后一条。
+5. 重试策略对两条通道都生效（次数与退避沿用上面 `autoUpdate` 的配置）：
+   API 探活、tag 解析、源码包下载都各自退避重试；`4xx`（除 429）判为不可重试，不白等。
+6. 源码包按 64 MiB 上限**边下边算**，超限立即断开；默认基地址必须是 HTTPS，
+   防的是默认地址被代理/镜像悄悄降级成明文。
+7. `QQ_AGENT_CODELOAD` 可覆盖 codeload 基地址（测试桩或自建镜像用，普通部署不需要设置）。
+   注意它与 `QQ_AGENT_GITHUB_API` 的信任级别不同：后者只改只读查询地址，
+   前者改的是**会被 `deploy.sh` 执行的源码来源**——不要把它接到配置或控制台上。
+8. 本次实际走的通道记录在 `data/auto-update.json` 的 `transport` 与
+   `connectivity.transport`（`git` / `api`），控制页的连通性一行也会显示通道名。
 
 ## 连通性测试
 

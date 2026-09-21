@@ -76,13 +76,19 @@ export function isRetryableUpdateNetworkError(error) {
     || error
     || ''
   ).toLowerCase();
-  if (!text) return true;
+  // undici 的 fetch 失败是 TypeError('fetch failed')，真正的原因在 cause 上
+  // （ECONNRESET / ENOTFOUND / socket hang up 之类）。不看 cause 就会把
+  // "连接级抖动" 判成不可重试，配置的重试次数在这条通道上等于空转。
+  const cause = error?.cause;
+  const causeText = String(cause?.code || cause?.message || '').toLowerCase();
+  const all = `${text} ${causeText}`.trim();
+  if (!all) return true;
   if (
-    /repository not found|authentication failed|permission denied|couldn't find remote ref|could not find remote ref|branch .* not found|invalid refspec|not an approved github/.test(text)
+    /repository not found|authentication failed|permission denied|couldn't find remote ref|could not find remote ref|branch .* not found|invalid refspec|not an approved github/.test(all)
   ) {
     return false;
   }
-  return /gnutls|tls|ssl|http\/2|http 429|http 5\d\d|returned error:\s*5\d\d|timed? ?out|timeout|connection|network|could not resolve|temporary failure|early eof|rpc failed|remote end hung up|connection reset|connection closed|recv error|send error|broken pipe|failed to connect|unreachable/.test(text)
+  return /gnutls|tls|ssl|http\/2|http 429|http 5\d\d|returned error:\s*5\d\d|timed? ?out|timeout|connection|network|could not resolve|temporary failure|early eof|rpc failed|remote end hung up|connection reset|connection closed|recv error|send error|broken pipe|failed to connect|unreachable|fetch failed|socket hang up|other side closed|econnreset|econnrefused|econnaborted|etimedout|enotfound|eai_again|epipe|ehostunreach|enetunreach/.test(all)
     || error?.code === 'ETIMEDOUT'
     || error?.code === 'ECONNRESET'
     || error?.code === 'EAI_AGAIN';

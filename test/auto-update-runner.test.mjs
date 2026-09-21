@@ -58,6 +58,9 @@ const published = options.published !== false;
 // 第二条下载通道（API 解析 tag→sha + codeload 源码包）用的桩数据
 const revision = options.revision || 'c'.repeat(40);
 const tarballPath = options.tarballPath || '';
+// 按调用序号让 /commits/ 返回 503（1 起算），用来测"瞬时 5xx 要重试"
+const failCommitsAt = Array.isArray(options.failCommitsAt) ? options.failCommitsAt : [];
+let commitsCalls = 0;
 const server = http.createServer((req, res) => {
   const url = String(req.url || '');
   if (/\\/releases\\/latest$/.test(url)) {
@@ -92,6 +95,12 @@ const server = http.createServer((req, res) => {
   }
   // GET /repos/<owner>/<repo>/commits/<ref>：tag 与分支都解析成同一个 sha
   if (/\\/repos\\/[^/]+\\/[^/]+\\/commits\\//.test(url)) {
+    commitsCalls += 1;
+    if (failCommitsAt.includes(commitsCalls)) {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end('{}');
+      return;
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ sha: revision }));
     return;
@@ -676,4 +685,241 @@ esac
   assert.equal(state.connectivity.transport, 'api');
   assert.equal(state.currentRevision, targetRevision);
   assert.equal(state.targetVersion, 'v9.9.9');
+});
+
+test('API 通道取源码失败时回退 git，并先 fetch 再 checkout', async (t) => {
+  if (process.platform !== 'linux') {
+    t.skip('更新器只在 Linux 上运行（需要 /bin/bash、tar 与 systemd）');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-update-lane-fallback-'));
+  const appDir = path.join(root, 'app');
+  const dataDir = path.join(root, 'data');
+  const binDir = path.join(root, 'bin');
+  const candidate = path.join(root, 'candidate');
+  const marker = path.join(root, 'deployed.txt');
+  const gitLog = path.join(root, 'git.log');
+  const previousRevision = 'a'.repeat(40);
+  const targetRevision = 'd'.repeat(40);
+  for (const directory of [
+    appDir,
+    dataDir,
+    binDir,
+    candidate,
+    path.join(candidate, 'src'),
+    path.join(candidate, 'scripts'),
+    path.join(candidate, 'test')
+  ]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  fs.mkdirSync(autoUpdatePaths(dataDir).repository, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
+    autoUpdate: {
+      enabled: true,
+      ownerUin: '900001',
+      repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
+      branch: 'main',
+      intervalHours: 6,
+      networkRetries: 0,
+      retryBaseMs: 100
+    },
+    server: { host: '127.0.0.1', port: 3210, token: 'token' }
+  }));
+  fs.writeFileSync(path.join(dataDir, 'deployed-revision'), `${previousRevision}\n`);
+  writeDeployment(appDir, dataDir);
+
+  fs.writeFileSync(path.join(candidate, 'package.json'), JSON.stringify({
+    name: 'qq-agent-plus',
+    type: 'module'
+  }));
+  fs.writeFileSync(path.join(candidate, 'package-lock.json'), '{}');
+  fs.writeFileSync(path.join(candidate, 'src/server.js'), '');
+  fs.writeFileSync(path.join(candidate, 'scripts/auto-update.mjs'), '');
+  fs.writeFileSync(
+    path.join(candidate, 'test/smoke.test.mjs'),
+    "import { test } from 'node:test';\ntest('candidate via git fallback', () => {});\n"
+  );
+  fs.writeFileSync(path.join(candidate, 'deploy.sh'), `#!/bin/sh
+printf '%s\n' "$QQ_AGENT_SOURCE_REVISION" > "$FAKE_DEPLOY_MARKER"
+`, { mode: 0o700 });
+
+  // 假 git：ls-remote 不通（→ 探活走 API 通道），但 fetch/checkout 可用
+  const fakeGit = path.join(binDir, 'git');
+  fs.writeFileSync(fakeGit, `#!/bin/sh
+cmd=''
+work=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --git-dir) shift 2 ;;
+    --work-tree) work="$2"; shift 2 ;;
+    -c) shift 2 ;;
+    -*) shift ;;
+    *) cmd="$1"; break ;;
+  esac
+done
+printf '%s\\n' "$cmd" >> "$FAKE_GIT_LOG"
+case "$cmd" in
+  init) ;;
+  remote)
+    case "$*" in
+      *set-url*) ;;
+      *) printf '%s\\n' 'origin' ;;
+    esac
+    ;;
+  ls-remote)
+    printf 'fatal: unable to access: Failed to connect to github.com\\n' >&2
+    exit 128
+    ;;
+  fetch|rev-parse) ;;
+  cat-file) exit 1 ;;
+  checkout)
+    cp -R "$FAKE_CANDIDATE"/. "$work"/
+    ;;
+  *) printf 'unexpected git command: %s\\n' "$*" >&2; exit 9 ;;
+esac
+`, { mode: 0o700 });
+  const fakeNpm = path.join(binDir, 'npm');
+  fs.writeFileSync(fakeNpm, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+
+  // 假 GitHub：tag 能解析，但源码包一律 500（逼 API 取源码失败）
+  const github = await startFakeGitHub({ status: 'ahead', revision: targetRevision });
+  t.after(() => github.close());
+  const result = runUpdater({
+    appDir,
+    dataDir,
+    binDir,
+    env: {
+      QQ_AGENT_UPDATE_NPM: fakeNpm,
+      FAKE_CANDIDATE: candidate,
+      FAKE_DEPLOY_MARKER: marker,
+      FAKE_GIT_LOG: gitLog,
+      QQ_AGENT_GITHUB_API: github.base,
+      QQ_AGENT_CODELOAD: github.base
+    }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /改走另一条通道/, '应记录通道回退');
+  assert.equal(fs.readFileSync(marker, 'utf8').trim(), targetRevision);
+  const calls = fs.readFileSync(gitLog, 'utf8');
+  assert.match(calls, /^fetch$/m, 'revision 来自 API 时，git 取源码必须先 fetch 再 checkout');
+  const state = readAutoUpdateState(dataDir);
+  assert.equal(state.status, 'succeeded');
+  assert.equal(state.transport, 'git', '最终成功的是 git 取源码');
+  assert.equal(state.connectivity.transport, 'api', '探活阶段走的是 API 通道');
+});
+
+test('API 解析 tag 遇到瞬时 5xx 会按配置重试（不再一次抖动就放弃）', async (t) => {
+  if (process.platform !== 'linux') {
+    t.skip('更新器只在 Linux 上运行（需要 /bin/bash、tar 与 systemd）');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-update-api-retry-'));
+  const appDir = path.join(root, 'app');
+  const dataDir = path.join(root, 'data');
+  const binDir = path.join(root, 'bin');
+  const packDir = path.join(root, 'pack');
+  const marker = path.join(root, 'deployed.txt');
+  const previousRevision = 'a'.repeat(40);
+  const targetRevision = 'e'.repeat(40);
+  const topDir = `sakurawwwxh-qq-agent-plus-${targetRevision.slice(0, 7)}`;
+  const tree = path.join(packDir, topDir);
+  for (const directory of [
+    appDir,
+    dataDir,
+    binDir,
+    path.join(tree, 'src'),
+    path.join(tree, 'scripts'),
+    path.join(tree, 'test')
+  ]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  fs.mkdirSync(autoUpdatePaths(dataDir).repository, { recursive: true });
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
+    autoUpdate: {
+      enabled: true,
+      ownerUin: '900001',
+      repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
+      branch: 'main',
+      intervalHours: 6,
+      // 允许 1 次重试、退避很短
+      networkRetries: 1,
+      retryBaseMs: 50
+    },
+    server: { host: '127.0.0.1', port: 3210, token: 'token' }
+  }));
+  fs.writeFileSync(path.join(dataDir, 'deployed-revision'), `${previousRevision}\n`);
+  writeDeployment(appDir, dataDir);
+
+  fs.writeFileSync(path.join(tree, 'package.json'), JSON.stringify({
+    name: 'qq-agent-plus',
+    type: 'module'
+  }));
+  fs.writeFileSync(path.join(tree, 'package-lock.json'), '{}');
+  fs.writeFileSync(path.join(tree, 'src/server.js'), '');
+  fs.writeFileSync(path.join(tree, 'scripts/auto-update.mjs'), '');
+  fs.writeFileSync(
+    path.join(tree, 'test/smoke.test.mjs'),
+    "import { test } from 'node:test';\ntest('candidate after api retry', () => {});\n"
+  );
+  fs.writeFileSync(path.join(tree, 'deploy.sh'), `#!/bin/sh
+printf '%s\n' "$QQ_AGENT_SOURCE_REVISION" > "$FAKE_DEPLOY_MARKER"
+`, { mode: 0o700 });
+  const tarballPath = path.join(root, 'source.tar.gz');
+  const packed = spawnSync('tar', ['-czf', tarballPath, '-C', packDir, topDir], { encoding: 'utf8' });
+  assert.equal(packed.status, 0, packed.stderr || 'tar 打包失败');
+
+  // 假 git：网络级命令全失败 → 只能走 API 通道
+  const fakeGit = path.join(binDir, 'git');
+  fs.writeFileSync(fakeGit, `#!/bin/sh
+cmd=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --git-dir|--work-tree|-c) shift 2 ;;
+    -*) shift ;;
+    *) cmd="$1"; break ;;
+  esac
+done
+case "$cmd" in
+  init) ;;
+  remote)
+    case "$*" in
+      *set-url*) ;;
+      *) printf '%s\n' 'origin' ;;
+    esac
+    ;;
+  *) printf 'fatal: unable to access: Failed to connect to github.com\n' >&2; exit 128 ;;
+esac
+`, { mode: 0o700 });
+  const fakeNpm = path.join(binDir, 'npm');
+  fs.writeFileSync(fakeNpm, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+
+  // 第 1 次 /commits/ 是连通性探活（必须成功），第 2 次是 tag 解析（刻意 503 一次）
+  const github = await startFakeGitHub({
+    status: 'ahead',
+    revision: targetRevision,
+    tarballPath,
+    failCommitsAt: [2]
+  });
+  t.after(() => github.close());
+  const result = runUpdater({
+    appDir,
+    dataDir,
+    binDir,
+    env: {
+      QQ_AGENT_UPDATE_NPM: fakeNpm,
+      FAKE_DEPLOY_MARKER: marker,
+      QQ_AGENT_GITHUB_API: github.base,
+      QQ_AGENT_CODELOAD: github.base
+    }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /api resolve failed; retry/, 'tag 解析遇到 5xx 要走退避重试');
+  assert.equal(fs.readFileSync(marker, 'utf8').trim(), targetRevision);
+  const state = readAutoUpdateState(dataDir);
+  assert.equal(state.status, 'succeeded');
+  assert.equal(state.transport, 'api');
 });
