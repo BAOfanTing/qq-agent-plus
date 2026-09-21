@@ -2805,7 +2805,7 @@ function updateUsagePage(stats, st, prices) {
     if (Number(un.calls) > 0) {
       unBlock.classList.remove('hidden');
       set('unpriced-title',
-        `${Number(un.calls)} 次调用没有价格（${fmtTokens(Number(un.tokens) || 0)} token 未计入成本）`);
+        `${Number(un.calls)} 次调用没有价格（${fmtTokens(Number(un.tokens) || 0)} 未计入成本）`);
       const listEl = box.querySelector('[data-field="unpriced-list"]');
       if (listEl) {
         const chips = unpricedModels.map((x) => {
@@ -2884,7 +2884,10 @@ function updateUsagePage(stats, st, prices) {
     const api = (state.config || {}).api || {};
     const custom = api.modelPrices || {};
     if (custom[model] || custom[`${m.vendor}：${model}`]) return '';
-    const hit = matchPriceTable(model, state.modelPrices?.prices || []);
+    // 用页面本次拿到的价格表（prices 参数），别依赖 state 里那份可能还没加载
+    const table = prices?.prices || state.modelPrices?.prices || [];
+    const aliases = prices?.aliases || state.modelPrices?.aliases || null;
+    const hit = matchPriceTable(model, table, aliases);
     if (!hit) return '';
     if (hit.confidence === 'alias') {
       return `<span class="uc-chip" title="${esc(`按别名映射计价：${hit.via}`)}">别名</span>`;
@@ -2989,11 +2992,15 @@ async function loadUsageView({ force = false } = {}) {
   }
 
   try {
-    const [stats, st] = await Promise.all([
+    const [stats, st, priceData] = await Promise.all([
       api(`/api/usage/stats?range=${range}`),
-      api('/api/status')
+      api('/api/status'),
+      // 价格表：模型行的「别名 / 近似」标记要用它。设置页只在打开时才加载，
+      // 所以这里自己拉一份（并行，不额外增加等待）。
+      api('/api/model-prices').catch(() => null)
     ]);
-    const prices = state.modelPrices || {};   // 启动时已加载，无需再请求
+    if (priceData) state.modelPrices = priceData;
+    const prices = state.modelPrices || {};
     // 竞态：期间用户切走了页签、或又点了别的时间范围 → 这次结果作废
     if (token !== usageLoadToken) return;
     if (state.tab !== 'usage' || usageRange !== range) return;
