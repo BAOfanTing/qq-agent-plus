@@ -7653,10 +7653,16 @@ function sliderToTierUI_tierToSlider(st) {
 /** 滑条位置 → 一句话说明（给用户的即时反馈）。 */
 function sliderDesc(pos) {
   const { tier, randomPercent } = sliderToTierUI(pos);
-  if (tier === 1) return '<b>1 档 · 仅艾特</b>：只有被 @ 时才响应，其余消息标记已读、不调模型（最省）';
-  if (tier === 2) return '<b>2 档 · +关键词</b>：被 @ 或命中关键词时响应';
-  if (tier === 3) return `<b>3 档 · +随机</b>：被 @ / 关键词必响应；此外每批普通消息有 <b>${randomPercent}%</b> 概率响应`;
-  return '<b>4 档 · 全响应</b>：任何消息都响应，且艾特/关键词/随机的判定全部失效';
+  let main;
+  if (tier === 1) main = '<b>1 档 · 仅艾特</b>：只有被 @ 时才响应，其余消息标记已读、不调模型（最省）';
+  else if (tier === 2) main = '<b>2 档 · +关键词</b>：被 @ 或命中关键词时响应';
+  else if (tier === 3) main = `<b>3 档 · +随机</b>：被 @ / 关键词必响应；此外每批普通消息有 <b>${randomPercent}%</b> 概率响应`;
+  else main = '<b>4 档 · 全响应</b>：任何消息都响应，且艾特/关键词/随机的判定全部失效';
+  // 档位管的是"它没在跟人对话时，要不要接这句话"。下面两条路不受档位限制，
+  // 不写清楚就会被当成"档位调了没生效"。
+  return main
+    + '<br><span class="muted">档位只管群聊里"要不要搭话"：私聊被直接找时总会回；'
+    + '对话模式是「参与者续接 / 完整生命周期」时，刚跟你说过话的人在活跃窗口内的消息也直接回（这两条不看概率）。</span>';
 }
 
 const TIER_NAME = { 1: '仅艾特', 2: '+关键词', 3: '+随机', 4: '全响应' };
@@ -9855,7 +9861,6 @@ async function saveConfig({ quiet = false } = {}) {
       keywordCount: clampInt(val('#cfg-kwcount', c.store?.keywordCount), 1, 500, 15),
       keywords: String($('#cfg-keywords')?.value || '')
         .split('\n').map((x) => x.trim()).filter(Boolean),
-      randomPercent: clampInt(val('#cfg-randpct', c.store?.randomPercent), 0, 100, 10),
       randomCount: clampInt(val('#cfg-randcount', c.store?.randomCount), 1, 500, 8),
       allCount: clampInt(val('#cfg-allcount', c.store?.allCount), 1, 500, 80),
       // 统一开关 + 分群滑条表（__replace__：删掉的群设置要真删，深合并做不到）
