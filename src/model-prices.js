@@ -671,26 +671,61 @@ export function supportsImage(price) {
  *
  *   ① 渠道价     api.modelPrices[渠道：模型]  —— 用户在中转站/自建渠道手填的实付价
  *   ② 自定义价   api.modelPrices[模型]        —— 用户填的通用价
- *   ③ 渠道价目表 该渠道拉到的价目（src/channel-prices.js）—— 同属实付口径
- *   ④ 价格表     官方表 / 远程表（同一个查询：远程条目优先，来源标出来）
- *                —— 模型商的参考价，是"估算"不是账单
- *   ⑤ 兜底单价   api.priceInputPerM/...       —— 只在关掉官方价时用（老行为）
- *   ⑥ 未定价     —— unpriced，界面显式提示（不是 0 元）
+ *   ③ 账户口径   按月付（costMode=subscription）：所有模型按固定月费
+ *   ④ 渠道价目表 该渠道拉到的价目（src/channel-prices.js）—— 同属实付口径
+ *   ⑤ 价格表     官方表 / 远程表（costMode=multiplier 时统一乘折扣）
+ *   ⑥ 兜底单价   api.priceInputPerM/...       —— 只在关掉官方价时用（老行为）
+ *   ⑦ 当前模型   按 api.model 的价估算（默认开，可关：fallbackToCurrentModel=false）
+ *   ⑧ 未定价     —— unpriced，界面显式提示（不是 0 元）
  *
- * 口径（kind）：① ② ③=实付 actual；④ ⑤=估算 estimate；⑥=未定价 unpriced。
- * 排序原则：手填的价 > 自动拉到的渠道价目 > 公共参考表 —— 用户明确输入的数字永远优先。
+ * 口径（kind）：①②③④=实付 actual；⑤⑥⑦=估算 estimate；⑧=未定价 unpriced。
+ * 排序原则：手填的价 > 账户口径 > 自动拉到的渠道价目 > 公共参考表 —— 用户明确输入的数字永远优先。
  *
  * ⚠️ unpriced=true 表示"没有价格"，和"免费（单价 0）"是两回事：
  *    统计时要单独标出来，不能显示成 ¥0.00 让用户以为免费。
  * ⚠️ useOfficialPrice === false 时**不看价格表**（尊重"我不用官方价"的选择），
  *    这条老语义保留；用户填的价在任何模式下都优先。
  */
+/**
+ * 账户级成本口径（设置页只需用户选一次，不用逐模型配）：
+ *   official      默认：按内置/远程价格表估算（"不是你的账单"）
+ *   multiplier    渠道价 = 官方价 × costMultiplier（中转站常见：只知道一个折扣）
+ *   subscription  按月付：所有模型按固定月费计（订阅制 / 本地自建）
+ */
+export function costModeOf(cfg) {
+  const api = (cfg && cfg.api) || {};
+  const raw = String(api.costMode ?? '').trim().toLowerCase();
+  const mode = ['multiplier', 'subscription'].includes(raw) ? raw : 'official';
+  return {
+    mode,
+    multiplier: Math.max(0.0001, Number(api.costMultiplier) || 1),
+    monthlyFee: Math.max(0, Number(api.costMonthlyFee) || 0)
+  };
+}
+
+/** 把价格表条目按倍率打折（multiplier 模式：用户声明的渠道价）。 */
+function scaleEntry(entry, multiplier) {
+  const scale = (value) => Number(((Number(value) || 0) * multiplier).toFixed(6));
+  const out = { ...entry, in: scale(entry.in), out: scale(entry.out) };
+  if (entry.cached != null) out.cached = scale(entry.cached);
+  if (entry.peak) {
+    out.peak = {
+      in: scale(entry.peak.in),
+      out: scale(entry.peak.out),
+      cached: entry.peak.cached == null ? out.cached : scale(entry.peak.cached)
+    };
+  }
+  return out;
+}
+
 export function resolveModelPrice(modelId, cfg, priceTable = null, options = {}) {
   const id = String(modelId || '').trim();
   const api = (cfg && cfg.api) || {};
   const officialEnabled = api.useOfficialPrice !== false;
   const vendor = String(options.vendor || '').trim();
   const customMap = api.modelPrices || {};
+  const cost = costModeOf(cfg);
+  const fallbackAllowed = options.allowFallback !== false;
 
   // ① 渠道价：同一个模型在不同渠道是不同商品，用户可以为某个渠道单独定价
   if (vendor && id) {
@@ -712,9 +747,27 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
     return customPrice(own, { source: 'custom', matched: id, via: '自定义价', locked: false });
   }
 
-  // ③ 渠道价目表（该渠道自动拉取/用户配置的价目，见 channel-prices.js）：
-  //    比公共参考表更具体（就是这个渠道的价），但比不过上面两条手填的价。
-  if (vendor && id && CHANNEL_PRICES[vendor]) {
+  // ③ 账户口径：按月付（订阅制 / 本地自建）—— 用户声明了固定月费，
+  //    就不查表、不按 token 算（手填的价仍然优先于它）。
+  if (cost.mode === 'subscription' && cost.monthlyFee > 0) {
+    return {
+      in: 0, out: 0, cached: 0,
+      peak: null, image: null,
+      billing: 'flat', amount: cost.monthlyFee, period: 'month',
+      note: '账户口径：按月付',
+      source: 'subscription',
+      matched: null,
+      locked: false,
+      unpriced: false,
+      kind: 'actual',
+      confidence: 'manual',
+      via: `按月付 ¥${cost.monthlyFee}/月`
+    };
+  }
+
+  // ④ 渠道价目表（该渠道自动拉取/用户配置的价目，见 channel-prices.js）：
+  //    比公共参考表更具体（就是这个渠道的价），但比不过上面几条手填的价。
+  if (cost.mode !== 'subscription' && vendor && id && CHANNEL_PRICES[vendor]) {
     const hit = matchPriceTable(id, CHANNEL_PRICES[vendor], EFFECTIVE_ALIASES);
     if (hit && (Number(hit.in) || Number(hit.out) || hit.billing)) {
       const { billing, amount, period } = billingOf(hit);
@@ -740,11 +793,16 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
     }
   }
 
-  // ④ 价格表（官方 + 远程）。远程条目优先，来源要标出来让界面区分"参考"与"渠道表"
+  // ⑤ 价格表（官方 + 远程）。远程条目优先，来源要标出来让界面区分"参考"与"渠道表"。
+  //    multiplier 模式（用户声明"我的渠道价 = 官方价 × 折扣"）在这里统一打折。
+  //    表里没有**不直接判未定价**：继续往下走 ⑥ 兜底单价 / ⑦ 按当前模型估算。
+  let tableMissed = false;
   if (officialEnabled) {
-    const p = id ? (priceTable ? matchPriceTable(id, priceTable) : resolveOfficialPrice(id)) : null;
-    if (p) {
-      const remote = isRemoteEntry(p.matched);
+    const hit = id ? (priceTable ? matchPriceTable(id, priceTable) : resolveOfficialPrice(id)) : null;
+    if (hit) {
+      const remote = isRemoteEntry(hit.matched);
+      const discounted = cost.mode === 'multiplier' && cost.multiplier !== 1;
+      const p = discounted ? scaleEntry(hit, cost.multiplier) : hit;
       // 表里也能标计费方式（例如社区表把某个本地模型标成 none、某个订阅套餐标成 flat）
       const { billing, amount, period } = billingOf(p);
       const perToken = billing === 'token';
@@ -758,23 +816,25 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
         amount,
         period,
         note: typeof p.note === 'string' ? p.note : '',
-        source: remote ? 'remote' : 'official',
+        source: discounted ? 'multiplier' : (remote ? 'remote' : 'official'),
         matched: p.matched ?? id,
-        locked: !remote,
+        locked: discounted ? false : !remote,
         unpriced: false,
-        kind: 'estimate',
-        confidence: p.confidence || 'exact',
-        via: p.via || ''
+        // 倍率是用户自己声明的渠道价 → 实付口径；官方表原价 → 估算
+        kind: discounted ? 'actual' : 'estimate',
+        confidence: discounted ? 'manual' : (p.confidence || 'exact'),
+        via: discounted ? `官方价 ×${cost.multiplier}` : (p.via || '')
       };
     }
-    // 表里没有 → 未定价（关掉官方价时才可能走下面的兜底）
-    return unpricedPrice({ locked: true });
+    // 表里没有 → 记下来，继续走兜底/按当前模型估算
+    tableMissed = true;
   }
 
-  // ⑤ 全局兜底单价：老配置在"不用官方价"模式下的主力路径
+  // ⑥ 全局兜底单价：老配置在"不用官方价"模式下的主力路径。
+  //    官方价开着时不生效 —— 否则"未定价"会被一个粗估数字悄悄藏起来（老语义，别改）。
   const fi = Number(api.priceInputPerM) || 0;
   const fo = Number(api.priceOutputPerM) || 0;
-  if (fi || fo) {
+  if (!officialEnabled && (fi || fo)) {
     return {
       in: fi,
       out: fo,
@@ -791,8 +851,27 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
     };
   }
 
-  // ⑥ 未定价
-  return unpricedPrice({ locked: false });
+  // ⑦ 未定价之前：按"用户当前正在用的模型"的价估算（默认开，可在高级里关掉）。
+  //    目的：不让"没价"变成用户要做的作业 —— 数字仍是估算口径，
+  //    面板会说明有多少次是按它估的（fallbackCalls）。
+  const currentModel = String(api.model || '').trim();
+  if (fallbackAllowed && api.fallbackToCurrentModel !== false && id && currentModel && currentModel !== id) {
+    const base = resolveModelPrice(currentModel, cfg, priceTable, { vendor, allowFallback: false });
+    if (base && base.unpriced !== true) {
+      return {
+        ...base,
+        matched: base.matched,
+        source: 'fallback-model',
+        confidence: 'fallback-model',
+        kind: 'estimate',
+        via: `按当前模型「${currentModel}」的价估算`,
+        fallbackFrom: currentModel
+      };
+    }
+  }
+
+  // ⑧ 未定价（官方价开着时只读：不允许在这些输入框里改官方价）
+  return unpricedPrice({ locked: tableMissed });
 }
 
 /** 渠道价键：「渠道：模型」（全角冒号，与 modelLabel 一致，避免和 id 里的半角符号混淆）。 */

@@ -1209,10 +1209,14 @@ async function refreshStatus() {
     // 只提示"含未定价调用"，避免让 ¥0 被读成"免费"。
     const c = s.cost;
     const costTxt = c && c.cost > 0 ? ` · ¥${c.cost.toFixed(3)}` : '';
+    // 按账户口径换个说法：倍率=你的渠道价、按月付=包月（不按 token 算）
+    const modeTxt = c?.costMode === 'subscription'
+      ? (Number(c.costMonthlyFee) > 0 ? ` · 包月 ¥${Number(c.costMonthlyFee)}/月` : ' · 按月付')
+      : (c?.costMode === 'multiplier' ? `（官方价 ×${Number(c.costMultiplier) || 1}）` : '');
     const unpricedTxt = c && c.unpriced ? ' · 含未定价调用' : '';
     const rate = s.cacheHitRate;
     const rateTxt = rate > 0 ? ` · 缓存 ${Math.round(rate * 100)}%` : '';
-    setStatusLabel('#usage-label', `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}${unpricedTxt}`);
+    setStatusLabel('#usage-label', `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}${modeTxt}${unpricedTxt}`);
     setStatusLabel('#search-count-label', `搜索：${s.webSearchCount ?? u.webSearchCount ?? 0} 次`);
     state.paused = s.paused;
     state.pauseReason = s.pauseReason;
@@ -2693,6 +2697,24 @@ function renderUsagePage(stats, st, prices) {
         </div>
       </div>
 
+      <!-- 首次引导：成本口径一次性三选一（选过或点过"以后再说"就不再出现） -->
+      <div class="usage-guide hidden" data-block="cost-guide">
+        <div class="ug-title">成本数字想更准？选一个就行（30 秒，之后不再问）</div>
+        <div class="ug-options">
+          <label class="radio-row"><input type="radio" name="guide-mode" value="official" checked />
+            <span>按模型官方价估就行（默认；数字是估算，不是账单）</span></label>
+          <label class="radio-row"><input type="radio" name="guide-mode" value="multiplier" />
+            <span>我按渠道价：官方价 × <input type="number" id="guide-multiplier" step="0.01" min="0.01" value="1" style="width:72px" />（例如 0.5 = 打五折）</span></label>
+          <label class="radio-row"><input type="radio" name="guide-mode" value="subscription" />
+            <span>我按月付 ¥ <input type="number" id="guide-monthly" step="1" min="0" value="0" style="width:84px" /> /月（订阅套餐、本地自建）</span></label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+          <button class="btn btn-primary btn-small" id="cost-guide-save">就用这个</button>
+          <button class="btn btn-small" id="cost-guide-later">以后再说</button>
+          <span class="hint" id="cost-guide-result"></span>
+        </div>
+      </div>
+
       <!-- 未定价提示条：有调用查不到单价时出现。这些调用不算钱，
            但不提示的话用户会以为成本是准的（或者以为模型免费）。 -->
       <div class="usage-unpriced hidden" data-block="unpriced">
@@ -2769,6 +2791,45 @@ function renderUsagePage(stats, st, prices) {
     });
   });
 
+  // 首次引导卡：三选一保存 / 以后再说（保存后不再出现）
+  const guide = box.querySelector('[data-block="cost-guide"]');
+  if (guide) {
+    const syncGuide = () => {
+      const picked = guide.querySelector('input[name="guide-mode"]:checked')?.value || 'official';
+      const mult = guide.querySelector('#guide-multiplier');
+      const monthly = guide.querySelector('#guide-monthly');
+      if (mult) mult.disabled = picked !== 'multiplier';
+      if (monthly) monthly.disabled = picked !== 'subscription';
+    };
+    guide.querySelectorAll('input[name="guide-mode"]').forEach((el) => el.addEventListener('change', syncGuide));
+    syncGuide();
+    const writeMode = async (patch, doneTxt) => {
+      const result = guide.querySelector('#cost-guide-result');
+      try {
+        const res = await api('/api/config', { method: 'POST', body: JSON.stringify({ api: patch }) });
+        if (res?.config) state.config = res.config;
+        else {
+          state.config = state.config || {};
+          state.config.api = { ...(state.config.api || {}), ...patch };
+        }
+        if (result) { result.textContent = doneTxt; result.className = 'hint success'; }
+        loadUsageView({ force: true });
+      } catch (error) {
+        if (result) { result.textContent = `保存失败：${error.message}`; result.className = 'hint error'; }
+      }
+    };
+    guide.querySelector('#cost-guide-save')?.addEventListener('click', () => {
+      const picked = guide.querySelector('input[name="guide-mode"]:checked')?.value || 'official';
+      const patch = { costMode: picked, costGuideDismissed: true };
+      if (picked === 'multiplier') patch.costMultiplier = Number(guide.querySelector('#guide-multiplier')?.value) || 1;
+      if (picked === 'subscription') patch.costMonthlyFee = Number(guide.querySelector('#guide-monthly')?.value) || 0;
+      writeMode(patch, '已按这个口径计算');
+    });
+    guide.querySelector('#cost-guide-later')?.addEventListener('click', () => {
+      writeMode({ costGuideDismissed: true }, '好的，以后不再问');
+    });
+  }
+
   updateUsagePage(stats, st, prices);
 }
 
@@ -2831,7 +2892,21 @@ function updateUsagePage(stats, st, prices) {
   ].filter(Boolean).join(' + ');
   if (flatTxt) split.push(`另有${flatTxt}`);
   if (Number(billingInfo.localCalls) > 0) split.push(`本地模型 ${Number(billingInfo.localCalls)} 次不计费`);
+  // 账户口径 + 兜底估算的说明（人话，不用用户理解"口径"两个字）
+  const costMode = String((state.config?.api?.costMode) || 'official');
+  const multiplier = Number(state.config?.api?.costMultiplier) || 1;
+  if (!flatTxt && hasEstimate && costMode !== 'multiplier') split.push('按官方价估算，不是账单');
+  if (!flatTxt && hasActual && costMode === 'multiplier') split.push(`官方价 ×${multiplier}（你的渠道价）`);
+  if (Number(t.fallbackCalls) > 0) split.push(`${Number(t.fallbackCalls)} 次按当前模型估算`);
   set('cost-sub', [stats?.rangeLabel || '', ...split].filter(Boolean).join(' · '));
+
+  // 首次引导卡：口径还是默认、且没处理过时出现
+  const guide = box.querySelector('[data-block="cost-guide"]');
+  if (guide) {
+    const dismissed = state.config?.api?.costGuideDismissed === true;
+    const showGuide = !dismissed && costMode === 'official';
+    guide.classList.toggle('hidden', !showGuide);
+  }
 
   // 未定价提示条：多少调用没算钱、分别是哪些模型
   const un = stats?.unpriced || {};
@@ -3062,14 +3137,17 @@ async function loadUsageView({ force = false } = {}) {
   }
 
   try {
-    const [stats, st, priceData] = await Promise.all([
+    const [stats, st, priceData, cfgData] = await Promise.all([
       api(`/api/usage/stats?range=${range}`),
       api('/api/status'),
       // 价格表：模型行的「别名 / 近似」标记要用它。设置页只在打开时才加载，
       // 所以这里自己拉一份（并行，不额外增加等待）。
-      api('/api/model-prices').catch(() => null)
+      api('/api/model-prices').catch(() => null),
+      // 配置：成本口径（官方价 / 渠道倍率 / 按月付）与引导卡状态要用
+      api('/api/config').catch(() => null)
     ]);
     if (priceData) state.modelPrices = priceData;
+    if (cfgData) state.config = cfgData;
     const prices = state.modelPrices || {};
     // 竞态：期间用户切走了页签、或又点了别的时间范围 → 这次结果作废
     if (token !== usageLoadToken) return;
@@ -5511,22 +5589,44 @@ function renderApiSection(c) {
       <span id="vision-switch-hint" class="muted" style="font-size:12px;align-self:center"></span></div>
     <div class="settings-divider"></div>
 
-    <h3>成本核算</h3>
-
-    <div class="checkbox-row"><input type="checkbox" id="cfg-useofficialprice" ${c.api.useOfficialPrice !== false ? 'checked' : ''} />
-      <label for="cfg-useofficialprice">用内置官方价格表估算（按模型 id 自动匹配；走中转站请关掉）</label></div>
-
-    <div class="field" style="margin-top:6px"><label>远程价格表 URL</label>
-      <div style="display:flex;gap:8px">
-        <input type="text" id="cfg-price-remote-url" placeholder="例如 https://你的服务器/prices.json" value="${esc(c.api.priceRemoteUrl || '')}" style="flex:1" />
-        <button class="btn btn-small" id="price-feed-refresh-btn" title="不等定时，立即拉一次">立即拉取</button>
-      </div>
-      <div class="hint" id="price-feed-status" style="margin-top:4px"></div>
+    <h3>成本怎么算</h3>
+    <div class="hint" style="margin-bottom:8px">选一个就行，不用逐个模型配。默认第一项。</div>
+    <div id="cost-mode-block">
+      <label class="radio-row"><input type="radio" name="cost-mode" value="official"
+        ${(!c.api.costMode || c.api.costMode === 'official') ? 'checked' : ''} />
+        <span>按模型官方价估（数字是估算，不是你的账单）</span></label>
+      <label class="radio-row"><input type="radio" name="cost-mode" value="multiplier"
+        ${c.api.costMode === 'multiplier' ? 'checked' : ''} />
+        <span>我按渠道价：官方价 ×
+          <input type="number" id="cfg-cost-multiplier" step="0.01" min="0.01" value="${esc(c.api.costMultiplier ?? 1)}" style="width:80px" />
+          （例如 0.5 = 打五折；中转站常用）</span></label>
+      <label class="radio-row"><input type="radio" name="cost-mode" value="subscription"
+        ${c.api.costMode === 'subscription' ? 'checked' : ''} />
+        <span>我按月付 ¥
+          <input type="number" id="cfg-cost-monthly" step="1" min="0" value="${esc(c.api.costMonthlyFee ?? 0)}" style="width:90px" />
+          /月（订阅套餐、本地自建；不按 token 算）</span></label>
+      <label class="checkbox-row" style="margin-top:6px"><input type="checkbox" id="cfg-fallback-current"
+        ${c.api.fallbackToCurrentModel !== false ? 'checked' : ''} />
+        <label for="cfg-fallback-current">没有价格的模型按「当前模型」的价估算（推荐：避免出现"未定价"）</label></label>
+      <div class="hint" id="cost-mode-status" style="margin-top:4px"></div>
     </div>
 
-    <!-- 从渠道自动拉价（探测）：把中转站/自建渠道公布的价格拉下来，写成"渠道价" -->
-    <div class="settings-divider"></div>
-    <h3>从渠道自动拉价</h3>
+    <details class="collapsible settings-advanced" id="price-advanced">
+      <summary>高级：逐模型定价 / 渠道价目表 / 远程价格表</summary>
+      <div class="checkbox-row" style="margin-top:8px"><input type="checkbox" id="cfg-useofficialprice" ${c.api.useOfficialPrice !== false ? 'checked' : ''} />
+        <label for="cfg-useofficialprice">用内置官方价格表估算（按模型 id 自动匹配；走中转站请关掉）</label></div>
+
+      <div class="field" style="margin-top:6px"><label>远程价格表 URL</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="cfg-price-remote-url" placeholder="例如 https://你的服务器/prices.json" value="${esc(c.api.priceRemoteUrl || '')}" style="flex:1" />
+          <button class="btn btn-small" id="price-feed-refresh-btn" title="不等定时，立即拉一次">立即拉取</button>
+        </div>
+        <div class="hint" id="price-feed-status" style="margin-top:4px"></div>
+      </div>
+
+      <!-- 从渠道自动拉价（探测）：把中转站/自建渠道公布的价格拉下来，写成"渠道价" -->
+      <div class="settings-divider"></div>
+      <h3>从渠道自动拉价</h3>
     <div class="field">
       <label>渠道地址（默认用上面的 Base URL；one-api / new-api 站会读它的 /api/pricing 倍率）</label>
       <div style="display:flex;gap:8px">
@@ -5571,6 +5671,7 @@ function renderApiSection(c) {
       <button class="btn btn-small" id="batch-price-btn">批量自定义价格编辑</button>
       <span class="muted" style="font-size:12px;align-self:center">填你的渠道实付价（覆盖官方价）；也可为多个模型分别设定</span>
     </div>
+    </details>
 
     <div class="settings-divider"></div>
 
@@ -8199,6 +8300,27 @@ function bindSettingsEvents(c) {
   $('#channel-feed-add')?.addEventListener('click', addChannelFeed);
   $('#channel-feeds')?.addEventListener('click', onChannelFeedAction);
 
+  // ── 成本口径三选一：只让被选中的那一项可填 ──
+  const syncCostModeInputs = () => {
+    const picked = $('input[name="cost-mode"]:checked')?.value || 'official';
+    const mult = $('#cfg-cost-multiplier');
+    const monthly = $('#cfg-cost-monthly');
+    if (mult) mult.disabled = picked !== 'multiplier';
+    if (monthly) monthly.disabled = picked !== 'subscription';
+    const status = $('#cost-mode-status');
+    if (status) {
+      const mode = state.modelPrices?.costMode || {};
+      status.textContent = picked === 'multiplier'
+        ? `官方价 ×${Number(mult?.value) || 1} = 你的渠道价（按实付口径显示）`
+        : picked === 'subscription'
+          ? `按 ¥${Number(monthly?.value) || 0}/月 固定支出显示，不再按 token 算`
+          : '按内置官方价格表估算：数字是估算，不是你的账单';
+    }
+  };
+  $$('input[name="cost-mode"]').forEach((el) => el.addEventListener('change', syncCostModeInputs));
+  ['#cfg-cost-multiplier', '#cfg-cost-monthly'].forEach((sel) => $(sel)?.addEventListener('input', syncCostModeInputs));
+  syncCostModeInputs();
+
   // ── 远程价格表：状态展示 + 立即拉取 ──
   renderPriceFeedStatus();
   $('#price-feed-refresh-btn')?.addEventListener('click', async () => {
@@ -9281,6 +9403,15 @@ async function saveConfig({ quiet = false } = {}) {
       ),
       // 成本核算：官方价开关（走中转站时通常要关掉开关自己填）
       useOfficialPrice: chk('#cfg-useofficialprice', c.api.useOfficialPrice !== false),
+      // 账户级口径三选一：官方价估算 / 渠道倍率 / 按月付
+      costMode: (() => {
+        const picked = $('input[name="cost-mode"]:checked')?.value;
+        return ['official', 'multiplier', 'subscription'].includes(picked) ? picked : (c.api.costMode || 'official');
+      })(),
+      costMultiplier: Number(val('#cfg-cost-multiplier', c.api.costMultiplier ?? 1)) || 1,
+      costMonthlyFee: Number(val('#cfg-cost-monthly', c.api.costMonthlyFee ?? 0)) || 0,
+      // 没有价格的模型按当前模型的价估算（默认开）
+      fallbackToCurrentModel: chk('#cfg-fallback-current', c.api.fallbackToCurrentModel !== false),
       // 远程价格表 URL：留空 = 只用内置表
       priceRemoteUrl: val('#cfg-price-remote-url', c.api.priceRemoteUrl || '').trim(),
       // 全局兜底单价：仅当没有模型级价格时生效

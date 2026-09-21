@@ -172,3 +172,69 @@ test('渠道价目表落盘 + 拉取失败时保留上一次的表', async () =>
   channel.removeChannelFeed('落盘渠道');
   assert.equal(channel.channelPriceStatus().length, 0);
 });
+
+/* ── 自动探测（零配置路径） ── */
+
+test('自动探测：成功就登记成渠道价目表并生效', async () => {
+  const github = fakeFetch({
+    '/api/pricing': { data: [{ model_name: 'auto-model', quota_type: 0, model_ratio: 1, completion_ratio: 2 }] }
+  });
+  let savedPatch = null;
+  const res = await channel.maybeAutoProbeChannel({
+    baseUrl: 'https://auto.example.com/provider/v1',
+    vendor: '自动渠道',
+    feedsConfig: [],
+    options: {
+      fetchImpl: github,
+      getConfig: () => ({ api: { channelPriceFeeds: [] } }),
+      updateConfig: (patch) => { savedPatch = patch; }
+    }
+  });
+  assert.equal(res.probed, true);
+  assert.equal(res.ok, true);
+  assert.equal(res.count, 1);
+  assert.ok(savedPatch, '要把渠道价目表写进配置');
+  assert.equal(savedPatch.api.channelPriceFeeds[0].vendor, '自动渠道');
+  assert.equal(savedPatch.api.channelPriceFeeds[0].auto, true);
+  assert.deepEqual(channel.channelPriceCounts()['自动渠道'], 1);
+  // 价格也真的生效了（该渠道下 1 倍率 = ¥14.4/百万）
+  const p = prices.resolveModelPrice('auto-model', { api: { useOfficialPrice: true } }, null, { vendor: '自动渠道' });
+  assert.equal(p.source, 'channel-table');
+  assert.ok(p.in > 14 && p.in < 15);
+  channel.removeChannelFeed('自动渠道');
+});
+
+test('自动探测：失败静默、不登记、不抛异常', async () => {
+  const github = fakeFetch({ '/api/pricing': { hello: 'world' } });
+  let called = 0;
+  const res = await channel.maybeAutoProbeChannel({
+    baseUrl: 'https://nope.example.com',
+    vendor: '失败的渠道',
+    feedsConfig: [],
+    options: {
+      fetchImpl: github,
+      getConfig: () => ({ api: { channelPriceFeeds: [] } }),
+      updateConfig: () => { called += 1; }
+    }
+  });
+  assert.equal(res.probed, true);
+  assert.equal(res.ok, false);
+  assert.equal(called, 0, '失败不写配置');
+  assert.equal(channel.channelPriceCounts()['失败的渠道'], undefined);
+});
+
+test('自动探测：已配过或刚探过就跳过', async () => {
+  const github = fakeFetch({ '/api/pricing': { data: [{ model_name: 'x', model_ratio: 1 }] } });
+  const configured = await channel.maybeAutoProbeChannel({
+    baseUrl: 'https://x.example.com',
+    vendor: '已有渠道',
+    feedsConfig: [{ vendor: '已有渠道', url: 'https://x.example.com/pricing.json' }],
+    options: { fetchImpl: github }
+  });
+  assert.equal(configured.probed, false);
+  assert.equal(configured.reason, 'configured');
+
+  const noUrl = await channel.maybeAutoProbeChannel({ baseUrl: '', vendor: '空地址', feedsConfig: [] });
+  assert.equal(noUrl.probed, false);
+  assert.equal(noUrl.reason, 'no-target');
+});

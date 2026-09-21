@@ -220,6 +220,76 @@ test('远程/渠道价目表也能带计费方式', () => {
   assert.equal(norm.prices['plain-model'].billing, undefined, '没写 billing 的条目不硬塞字段');
 });
 
+/* ── 账户级口径：设置页只需选一次，不用逐模型配 ── */
+
+const CURRENT = 'deepseek/deepseek-v4.1-flash';
+
+test('账户口径：渠道倍率（官方价 × 折扣）', () => {
+  const cfg = { api: { model: CURRENT, useOfficialPrice: true, costMode: 'multiplier', costMultiplier: 0.5 } };
+  const p = priceOf(CURRENT, cfg, { vendor: 'cmd' });
+  assert.equal(p.source, 'multiplier');
+  assert.equal(p.kind, 'actual', '倍率是用户自己声明的渠道价 → 实付口径');
+  assert.equal(p.in, 0.5);
+  assert.equal(p.out, 2);
+  assert.equal(p.cached, 0.01);
+  assert.ok(p.peak && p.peak.in === 1, '峰谷档也要按倍率打折');
+  assert.match(p.via, /官方价 ×0\.5/);
+});
+
+test('账户口径：按月付（所有模型都是固定支出，连没听过的模型也不会"未定价"）', () => {
+  const cfg = { api: { model: CURRENT, useOfficialPrice: true, costMode: 'subscription', costMonthlyFee: 68 } };
+  const known = priceOf(CURRENT, cfg, { vendor: 'cmd' });
+  assert.equal(known.billing, 'flat');
+  assert.equal(known.amount, 68);
+  assert.equal(known.kind, 'actual');
+  assert.equal(known.unpriced, false);
+
+  const unknown = priceOf('some-brand-new-model', cfg, { vendor: 'cmd' });
+  assert.equal(unknown.billing, 'flat', '按月付口径下，未知模型也不该显示未定价');
+  assert.equal(unknown.unpriced, false);
+  assert.equal(unknown.amount, 68);
+});
+
+test('没有价格的模型：默认按"当前模型"的价估算（可关）', () => {
+  const cfg = { api: { model: CURRENT, useOfficialPrice: true } };
+  const p = priceOf('mystery-model-x', cfg, { vendor: 'cmd' });
+  assert.equal(p.source, 'fallback-model');
+  assert.equal(p.kind, 'estimate', '这是估算，不是实付');
+  assert.equal(p.in, 1, '沿用当前模型的价');
+  assert.equal(p.unpriced, false);
+  assert.match(p.via, /按当前模型/);
+
+  const off = priceOf('mystery-model-x', { api: { ...cfg.api, fallbackToCurrentModel: false } }, { vendor: 'cmd' });
+  assert.equal(off.unpriced, true, '关掉兜底后回到未定价');
+
+  // 当前模型自己也没价 → 没法兜底，仍是未定价
+  const noBase = priceOf('mystery-model-x', { api: { model: 'another-unknown', useOfficialPrice: true } }, { vendor: 'cmd' });
+  assert.equal(noBase.unpriced, true);
+});
+
+test('手填的价优先于账户口径', () => {
+  const cfg = {
+    api: {
+      model: CURRENT,
+      useOfficialPrice: true,
+      costMode: 'subscription',
+      costMonthlyFee: 68,
+      modelPrices: { [`cmd：${CURRENT}`]: { in: 1.5, out: 6 } }
+    }
+  };
+  const p = priceOf(CURRENT, cfg, { vendor: 'cmd' });
+  assert.equal(p.source, 'channel');
+  assert.equal(p.billing, 'token');
+  assert.equal(p.in, 1.5);
+});
+
+test('costModeOf 归一化', () => {
+  assert.deepEqual(prices.costModeOf({ api: { costMode: 'MULTIPLIER', costMultiplier: '0.3' } }), { mode: 'multiplier', multiplier: 0.3, monthlyFee: 0 });
+  assert.deepEqual(prices.costModeOf({ api: { costMode: 'subscription', costMonthlyFee: '68' } }), { mode: 'subscription', multiplier: 1, monthlyFee: 68 });
+  assert.deepEqual(prices.costModeOf({}), { mode: 'official', multiplier: 1, monthlyFee: 0 });
+  assert.deepEqual(prices.costModeOf({ api: { costMode: '乱填的' } }), { mode: 'official', multiplier: 1, monthlyFee: 0 });
+});
+
 test('自定义价与全局兜底单价都算"已定价"', () => {
   const custom = priceOf('my-private-model', {
     api: { useOfficialPrice: false, modelPrices: { 'my-private-model': { in: 2, out: 8 } } }

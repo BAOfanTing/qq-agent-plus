@@ -34,6 +34,18 @@ export const DEFAULT_CONFIG = {
     priceOutputPerM: 0,     // 输出单价
     priceCachedPerM: 0,     // 输入且命中缓存的单价；留 0 时按 priceInputPerM 计
     useOfficialPrice: true, // true = 优先用内置官方价格表（按模型 id 匹配）
+    // 成本口径（设置页只需用户选一次，不用逐模型配）：
+    //   official     默认：按内置/远程价格表估算（"不是你的账单"）
+    //   multiplier   渠道价 = 官方价 × costMultiplier（中转站常见：只知道一个折扣）
+    //   subscription 按月付：所有模型按固定月费（订阅套餐 / 本地自建）
+    costMode: 'official',
+    costMultiplier: 1,
+    costMonthlyFee: 0,
+    // 没有价格的模型按"当前模型"的价估算（默认开）：避免"未定价"变成用户的作业。
+    // 数字仍是估算口径，用量页会说明有多少次是按它估的。
+    fallbackToCurrentModel: true,
+    // 用量页那张"成本想更准？三选一"的引导卡是否已经处理过（选过或点过"以后再说"）
+    costGuideDismissed: false,
     // 远程价格表 URL（可选）：指向与 prices.json 相同结构的自托管 JSON。
     // 启动时拉取一次，之后每 24 小时自动刷新（失败过 3 小时重试）；
     // 拉取全程异步、失败不清表 —— 对正常使用零影响。

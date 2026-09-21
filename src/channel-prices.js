@@ -10,23 +10,27 @@
 // 约束沿用 price-feed：全异步、错误都吞进状态、任何函数都不把异常抛给调用方。
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR } from './config.js';
+import { DATA_DIR, updateConfig } from './config.js';
 import { setChannelPrices } from './model-prices.js';
 import { normalizePriceFeed } from './price-feed.js';
+import { probeChannelPrices } from './price-probe.js';
 
 const FILE = path.join(DATA_DIR, 'channel-prices.json');
 const CACHE_VERSION = 1;
 const FETCH_TIMEOUT_MS = 15000;
 const STALE_MS = 24 * 3600 * 1000;   // 启动时超过 24h 的缓存顺手刷新一次
+const AUTO_PROBE_TTL_MS = 24 * 3600 * 1000;   // 同一个渠道 24h 内只自动探一次
 
 /** { [vendor]: { url, ok, error, fetchedAt, count, dropped, prices } } */
 let feeds = {};
+/** { [vendor]: 上次自动探测时间 } —— 探测失败也要记，避免每次重启都去敲站点 */
+let autoProbeAt = {};
 
 function writeFile() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = `${FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: CACHE_VERSION, feeds }, null, 2), { mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify({ version: CACHE_VERSION, feeds, autoProbeAt }, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, FILE);
   } catch { /* 写不进去不影响查价（内存里已经有表） */ }
 }
@@ -47,6 +51,7 @@ export function initChannelPrices(feedsConfig = []) {
   try {
     const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     const cached = data?.version === CACHE_VERSION && data.feeds && typeof data.feeds === 'object' ? data.feeds : {};
+    autoProbeAt = (data?.autoProbeAt && typeof data.autoProbeAt === 'object') ? data.autoProbeAt : {};
     feeds = {};
     for (const [vendor, feed] of Object.entries(cached)) {
       if (!wanted.has(vendor)) continue;
@@ -138,7 +143,8 @@ export function channelPriceStatus() {
       error: String(feed?.error || ''),
       fetchedAt: Number(feed?.fetchedAt || 0),
       count: Number(feed?.count || 0),
-      dropped: Number(feed?.dropped || 0)
+      dropped: Number(feed?.dropped || 0),
+      auto: feed?.auto === true
     }))
     .sort((a, b) => a.vendor.localeCompare(b.vendor));
 }
@@ -150,4 +156,63 @@ export function channelPriceCounts() {
     out[vendor] = Object.keys(feed?.prices || {}).length;
   }
   return out;
+}
+
+/**
+ * 自动探测（"零配置"路径）：用户填了渠道地址但还没配任何渠道价目表时，
+ * 后台自己探一次 —— 成功就把结果登记成该渠道的价目表（写进 config，
+ * 之后按 24h 缓存刷新）；失败**完全静默**，回落到官方价估算。
+ *
+ * 约束：
+ *   - 同一个渠道 24h 内只试一次（成功失败都算），避免每次重启都去敲对方站点
+ *   - 已经有该渠道的价目表时不再探测
+ *   - 任何异常都吞掉：这个函数绝不把错误抛给调用方
+ */
+export async function maybeAutoProbeChannel({ baseUrl, vendor, feedsConfig = [], options = {} } = {}) {
+  try {
+    const url = String(baseUrl || '').trim();
+    const channel = String(vendor || '').trim();
+    if (!url || !channel || !/^https?:\/\//i.test(url)) return { probed: false, reason: 'no-target' };
+    const configured = (Array.isArray(feedsConfig) ? feedsConfig : [])
+      .some((f) => String(f?.vendor || '').trim() === channel);
+    if (configured) return { probed: false, reason: 'configured' };
+    const last = Number(autoProbeAt[channel] || 0);
+    if (last && Date.now() - last < AUTO_PROBE_TTL_MS) return { probed: false, reason: 'recent' };
+
+    autoProbeAt[channel] = Date.now();
+    writeFile();
+    const probe = await probeChannelPrices({
+      url,
+      timeoutMs: Number(options.timeoutMs) || 12000,
+      fetchImpl: options.fetchImpl
+    });
+    if (!probe.ok || !Object.keys(probe.prices || {}).length) {
+      return { probed: true, ok: false, error: probe.error || '没有识别到价目' };
+    }
+    // 登记成该渠道的价目表（写 config + 落盘 + 注入）
+    try {
+      const current = options.getConfig ? options.getConfig() : null;
+      const feeds = Array.isArray(current?.api?.channelPriceFeeds) ? current.api.channelPriceFeeds : [];
+      if (!feeds.some((f) => String(f?.vendor || '').trim() === channel)) {
+        const write = options.updateConfig || updateConfig;
+        write({ api: { ...(current?.api || {}), channelPriceFeeds: [...feeds, { vendor: channel, url, auto: true }] } });
+      }
+    } catch { /* 写不进 config 也要把表用起来 */ }
+    feeds[channel] = {
+      url,
+      ok: true,
+      error: '',
+      fetchedAt: Date.now(),
+      count: Object.keys(probe.prices).length,
+      dropped: probe.skipped || 0,
+      prices: probe.prices,
+      auto: true,
+      source: probe.kind
+    };
+    setChannelPrices(channel, probe.prices);
+    writeFile();
+    return { probed: true, ok: true, count: Object.keys(probe.prices).length, kind: probe.kind };
+  } catch (error) {
+    return { probed: true, ok: false, error: String(error?.message ?? error) };
+  }
 }

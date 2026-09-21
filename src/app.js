@@ -16,10 +16,10 @@ import { Orchestrator } from './orchestrator.js';
 import { DailyMomentsManager } from './daily-moments.js';
 import { QzoneInteractionManager } from './qzone-interactions.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from './llm.js';
-import { resolveOfficialPrice, listOfficialPrices, listModelAliases, isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, vendorOfConfig, UNKNOWN_VENDOR } from './model-prices.js';
+import { resolveOfficialPrice, listOfficialPrices, listModelAliases, isPeakHour, priceAt, resolveModelPrice, costModeOf, modelLabel, splitModelLabel, vendorOfConfig, UNKNOWN_VENDOR } from './model-prices.js';
 import { initPriceFeed, refreshPriceFeed, priceFeedStatus } from './price-feed.js';
 import { probeChannelPrices, capPrices } from './price-probe.js';
-import { initChannelPrices, refreshChannelFeed, removeChannelFeed, channelPriceStatus } from './channel-prices.js';
+import { initChannelPrices, refreshChannelFeed, removeChannelFeed, channelPriceStatus, maybeAutoProbeChannel } from './channel-prices.js';
 import { currentProviders, setProviderKey, testAllProviders, testOneProvider, testModelChat, fetchModelsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider } from './providers.js';
 import { scanModelsVision, visionResults, modelImageVerdict } from './vision-scan.js';
 import { builtinVisionResults } from './model-vision-docs.js';
@@ -505,6 +505,13 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
 
   // 每渠道一份价目表：先吃磁盘缓存，缓存缺失/过旧的按需后台刷新（同样幂等、不阻塞启动）
   initChannelPrices(cfg.api?.channelPriceFeeds || []);
+  // 零配置路径：填了渠道地址但没配过价目表时，后台自己探一次（成功自动采用，失败静默）
+  maybeAutoProbeChannel({
+    baseUrl: cfg.api?.baseUrl || '',
+    vendor: vendorOfConfig(cfg) || '',
+    feedsConfig: cfg.api?.channelPriceFeeds || [],
+    options: { getConfig, updateConfig }
+  }).catch(() => { /* 内部已吞，这里是第二道保险 */ });
 
   // OneBot 连接状态推送
   onebot.onStatus((status) => {
@@ -1366,6 +1373,10 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           // 口径：实付（用户自己填的价）/ 估算（官方表、兜底）/ 未定价
           kind: currentPrice.kind || 'estimate',
           billing: currentPrice.billing || 'token',
+          costMode: costModeOf(cfgNow).mode,
+          costMultiplier: costModeOf(cfgNow).multiplier,
+          costMonthlyFee: costModeOf(cfgNow).monthlyFee,
+          fallbackCalls: totals.fallbackCalls || 0,
           billingAmount: Number(currentPrice.amount) || 0,
           billingPeriod: currentPrice.period === 'day' ? 'day' : 'month',
           actualCost: totals.actualCost || 0,
@@ -1528,6 +1539,7 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           currentVendor: vendor,
           currentDetail: { model, vendor, ...resolveModelPrice(model, cfg, null, { vendor }) },
           aliases: listModelAliases(),
+          costMode: costModeOf(cfg),
           channelFeeds: channelPriceStatus(),   // 每渠道一份价目表的状态
           remote: priceFeedStatus()   // 远程价格表状态（设置页展示：来源/时间/条目数/错误）
         });
@@ -3422,6 +3434,8 @@ function costOfRows(rows) {
   let flatCalls = 0, flatTokens = 0;
   const flatItems = new Map();
   let localCalls = 0, localTokens = 0;
+  // 按"当前模型"的价估算的调用（没有自己价格的模型，避免变成用户的作业）
+  let fallbackCalls = 0, fallbackTokens = 0;
   for (const r of rows) {
     const p = priceOf(r.model, r.vendor);
     if (p.peak) hasPeakModel = true;
@@ -3462,6 +3476,11 @@ function costOfRows(rows) {
     } else if (p.billing === 'none') {
       localCalls += 1;
       localTokens += tk;
+    } else if (p.source === 'fallback-model') {
+      fallbackCalls += 1;
+      fallbackTokens += tk;
+      if (p.kind === 'actual') { actualCost += c; actualCalls += 1; }
+      else { estimateCost += c; estimateCalls += 1; }
     } else if (p.kind === 'actual') { actualCost += c; actualCalls += 1; }
     else { estimateCost += c; estimateCalls += 1; }
   }
@@ -3476,7 +3495,8 @@ function costOfRows(rows) {
     unpricedCalls, unpricedTokens,
     actualCost, estimateCost, actualCalls, estimateCalls,
     flatCalls, flatTokens, flatItems: [...flatItems.values()],
-    localCalls, localTokens
+    localCalls, localTokens,
+    fallbackCalls, fallbackTokens
   };
 }
 

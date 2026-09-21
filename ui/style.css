@@ -2318,6 +2318,40 @@ button.uu-chip:hover { border-color: var(--accent); color: var(--text); }
 /* ── 渠道价目表 / 探测结果 ── */
 .hint.success { color: var(--green, #2fd07a); }
 .hint.error { color: var(--red, #ff6b6b); }
+
+/* ── 成本口径三选一（设置页）── */
+.radio-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.radio-row:hover { border-color: var(--accent); }
+.radio-row input[type="radio"] { flex: none; }
+.radio-row > span { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* 高级折叠区：和 .collapsible 一致，但内部是正常排版的表单（不是代码块） */
+.settings-advanced > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); padding: 8px 12px; }
+.settings-advanced[open] > summary { border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+.settings-advanced > *:not(summary) { padding-left: 12px; padding-right: 12px; }
+#cost-mode-status { font-size: 11.5px; color: var(--muted); }
+
+/* ── 用量页首次引导卡（成本口径三选一） ── */
+.usage-guide {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(76, 141, 255, .45);
+  background: rgba(76, 141, 255, .07);
+  border-radius: 10px;
+}
+.ug-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.ug-options { display: flex; flex-direction: column; gap: 6px; }
+.ug-options .radio-row { margin-bottom: 0; background: var(--bg); }
 .cf-row {
   display: flex;
   align-items: center;
