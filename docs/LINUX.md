@@ -375,3 +375,43 @@ bash -n deploy.sh manage.sh
 Tests use local mock protocol/model servers and isolated temporary data. Real QQ
 end-to-end reply validation requires an exclusive test chat/account and explicit
 activation. Observe-mode deployment validates receipt without emitting replies.
+
+## OneBot Shows "Not Connected"
+
+The control panel only tells whether the socket is up. The actual reason is kept in
+`/api/status` under `onebot.error`, and one read-only audit prints it:
+
+```bash
+node src/ops.js audit --dir=/mnt/data/qq-agent     # line: "OneBot: connected=false error=…"
+journalctl --user -u qq-agent-linux -n 80 | grep -i onebot
+```
+
+`ops.js` probes the protocol server on port `3390` by default, while a default
+install uses `3000`. Pass `QQ_AGENT_ONEBOT_HTTP_PORT=3000`, or that line reports a
+reachable server as unreachable.
+
+Match the error text:
+
+- `ECONNREFUSED` — nothing listens on that port. Check the protocol container:
+  `docker ps -a | grep snowluma`, then `docker logs --tail 50 qq-agent-snowluma`.
+- `401` / `403` — token mismatch. The `accessToken` in the protocol side's
+  `onebot.json` must equal the WebSocket token under Settings → OneBot (the HTTP
+  token falls back to the WS token when left empty).
+- `ENOTFOUND` — the host does not resolve; the WS URL is wrong
+  (default `ws://127.0.0.1:3001`).
+- `ETIMEDOUT` — the host is unreachable (address or firewall).
+- `404` / `Unexpected server response` — wrong port: the peer is not a WebSocket
+  server (the HTTP port `3000` cannot serve as the WS port).
+
+Three traps worth knowing:
+
+- **An address or token change needs a restart.** The connection is created once at
+  startup and is not rebuilt when the control panel saves config; run
+  `bash manage.sh restart`.
+- The protocol side must expose a **forward WebSocket server**. This service is a
+  forward WS client only; it does not provide a reverse WS server.
+- Status dot: green = connected, yellow = connected before and dropped (it backs off
+  and reconnects by itself, no restart needed), grey = never connected.
+
+A logged-out QQ account is not a connection failure: the socket stays up and only
+`get_login_info` is missing. Watch it with `node src/ops.js watch-login`.

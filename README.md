@@ -266,6 +266,39 @@ node src/ops.js console --open           # 建 SSH 隧道并打开控制台
 每个子命令都支持 `--help`；环境变量、常用示例与远程执行说明见
 [运维工具文档](docs/OPS.md)。
 
+### OneBot 显示「未连接」怎么查
+
+控制台只判断"连上/没连上"，真正的原因在 `/api/status` 的 `onebot.error` 里，跑一次体检就能看到：
+
+```bash
+node src/ops.js audit --dir=/mnt/data/qq-agent     # 看 "OneBot: connected=false error=…" 那一行
+journalctl --user -u qq-agent-linux -n 80 | grep -i onebot
+```
+
+> `ops.js` 直连协议端时默认用 `3390` 端口；如果你没改过端口（安装脚本默认 `3000`），
+> 加一个 `QQ_AGENT_ONEBOT_HTTP_PORT=3000` 再看，否则那一行会误报不可达。
+
+按 error 里的内容对症：
+
+- `ECONNREFUSED` —— 协议端没在这个端口监听。先看容器在不在：
+  `docker ps -a | grep snowluma`、`docker logs --tail 50 qq-agent-snowluma`。
+- `401` / `403` —— 令牌不一致：协议端 `onebot.json` 里的 `accessToken` 必须和
+  控制台「设置 → OneBot」的 WS 令牌一致（HTTP 令牌留空则沿用 WS）。
+- `ENOTFOUND` —— 地址解析不了，WS 地址写错了（默认 `ws://127.0.0.1:3001`）。
+- `ETIMEDOUT` —— 连不到那台机器（地址或防火墙）。
+- `404` / `Unexpected server response` —— 端口填错，对方不是 WebSocket 协议端
+  （HTTP 端口 `3000` 不能当 WS 用）。
+
+三个最容易踩的坑：
+
+- **改完地址或令牌必须重启才生效**：连接只在服务启动时建立一次，控制台里保存配置
+  不会重连，执行 `bash manage.sh restart`。
+- 协议端必须是**正向 WebSocket 服务端**：本项目只做正向 WS 客户端，不提供反向 WS 服务端。
+- 状态圆点：绿＝已连接，黄＝连上过又断了（会自己退避重连，不用重启），灰＝从未连上。
+
+QQ 没登录不算"未连接"：那种情况 WS 是通的，只是取不到登录信息，用
+`node src/ops.js watch-login` 盯登录即可。
+
 > **本机看控制台不用碰公网端口**：控制台只监听服务器的 `127.0.0.1:3210`。
 > Windows 用户直接双击仓库里的 [`console-tunnel.bat`](console-tunnel.bat)——首次输入一次
 > `user@host` 并记住，它会自动从服务器读取控制台令牌、建好 SSH 隧道并免登录打开浏览器
@@ -390,7 +423,7 @@ bash -n deploy.sh manage.sh
 ```
 
 CI（GitHub Actions）在每次推送和 PR 上跑：语法检查、未定义调用扫描（严格模式）、
-单元测试与本地回归。当前基线上有 5 个遗留失败用例被显式跳过，清单与实测表现见
+单元测试与本地回归。当前基线上没有待修的已知问题，历史记录见
 [已知问题](docs/KNOWN-ISSUES.md)。
 
 详细说明见 [Linux 运维手册](docs/LINUX.md)。

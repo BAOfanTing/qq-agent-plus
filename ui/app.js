@@ -525,8 +525,11 @@ async function pollUntilReady() {
   const startedAt = Date.now();
   try {
     const status = await api('/api/status');
-    if (!status.onebot?.connected) setLoadingStatus('正在连接外部 OneBot 服务…');
-    else setLoadingStatus(`OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}，即将进入控制台…`);
+    if (!status.onebot?.connected) {
+      // 首屏就卡在这儿的多半是协议端没起来，把原因直接写出来，别让人对着"正在连接"干等
+      const why = onebotIssueText(status.onebot, { withRaw: false });
+      setLoadingStatus(why ? `OneBot 还没连上：${why}` : '正在连接外部 OneBot 服务…');
+    } else setLoadingStatus(`OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}，即将进入控制台…`);
     // 服务已可达，无需等到 OneBot 完全连上即可进入控制台（体检卡会继续提示）
     return true;
   } catch (e) {
@@ -622,6 +625,38 @@ function setStatusLabel(selector, text) {
   el.title = text;
 }
 
+// ── OneBot 连接失败的人话解释 ──
+// 后端在 /api/status 的 onebot.error 里记着最近一次连接失败的原因（例如
+// "connect ECONNREFUSED 127.0.0.1:3001"），但界面上以前只写"未连接"，用户只能猜。
+// 这里把常见错误翻成能照着做的短句；原文附在括号里，方便直接复制去求助。
+function onebotIssueText(ob, { withRaw = true } = {}) {
+  if (!ob || ob.connected) return '';
+  const raw = String(ob.error || '').trim();
+  if (!raw) return ob.everConnected ? '连接已断开，正在自动重连' : '还没连上协议端，正在重试';
+  let hint = '连接失败';
+  if (/ECONNREFUSED/i.test(raw)) hint = '协议端没在这个端口监听（服务没启动或端口不对）';
+  else if (/ENOTFOUND|EAI_AGAIN/i.test(raw)) hint = '这个地址解析不了（WS 地址可能写错了）';
+  else if (/ETIMEDOUT|EHOSTUNREACH|ENETUNREACH/i.test(raw)) hint = '连不到那台机器（地址或防火墙）';
+  else if (/\b(401|403)\b|unauthorized|forbidden/i.test(raw)) hint = '对方拒绝了连接，多半是令牌不一致（协议端 onebot.json 的 accessToken 要和控制台里的 WS 令牌一致）';
+  else if (/\b404\b|Unexpected server response/i.test(raw)) hint = '对方不是 WebSocket 协议端（地址或端口填错了）';
+  return withRaw ? `${hint}（${raw}）` : hint;
+}
+
+// 设置页「OneBot」那一块的状态行：那一页就是来修"连不上"的地方，
+// 所以当前状态和失败原因直接摊开写，不用去别处找。
+function onebotStatusLineHtml() {
+  const ob = state.status?.onebot;
+  return ob?.connected
+    ? `<div class="hint success">当前状态：已连接${ob.self ? `（${ob.self.nickname}）` : '（但没取到登录信息，确认协议端的 QQ 已登录）'}</div>`
+    : `<div class="hint error">当前状态：未连接 —— ${esc(onebotIssueText(ob) || '正在等待首次连接')}</div>`;
+}
+
+// 状态刷新时只换这一行的文字，不重渲染整段表单（否则会清掉用户正在填的内容）
+function updateOnebotStatusLine() {
+  const el = $('#onebot-status-line');
+  if (el) el.innerHTML = onebotStatusLineHtml();
+}
+
 // ── 就绪度体检（傻瓜式引导的核心） ──
 function assessReadiness(cfg, status) {
   const checks = [];
@@ -643,7 +678,14 @@ function assessReadiness(cfg, status) {
   const allowOk = (cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty);
   checks.push({ ok: !!allowOk, label: allowOk ? `白名单：${(cfg.allow.groups || []).length} 个群 / ${(cfg.allow.private || []).length} 个好友` : '还没有配置白名单（必填）', fix: allowOk ? null : 'settings-allow' });
   const obOk = status?.onebot?.connected;
-  checks.push({ ok: !!obOk, label: obOk ? `OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}` : 'OneBot 未连接 —— 请检查设置中的 WS/HTTP 地址与令牌', fix: obOk ? null : 'settings-onebot' });
+  const obIssue = onebotIssueText(status?.onebot);
+  checks.push({
+    ok: !!obOk,
+    label: obOk
+      ? `OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}`
+      : `OneBot 未连接 —— ${obIssue || '请检查设置中的 WS/HTTP 地址与令牌'}`,
+    fix: obOk ? null : 'settings-onebot'
+  });
   return { ready: urlOk && modelOk && allowOk && obOk, checks };
 }
 
@@ -658,7 +700,8 @@ function renderBanner() {
     html = '⏸ 机器人已暂停，不会处理任何消息。';
   } else if (s && !s.onebot.connected && !s.onebot.everConnected) {
     show = true;
-    html = '🔌 OneBot 还没连上：请确认外部协议服务已启动，且 WS/HTTP 地址正确。';
+    const why = onebotIssueText(s.onebot);
+    html = `🔌 OneBot 还没连上：${why ? `${esc(why)}。` : ''}请确认外部协议服务已启动，且 WS/HTTP 地址正确。`;
   }
   banner.classList.toggle('hidden', !show);
   if (show) {
@@ -1200,6 +1243,10 @@ async function refreshStatus() {
     const dot = $('#onebot-dot');
     const label = $('#onebot-label');
     dot.className = 'dot ' + (s.onebot.connected ? 'dot-on' : (s.onebot.everConnected ? 'dot-wait' : 'dot-off'));
+    // 状态条本身截断显示（顶栏高度锁死），失败原因放 title，鼠标悬停就能看到
+    const obIssue = onebotIssueText(s.onebot);
+    dot.title = obIssue ? `OneBot：${obIssue}` : 'OneBot 连接状态';
+    label.title = obIssue;
     label.textContent = s.onebot.connected
       ? `OneBot 已连接${s.onebot.self ? `（${s.onebot.self.nickname}）` : ''}`
       : 'OneBot 未连接';
@@ -1226,6 +1273,7 @@ async function refreshStatus() {
       setStatusLabel('#model-label', $('#model-label').textContent + (s.timeControl.active ? ' · 活跃时段' : ' · 非活跃时段'));
     }
     if (state.tab === 'settings' && state.settingsSection === 'time-control') loadTimeControlStatus();
+    if (state.tab === 'settings' && state.settingsSection === 'onebot') updateOnebotStatusLine();
     if (state.tab === 'settings' && state.settingsSection === 'moments') loadDailyMomentsStatus();
     if (state.tab === 'settings' && state.settingsSection === 'qzone-interactions') {
       loadQzoneInteractionStatus();
@@ -5502,7 +5550,7 @@ function renderSettingsSidebar() {
   sidebar.innerHTML = `
     <div class="settings-runstate">
       <div class="rs-title">机器人运行状态</div>
-      <div class="rs-row"><span class="dot ${s?.onebot?.connected ? 'dot-on' : 'dot-off'}"></span><span>${s?.onebot?.connected ? '运行中' : '未就绪'}</span></div>
+      <div class="rs-row" ${s?.onebot?.connected ? '' : `title="${esc(onebotIssueText(s?.onebot) || '正在等待首次连接')}"`}><span class="dot ${s?.onebot?.connected ? 'dot-on' : 'dot-off'}"></span><span>${s?.onebot?.connected ? '运行中' : '未就绪'}</span></div>
       <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${s.orchestrator.model}` : '模型：未设置')}</div>
     </div>
     <div class="settings-menu">
@@ -7767,7 +7815,8 @@ function renderOnebotSection(c) {
       <div class="field"><label>HTTP 令牌（与 WS 不同时填）</label><input type="password" id="cfg-obhttptoken"
         placeholder="${c.onebot.hasHttpAccessToken ? '已保存；留空保持不变' : '未设置'}" /></div>
     </div>
-    <div class="hint">改完 OneBot 地址或令牌后，执行 <code>manage.sh restart</code> 生效。</div>`;
+    <div id="onebot-status-line">${onebotStatusLineHtml()}</div>
+    <div class="hint">改完 OneBot 地址或令牌后，执行 <code>manage.sh restart</code> 生效（连接只在启动时建立一次，改完不重启还是旧地址）。</div>`;
 }
 
 function bindSettingsEvents(c) {

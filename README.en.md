@@ -111,8 +111,11 @@ npm run test:local    # local regression (uses a temp data dir, never production
 node src/ops.js scan --strict
 ```
 
-CI runs the same steps on every push and pull request. Five inherited test cases currently
-fail on this baseline and are explicitly skipped — see [KNOWN-ISSUES](docs/KNOWN-ISSUES.md).
+CI runs the same steps on every push and pull request. No known issue is currently
+open on this baseline; see [KNOWN-ISSUES](docs/KNOWN-ISSUES.md) for the history.
+
+When the console says OneBot is not connected, the reason is in `onebot.error` —
+see [Troubleshooting](docs/LINUX.md#onebot-shows-not-connected).
 
 ## 📄 License
 
