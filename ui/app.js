@@ -4835,7 +4835,7 @@ function priceTxt(value) {
 }
 
 /**
- * 手填的一条价目算不算"填了价\"：判据是写没写 in/out 字段（0 是合法价，代表免费），
+ * 手填的一条价目算不算"填了价"：判据是写没写 in/out 字段（0 是合法价，代表免费），
  * 与后端 hasManualPrice 保持一致。
  */
 function hasOwnPrice(entry) {
@@ -4864,7 +4864,6 @@ function hasOwnPrice(entry) {
  * 匹配判断在本地用 state.modelPrices.prices 算，不读 state.modelPrices.current
  * —— 后者是后端按「当时请求的模型」算的，切换模型后不重新请求就会拿到旧值。
  */
-
 function refreshModelPriceCard() {
   const modelEl = $('#pc-model');
   const noteEl = $('#pc-note');

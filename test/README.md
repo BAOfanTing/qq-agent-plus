@@ -5,7 +5,7 @@
 ## 1. 单元测试（CI 跑）
 
 ```
-test/*.test.mjs      # node:test，53 个文件
+test/*.test.mjs      # node:test，一个文件管一块（清单看 ls test/*.test.mjs，别写死数量）
 ```
 
 - 命令：`npm run test:unit`（= `node --test test/*.test.mjs`）
