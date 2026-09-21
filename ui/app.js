@@ -1205,12 +1205,14 @@ async function refreshStatus() {
       : 'OneBot 未连接';
     setStatusLabel('#model-label', `模型：${s.orchestrator.model || '未设置'}`);
     const u = s.usage;
-    // 成本：官方价匹配得上就显示；匹配不上（中转站常见）只显示 token，不显示误导性的 ¥0
+    // 成本：查得到价就显示；查不到（未定价，转站/新模型常见）就不显示金额，
+    // 只提示"含未定价调用"，避免让 ¥0 被读成"免费"。
     const c = s.cost;
     const costTxt = c && c.cost > 0 ? ` · ¥${c.cost.toFixed(3)}` : '';
+    const unpricedTxt = c && c.unpriced ? ' · 含未定价调用' : '';
     const rate = s.cacheHitRate;
     const rateTxt = rate > 0 ? ` · 缓存 ${Math.round(rate * 100)}%` : '';
-    setStatusLabel('#usage-label', `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}`);
+    setStatusLabel('#usage-label', `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}${unpricedTxt}`);
     setStatusLabel('#search-count-label', `搜索：${s.webSearchCount ?? u.webSearchCount ?? 0} 次`);
     state.paused = s.paused;
     state.pauseReason = s.pauseReason;
@@ -1982,7 +1984,7 @@ function renderSessionContextInspector(s) {
         <div><span>总缓存 Token</span><strong>${fmtTok(metrics.cachedTokens)}</strong><small>token</small></div>
         <div><span>总工具次数</span><strong>${fmtTok(metrics.toolCalls)}</strong><small>次</small></div>
         <div><span>总联网次数</span><strong>${fmtTok(metrics.webSearchCount)}</strong><small>次</small></div>
-        <div><span>预估成本</span><strong>${fmtYuan(metrics.estimatedCost)}</strong><small>与用量页同口径</small></div>
+        <div><span>预估成本</span><strong>${fmtYuan(metrics.estimatedCost)}</strong><small>${Number(metrics.unpricedCalls) > 0 ? `含 ${Number(metrics.unpricedCalls)} 次未定价调用` : '与用量页同口径'}</small></div>
       </div>
       <div class="context-request-summary">
         当前展示第 ${Number(s.inputRound) || Math.max(1, calls.length)} 轮请求快照
@@ -2691,6 +2693,18 @@ function renderUsagePage(stats, st, prices) {
         </div>
       </div>
 
+      <!-- 未定价提示条：有调用查不到单价时出现。这些调用不算钱，
+           但不提示的话用户会以为成本是准的（或者以为模型免费）。 -->
+      <div class="usage-unpriced hidden" data-block="unpriced">
+        <div class="uu-head">
+          <span class="uu-icon">!</span>
+          <span class="uu-title" data-field="unpriced-title">-</span>
+        </div>
+        <div class="uu-list" data-field="unpriced-list"></div>
+        <div class="uu-hint">这些调用在价格表里查不到单价，成本没有计入（不等于免费）。
+          指定价格后本页会自动重算：<b>设置 → 模型价格</b>（开关关掉后可按模型/渠道手填，或配远程价格表）。</div>
+      </div>
+
       <div data-block="days">
         <h3 class="usage-h3">按天</h3>
         <table class="usage-table clickable" data-table="days">
@@ -2782,6 +2796,30 @@ function updateUsagePage(stats, st, prices) {
   set('rate-sub', `命中 ${fmtTok(t.cachedTokens)} / 输入 ${fmtTok(t.promptTokens)}`);
   set('cost', fmtYuan(t.cost));
   set('cost-sub', stats?.rangeLabel || '');
+
+  // 未定价提示条：多少调用没算钱、分别是哪些模型
+  const un = stats?.unpriced || {};
+  const unBlock = box.querySelector('[data-block="unpriced"]');
+  if (unBlock) {
+    const unpricedModels = un.models || [];
+    if (Number(un.calls) > 0) {
+      unBlock.classList.remove('hidden');
+      set('unpriced-title',
+        `${Number(un.calls)} 次调用没有价格（${fmtTokens(Number(un.tokens) || 0)} token 未计入成本）`);
+      const listEl = box.querySelector('[data-field="unpriced-list"]');
+      if (listEl) {
+        const chips = unpricedModels.map((x) => {
+          const label = x.vendor ? `${x.vendor}：${x.model}` : (x.model || x.key || '');
+          return `<span class="uu-chip" title="${esc(label)}">${esc(label)}<b>${Number(x.calls) || 0} 次</b></span>`;
+        });
+        if (Number(un.more) > 0) chips.push(`<span class="uu-chip muted">等 ${Number(un.more)} 个</span>`);
+        const html = chips.join('');
+        if (listEl.dataset.sig !== html) { listEl.innerHTML = html; listEl.dataset.sig = html; }
+      }
+    } else {
+      unBlock.classList.add('hidden');
+    }
+  }
   const bar = box.querySelector('[data-field="rate-bar"]');
   if (bar) bar.style.width = `${Math.max(0, Math.min(100, (t.cacheHitRate || 0) * 100)).toFixed(1)}%`;
 
@@ -2827,6 +2865,36 @@ function updateUsagePage(stats, st, prices) {
     if (tbody.dataset.sig !== html) { tbody.innerHTML = html; tbody.dataset.sig = html; }
   };
 
+  // 成本单元格：整行都没有价格时不能显示成 ¥0.00（会被读成"免费"）
+  const costCell = (row) => {
+    const calls = Number(row.runs) || 0;
+    const unpriced = Number(row.unpricedCalls) || 0;
+    if (unpriced <= 0) return fmtYuan(row.cost);
+    const title = `其中有 ${unpriced} 次调用在价格表里查不到单价，未计入成本`;
+    if (calls > 0 && unpriced >= calls) {
+      return `<span class="uc-chip warn" title="${esc(title)}">未定价</span>`;
+    }
+    return `${fmtYuan(row.cost)}<span class="uc-chip warn" title="${esc(title)}">未定价 ${unpriced}</span>`;
+  };
+
+  // 官方价匹配的提示：别名映射 / 近似匹配都标出来（用户自己定过价的不标）
+  const matchNote = (m) => {
+    const model = String(m.model || '');
+    if (!model) return '';
+    const api = (state.config || {}).api || {};
+    const custom = api.modelPrices || {};
+    if (custom[model] || custom[`${m.vendor}：${model}`]) return '';
+    const hit = matchPriceTable(model, state.modelPrices?.prices || []);
+    if (!hit) return '';
+    if (hit.confidence === 'alias') {
+      return `<span class="uc-chip" title="${esc(`按别名映射计价：${hit.via}`)}">别名</span>`;
+    }
+    if (hit.confidence === 'fuzzy') {
+      return `<span class="uc-chip" title="${esc(`近似匹配到 ${hit.matched}（${hit.via}）`)}">近似</span>`;
+    }
+    return '';
+  };
+
   fill('days', stats?.days, (d) => `
     <tr data-key="${esc(d.day)}">
       <td>${esc(d.day)}</td>
@@ -2835,7 +2903,7 @@ function updateUsagePage(stats, st, prices) {
       <td class="r">${fmtTok(d.completionTokens)}</td>
       <td class="r">${fmtTok(d.cachedTokens)}</td>
       <td class="r">${((d.cacheHitRate || 0) * 100).toFixed(0)}%</td>
-      <td class="r">${fmtYuan(d.cost)}</td>
+      <td class="r">${costCell(d)}</td>
     </tr>`);
 
   fill('chats', stats?.chats, (c) => `
@@ -2845,19 +2913,19 @@ function updateUsagePage(stats, st, prices) {
       <td class="r">${fmtTok(c.promptTokens)}</td>
       <td class="r">${fmtTok(c.completionTokens)}</td>
       <td class="r">${((c.cacheHitRate || 0) * 100).toFixed(0)}%</td>
-      <td class="r">${fmtYuan(c.cost)}</td>
+      <td class="r">${costCell(c)}</td>
     </tr>`);
 
   // 模型与供应商分两列显示：同一个 id 走不同渠道是不同的"商品"，
   // 价格可能差很多（中转站加价、:free 版本等），必须能区分开。
   fill('models', stats?.models, (m) => `
     <tr data-key="${esc(m.key)}">
-      <td>${esc(m.vendor ? `${m.vendor}：${m.model}` : (m.model ?? m.key))}</td>
+      <td>${esc(m.vendor ? `${m.vendor}：${m.model}` : (m.model ?? m.key))}${matchNote(m)}</td>
       <td class="r">${m.runs}</td>
       <td class="r">${fmtTok(m.promptTokens)}</td>
       <td class="r">${fmtTok(m.completionTokens)}</td>
       <td class="r">${((m.cacheHitRate || 0) * 100).toFixed(0)}%</td>
-      <td class="r">${fmtYuan(m.cost)}</td>
+      <td class="r">${costCell(m)}</td>
     </tr>`, { collapsible: true, expandBtn: '#models-expand' });
 }
 
@@ -4264,31 +4332,75 @@ function renderPriceFeedStatus() {
  * 在内置价格表里匹配模型（前端版）。
  *
  * 前端是无模块单文件，拿不到 src/model-prices.js 的导出，所以这里实现一份
- * 与后端 matchPriceTable 完全相同的逻辑：精确 → 去前缀 → 最长前缀匹配。
- * 用本地数据算而不是读 state.modelPrices.current —— 后者是后端按
- * 「当时请求的模型」算的，切换模型后不重新请求就会拿到旧值。
+ * 与后端 matchModelId 完全相同的逻辑（改后端时这里要一起改）：
+ *   候选名（原样 → 去渠道前缀 → 去叫法后缀/日期后缀 → 点号归并）
+ *   → 别名 → 表内精确 → 前缀匹配（取最长）
+ * 返回条目并带上 confidence/via：'alias'（按别名）/ 'fuzzy'（近似）要在界面上标出来。
+ * 别名表来自 /api/model-prices 的 aliases（内置 + 远程）。
  */
-function matchPriceTable(modelId, table) {
-  const raw = String(modelId || '').trim();
+function matchPriceTable(modelId, table, aliases = null) {
+  const raw = String(modelId || '').trim().toLowerCase();
   if (!raw) return null;
-  const id = raw.toLowerCase();
-  const list = table || [];
+  const list = Array.isArray(table) ? table : Object.entries(table || {}).map(([id, e]) => ({ id, ...e }));
+  if (!list.length) return null;
+  const aliasMap = aliases || state.modelPrices?.aliases || {};
 
-  const exact = list.find((x) => String(x.id).toLowerCase() === id);
-  if (exact) return exact;
-
-  if (id.includes('/')) {
-    const bare = id.split('/').pop();
-    const hit = list.find((x) => String(x.id).toLowerCase() === bare);
-    if (hit) return hit;
-  }
-
-  let best = null;
+  const byId = new Map();
   for (const x of list) {
-    const xid = String(x.id).toLowerCase();
-    if (id.startsWith(xid) && (!best || xid.length > String(best.id).length)) best = x;
+    const key = String(x?.id ?? '').toLowerCase();
+    if (key) byId.set(key, x);
   }
-  return best;
+
+  // 候选名（与后端 modelIdCandidates 一致）
+  const candidates = [];
+  const push = (id, confidence, via) => {
+    if (id && !candidates.some((c) => c.id === id)) candidates.push({ id, confidence, via });
+  };
+  const suffixes = [':free', ':beta', ':latest', '-free', '-beta', '-latest',
+    '-preview', '-exp', '-experimental', '-thinking', '-nothink', '-nonthinking', '-non-thinking'];
+  push(raw, 'exact', '');
+  const bare = raw.includes('/') ? raw.slice(raw.indexOf('/') + 1) : raw;
+  if (bare !== raw) push(bare, 'exact', '去渠道前缀');
+  for (const base of [raw, bare]) {
+    let id = base;
+    for (const suffix of suffixes) {
+      if (id.endsWith(suffix) && id.length > suffix.length) id = id.slice(0, -suffix.length);
+    }
+    if (id !== base) push(id, 'normalized', '去掉叫法后缀');
+    const noDate = id.replace(/-(?:\d{4}|\d{6}|\d{8})$/, '');
+    if (noDate !== id) push(noDate, 'normalized', '去掉日期快照后缀');
+  }
+  for (const cand of [...candidates]) {
+    const minor = cand.id.replace(/v(\d+)\.(\d+)/g, 'v$1');
+    if (minor !== cand.id) push(minor, 'fuzzy', '点号版本归并');
+    const dashed = cand.id.replace(/\./g, '-');
+    if (dashed !== cand.id) push(dashed, 'fuzzy', '点号转连字符');
+  }
+
+  for (const cand of candidates) {
+    const alias = aliasMap[cand.id];
+    if (alias && byId.has(alias)) {
+      return { ...byId.get(alias), matched: alias, confidence: 'alias', via: `${cand.id} → ${alias}` };
+    }
+    if (byId.has(cand.id)) {
+      return { ...byId.get(cand.id), matched: cand.id, confidence: cand.confidence, via: cand.via };
+    }
+  }
+
+  for (const cand of candidates) {
+    let best = null;
+    for (const key of byId.keys()) {
+      if (
+        cand.id === key
+        || cand.id.startsWith(`${key}/`) || cand.id.startsWith(`${key}-`)
+        || cand.id.startsWith(`${key}@`) || cand.id.startsWith(`${key}:`)
+      ) {
+        if (!best || key.length > best.length) best = key;
+      }
+    }
+    if (best) return { ...byId.get(best), matched: best, confidence: 'prefix', via: '前缀匹配' };
+  }
+  return null;
 }
 
 /**
@@ -4344,6 +4456,14 @@ function refreshModelPriceCard() {
       };
       const tag = official.src === 'official' ? '厂商官方定价页直取' : '二手折算，仅供参考';
       sourceTxt = `内置官方价格表已匹配到「${official.id}」（${tag}）。开关开启时只读 —— 要自定义请关闭上方开关。`;
+      // 匹配链路：别名/近似要说清楚，否则用户看不出价格是"猜"的还是"对"的
+      if (official.confidence === 'alias') {
+        sourceTxt += `　按别名映射：${official.via}。`;
+      } else if (official.confidence === 'fuzzy') {
+        sourceTxt += `　近似匹配：${official.via}（价格可能与实际型号有差异）。`;
+      } else if (official.confidence === 'normalized') {
+        sourceTxt += `　匹配时${official.via}。`;
+      }
       if (official.peak) {
         sourceTxt += `　该模型分时段计价（高峰 ${official.peak.in}/${official.peak.out}/${official.peak.cached}）。`;
       }
@@ -4356,7 +4476,8 @@ function refreshModelPriceCard() {
       }
     } else {
       shown = { in: 0, out: 0, cached: 0 };
-      sourceTxt = '';
+      sourceTxt = `未定价：内置价格表里没有「${model}」这一条 —— 用量页会把它的成本当成 0（不是免费）。`
+        + '要给它定价：关掉上方开关，在下面填入该模型（或该渠道）的单价；也可以配置远程价格表统一维护。';
     }
   } else {
     locked = false;

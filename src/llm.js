@@ -446,6 +446,10 @@ export function estimateCost(usage, opts = {}) {
     },
     prices: { in: inPrice, out: outPrice, cached: cachedPrice },
     matched,
+    // 未定价 = 价格表里查不到（不是免费）。调用方要能区分这两种情况。
+    unpriced: p.unpriced === true,
+    confidence: p.confidence || '',
+    via: p.via || '',
     // 峰谷信息：hasPeakTiers 表示这个模型是否分时段计价
     peak,
     hasPeakTiers

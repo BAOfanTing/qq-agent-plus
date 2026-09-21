@@ -293,31 +293,118 @@ export const OFFICIAL_PRICES = {
   'granite-4.0-h-micro': { in: 0.12, out: 0.81, cached: null, note: 'IBM；最便宜付费档', src: 'derived' }
 };
 
+/* ══════════════════════════════════════════════════════════════
+   模型 id 归一化 → 别名 → 价格表
+
+   渠道给模型起的名字五花八门：deepseek/deepseek-v4.1-flash、
+   deepseek-v4-flash-0731、glm-5.3-flash:free、kimi-k3-preview……
+   价格表只认自己的条目名，所以查价前先展开成一串候选名（带可信度），
+   再依次尝试：别名 → 表内精确 → 前缀匹配。查不到就是"未定价"，
+   由调用方标记出来，绝不能当成 0 元悄悄过掉。
+   ══════════════════════════════════════════════════════════════ */
+
 /**
- * 按模型 id 查官方价格。
- * 匹配顺序：精确 → 去 provider 前缀再精确 → 前缀匹配。
- * 查不到返回 null（此时应由用户手动填单价）。
+ * 显式别名：渠道常用名 → 价格表条目名。
+ * 一条一行，加名字不用动价格；远程价格表也能带 aliases（远程赢）。
  */
-export function resolveOfficialPrice(modelId) {
+export const MODEL_ALIASES = {
+  // 聚合站对新版 DeepSeek 用点号写法；表里 V4.1-Flash 的条目名是 deepseek-flash
+  'deepseek-v4.1-flash': 'deepseek-flash',
+  'deepseek-v4.1-flash-0731': 'deepseek-flash',
+  'deepseek-v41-flash': 'deepseek-flash'
+};
+
+/** 只是"叫法"、不影响型号判断的后缀：去掉再查。 */
+const COSMETIC_SUFFIXES = [
+  ':free', ':beta', ':latest', '-free', '-beta', '-latest',
+  '-preview', '-exp', '-experimental',
+  '-thinking', '-nothink', '-nonthinking', '-non-thinking'
+];
+
+/** 日期快照后缀：-0731 / -20260101。 */
+const DATE_SUFFIX = /-(?:\d{4}|\d{6}|\d{8})$/;
+
+/**
+ * 展开一个 model id 的候选名，按可信度从高到低：
+ *   exact      —— 原样 / 去掉渠道前缀后的名字
+ *   normalized —— 去掉叫法后缀、日期快照后缀
+ *   fuzzy      —— 点号版本归并（v4.1 → v4）、点号转连字符
+ * 只做名字层面的变换，不猜型号。
+ */
+export function modelIdCandidates(modelId) {
   const raw = String(modelId ?? '').trim().toLowerCase();
-  if (!raw) return null;
+  if (!raw) return [];
+  const out = [];
+  const push = (id, confidence, via) => {
+    if (id && !out.some((c) => c.id === id)) out.push({ id, confidence, via });
+  };
 
-  const table = EFFECTIVE_PRICES;
-  if (table[raw]) return { ...table[raw], matched: raw };
-
-  // 去掉 provider 前缀：openai/gpt-5.6-luna → gpt-5.6-luna
+  push(raw, 'exact', '');
   const bare = raw.includes('/') ? raw.slice(raw.indexOf('/') + 1) : raw;
-  if (bare !== raw && table[bare]) return { ...table[bare], matched: bare };
+  if (bare !== raw) push(bare, 'exact', '去渠道前缀');
 
-  // 前缀匹配：z-ai/glm-5.3 → glm-5.3（取最长匹配，避免 glm-5 抢先命中 glm-5.3）
-  let best = null;
-  for (const key of Object.keys(table)) {
-    if (bare === key || bare.startsWith(key + '/') || bare.startsWith(key + '-') || bare.startsWith(key + '@') || bare.startsWith(key + ':')) {
-      if (!best || key.length > best.length) best = key;
+  for (const base of [raw, bare]) {
+    let id = base;
+    for (const suffix of COSMETIC_SUFFIXES) {
+      if (id.endsWith(suffix) && id.length > suffix.length) id = id.slice(0, -suffix.length);
+    }
+    if (id !== base) push(id, 'normalized', '去掉叫法后缀');
+    const noDate = id.replace(DATE_SUFFIX, '');
+    if (noDate !== id) push(noDate, 'normalized', '去掉日期快照后缀');
+  }
+
+  for (const cand of [...out]) {
+    const minor = cand.id.replace(/v(\d+)\.(\d+)/g, 'v$1');
+    if (minor !== cand.id) push(minor, 'fuzzy', '点号版本归并');
+    const dashed = cand.id.replace(/\./g, '-');
+    if (dashed !== cand.id) push(dashed, 'fuzzy', '点号转连字符');
+  }
+  return out;
+}
+
+/**
+ * 在一张"id → 条目"的表里匹配模型（表用普通对象，方便直接喂内置/远程表）。
+ * 候选顺序即优先级：别名 → 精确 → 归一化 → 模糊 → 前缀匹配。
+ * 返回条目副本并带上 matched / confidence / via，取不到返回 null。
+ */
+function matchModelId(modelId, table, aliases) {
+  const candidates = modelIdCandidates(modelId);
+  const keys = Object.keys(table || {});
+  if (!candidates.length || !keys.length) return null;
+
+  for (const cand of candidates) {
+    const alias = aliases[cand.id];
+    if (alias && table[alias]) {
+      return { ...table[alias], matched: alias, confidence: 'alias', via: `${cand.id} → ${alias}` };
+    }
+    if (table[cand.id]) {
+      return { ...table[cand.id], matched: cand.id, confidence: cand.confidence, via: cand.via };
     }
   }
-  if (best) return { ...table[best], matched: best };
+
+  // 前缀匹配兜底：z-ai/glm-5.3-insider → glm-5.3（取最长匹配，避免 glm-5 抢先命中 glm-5.3）
+  for (const cand of candidates) {
+    let best = null;
+    for (const key of keys) {
+      if (
+        cand.id === key
+        || cand.id.startsWith(key + '/') || cand.id.startsWith(key + '-')
+        || cand.id.startsWith(key + '@') || cand.id.startsWith(key + ':')
+      ) {
+        if (!best || key.length > best.length) best = key;
+      }
+    }
+    if (best) return { ...table[best], matched: best, confidence: 'prefix', via: '前缀匹配' };
+  }
   return null;
+}
+
+/**
+ * 按模型 id 查官方价格。
+ * 查不到返回 null —— 调用方按"未定价"处理（不要当成 0 元）。
+ */
+export function resolveOfficialPrice(modelId) {
+  return matchModelId(modelId, EFFECTIVE_PRICES, EFFECTIVE_ALIASES);
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -329,21 +416,42 @@ export function resolveOfficialPrice(modelId) {
    与内置表**按模型 id 合并**（远程赢），内置表其余条目仍是兜底。
    查价时走 EFFECTIVE_PRICES —— 合并结果在注入时重建一次，
    不在每次查价时临时拼（用量统计要逐条解析几百次）。
+   别名同理：远程 aliases 覆盖内置 MODEL_ALIASES。
 */
 let REMOTE_OVERRIDES = {};                 // { 模型id(小写): 条目 }
 let EFFECTIVE_PRICES = OFFICIAL_PRICES;    // 内置 + 远程的合并视图
+let REMOTE_ALIASES = {};                   // { 渠道叫法: 表内条目名 }
+let EFFECTIVE_ALIASES = MODEL_ALIASES;     // 内置 + 远程的合并视图
 
-/** 注入远程价格表（已校验的条目）。传 {} 即退回纯内置表。 */
-export function setRemotePrices(map) {
+/** 注入远程价格表（已校验的条目）与别名。传 {} 即退回纯内置表。 */
+export function setRemotePrices(map, aliases = null) {
   REMOTE_OVERRIDES = (map && typeof map === 'object') ? map : {};
   EFFECTIVE_PRICES = Object.keys(REMOTE_OVERRIDES).length
     ? { ...OFFICIAL_PRICES, ...REMOTE_OVERRIDES }
     : OFFICIAL_PRICES;
+
+  const nextAliases = {};
+  if (aliases && typeof aliases === 'object' && !Array.isArray(aliases)) {
+    for (const [from, to] of Object.entries(aliases)) {
+      const key = String(from ?? '').trim().toLowerCase();
+      const value = String(to ?? '').trim().toLowerCase();
+      if (key && value && key !== value) nextAliases[key] = value;
+    }
+  }
+  REMOTE_ALIASES = nextAliases;
+  EFFECTIVE_ALIASES = Object.keys(REMOTE_ALIASES).length
+    ? { ...MODEL_ALIASES, ...REMOTE_ALIASES }
+    : MODEL_ALIASES;
 }
 
 /** 当前生效的远程覆盖条目数（状态展示用）。 */
 export function remoteOverrideCount() {
   return Object.keys(REMOTE_OVERRIDES).length;
+}
+
+/** 当前生效的别名表（内置 + 远程），给界面/接口展示用。 */
+export function listModelAliases() {
+  return { ...EFFECTIVE_ALIASES };
 }
 
 /** 列出全部价格条目（给设置页展示/提示用）。远程覆盖的条目带 remote:true。 */
@@ -534,7 +642,12 @@ export function supportsImage(price) {
  * @param {Array} [priceTable] 内置价格表（可选，默认用内置的 OFFICIAL_PRICES）
  * @returns {{in:number,out:number,cached:number,peak:?object,image:?object,
  *            source:'official'|'unmatched'|'custom'|'manual'|'none',
- *            matched:?string, locked:boolean}}
+ *            matched:?string, locked:boolean, unpriced:boolean,
+ *            confidence:'exact'|'alias'|'normalized'|'fuzzy'|'prefix'|'custom'|'manual'|'none',
+ *            via:string}}
+ *
+ * ⚠️ unpriced=true 表示"没有价格"，和"免费（单价 0）"是两回事：
+ *    统计时要单独标出来，不能显示成 ¥0.00 让用户以为免费。
  */
 export function resolveModelPrice(modelId, cfg, priceTable = null) {
   const id = String(modelId || '').trim();
@@ -552,16 +665,22 @@ export function resolveModelPrice(modelId, cfg, priceTable = null) {
         image: p.image || null,
         source: 'official',
         matched: p.matched ?? id,
-        locked: true
+        locked: true,
+        unpriced: false,
+        confidence: p.confidence || 'exact',
+        via: p.via || ''
       };
     }
-    // 开关注定要读，但表里没有 —— 单价 0，仍然只读
+    // 开关注定要读，但表里没有 —— 标记为未定价，由界面显式提示（不是 0 元）
     return {
       in: 0, out: 0, cached: 0,
       peak: null, image: null,
       source: 'unmatched',
       matched: null,
-      locked: true
+      locked: true,
+      unpriced: true,
+      confidence: 'none',
+      via: ''
     };
   }
 
@@ -575,7 +694,10 @@ export function resolveModelPrice(modelId, cfg, priceTable = null) {
       image: null,
       source: 'custom',
       matched: id,
-      locked: false
+      locked: false,
+      unpriced: false,
+      confidence: 'custom',
+      via: '自定义价'
     };
   }
 
@@ -589,7 +711,10 @@ export function resolveModelPrice(modelId, cfg, priceTable = null) {
       peak: null, image: null,
       source: 'manual',
       matched: null,
-      locked: false
+      locked: false,
+      unpriced: false,
+      confidence: 'manual',
+      via: '全局兜底单价'
     };
   }
 
@@ -598,35 +723,27 @@ export function resolveModelPrice(modelId, cfg, priceTable = null) {
     peak: null, image: null,
     source: 'none',
     matched: null,
-    locked: false
+    locked: false,
+    unpriced: true,
+    confidence: 'none',
+    via: ''
   };
 }
 
+/** 这次解析结果算不算"没有价格"（与"免费"区分开）。 */
+export function isPriceUnpriced(price) {
+  return Boolean(price && price.unpriced === true);
+}
+
 /** 在一张价格表里匹配模型（供前端用本地数据算，不依赖接口往返）。 */
-export function matchPriceTable(modelId, table) {
-  const raw = String(modelId || '').trim();
-  if (!raw) return null;
-  const id = raw.toLowerCase();
-  const list = table || [];
-
-  const exact = list.find((x) => String(x.id).toLowerCase() === id);
-  if (exact) return { ...exact, matched: exact.id };
-
-  // 去 provider 前缀后再试（z-ai/glm-5.3 → glm-5.3）
-  if (id.includes('/')) {
-    const bare = id.split('/').pop();
-    const hit = list.find((x) => String(x.id).toLowerCase() === bare);
-    if (hit) return { ...hit, matched: hit.id };
+export function matchPriceTable(modelId, table, aliases = null) {
+  const list = Array.isArray(table) ? table : Object.entries(table || {}).map(([id, e]) => ({ id, ...e }));
+  const map = {};
+  for (const entry of list) {
+    const key = String(entry?.id ?? '').trim().toLowerCase();
+    if (key) map[key] = entry;
   }
-
-  // 前缀匹配：取最长的那条，避免 gpt-5 命中 gpt-5.6
-  let best = null;
-  for (const x of list) {
-    const xid = String(x.id).toLowerCase();
-    if (id.startsWith(xid) && (!best || xid.length > String(best.id).length)) best = x;
-  }
-  if (best) return { ...best, matched: best.id };
-  return null;
+  return matchModelId(modelId, map, aliases || EFFECTIVE_ALIASES);
 }
 
 /* ══════════════════════════════════════════════════════════════

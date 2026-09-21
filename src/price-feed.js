@@ -38,6 +38,7 @@ const status = {
   ok: false,              // 上次拉取是否成功
   error: '',
   count: 0,               // 生效的远程条目数
+  aliasCount: 0,          // 生效的远程别名数
   dropped: 0              // 校验被丢弃的条目数
 };
 
@@ -71,22 +72,28 @@ function normEntry(v) {
 
 /**
  * 校验并规范化远程价格表的整个载荷。
- * @returns {{ prices: object, dropped: number } | null} 载荷完全不可用返回 null
+ * 顺带接受可选的 aliases（{ "渠道叫法": "表内条目名" }），
+ * 让别名表也能随远程价格表更新，不必等发版。
+ * @returns {{ prices: object, aliases: object, dropped: number } | null} 载荷完全不可用返回 null
  */
 export function normalizePriceFeed(data) {
   if (!data || typeof data !== 'object') return null;
 
   // 四种外形 → 统一的 [id, entry] 列表
   let pairs = [];
+  let rawAliases = null;
   if (Array.isArray(data)) {
     pairs = data.map((x) => [x?.id, x]);
   } else if (Array.isArray(data.prices)) {
     pairs = data.prices.map((x) => [x?.id, x]);
+    rawAliases = data.aliases;
   } else if (data.prices && typeof data.prices === 'object') {
     pairs = Object.entries(data.prices);
+    rawAliases = data.aliases;
   } else {
     // 裸 map：排除明显的元数据键，避免把 {"updated": "..."} 当成模型
-    pairs = Object.entries(data).filter(([k]) => !/^(updated|version|meta|comment)$/i.test(k));
+    rawAliases = data.aliases;
+    pairs = Object.entries(data).filter(([k]) => !/^(updated|version|meta|comment|aliases)$/i.test(k));
   }
 
   const prices = {};
@@ -98,14 +105,24 @@ export function normalizePriceFeed(data) {
     prices[key] = e;
   }
   if (!Object.keys(prices).length && dropped) return null;   // 全是垃圾 → 判失败
-  return { prices, dropped };
+
+  const aliases = {};
+  if (rawAliases && typeof rawAliases === 'object' && !Array.isArray(rawAliases)) {
+    for (const [from, to] of Object.entries(rawAliases)) {
+      const key = String(from ?? '').trim().toLowerCase();
+      const value = String(to ?? '').trim().toLowerCase();
+      if (key && value && key !== value) aliases[key] = value;
+    }
+  }
+  return { prices, aliases, dropped };
 }
 
 /** 应用一张表：注入查价层 + 更新状态。 */
-function applyPrices(prices, source) {
-  setRemotePrices(prices);
+function applyPrices(prices, source, aliases = null) {
+  setRemotePrices(prices, aliases);
   status.source = source;
   status.count = Object.keys(prices).length;
+  status.aliasCount = aliases ? Object.keys(aliases).length : 0;
 }
 
 /** 启动时先吃磁盘缓存（URL 对得上才用）。 */
@@ -113,9 +130,9 @@ function applyDiskCache(url) {
   try {
     const data = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
     if (data?.url !== url) return false;   // 缓存是另一个 URL 的，不能用
-    const norm = normalizePriceFeed(data.prices);
+    const norm = normalizePriceFeed({ prices: data.prices, aliases: data.aliases });
     if (!norm) return false;
-    applyPrices(norm.prices, 'cache');
+    applyPrices(norm.prices, 'cache', norm.aliases);
     status.dropped = norm.dropped;
     return true;
   } catch {
@@ -123,11 +140,11 @@ function applyDiskCache(url) {
   }
 }
 
-function writeDiskCache(url, prices) {
+function writeDiskCache(url, prices, aliases = null) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = `${CACHE_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ url, fetchedAt: Date.now(), prices }), 'utf8');
+    fs.writeFileSync(tmp, JSON.stringify({ url, fetchedAt: Date.now(), prices, aliases: aliases || {} }), 'utf8');
     fs.renameSync(tmp, CACHE_FILE);
   } catch { /* 缓存写不进去不影响使用 */ }
 }
@@ -152,11 +169,11 @@ export async function refreshPriceFeed(url) {
     const data = await res.json().catch(() => { throw new Error('返回的不是合法 JSON'); });
     const norm = normalizePriceFeed(data);
     if (!norm) throw new Error('JSON 里没有可用的价格条目');
-    applyPrices(norm.prices, 'remote');
+    applyPrices(norm.prices, 'remote', norm.aliases);
     status.ok = true;
     status.error = '';
     status.dropped = norm.dropped;
-    writeDiskCache(url, norm.prices);
+    writeDiskCache(url, norm.prices, norm.aliases);
   } catch (error) {
     status.ok = false;
     status.error = String(error?.cause?.message ?? error?.message ?? error);

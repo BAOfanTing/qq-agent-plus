@@ -16,7 +16,7 @@ import { Orchestrator } from './orchestrator.js';
 import { DailyMomentsManager } from './daily-moments.js';
 import { QzoneInteractionManager } from './qzone-interactions.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from './llm.js';
-import { resolveOfficialPrice, listOfficialPrices, isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, UNKNOWN_VENDOR } from './model-prices.js';
+import { resolveOfficialPrice, listOfficialPrices, listModelAliases, isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, UNKNOWN_VENDOR } from './model-prices.js';
 import { initPriceFeed, refreshPriceFeed, priceFeedStatus } from './price-feed.js';
 import { currentProviders, setProviderKey, testAllProviders, testOneProvider, testModelChat, fetchModelsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider } from './providers.js';
 import { scanModelsVision, visionResults, modelImageVerdict } from './vision-scan.js';
@@ -1363,6 +1363,10 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
             cached: currentTier.cached
           },
           matched: currentPrice.matched,
+          // 未定价 = 当前模型没有单价（不是免费）；界面据此提示"含未定价调用"
+          unpriced: currentPrice.unpriced === true,
+          confidence: currentPrice.confidence || '',
+          via: currentPrice.via || '',
           peak: Boolean(currentTier.peak),
           hasPeakTiers: totals.hasPeakModel,
           peakCost: totals.peakCost,
@@ -1419,22 +1423,30 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       }
 
       if (pathname === '/api/model-prices' && method === 'GET') {
-        const model = String(url.searchParams.get('model') || getConfig().api?.model || '');
+        const cfg = getConfig();
+        const model = String(url.searchParams.get('model') || cfg.api?.model || '');
+        // currentDetail：完整的解析链路（匹配到哪一条、走了别名还是近似），
+        // 界面据此解释"为什么这个模型没有价格"。
         return json(res, 200, {
           prices: listOfficialPrices(),
           current: resolveOfficialPrice(model),
+          currentDetail: { model, ...resolveModelPrice(model, cfg) },
+          aliases: listModelAliases(),
           remote: priceFeedStatus()   // 远程价格表状态（设置页展示：来源/时间/条目数/错误）
         });
       }
 
       // 手动触发一次远程价格表拉取（设置页「立即拉取」按钮）
       if (pathname === '/api/model-prices/refresh' && method === 'POST') {
-        const st = await refreshPriceFeed(getConfig().api?.priceRemoteUrl || '');
+        const cfg = getConfig();
+        const st = await refreshPriceFeed(cfg.api?.priceRemoteUrl || '');
         return json(res, 200, {
           ok: st.ok,
           remote: st,
           prices: listOfficialPrices(),
-          current: resolveOfficialPrice(getConfig().api?.model || '')
+          current: resolveOfficialPrice(cfg.api?.model || ''),
+          currentDetail: { model: String(cfg.api?.model || ''), ...resolveModelPrice(cfg.api?.model || '', cfg) },
+          aliases: listModelAliases()
         });
       }
 
@@ -3102,7 +3114,8 @@ function buildSessionMetrics(s) {
     webSearchCount: Number(s?.webSearchCount) || 0,
     estimatedCost: priced.cost,
     costBreakdown: priced.breakdown,
-    exactCostCalls: priced.exactCalls
+    exactCostCalls: priced.exactCalls,
+    unpricedCalls: priced.unpricedCalls || 0
   };
 }
 
@@ -3308,6 +3321,8 @@ function costOfRows(rows) {
   let cost = 0, peakCost = 0, offPeakCost = 0, peakTokens = 0, offPeakTokens = 0;
   let freshCost = 0, cachedCost = 0, outputCost = 0;
   let promptTokens = 0, completionTokens = 0, cachedTokens = 0, exactCalls = 0, hasPeakModel = false;
+  // 未定价 = 价格表里查不到（不是"免费"）。这些调用不计成本，但必须能看见。
+  let unpricedCalls = 0, unpricedTokens = 0;
   for (const r of rows) {
     const p = priceOf(r.model, r.vendor);
     if (p.peak) hasPeakModel = true;
@@ -3330,6 +3345,7 @@ function costOfRows(rows) {
     completionTokens += completion;
     cachedTokens += cached;
     if (r.exact) exactCalls += 1;
+    if (p.unpriced === true) { unpricedCalls += 1; unpricedTokens += tk; }
   }
   return {
     cost, peakCost, offPeakCost, peakTokens, offPeakTokens,
@@ -3338,7 +3354,8 @@ function costOfRows(rows) {
     totalTokens: promptTokens + completionTokens,
     cacheHitRate: promptTokens ? Math.min(1, cachedTokens / promptTokens) : 0,
     peakRatio: (peakTokens + offPeakTokens) ? peakTokens / (peakTokens + offPeakTokens) : 0,
-    exactCalls, hasPeakModel, runs: rows.length
+    exactCalls, hasPeakModel, runs: rows.length,
+    unpricedCalls, unpricedTokens
   };
 }
 
@@ -3372,6 +3389,23 @@ function buildUsageStats({ range = '7' } = {}) {
     const { vendor, model } = splitModelLabel(m.key);
     return { ...m, vendor, model };
   });
+  // 未定价清单：哪些模型没有价格、涉及多少次调用与 token。
+  // 页面顶部要把这件事说清楚，否则用户会以为这些调用是免费的。
+  const unpricedByModel = new Map();
+  for (const r of rows) {
+    if (priceOf(r.model, r.vendor).unpriced !== true) continue;
+    const cur = unpricedByModel.get(r.modelKey) || { key: r.modelKey, calls: 0, tokens: 0 };
+    cur.calls += 1;
+    cur.tokens += (Number(r.promptTokens) || 0) + (Number(r.completionTokens) || 0);
+    unpricedByModel.set(r.modelKey, cur);
+  }
+  const unpricedList = [...unpricedByModel.values()]
+    .sort((a, b) => b.calls - a.calls)
+    .map((x) => {
+      const { vendor, model } = splitModelLabel(x.key);
+      return { ...x, vendor, model };
+    });
+  const UNPRICED_LIMIT = 20;
   return {
     range: String(range),
     rangeLabel: win.label,
@@ -3382,7 +3416,13 @@ function buildUsageStats({ range = '7' } = {}) {
     toolCounts: toolCounts || {},
     days: byDay,
     chats,
-    models
+    models,
+    unpriced: {
+      calls: totals.unpricedCalls || 0,
+      tokens: totals.unpricedTokens || 0,
+      models: unpricedList.slice(0, UNPRICED_LIMIT),
+      more: Math.max(0, unpricedList.length - UNPRICED_LIMIT)
+    }
   };
 }
 
