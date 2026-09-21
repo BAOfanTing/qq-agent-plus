@@ -86,8 +86,12 @@ export function escapeCqText(text) {
  */
 export function sanitizeUserText(text) {
   let s = String(text ?? '');
-  // 全角化方括号包裹的疑似系统标记：【xxx】→【xxx】保留，但 [xxx] 中含中文关键词的换成（xxx）
-  s = s.replace(/\[(本次唤醒|系统|管理员|owner| Owner|OWNER|角色扮演|会话令牌|当前时间)[^\]]*\]/gi, '($1)');
+  // 系统段标记在提示词里是全角【】（见 prompt.js 的【本次唤醒】/【管理员附加规则】），
+  // 所以半角、全角、繁体方括号都要处理；命中后换圆括号：语义不变，但不再是"段标记"。
+  s = s.replace(
+    /[\[【［](本次唤醒|系统提醒|系统|管理员|owner|角色扮演|会话令牌|当前时间|过去状态|记忆|当前对话线程)[^\]】］]*[\]】］]/gi,
+    '（$1）'
+  );
   return s;
 }
 

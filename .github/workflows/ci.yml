@@ -23,11 +23,12 @@ jobs:
       - name: 安装依赖
         run: npm ci --no-audit --no-fund
 
-      - name: 语法检查（src / scripts / test）
+      - name: 语法检查（src / scripts / test / ui，递归）
         run: |
           set -e
           count=0
-          for f in src/*.js scripts/*.mjs test/*.mjs test/local/*.mjs; do
+          # 递归：src/ 按领域分了子目录，用 src/*.js 这种 glob 会静默漏掉子目录
+          for f in $(find src scripts test ui -type f \( -name '*.js' -o -name '*.mjs' \) | sort); do
             node --check "$f"
             count=$((count + 1))
           done

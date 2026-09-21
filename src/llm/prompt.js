@@ -15,7 +15,7 @@ import { getConfig } from '../core/config.js';
 // 这里 re-export 是为了让已经从 prompt.js 引用的代码不受影响。
 import { sliderToTier as _sliderToTier, tierToSlider as _tierToSlider, TIER_SLIDER_BANDS as _TIER_SLIDER_BANDS } from '../core/tier-slider.js';
 export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider, _TIER_SLIDER_BANDS as TIER_SLIDER_BANDS };
-import { formatFullTime, formatShortTime } from '../core/util.js';
+import { formatFullTime, formatShortTime, sanitizeUserText } from '../core/util.js';
 import { buildStickerContext, buildStickerStrategyHint } from '../onebot/stickers.js';
 
 // ── 系统提示 ─────────────────────────────────────────────────────────────
@@ -334,10 +334,11 @@ function participationText(level) {
 function formatEntry(m, { withId = true } = {}) {
   const notes = getConfig().memberNotes || {};
   const senderId = String(m.senderId || '');
-  const who = m.self ? '我' : (notes[senderId] || m.senderName || senderId || '未知');
+  // 昵称/备注名来自 QQ 侧（可任意字符），进提示词前用同一套规则弱化段标记
+  const who = m.self ? '我' : sanitizeUserText(notes[senderId] || m.senderName || senderId || '未知');
   const replyPrefix = !String(m.text || '').startsWith('[引用 ')
     && (m.reply?.text || m.reply?.sender)
-    ? `[引用 ${[m.reply?.sender, m.reply?.text].filter(Boolean).join('：')}]`
+    ? `[引用 ${sanitizeUserText([m.reply?.sender, m.reply?.text].filter(Boolean).join('：'))}]`
     : '';
   const hasMid = m.mid !== null && m.mid !== undefined && String(m.mid) !== '';
   const idPrefix = withId && hasMid ? `#${m.mid} ` : '';

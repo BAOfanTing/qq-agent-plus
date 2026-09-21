@@ -70,7 +70,10 @@ function apiUrl(slug, suffix) {
 /** 部署基线：deploy.sh 写入的 data/deployed-revision，缺失时退回状态文件里的记录。 */
 export function deployedRevisionAt(dataDir, state = null) {
   try {
-    const revision = cleanText(fs.readFileSync(path.join(dataDir, 'deployed-revision'), 'utf8'), REVISION_LENGTH);
+    // deploy.sh 在源码树有未提交改动时会写 "<sha>-dirty"；带上它去调 GitHub compare 会 404，
+    // 表现为更新检查永久 compare-failed（静默失效）。与 scripts/auto-update.mjs 口径一致地剥掉。
+    const revision = cleanText(fs.readFileSync(path.join(dataDir, 'deployed-revision'), 'utf8'), REVISION_LENGTH)
+      .replace(/-dirty$/, '');
     if (revision) return revision;
   } catch { /* 从未部署过 */ }
   return cleanText(state?.currentRevision, REVISION_LENGTH);

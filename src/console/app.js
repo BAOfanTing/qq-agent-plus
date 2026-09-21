@@ -23,7 +23,7 @@ import { initChannelPrices, refreshChannelFeed, removeChannelFeed, channelPriceS
 import { currentProviders, setProviderKey, testAllProviders, testOneProvider, testModelChat, fetchModelsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider } from '../core/providers.js';
 import { scanModelsVision, visionResults, modelImageVerdict } from '../llm/vision-scan.js';
 import { builtinVisionResults } from '../llm/model-vision-docs.js';
-import { createEventBus, todayKey, shanghaiDayStart } from '../core/util.js';
+import { createEventBus, todayKey, shanghaiDayStart, sanitizeUserText } from '../core/util.js';
 import { assertCanSend } from '../core/access.js';
 import { isTimeActive } from '../core/time-gate.js';
 import { timeControlState, TIME_ZONE } from '../core/time-control.js';
@@ -868,6 +868,8 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     } else {
       const targetName = isGroup ? (await resolveAtName(id, targetId)) || targetId : targetId;
       text = operatorId === targetId ? `[拍一拍] ${operatorName} 拍了拍自己` : `[拍一拍] ${operatorName} 拍了拍 ${targetName}`;
+      text = sanitizeUserText(text);
+      // 上面这段文案会进消息存档、进而进提示词，昵称同样是 QQ 侧可控内容
     }
     store.appendIncoming(chatKeyNow, {
       mid: null,
@@ -971,8 +973,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     const url = new URL(req.url, 'http://127.0.0.1');
     const cookie = String(req.headers.cookie || '').split(';').map((v) => v.trim())
       .find((v) => v.startsWith('qq_agent_token='));
-    return req.headers['x-console-token'] === token || url.searchParams.get('token') === token
-      || cookie?.slice('qq_agent_token='.length) === encodeURIComponent(token);
+    return sameSecret(req.headers['x-console-token'], token)
+      || sameSecret(url.searchParams.get('token'), token)
+      || sameSecret(cookie?.slice('qq_agent_token='.length), encodeURIComponent(token));
   }
 
   function setConsoleCookie(res, token) {
@@ -1063,12 +1066,13 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     if (token && authorize(req)) return true;
     if (token) {
       const url = new URL(req.url, 'http://127.0.0.1');
-      if (req.headers['x-console-token'] === token || url.searchParams.get('token') === token) return true;
+      if (sameSecret(req.headers['x-console-token'], token) || sameSecret(url.searchParams.get('token'), token)) return true;
     }
-    // 带自定义头 → 不可能是简单跨站请求（需 CORS 预检通过才能发出），放行
-    if (req.headers['x-console-token']) return true;
-
+    // 带自定义头 → 不可能是简单跨站请求（需 CORS 预检通过才能发出）；
+    // 但还要求 loopback Host：否则"控制台暴露到公网且没设令牌"时任何人都能读明文密钥。
     const host = String(req.headers.host ?? '');
+    if (req.headers['x-console-token'] && /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host)) return true;
+
     const origin = String(req.headers.origin ?? '');
     const referer = String(req.headers.referer ?? '');
     const isLoopbackHost = /^127\.0\.0\.1:\d+$/.test(host) || /^localhost:\d+$/.test(host);

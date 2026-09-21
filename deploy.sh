@@ -288,7 +288,7 @@ fi
 cd "$INSTALL_DIR"
 NPM_BIN="$(dirname "$NODE_BIN")/npm"
 [[ -x "$NPM_BIN" ]] || NPM_BIN="$(command -v npm || true)"
-[[ -n "$NPM_BIN" && -x "$NPM_BIN" ]] || { printf 'npm is required\n' >&2; exit 1; }
+[[ -n "$NPM_BIN" && -x "$NPM_BIN" ]] || { printf 'npm is required\n' >&2; rollback_deployment; exit 1; }
 "$NPM_BIN" ci --omit=dev --ignore-scripts
 
 # Do not silently choose another port on a server.
@@ -326,7 +326,7 @@ for _ in {1..50}; do
   fi
   sleep 0.2
 done
-[[ "$HEALTHY" == true ]] || { printf 'Service health check failed\n' >&2; exit 1; }
+[[ "$HEALTHY" == true ]] || { printf 'Service health check failed\n' >&2; rollback_deployment; exit 1; }
 trap - ERR INT TERM
 if [[ "${QQ_AGENT_SOURCE_REVISION:-}" =~ ^[0-9a-f]{40}$ ]]; then
   REVISION="$QQ_AGENT_SOURCE_REVISION"

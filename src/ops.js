@@ -824,7 +824,7 @@ async function auditServer(args) {
     const restarts = systemctlUser(['show', cfg.service, '-p', 'NRestarts', '--value']);
     const started = systemctlUser(['show', cfg.service, '-p', 'ActiveEnterTimestamp', '--value']);
     noteLine(`重启次数: ${restarts.stdout.trim() || '未知'}  启动时间: ${started.stdout.trim() || '未知'}`);
-    noteLine(`更新定时器（应为 disabled）: ${text(systemctlUser(['is-enabled', cfg.updateTimer])) || '未知'}`);
+    noteLine(`更新定时器（应为 enabled，它负责定期检查更新）: ${text(systemctlUser(['is-enabled', cfg.updateTimer])) || '未知'}`);
     noteLine(`进程看门狗（应为 enabled）: ${text(systemctlUser(['is-enabled', cfg.guardTimer])) || '未知'}`);
     const timers = systemctlUser(['list-timers', '--all', '--no-pager']);
     for (const line of timers.stdout.split('\n').slice(0, 6)) if (line.trim()) noteLine(line.trim());
@@ -1164,7 +1164,8 @@ async function cmdBackup(args) {
     ngLine('本机缺少 tar 命令，无法备份');
     return 1;
   }
-  fs.mkdirSync(cfg.backupDir, { recursive: true });
+  // 包里是 config.json（含密钥）/console-access.txt/messages.sqlite，权限必须收紧
+  fs.mkdirSync(cfg.backupDir, { recursive: true, mode: 0o700 });
   const outFile = path.join(cfg.backupDir, `qq-agent-data-${formatStamp()}.tar.gz`);
   const du = run('du', ['-sh', cfg.dataDir]);
   if (!du.missing && du.ok) noteLine(`源大小: ${du.stdout.trim().split(/\s+/)[0]}`);
@@ -1208,6 +1209,7 @@ async function cmdBackup(args) {
   const size = (() => {
     try { return (fs.statSync(outFile).size / 1024 / 1024).toFixed(1); } catch { return '?'; }
   })();
+  try { fs.chmodSync(outFile, 0o600); } catch { /* 权限设不上不影响备份本身 */ }
   okLine(`备份完成: ${size} MB ${outFile}`);
   for (const item of backups.slice(0, keep)) noteLine(`  ${item.name}`);
   return 0;

@@ -8802,7 +8802,7 @@ function modelModalShell({ head, body, foot = '', danger = false }) {
   overlay.innerHTML = `
     <div class="model-modal ${danger ? 'danger' : ''}">
       <div class="model-modal-head">
-        <span>${head}</span>
+        <span>${esc(head)}</span>
         <button class="model-modal-close">×</button>
       </div>
       <div class="model-modal-body${/^\s*<div class="model-modal-left"/.test(String(body)) ? ' row' : ''}">${body}</div>

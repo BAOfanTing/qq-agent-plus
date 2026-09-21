@@ -511,7 +511,8 @@ export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000
   for (let i = 0; i < nodes.length; i++) {
     if (lines.length >= maxNodes) { truncated = nodes.length - i; break; }
     const n = nodes[i] || {};
-    const name = String(n.sender?.card || n.sender?.nickname || n.user_id || '?');
+    // 节点名来自 QQ 侧（群名片可任意字符），与消息文本同一套清洗
+    const name = sanitizeUserText(String(n.sender?.card || n.sender?.nickname || n.user_id || '?'));
     const nm = n.message ?? n.content;
     let body = '';
     if (typeof nm === 'string') {
@@ -523,7 +524,7 @@ export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000
       body = await segmentsToText(segs, {});
       media.push(...extractMediaFromSegments(segs));
     }
-    body = body.replace(/\s+/g, ' ').trim().slice(0, 200);
+    body = sanitizeUserText(body.replace(/\s+/g, ' ').trim().slice(0, 200));
     if (!body) continue;
     lines.push(`${name}: ${body}`);
     if (lines.join('\n').length > maxChars) { truncated = nodes.length - i - 1; break; }
