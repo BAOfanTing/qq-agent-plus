@@ -4,7 +4,7 @@
 
 本文是初次分析时的方向稿，不是最终角色卡、开发规格或上线配置。依据当时本地源码和旧 Bridge 的小鲸鱼角色卡分析，包含工作区中的现有改动；没有读取线上实际人设配置，也没有抽样验证线上聊天效果。
 
-第一阶段现已接入仓库，详见 [人设接入与切换说明](GAME_CLIENT_PERSONA.md) 和 [完整角色卡](../roles/xiaojingyu-game-client.md)。下文仍保留初步设计，未实现的长期状态与开发工具不视为已有能力。
+第一阶段现已接入仓库，详见 [人设接入与切换说明](../GAME_CLIENT_PERSONA.md) 和 [完整角色卡](../../roles/xiaojingyu-game-client.md)。下文仍保留初步设计，未实现的长期状态与开发工具不视为已有能力。
 
 ## 1. 核心定位
 
@@ -44,12 +44,12 @@ OneBot 消息事件
 重要实现依据：
 
 - 旧参考人设：[小鲸鱼.md](../../qq-bridge-linux/roles/小鲸鱼.md)。
-- qq-agent 内置适配模板：[roles/](../roles)（登记与加载在 [personas.js](../src/personas.js)）。
-- 默认配置与持久配置加载：[config.js](../src/core/config.js)，持久配置可以覆盖内置模板；修改旧 Bridge 的 Markdown 不会自动更新 qq-agent 人设。
-- 通用行为与上下文注入：[prompt.js](../src/llm/prompt.js)，特别是 `antiAiFlavor`、`memoryRules`、`buildSystemPrompt`、`buildUserPrompt`。
-- 实际生命周期实现：[orchestrator.js](../src/core/orchestrator.js)、[对话模式](CONVERSATION_MODES.md)。不能依据旧注释把当前全部模式理解为完全无历史。
-- 记忆：[memory.js](../src/memory/memory.js)，`append` 只接收成员印象；handoff 默认有效期为一天，可配置，并非长期自身履历。
-- 各社交场景提示词：[moment-prompt.js](../src/llm/moment-prompt.js)、[qzone-interaction-prompt.js](../src/llm/qzone-interaction-prompt.js)、[friend-review-prompt.js](../src/llm/friend-review-prompt.js)。
+- qq-agent 内置适配模板：[roles/](../../roles)（登记与加载在 [personas.js](../../src/personas.js)）。
+- 默认配置与持久配置加载：[config.js](../../src/core/config.js)，持久配置可以覆盖内置模板；修改旧 Bridge 的 Markdown 不会自动更新 qq-agent 人设。
+- 通用行为与上下文注入：[prompt.js](../../src/llm/prompt.js)，特别是 `antiAiFlavor`、`memoryRules`、`buildSystemPrompt`、`buildUserPrompt`。
+- 实际生命周期实现：[orchestrator.js](../../src/core/orchestrator.js)、[对话模式](../CONVERSATION_MODES.md)。不能依据旧注释把当前全部模式理解为完全无历史。
+- 记忆：[memory.js](../../src/memory/memory.js)，`append` 只接收成员印象；handoff 默认有效期为一天，可配置，并非长期自身履历。
+- 各社交场景提示词：[moment-prompt.js](../../src/llm/moment-prompt.js)、[qzone-interaction-prompt.js](../../src/llm/qzone-interaction-prompt.js)、[friend-review-prompt.js](../../src/llm/friend-review-prompt.js)。
 
 ## 3. 初步人物画像
 
@@ -205,7 +205,7 @@ OneBot 消息事件
 
 并行群聊与空间任务应读取带版本的状态快照；执行前重查权限和关键状态。待发送计划、已经发送和发送结果未知必须分开，不能因为写了经历记录就把动作标成成功。
 
-试点应遵循 [实验功能标准](EXPERIMENTAL_FEATURE_STANDARD.md)：独立模块、默认关闭、运行开关与固化分离、关闭保留数据、停止定时工作和外部写入。旧模式可以动态切回。
+试点应遵循 [实验功能标准](../EXPERIMENTAL_FEATURE_STANDARD.md)：独立模块、默认关闭、运行开关与固化分离、关闭保留数据、停止定时工作和外部写入。旧模式可以动态切回。
 
 ## 10. 分阶段推进
 

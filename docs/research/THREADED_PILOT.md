@@ -2,7 +2,7 @@
 
 This document describes the earlier two-mode pilot. The lifecycle branch keeps
 that mode and adds a third mode documented in
-[Conversation Modes](CONVERSATION_MODES.md).
+[Conversation Modes](../CONVERSATION_MODES.md).
 
 This branch adds a reversible conversation-continuity pilot without replacing
 the existing SQLite message lease or outbox delivery model.

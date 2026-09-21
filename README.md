@@ -426,10 +426,10 @@ CI（GitHub Actions）在每次推送和 PR 上跑：语法检查、未定义调
 单元测试与本地回归。当前基线上没有待修的已知问题，历史记录见
 [已知问题](docs/KNOWN-ISSUES.md)。
 
-详细说明见 [Linux 运维手册](docs/LINUX.md)。
+详细说明见 [Linux 运维手册](docs/LINUX.md)；全部文档见 [文档索引](docs/README.md)。
 试验性三模式对话引擎见
 [Conversation Modes](docs/CONVERSATION_MODES.md)；早期参与者续接方案见
-[Threaded Conversation Pilot](docs/THREADED_PILOT.md)。
+[Threaded Conversation Pilot](docs/docs/research/THREADED_PILOT.md)。
 
 ## 📄 许可
 

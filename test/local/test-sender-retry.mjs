@@ -1,4 +1,8 @@
-// 本地回归：sender 的网络层错误会重试一次，非网络错误不重试。
+// 本地回归：sender 只对"能确认未送达"的错误重试一次；结果未知的错误不自动重发。
+//
+// 背景（真实缺陷）：超时 / 连接被重置 / socket hang up / fetch failed 都可能发生在
+// "对方已经收下并发出去了"之后；自动重发会让群里出现两条一样的消息，而 outbox 只记一条。
+// 所以这类一律按结果未知走 held 人工核对，只有"连不上/被拒"这类确定没送达的才重试。
 //
 // 用法：
 //   T=$(mktemp -d); QQ_AGENT_DATA_DIR=$T node test/local/test-sender-retry.mjs
@@ -38,12 +42,12 @@ function makeStore() {
 
 const store = makeStore();
 
-// 用例 1：第一次 fetch failed，第二次成功 → 应该重试并发出
+// 用例 1：第一次连接被拒（可确认未送达），第二次成功 → 应该重试并发出
 let calls1 = 0;
 const onebot1 = {
   async sendText(kind, id, text) {
     calls1 += 1;
-    if (calls1 === 1) throw new TypeError('fetch failed');
+    if (calls1 === 1) throw new Error('connect ECONNREFUSED 127.0.0.1:3390');
     return { message_id: 999 };
   }
 };
@@ -64,16 +68,29 @@ let err2 = '';
 try { await q2.sendTextBatch('private:100000001', ['限频不该重试'], {}); } catch (e) { err2 = String(e.message); }
 console.log('用例2（非网络错误）: 调用次数=%d 报错=%s', calls2, err2.slice(0, 40));
 
-// 用例 3：两次都网络失败 → 只重试一次，最终抛错
+// 用例 3：两次都连接被拒 → 只重试一次，最终抛错
 let calls3 = 0;
-const onebot3 = { async sendText() { calls3 += 1; throw new TypeError('fetch failed'); } };
+const onebot3 = { async sendText() { calls3 += 1; throw new Error('connect ECONNREFUSED 127.0.0.1:3390'); } };
 const q3 = new SendQueue({ onebot: onebot3, store });
 let err3 = '';
 try { await q3.sendTextBatch('private:100000001', ['一直失败'], {}); } catch (e) { err3 = String(e.message); }
 console.log('用例3（连续网络失败）: 调用次数=%d 报错=%s', calls3, err3.slice(0, 40));
 
+// 用例 4：超时（结果未知）不该自动重发——对方可能已经发出去了
+let calls4 = 0;
+const onebot4 = {
+  async sendText() {
+    calls4 += 1;
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  }
+};
+const q4 = new SendQueue({ onebot: onebot4, store });
+try { await q4.sendTextBatch('private:100000001', ['超时不该重发'], {}); } catch { /* 预期抛错 */ }
+console.log('用例4（超时=结果未知）: 调用次数=%d（应为 1）', calls4);
+
 console.log(
-  (calls1 === 2 && r1.sent.length === 1 ? 'PASS' : 'FAIL') + ' 网络错误重试一次; ' +
+  (calls1 === 2 && r1.sent.length === 1 ? 'PASS' : 'FAIL') + ' 可确认未送达的错误重试一次; ' +
   (calls2 === 1 ? 'PASS' : 'FAIL') + ' 非网络错误不重试; ' +
-  (calls3 === 2 ? 'PASS' : 'FAIL') + ' 最多重试一次'
+  (calls3 === 2 ? 'PASS' : 'FAIL') + ' 最多重试一次; ' +
+  (calls4 === 1 ? 'PASS' : 'FAIL') + ' 超时（结果未知）不自动重发'
 );
