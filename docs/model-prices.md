@@ -44,6 +44,25 @@
 - 单独给某个模型/渠道定价：设置 → 模型价格（关掉"使用官方价"后可手填）；
 - 或者配远程价格表（`priceRemoteUrl`）统一维护，新模型上市当天就能补上。
 
+## 谁的价：渠道价 > 自定义价 > 价格表 > 兜底
+
+同一个模型在不同渠道是不同商品（官方直连、中转站、自建中转……），**实付价只有用户自己知道**。
+所以查价按"谁最懂这个价"排序，每一步都带来源（`source`）与口径（`kind`）：
+
+| 顺序 | 来源 | 键 / 条件 | source | kind（口径） |
+|---|---|---|---|---|
+| ① | **渠道价** | `api.modelPrices["渠道：模型"]`（全角冒号，渠道名取会话记录的 vendor，缺省时用 baseUrl 的域名） | `channel` | `actual`（实付） |
+| ② | **自定义价** | `api.modelPrices["模型"]` | `custom` | `actual`（实付） |
+| ③ | **价格表** | 内置官方表 / 远程表（远程优先；`useOfficialPrice !== false`） | `official` / `remote` | `estimate`（估算） |
+| ④ | **兜底单价** | `api.priceInputPerM` 等（沿用"关掉官方价"的老语义） | `manual` | `estimate`（估算） |
+| ⑤ | **未定价** | 都没有 | `unmatched` | `unpriced` |
+
+- 用户填的价（①②）**永远优先**，官方表不会被改动；价格卡片与用量页会显示"当前生效价来自哪里"。
+- 口径会体现在面板上：估算成本卡片写 `实付 ¥x · 估算 ¥y`，整行都是实付的模型标「实付」徽标。
+- `useOfficialPrice === false` 时**不看价格表**（尊重"我不用官方价"的选择），走 ①②④⑤。
+- 导出给其它程序的字段：`resolveModelPrice()` 返回 `source` / `kind` / `unpriced` / `confidence` / `via`；
+  控制台 `/api/model-prices` 额外给出 `currentVendor` 与 `currentDetail`（当前模型的完整解析链路）。
+
 ## DeepSeek（10 条，8 条 official）
 
 | 模型 id | 输入 | 输出 | 缓存命中 | 高峰价 | 图片 | 来源 | 备注 |

@@ -16,7 +16,7 @@ after(() => {
 });
 
 const OFFICIAL = { api: { useOfficialPrice: true } };
-const priceOf = (id, cfg = OFFICIAL) => prices.resolveModelPrice(id, cfg);
+const priceOf = (id, cfg = OFFICIAL, options = undefined) => prices.resolveModelPrice(id, cfg, null, options);
 
 test('渠道的点号版本名走别名表（真实案例：deepseek/deepseek-v4.1-flash）', () => {
   const p = priceOf('deepseek/deepseek-v4.1-flash');
@@ -81,7 +81,7 @@ test('查不到的模型是"未定价"，不是"免费"', () => {
 
   // 官方价开关关掉、没自定义价、也没填兜底单价 → 同样是未定价
   const bare = priceOf('another-unknown-model', { api: {} });
-  assert.equal(bare.source, 'none');
+  assert.equal(bare.source, 'unmatched');
   assert.equal(bare.unpriced, true);
 
   // 官方免费（单价 0）≠ 未定价：这是"真的不要钱"
@@ -89,6 +89,80 @@ test('查不到的模型是"未定价"，不是"免费"', () => {
   assert.equal(freeModel.unpriced, false);
   assert.equal(freeModel.in, 0);
   assert.equal(freeModel.out, 0);
+});
+
+test('渠道价优先于官方表，且不会串到别的渠道', () => {
+  const cfg = {
+    api: {
+      useOfficialPrice: true,
+      modelPrices: {
+        'commandcode：deepseek/deepseek-v4.1-flash': { in: 0.5, out: 2, cached: 0.05 }
+      }
+    }
+  };
+  const byChannel = priceOf('deepseek/deepseek-v4.1-flash', cfg, { vendor: 'commandcode' });
+  assert.equal(byChannel.source, 'channel');
+  assert.equal(byChannel.kind, 'actual', '用户自己填的价属于实付口径');
+  assert.equal(byChannel.in, 0.5);
+  assert.equal(byChannel.unpriced, false);
+
+  // 同一个模型走别的渠道：渠道价不生效，回落到官方表（估算口径）
+  const otherChannel = priceOf('deepseek/deepseek-v4.1-flash', cfg, { vendor: '别的站' });
+  assert.equal(otherChannel.source, 'official');
+  assert.equal(otherChannel.kind, 'estimate');
+  assert.equal(otherChannel.matched, 'deepseek-flash');
+
+  // 不带渠道信息时也拿不到渠道价
+  assert.equal(priceOf('deepseek/deepseek-v4.1-flash', cfg).source, 'official');
+});
+
+test('自定义价（不分渠道）在官方表之前生效，且对任何渠道都生效', () => {
+  const cfg = {
+    api: {
+      useOfficialPrice: true,
+      modelPrices: { 'deepseek-flash': { in: 3, out: 12 } }
+    }
+  };
+  const noChannel = priceOf('deepseek-flash', cfg);
+  assert.equal(noChannel.source, 'custom');
+  assert.equal(noChannel.kind, 'actual');
+  assert.equal(noChannel.in, 3);
+
+  const withChannel = priceOf('deepseek-flash', cfg, { vendor: '随便哪个站' });
+  assert.equal(withChannel.source, 'custom', '没有渠道价时，模型自定义价仍然生效');
+  assert.equal(withChannel.in, 3);
+});
+
+test('关掉官方价格表时才用全局兜底单价（老语义保留）', () => {
+  const cfg = { api: { useOfficialPrice: false, priceInputPerM: 9, priceOutputPerM: 18 } };
+  const p = priceOf('deepseek-flash', cfg);
+  assert.equal(p.source, 'manual');
+  assert.equal(p.kind, 'estimate');
+  assert.equal(p.in, 9);
+
+  // 官方价开着的配置里，兜底单价不该偷偷生效（否则"未定价"会被藏起来）
+  const withOfficial = priceOf('完全没听过的模型', { api: { useOfficialPrice: true, priceInputPerM: 9, priceOutputPerM: 18 } });
+  assert.equal(withOfficial.source, 'unmatched');
+  assert.equal(withOfficial.unpriced, true);
+});
+
+test('远程价格表的条目来源标成 remote（口径仍是估算）', () => {
+  prices.setRemotePrices({ 'acme-flash-x': { in: 5, out: 20 } });
+  try {
+    const p = priceOf('acme-flash-x');
+    assert.equal(p.source, 'remote');
+    assert.equal(p.kind, 'estimate');
+    assert.equal(p.in, 5);
+  } finally {
+    prices.setRemotePrices({});
+  }
+});
+
+test('priceKind 把三种口径分开', () => {
+  assert.equal(prices.priceKind({ kind: 'actual' }), 'actual');
+  assert.equal(prices.priceKind({ kind: 'estimate' }), 'estimate');
+  assert.equal(prices.priceKind({ unpriced: true }), 'unpriced');
+  assert.equal(prices.priceKind(null), 'unpriced');
 });
 
 test('自定义价与全局兜底单价都算"已定价"', () => {

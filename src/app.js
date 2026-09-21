@@ -16,7 +16,7 @@ import { Orchestrator } from './orchestrator.js';
 import { DailyMomentsManager } from './daily-moments.js';
 import { QzoneInteractionManager } from './qzone-interactions.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from './llm.js';
-import { resolveOfficialPrice, listOfficialPrices, listModelAliases, isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, UNKNOWN_VENDOR } from './model-prices.js';
+import { resolveOfficialPrice, listOfficialPrices, listModelAliases, isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, vendorOfConfig, UNKNOWN_VENDOR } from './model-prices.js';
 import { initPriceFeed, refreshPriceFeed, priceFeedStatus } from './price-feed.js';
 import { currentProviders, setProviderKey, testAllProviders, testOneProvider, testModelChat, fetchModelsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider } from './providers.js';
 import { scanModelsVision, visionResults, modelImageVerdict } from './vision-scan.js';
@@ -1348,7 +1348,8 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           webSearchCount: dailyStats.searchCount
         };
         const cfgNow = getConfig();
-        const currentPrice = resolveModelPrice(cfgNow.api?.model, cfgNow);
+        const currentVendor = vendorOfConfig(cfgNow) || '';
+        const currentPrice = resolveModelPrice(cfgNow.api?.model, cfgNow, null, { vendor: currentVendor });
         const currentTier = currentPrice.peak
           ? priceAt(currentPrice, Date.now())
           : currentPrice;
@@ -1357,6 +1358,10 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           source: currentPrice.source,
           calculation: 'per-call',
           breakdown: totals.breakdown,
+          // 口径：实付（用户自己填的价）/ 估算（官方表、兜底）/ 未定价
+          kind: currentPrice.kind || 'estimate',
+          actualCost: totals.actualCost || 0,
+          estimateCost: totals.estimateCost || 0,
           prices: {
             in: currentTier.in,
             out: currentTier.out,
@@ -1425,12 +1430,14 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       if (pathname === '/api/model-prices' && method === 'GET') {
         const cfg = getConfig();
         const model = String(url.searchParams.get('model') || cfg.api?.model || '');
-        // currentDetail：完整的解析链路（匹配到哪一条、走了别名还是近似），
-        // 界面据此解释"为什么这个模型没有价格"。
+        // currentDetail：完整的解析链路（渠道价 → 自定义价 → 表 → 兜底 → 未定价，
+        // 以及走了别名还是近似）。界面据此解释"这个价格是哪来的"。
+        const vendor = vendorOfConfig(cfg) || '';
         return json(res, 200, {
           prices: listOfficialPrices(),
           current: resolveOfficialPrice(model),
-          currentDetail: { model, ...resolveModelPrice(model, cfg) },
+          currentVendor: vendor,
+          currentDetail: { model, vendor, ...resolveModelPrice(model, cfg, null, { vendor }) },
           aliases: listModelAliases(),
           remote: priceFeedStatus()   // 远程价格表状态（设置页展示：来源/时间/条目数/错误）
         });
@@ -1439,13 +1446,16 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       // 手动触发一次远程价格表拉取（设置页「立即拉取」按钮）
       if (pathname === '/api/model-prices/refresh' && method === 'POST') {
         const cfg = getConfig();
+        const model = String(cfg.api?.model || '');
+        const vendor = vendorOfConfig(cfg) || '';
         const st = await refreshPriceFeed(cfg.api?.priceRemoteUrl || '');
         return json(res, 200, {
           ok: st.ok,
           remote: st,
           prices: listOfficialPrices(),
-          current: resolveOfficialPrice(cfg.api?.model || ''),
-          currentDetail: { model: String(cfg.api?.model || ''), ...resolveModelPrice(cfg.api?.model || '', cfg) },
+          current: resolveOfficialPrice(model),
+          currentVendor: vendor,
+          currentDetail: { model, vendor, ...resolveModelPrice(model, cfg, null, { vendor }) },
           aliases: listModelAliases()
         });
       }
@@ -3297,22 +3307,13 @@ function collectUsageRows({ range }) {
 
 /** 用配置解析价格（成本只与实际调用的模型有关，与当前选中模型无关）。 */
 /**
- * 取某次调用的单价。
- *
- * 按「渠道：模型 id」优先查 —— 用户可以为某个渠道下的模型单独定价
- * （A6API 的 GLM-5.3-Flash 与 OpenRouter 的可能是两个价）。
- * 查不到再退回裸模型 id（通用价），最后才是全局兜底。
+ * 取某次调用的单价：渠道价（「渠道：模型」）→ 模型自定义价 → 价格表 → 兜底 → 未定价。
+ * 链路本身在 resolveModelPrice 里，这里只负责把这次的渠道身份传进去。
  *
  * ⚠️ 必须与前端展示/批量编辑用的身份一致，否则用户设的渠道价永远不会生效。
  */
 function priceOf(model, vendor) {
-  const cfg = getConfig();
-  if (vendor) {
-    const byVendor = resolveModelPrice(modelLabel(vendor, model), cfg);
-    // 命中自定义价才算数；否则退回通用价（避免渠道名干扰官方表匹配）
-    if (byVendor.source === 'custom') return byVendor;
-  }
-  return resolveModelPrice(model, cfg);
+  return resolveModelPrice(model, getConfig(), null, { vendor });
 }
 
 /** 对一批行计价，返回总额与峰谷拆分。 */
@@ -3323,6 +3324,9 @@ function costOfRows(rows) {
   let promptTokens = 0, completionTokens = 0, cachedTokens = 0, exactCalls = 0, hasPeakModel = false;
   // 未定价 = 价格表里查不到（不是"免费"）。这些调用不计成本，但必须能看见。
   let unpricedCalls = 0, unpricedTokens = 0;
+  // 口径拆分：实付（用户自己填的渠道价/自定义价）vs 估算（官方表/兜底）。
+  // 面板要能说清"这个数字里有多少是真价、多少是估的"。
+  let actualCost = 0, estimateCost = 0, actualCalls = 0, estimateCalls = 0;
   for (const r of rows) {
     const p = priceOf(r.model, r.vendor);
     if (p.peak) hasPeakModel = true;
@@ -3346,6 +3350,8 @@ function costOfRows(rows) {
     cachedTokens += cached;
     if (r.exact) exactCalls += 1;
     if (p.unpriced === true) { unpricedCalls += 1; unpricedTokens += tk; }
+    else if (p.kind === 'actual') { actualCost += c; actualCalls += 1; }
+    else { estimateCost += c; estimateCalls += 1; }
   }
   return {
     cost, peakCost, offPeakCost, peakTokens, offPeakTokens,
@@ -3355,7 +3361,8 @@ function costOfRows(rows) {
     cacheHitRate: promptTokens ? Math.min(1, cachedTokens / promptTokens) : 0,
     peakRatio: (peakTokens + offPeakTokens) ? peakTokens / (peakTokens + offPeakTokens) : 0,
     exactCalls, hasPeakModel, runs: rows.length,
-    unpricedCalls, unpricedTokens
+    unpricedCalls, unpricedTokens,
+    actualCost, estimateCost, actualCalls, estimateCalls
   };
 }
 

@@ -2666,7 +2666,7 @@ function renderUsagePage(stats, st, prices) {
            五张卡固定一行（曾经第一张跨两列、整体占两行，已按需求改单行）。 -->
       <div class="usage-cards">
         <div class="usage-card accent">
-          <div class="uc-label">估算成本</div>
+          <div class="uc-label" data-field="cost-label">估算成本</div>
           <div class="uc-value" data-field="cost">-</div>
           <div class="uc-sub" data-field="cost-sub">-</div>
         </div>
@@ -2758,6 +2758,17 @@ function renderUsagePage(stats, st, prices) {
     if (tr) openUsageBreakdown('model', tr.dataset.key);
   });
 
+  // 未定价提示条：每个模型一个按钮，点开就是定价弹窗（填完立即重算）
+  box.querySelector('[data-field="unpriced-list"]')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-price-model]');
+    if (!btn) return;
+    e.stopPropagation();
+    openPriceDialog({
+      model: btn.dataset.priceModel || '',
+      vendor: btn.dataset.priceVendor || ''
+    });
+  });
+
   updateUsagePage(stats, st, prices);
 }
 
@@ -2795,7 +2806,19 @@ function updateUsagePage(stats, st, prices) {
   set('rate', `${((t.cacheHitRate || 0) * 100).toFixed(1)}%`);
   set('rate-sub', `命中 ${fmtTok(t.cachedTokens)} / 输入 ${fmtTok(t.promptTokens)}`);
   set('cost', fmtYuan(t.cost));
-  set('cost-sub', stats?.rangeLabel || '');
+  // 口径：实付（用户自己填的渠道价/自定义价）vs 估算（官方表、兜底）。
+  // 只显示"估算成本"会让人以为数字是账单；只显示"实付"又会漏掉估算那部分。
+  const actual = Number(t.actualCost) || 0;
+  const estimate = Number(t.estimateCost) || 0;
+  const hasActual = actual > 1e-9;
+  const hasEstimate = estimate > 1e-9;
+  set('cost-label', hasActual && !hasEstimate
+    ? '实付成本'
+    : (hasActual && hasEstimate ? '成本（含估算）' : '估算成本'));
+  const split = [];
+  if (hasActual) split.push(`实付 ${fmtYuan(actual)}`);
+  if (hasEstimate) split.push(`估算 ${fmtYuan(estimate)}`);
+  set('cost-sub', [stats?.rangeLabel || '', ...split].filter(Boolean).join(' · '));
 
   // 未定价提示条：多少调用没算钱、分别是哪些模型
   const un = stats?.unpriced || {};
@@ -2810,7 +2833,9 @@ function updateUsagePage(stats, st, prices) {
       if (listEl) {
         const chips = unpricedModels.map((x) => {
           const label = x.vendor ? `${x.vendor}：${x.model}` : (x.model || x.key || '');
-          return `<span class="uu-chip" title="${esc(label)}">${esc(label)}<b>${Number(x.calls) || 0} 次</b></span>`;
+          return `<button type="button" class="uu-chip" title="给这个模型定价（${esc(label)}）"`
+            + ` data-price-model="${esc(x.model || x.key || '')}" data-price-vendor="${esc(x.vendor || '')}">`
+            + `${esc(label)}<b>${Number(x.calls) || 0} 次</b><i>定价</i></button>`;
         });
         if (Number(un.more) > 0) chips.push(`<span class="uu-chip muted">等 ${Number(un.more)} 个</span>`);
         const html = chips.join('');
@@ -2877,6 +2902,16 @@ function updateUsagePage(stats, st, prices) {
     return `${fmtYuan(row.cost)}<span class="uc-chip warn" title="${esc(title)}">未定价 ${unpriced}</span>`;
   };
 
+  // 实付标记：这一行的价全部来自用户自己填的价（渠道价 / 自定义价），不是官方价估算
+  const actualChip = (row) => {
+    const calls = Number(row.runs) || 0;
+    const actual = Number(row.actualCalls) || 0;
+    if (calls > 0 && actual >= calls) {
+      return '<span class="uc-chip ok" title="这一行的价是你自己填的（渠道价 / 自定义价），属于实付口径">实付</span>';
+    }
+    return '';
+  };
+
   // 官方价匹配的提示：别名映射 / 近似匹配都标出来（用户自己定过价的不标）
   const matchNote = (m) => {
     const model = String(m.model || '');
@@ -2923,7 +2958,7 @@ function updateUsagePage(stats, st, prices) {
   // 价格可能差很多（中转站加价、:free 版本等），必须能区分开。
   fill('models', stats?.models, (m) => `
     <tr data-key="${esc(m.key)}">
-      <td>${esc(m.vendor ? `${m.vendor}：${m.model}` : (m.model ?? m.key))}${matchNote(m)}</td>
+      <td>${esc(m.vendor ? `${m.vendor}：${m.model}` : (m.model ?? m.key))}${actualChip(m)}${matchNote(m)}</td>
       <td class="r">${m.runs}</td>
       <td class="r">${fmtTok(m.promptTokens)}</td>
       <td class="r">${fmtTok(m.completionTokens)}</td>
@@ -4441,8 +4476,9 @@ function refreshModelPriceCard() {
   const modelInput = $('#cfg-model');
   const useOfficial = box ? box.checked : (api.useOfficialPrice !== false);
   const model = String((modelInput ? modelInput.value : api.model) || '').trim();
+  const vendor = state.modelPrices?.currentVendor || '';
 
-  modelEl.textContent = model || '（未选择模型）';
+  modelEl.textContent = model ? (vendor ? `${model} · ${vendor}` : model) : '（未选择模型）';
 
   if (!model) {
     [inEl, outEl, cachedEl].forEach((el) => { if (el) { el.value = 0; el.disabled = true; } });
@@ -4450,60 +4486,44 @@ function refreshModelPriceCard() {
     return;
   }
 
-  let shown, locked, sourceTxt;
+  // 生效价按与后端一致的链路算：渠道价 → 自定义价 → 价格表 → 兜底 → 未定价。
+  // 界面上的开关是实时值，所以这里临时覆盖一份 cfg 再算，避免"按了没反应"。
+  const eff = effectivePriceFor(model, vendor, { useOfficialPrice: useOfficial });
+  const shown = { in: eff.in ?? 0, out: eff.out ?? 0, cached: eff.cached ?? 0 };
+  const locked = eff.locked === true;
+  let sourceTxt = '';
 
-  if (useOfficial) {
-    locked = true;
-    const official = matchPriceTable(model, state.modelPrices?.prices || []);
-    if (official) {
-      shown = {
-        in: official.in ?? 0,
-        out: official.out ?? 0,
-        cached: official.cached == null ? official.in : official.cached
-      };
-      const tag = official.src === 'official' ? '厂商官方定价页直取' : '二手折算，仅供参考';
-      sourceTxt = `内置官方价格表已匹配到「${official.id}」（${tag}）。开关开启时只读 —— 要自定义请关闭上方开关。`;
-      // 匹配链路：别名/近似要说清楚，否则用户看不出价格是"猜"的还是"对"的
-      if (official.confidence === 'alias') {
-        sourceTxt += `　按别名映射：${official.via}。`;
-      } else if (official.confidence === 'fuzzy') {
-        sourceTxt += `　近似匹配：${official.via}（价格可能与实际型号有差异）。`;
-      } else if (official.confidence === 'normalized') {
-        sourceTxt += `　匹配时${official.via}。`;
-      }
-      if (official.peak) {
-        sourceTxt += `　该模型分时段计价（高峰 ${official.peak.in}/${official.peak.out}/${official.peak.cached}）。`;
-      }
-      if (official.image) {
-        sourceTxt += '　支持图片输入：' + (official.image.mode === 'capped'
-          ? `每张封顶 ${official.image.maxTokensPerImage} token`
-          : official.image.mode === 'pixel'
-            ? `每张 = 宽×高/${official.image.divisor}+${official.image.base} token`
-            : '换算规则待补');
-      }
-    } else {
-      shown = { in: 0, out: 0, cached: 0 };
-      sourceTxt = `未定价：内置价格表里没有「${model}」这一条 —— 用量页会把它的成本当成 0（不是免费）。`
-        + '要给它定价：关掉上方开关，在下面填入该模型（或该渠道）的单价；也可以配置远程价格表统一维护。';
-    }
+  if (eff.source === 'channel') {
+    sourceTxt = `正在使用你为「${vendor}」这个渠道单独填的价（实付口径，覆盖官方价）。`;
+  } else if (eff.source === 'custom') {
+    sourceTxt = '正在使用你为这个模型填的价（实付口径，覆盖官方价）。';
+  } else if (eff.source === 'remote') {
+    sourceTxt = '这个价来自远程价格表（你配置的那份），可以直接改；改完就变成你自己的价。';
+  } else if (eff.source === 'manual') {
+    sourceTxt = '官方价格表没有命中，正在用「全局兜底单价」估算 —— 想让这个模型更准，用下面的「给这个模型定价」。';
+  } else if (eff.source === 'unmatched') {
+    sourceTxt = `未定价：价格表里没有「${model}」这一条 —— 用量页会把它的成本算成 0（不是免费）。`
+      + '用下面的「给这个模型定价」填一条就行。';
   } else {
-    locked = false;
-    // 自定义价读已保存的配置（那才是用户存的），但模型身份用实时模型名去查
-    const custom = (api.modelPrices || {})[model];
-    if (custom && (Number(custom.in) || Number(custom.out))) {
-      shown = {
-        in: Number(custom.in) || 0,
-        out: Number(custom.out) || 0,
-        cached: custom.cached == null ? Number(custom.in) || 0 : Number(custom.cached) || 0
-      };
-      sourceTxt = '正在使用你为该模型设定的单价。';
-    } else {
-      shown = {
-        in: Number(api.priceInputPerM) || 0,
-        out: Number(api.priceOutputPerM) || 0,
-        cached: Number(api.priceCachedPerM) || Number(api.priceInputPerM) || 0
-      };
-      sourceTxt = '已关闭官方价格表，可在此填写该模型的单价（也可在「批量自定义价格编辑」里为多个模型分别设定）。';
+    const tag = eff.src === 'official' ? '厂商官方定价页直取' : '二手折算，仅供参考';
+    sourceTxt = `内置官方价格表已匹配到「${eff.matched || model}」（${tag}）。这是**估算**口径，不是你的账单；`
+      + '要按实付价算，用下面的「给这个模型定价」。';
+    if (eff.confidence === 'alias') {
+      sourceTxt += `　按别名映射：${eff.via}。`;
+    } else if (eff.confidence === 'fuzzy') {
+      sourceTxt += `　近似匹配：${eff.via}（价格可能与实际型号有差异）。`;
+    } else if (eff.confidence === 'normalized') {
+      sourceTxt += `　匹配时${eff.via}。`;
+    }
+    if (eff.peak) {
+      sourceTxt += `　该模型分时段计价（高峰 ${eff.peak.in}/${eff.peak.out}/${eff.peak.cached}）。`;
+    }
+    if (eff.image) {
+      sourceTxt += '　支持图片输入：' + (eff.image.mode === 'capped'
+        ? `每张封顶 ${eff.image.maxTokensPerImage} token`
+        : eff.image.mode === 'pixel'
+          ? `每张 = 宽×高/${eff.image.divisor}+${eff.image.base} token`
+          : '换算规则待补');
     }
   }
 
@@ -4513,6 +4533,214 @@ function refreshModelPriceCard() {
   const card = $('#model-price-card');
   if (card) card.classList.toggle('locked', locked);
   if (noteEl) noteEl.textContent = sourceTxt;
+}
+
+/**
+ * 前端版查价链路（与后端 resolveModelPrice 保持一致，改后端时要一起改）：
+ *   ① 渠道价 modelPrices[渠道：模型]  ② 自定义价 modelPrices[模型]
+ *   ③ 官方/远程价格表（useOfficialPrice !== false 时）  ④ 全局兜底单价  ⑤ 未定价
+ * 返回里带 kind：actual（实付）/ estimate（估算）/ unpriced（未定价），界面据此标口径。
+ *
+ * @param {string} model 模型 id
+ * @param {string} vendor 渠道名（可空）
+ * @param {object} [overrides] 覆盖 config.api 的实时值（如界面上的开关）
+ */
+function effectivePriceFor(model, vendor, overrides = null) {
+  const api = { ...((state.config || {}).api || {}), ...(overrides || {}) };
+  const customMap = api.modelPrices || {};
+  const id = String(model || '').trim();
+  if (!id) {
+    return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: true };
+  }
+
+  const customShape = (entry, source, matched, via) => ({
+    in: Number(entry.in) || 0,
+    out: Number(entry.out) || 0,
+    cached: entry.cached == null ? Number(entry.in) || 0 : Number(entry.cached) || 0,
+    peak: entry.peak || null,
+    source,
+    matched,
+    via,
+    confidence: source,
+    kind: 'actual',
+    unpriced: false,
+    locked: false
+  });
+
+  if (vendor) {
+    const key = `${vendor}：${id}`;
+    const hit = customMap[key];
+    if (hit && (Number(hit.in) || Number(hit.out))) return customShape(hit, 'channel', key, `渠道价（${vendor}）`);
+  }
+  const own = customMap[id];
+  if (own && (Number(own.in) || Number(own.out))) return customShape(own, 'custom', id, '自定义价');
+
+  if (api.useOfficialPrice !== false) {
+    const hit = matchPriceTable(id, state.modelPrices?.prices || [], state.modelPrices?.aliases || null);
+    if (hit) {
+      const remote = hit.remote === true;
+      return {
+        in: Number(hit.in) || 0,
+        out: Number(hit.out) || 0,
+        cached: hit.cached == null ? Number(hit.in) || 0 : Number(hit.cached) || 0,
+        peak: hit.peak || null,
+        image: hit.image || null,
+        src: hit.src || '',
+        source: remote ? 'remote' : 'official',
+        matched: hit.matched,
+        confidence: hit.confidence || 'exact',
+        via: hit.via || '',
+        kind: 'estimate',
+        unpriced: false,
+        locked: !remote
+      };
+    }
+    return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: true };
+  }
+
+  const fi = Number(api.priceInputPerM) || 0;
+  const fo = Number(api.priceOutputPerM) || 0;
+  if (fi || fo) {
+    return {
+      in: fi,
+      out: fo,
+      cached: Number(api.priceCachedPerM) || fi,
+      source: 'manual',
+      matched: null,
+      via: '全局兜底单价',
+      confidence: 'manual',
+      kind: 'estimate',
+      unpriced: false,
+      locked: false
+    };
+  }
+  return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: false };
+}
+
+/** 定价弹窗当前编辑的对象：{ model, vendor }。 */
+let priceDialogState = null;
+
+/**
+ * 打开「给这个模型定价」弹窗。
+ * 渠道下拉：当前渠道（默认）→ 全部渠道 → 配置里已出现过的渠道。
+ * 预填当前生效价；保存只写这一条（官方表不动）。
+ */
+function openPriceDialog({ model, vendor } = {}) {
+  const dlg = $('#price-dialog');
+  if (!dlg) return;
+  const cfg = state.config || {};
+  const api = cfg.api || {};
+  const customMap = api.modelPrices || {};
+  const currentVendor = String(vendor || state.modelPrices?.currentVendor || '');
+  const modelId = String(model || api.model || '').trim();
+  priceDialogState = { model: modelId, vendor: currentVendor };
+
+  const channels = new Set();
+  for (const key of Object.keys(customMap)) {
+    const i = key.indexOf('：');
+    if (i > 0) channels.add(key.slice(0, i));
+  }
+  if (currentVendor) channels.delete(currentVendor);
+  const options = [];
+  if (currentVendor) options.push({ value: currentVendor, label: `当前渠道（${currentVendor}）` });
+  options.push({ value: '', label: '全部渠道（不分渠道）' });
+  for (const v of [...channels].sort()) options.push({ value: v, label: v });
+  const select = $('#price-dialog-channel');
+  if (select) {
+    select.innerHTML = options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+    select.value = currentVendor;
+  }
+
+  const eff = effectivePriceFor(modelId, currentVendor);
+  for (const [id, value] of [['#price-dialog-in', eff.in], ['#price-dialog-out', eff.out], ['#price-dialog-cached', eff.cached]]) {
+    const el = $(id);
+    if (el) el.value = Number(value) || 0;
+  }
+
+  const title = $('#price-dialog-title');
+  if (title) title.textContent = modelId ? `给「${modelId}」定价` : '给模型定价';
+  const sub = $('#price-dialog-sub');
+  if (sub) {
+    sub.textContent = eff.kind === 'unpriced'
+      ? '这个模型现在没有价（成本算 0）。填一条只影响它，官方价格表不会被改动。'
+      : `当前生效价来自：${eff.via || eff.source}。保存后这条价优先于官方价。`;
+  }
+  const result = $('#price-dialog-result');
+  if (result) { result.textContent = ''; result.className = 'control-result muted'; }
+  const delBtn = $('#price-dialog-delete');
+  if (delBtn) delBtn.style.display = (eff.source === 'channel' || eff.source === 'custom') ? '' : 'none';
+  if (!dlg.open) dlg.showModal();
+}
+
+/** 保存定价弹窗：只写 modelPrices 的一条（键 = 渠道：模型 或 模型）。 */
+async function savePriceDialog() {
+  const st = priceDialogState;
+  const result = $('#price-dialog-result');
+  if (!st?.model) return;
+  const vendor = String($('#price-dialog-channel')?.value || '');
+  const num = (sel) => Number(String($(sel)?.value ?? '').trim()) || 0;
+  const inV = num('#price-dialog-in');
+  const outV = num('#price-dialog-out');
+  const cachedV = num('#price-dialog-cached');
+  if (!inV && !outV) {
+    if (result) { result.textContent = '输入/输出至少要填一个非 0 的数。'; result.className = 'control-result error'; }
+    return;
+  }
+  const key = vendor ? `${vendor}：${st.model}` : st.model;
+  const entry = { in: inV, out: outV, cached: cachedV };
+  try {
+    const res = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ api: { modelPrices: { [key]: entry } } })
+    });
+    if (res?.config) state.config = res.config;
+    else {
+      // 接口没回整体配置时，本地也要记上，否则卡片/重算还在用旧价
+      state.config = state.config || {};
+      state.config.api = state.config.api || {};
+      state.config.api.modelPrices = { ...(state.config.api.modelPrices || {}), [key]: entry };
+    }
+    if (result) { result.textContent = `已保存：${key}`; result.className = 'control-result success'; }
+    $('#price-dialog')?.close();
+    refreshModelPriceCard();
+    // 用量页正在看的话，让它重算（价格变了）
+    if (state.tab === 'usage') loadUsageView({ force: true });
+  } catch (error) {
+    if (result) { result.textContent = `保存失败：${error.message}`; result.className = 'control-result error'; }
+  }
+}
+
+/** 删除当前正在生效的那条自定义/渠道价。 */
+async function deletePriceDialog() {
+  const st = priceDialogState;
+  const result = $('#price-dialog-result');
+  if (!st?.model) return;
+  const vendor = String($('#price-dialog-channel')?.value || '');
+  const key = vendor ? `${vendor}：${st.model}` : st.model;
+  const next = { ...((state.config?.api?.modelPrices) || {}) };
+  if (!(key in next)) {
+    if (result) { result.textContent = `没有找到 ${key} 这条自定义价。`; result.className = 'control-result error'; }
+    return;
+  }
+  delete next[key];
+  try {
+    const res = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ api: { modelPrices: { __replace__: next } } })
+    });
+    if (res?.config) state.config = res.config;
+    else {
+      state.config = state.config || {};
+      state.config.api = state.config.api || {};
+      state.config.api.modelPrices = next;
+    }
+    if (result) { result.textContent = `已删除：${key}`; result.className = 'control-result success'; }
+    $('#price-dialog')?.close();
+    refreshModelPriceCard();
+    if (state.tab === 'usage') loadUsageView({ force: true });
+  } catch (error) {
+    if (result) { result.textContent = `删除失败：${error.message}`; result.className = 'control-result error'; }
+  }
 }
 
 /**
@@ -5016,8 +5244,9 @@ function renderApiSection(c) {
     </div>
 
     <div style="display:flex;gap:8px;margin:8px 0">
+      <button class="btn btn-small" id="pc-price-btn">给这个模型定价</button>
       <button class="btn btn-small" id="batch-price-btn">批量自定义价格编辑</button>
-      <span class="muted" style="font-size:12px;align-self:center">为多个模型分别设定单价</span>
+      <span class="muted" style="font-size:12px;align-self:center">填你的渠道实付价（覆盖官方价）；也可为多个模型分别设定</span>
     </div>
 
     <div class="settings-divider"></div>
@@ -7635,6 +7864,11 @@ function bindSettingsEvents(c) {
 
   // 批量自定义价格编辑
   $('#batch-price-btn')?.addEventListener('click', () => openBatchPriceModal());
+  // 给"当前模型"定价（渠道价/自定义价，覆盖官方价）
+  $('#pc-price-btn')?.addEventListener('click', () => openPriceDialog({
+    model: String($('#cfg-model')?.value || state.config?.api?.model || '').trim(),
+    vendor: state.modelPrices?.currentVendor || ''
+  }));
 
   // ── 远程价格表：状态展示 + 立即拉取 ──
   renderPriceFeedStatus();
@@ -9134,6 +9368,13 @@ $$('.tab').forEach((tab) => {
   $('#update-notice-later')?.addEventListener('click', () => $('#update-notice')?.close());
   $('#update-notice-run')?.addEventListener('click', runUpdateFromNotice);
   $('#update-notice-ignore')?.addEventListener('click', ignoreUpdateVersion);
+
+  // 「给模型定价」弹窗：入口在用量页（未定价提示条）与设置页（价格卡片），
+  // 但按钮监听必须在这里一次性绑好 —— 挂在设置页渲染里会导致"从未打开设置页时
+  // 弹窗里的按钮点了没反应"。
+  $('#price-dialog-save')?.addEventListener('click', savePriceDialog);
+  $('#price-dialog-delete')?.addEventListener('click', deletePriceDialog);
+  $('#price-dialog-cancel')?.addEventListener('click', () => $('#price-dialog')?.close());
 
   // 地址栏带 ?token= 时先自动登录（供快捷方式/脚本免输令牌）；
   // 成功后清掉地址栏里的明文令牌再重载，避免留在浏览历史里。

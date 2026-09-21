@@ -449,6 +449,12 @@ export function remoteOverrideCount() {
   return Object.keys(REMOTE_OVERRIDES).length;
 }
 
+/** 这个条目是不是远程表覆盖进来的（用于把来源标成"远程表"而不是"内置官方价"）。 */
+export function isRemoteEntry(id) {
+  const key = String(id ?? '').trim().toLowerCase();
+  return Boolean(key) && Object.prototype.hasOwnProperty.call(REMOTE_OVERRIDES, key);
+}
+
 /** 当前生效的别名表（内置 + 远程），给界面/接口展示用。 */
 export function listModelAliases() {
   return { ...EFFECTIVE_ALIASES };
@@ -637,70 +643,74 @@ export function supportsImage(price) {
 */
 
 /**
- * @param {string} modelId 模型 id
- * @param {object} cfg 配置
- * @param {Array} [priceTable] 内置价格表（可选，默认用内置的 OFFICIAL_PRICES）
- * @returns {{in:number,out:number,cached:number,peak:?object,image:?object,
- *            source:'official'|'unmatched'|'custom'|'manual'|'none',
- *            matched:?string, locked:boolean, unpriced:boolean,
- *            confidence:'exact'|'alias'|'normalized'|'fuzzy'|'prefix'|'custom'|'manual'|'none',
- *            via:string}}
+ * 查价主入口：按"谁最懂这个价"的顺序解析。
+ *
+ *   ① 渠道价   api.modelPrices[渠道：模型]  —— 用户在中转站/自建渠道的实付价
+ *   ② 自定义价 api.modelPrices[模型]        —— 用户填的通用价
+ *   ③ 价格表   官方表 / 远程表（同一个查询：远程条目优先，来源标出来）
+ *              —— 模型商的参考价，是"估算"不是账单
+ *   ④ 兜底单价 api.priceInputPerM/...       —— 只在关掉官方价时用（老行为）
+ *   ⑤ 未定价   —— unpriced，界面显式提示（不是 0 元）
+ *
+ * 口径（kind）：① ②=实付 actual；③ ④=估算 estimate；⑤=未定价 unpriced。
  *
  * ⚠️ unpriced=true 表示"没有价格"，和"免费（单价 0）"是两回事：
  *    统计时要单独标出来，不能显示成 ¥0.00 让用户以为免费。
+ * ⚠️ useOfficialPrice === false 时**不看价格表**（尊重"我不用官方价"的选择），
+ *    这条老语义保留；用户填的价在任何模式下都优先。
  */
-export function resolveModelPrice(modelId, cfg, priceTable = null) {
+export function resolveModelPrice(modelId, cfg, priceTable = null, options = {}) {
   const id = String(modelId || '').trim();
   const api = (cfg && cfg.api) || {};
-  const useOfficial = api.useOfficialPrice === true;
+  const officialEnabled = api.useOfficialPrice !== false;
+  const vendor = String(options.vendor || '').trim();
+  const customMap = api.modelPrices || {};
 
-  if (useOfficial) {
+  // ① 渠道价：同一个模型在不同渠道是不同商品，用户可以为某个渠道单独定价
+  if (vendor && id) {
+    const key = channelPriceKey(vendor, id);
+    const hit = customMap[key];
+    if (hit && (Number(hit.in) || Number(hit.out))) {
+      return customPrice(hit, {
+        source: 'channel',
+        matched: key,
+        via: `渠道价（${vendor}）`,
+        locked: false
+      });
+    }
+  }
+
+  // ② 模型自定义价（不分渠道）
+  const own = customMap[id];
+  if (id && own && (Number(own.in) || Number(own.out))) {
+    return customPrice(own, { source: 'custom', matched: id, via: '自定义价', locked: false });
+  }
+
+  // ③ 价格表（官方 + 远程）。远程条目优先，来源要标出来让界面区分"参考"与"渠道表"
+  if (officialEnabled) {
     const p = id ? (priceTable ? matchPriceTable(id, priceTable) : resolveOfficialPrice(id)) : null;
     if (p) {
+      const remote = isRemoteEntry(p.matched);
       return {
         in: Number(p.in) || 0,
         out: Number(p.out) || 0,
         cached: p.cached == null ? Number(p.in) || 0 : Number(p.cached) || 0,
         peak: p.peak || null,
         image: p.image || null,
-        source: 'official',
+        source: remote ? 'remote' : 'official',
         matched: p.matched ?? id,
-        locked: true,
+        locked: !remote,
         unpriced: false,
+        kind: 'estimate',
         confidence: p.confidence || 'exact',
         via: p.via || ''
       };
     }
-    // 开关注定要读，但表里没有 —— 标记为未定价，由界面显式提示（不是 0 元）
-    return {
-      in: 0, out: 0, cached: 0,
-      peak: null, image: null,
-      source: 'unmatched',
-      matched: null,
-      locked: true,
-      unpriced: true,
-      confidence: 'none',
-      via: ''
-    };
+    // 表里没有 → 未定价（关掉官方价时才可能走下面的兜底）
+    return unpricedPrice({ locked: true });
   }
 
-  const custom = (api.modelPrices || {})[id];
-  if (custom && (Number(custom.in) || Number(custom.out))) {
-    return {
-      in: Number(custom.in) || 0,
-      out: Number(custom.out) || 0,
-      cached: custom.cached == null ? Number(custom.in) || 0 : Number(custom.cached) || 0,
-      peak: custom.peak || null,
-      image: null,
-      source: 'custom',
-      matched: id,
-      locked: false,
-      unpriced: false,
-      confidence: 'custom',
-      via: '自定义价'
-    };
-  }
-
+  // ④ 全局兜底单价：老配置在"不用官方价"模式下的主力路径
   const fi = Number(api.priceInputPerM) || 0;
   const fo = Number(api.priceOutputPerM) || 0;
   if (fi || fo) {
@@ -713,18 +723,48 @@ export function resolveModelPrice(modelId, cfg, priceTable = null) {
       matched: null,
       locked: false,
       unpriced: false,
+      kind: 'estimate',
       confidence: 'manual',
       via: '全局兜底单价'
     };
   }
 
+  // ⑤ 未定价
+  return unpricedPrice({ locked: false });
+}
+
+/** 渠道价键：「渠道：模型」（全角冒号，与 modelLabel 一致，避免和 id 里的半角符号混淆）。 */
+export function channelPriceKey(vendor, model) {
+  return modelLabel(vendor, model);
+}
+
+/** 用户自填价的统一形状（渠道价与自定义价共用）。 */
+function customPrice(entry, { source, matched, via, locked }) {
+  return {
+    in: Number(entry.in) || 0,
+    out: Number(entry.out) || 0,
+    cached: entry.cached == null ? Number(entry.in) || 0 : Number(entry.cached) || 0,
+    peak: entry.peak || null,
+    image: null,
+    source,
+    matched,
+    locked,
+    unpriced: false,
+    kind: 'actual',
+    confidence: source,
+    via
+  };
+}
+
+function unpricedPrice({ locked }) {
   return {
     in: 0, out: 0, cached: 0,
     peak: null, image: null,
-    source: 'none',
+    source: 'unmatched',
     matched: null,
-    locked: false,
+    locked,
     unpriced: true,
+    kind: 'unpriced',
     confidence: 'none',
     via: ''
   };
@@ -733,6 +773,12 @@ export function resolveModelPrice(modelId, cfg, priceTable = null) {
 /** 这次解析结果算不算"没有价格"（与"免费"区分开）。 */
 export function isPriceUnpriced(price) {
   return Boolean(price && price.unpriced === true);
+}
+
+/** 这次的价格是"实付"还是"估算"（面板口径标注用）。 */
+export function priceKind(price) {
+  if (!price || price.unpriced === true) return 'unpriced';
+  return price.kind === 'actual' ? 'actual' : 'estimate';
 }
 
 /** 在一张价格表里匹配模型（供前端用本地数据算，不依赖接口往返）。 */
