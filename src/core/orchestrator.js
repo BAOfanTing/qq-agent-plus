@@ -228,6 +228,28 @@ export function triggerKindForTier(result = {}, {
   return 'unknown';
 }
 
+/**
+ * 是否该跑一次自动记忆整理（纯函数，便于单测）。
+ *
+ * 触发规则：
+ *   - 一条印象都没有时：**允许跑一次**。整理里的"发现新人"那条路
+ *     （发言够多但零印象的人 → 新建印象）正是给这种情况准备的；如果这里也按
+ *     "印象数 > 阈值"卡住，新装实例的自动整理就永远不会触发 ——
+ *     印象数从 0 开始，永远够不到阈值，于是谁都没有人物记忆。
+ *   - 已经有印象时：按阈值来（全群总数超过 minImpressions，或某人超过 maxPerMember）。
+ */
+export function shouldAutoConsolidate({
+  impressionCount = 0,
+  memberCounts = [],
+  minImpressions = 4,
+  maxPerMember = 5
+} = {}) {
+  const total = Number(impressionCount) || 0;
+  if (total <= 0) return true;
+  if (total > Math.max(1, Number(minImpressions) || 4)) return true;
+  return memberCounts.some((count) => Number(count) > Math.max(2, Number(maxPerMember) || 5));
+}
+
 export class Orchestrator {
   constructor({
     store,
@@ -1789,8 +1811,12 @@ export class Orchestrator {
       // 只看总数会在"人少"的群里彻底失灵 —— 比如 3 位成员各 1 条，
       // 总数 3 永远够不到阈值，自动整理形同虚设。
       const maxPerMember = Math.max(2, Number(cfg.memory?.maxImpressionsPerMember) || 5);
-      const anyMemberOverloaded = st.members.some((m) => m.count > maxPerMember);
-      if (!(st.counts.memberImpression > minImpressions) && !anyMemberOverloaded) return;
+      if (!shouldAutoConsolidate({
+        impressionCount: st.counts?.memberImpression,
+        memberCounts: (st.members || []).map((m) => m.count),
+        minImpressions,
+        maxPerMember
+      })) return;
       const minInterval = Math.max(30 * 60 * 1000, Number(cfg.memory?.consolidateMinIntervalMs) || 6 * 60 * 60 * 1000);
       if (Date.now() - (st.lastConsolidatedAt || 0) < minInterval) return;
       this.consolidating.add(chatKey);
