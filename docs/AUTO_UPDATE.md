@@ -83,15 +83,36 @@ timer 每小时唤醒一次，应用配置中的 `intervalHours` 决定是否已
 
 `deploy.sh` 会同时安装和校验更新 service/timer，并在部署失败时恢复旧单元及原启用状态。
 
+## 两条下载通道：git 与 API + 源码包
+
+有些网络到 `github.com` 的 **git 通道**是黑洞（TCP 能连上但 `ls-remote` 一直卡到超时），
+而 `api.github.com` 与 `codeload.github.com` 是好的。遇到这种情况不必手动升级：
+
+1. `git ls-remote` 连通性预检失败后，会再用 GitHub API 探同一个仓库/分支
+   （`GET /repos/<owner>/<repo>/commits/<branch>`）。它也失败才算真的不通（错误与告警逻辑不变）。
+2. 判定要部署的 Release 后，用 API 把 tag 解析成 commit（`/commits/<tag>` → `sha`），
+   再从 `codeload.github.com/<owner>/<repo>/tar.gz/<sha>` 拉该提交的源码包，
+   用系统 `tar` 解开到工作目录（去掉压缩包顶层目录）。
+3. 两条通道都是 HTTPS、都以 GitHub 给出的 commit sha 为锚点，后续步骤
+   （`npm ci` → 单元测试 → `deploy.sh`）完全一致；`deploy.sh` 靠
+   `QQ_AGENT_SOURCE_REVISION` 记录版本，不依赖工作目录里有 `.git`。
+4. 解析 tag 与取源码各自都会**先试首选通道、失败再换另一条**：git 通了就用 git，
+   git 不通就走 API，API 中途失败还会回退 git。本次实际走的通道记录在
+   `data/auto-update.json` 的 `transport` 与 `connectivity.transport`（`git` / `api`）。
+5. 源码包设了 64 MiB 上限，避免异常地址把内存吃满。
+6. `QQ_AGENT_CODELOAD` 可覆盖 codeload 基地址（测试桩或自建镜像用），普通部署不需要设置。
+
 ## 连通性测试
 
 控制页中的“测试 GitHub 连通性”会提交一个独立 `probe` 请求：
 
-- 只检查目标 GitHub 仓库和目标分支能否通过 Git transport 获取 revision。
+- 先走 Git transport（`git ls-remote`）检查目标仓库与分支；git 通道不通时自动改用
+  GitHub API 探同一个分支，两条都失败才判定不通。
 - 会应用 HTTP/1.1、超时、重试和指数退避设置。
 - 不执行 `git fetch`、`npm ci`、测试或部署。
 - 测试失败不会修改自动更新开关，也不会发送部署失败告警。
-- 结果保存在 `data/auto-update.json` 的 `connectivity` 字段中，控制页可看到尝试次数、耗时、目标 revision 和错误。
+- 结果保存在 `data/auto-update.json` 的 `connectivity` 字段中，控制页可看到尝试次数、耗时、
+  实际通道（`transport`）、目标 revision 和错误。
 
 ## 失败策略
 

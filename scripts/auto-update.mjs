@@ -16,7 +16,7 @@ import {
   normalizeUpdateNetworkSettings,
   retryUpdateOperation
 } from '../src/update-network.js';
-import { checkForUpdate } from '../src/update-notice.js';
+import { checkForUpdate, githubApiBase } from '../src/update-notice.js';
 
 const { values } = parseArgs({
   options: {
@@ -290,6 +290,7 @@ async function probeConnectivity() {
   });
   const connectivity = {
     status: 'ok',
+    transport: 'git',
     checkedAt: Date.now(),
     attempts: result.attempts,
     latencyMs: Date.now() - probeStartedAt,
@@ -323,6 +324,220 @@ async function fetchReleaseTag(tag) {
     isRetryable: isRetryableUpdateNetworkError,
     onRetry: retryLog('git fetch')
   });
+}
+
+/* ══════════════════════════════════════════════════════════════
+   第二条下载通道：GitHub API + codeload 源码包
+   ══════════════════════════════════════════════════════════════
+
+   有些网络到 github.com 的 git 通道是黑洞（TCP 443 连上就卡住，或 ls-remote
+   直接超时），但 api.github.com 与 codeload.github.com 是好的。这条通道用
+   「API 解析 tag/branch → commit sha，再拉该 commit 的 tar.gz」把同样的源码取回来，
+   取回之后的流程（npm ci → 单元测试 → deploy.sh）与 git 通道完全一致。
+
+   安全性：两条通道都是 HTTPS、都以 GitHub 给出的 commit sha 为锚点；tarball 的
+   地址里带的就是 API 解析出来的那个 sha，信任级别与 git fetch 一致。
+   压缩包大小设上限，避免异常地址把内存吃满。
+*/
+
+const CODELOAD_DEFAULT = 'https://codeload.github.com';
+const MAX_TARBALL_BYTES = 64 * 1024 * 1024;
+
+/** https://github.com/<owner>/<repo>.git → { owner, repo }；解析不了返回 null。 */
+function repositorySlug() {
+  const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(repository);
+  return match ? { owner: match[1], repo: match[2] } : null;
+}
+
+/** codeload 基地址：QQ_AGENT_CODELOAD 供测试桩/镜像覆盖。 */
+function codeloadBase() {
+  return String(process.env.QQ_AGENT_CODELOAD || CODELOAD_DEFAULT).replace(/\/+$/, '');
+}
+
+/** 读一个 GitHub API JSON；非 2xx 抛可重试错误（5xx/429）或不可重试错误。 */
+async function githubApiJson(pathname, timeoutMs) {
+  const res = await fetch(`${githubApiBase()}${pathname}`, {
+    headers: { accept: 'application/vnd.github+json', 'user-agent': 'qq-agent-plus-auto-update' },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!res.ok) {
+    const error = new Error(`GitHub API ${res.status} for ${pathname}`);
+    error.retryable = res.status >= 500 || res.status === 429;
+    throw error;
+  }
+  return res.json();
+}
+
+/** git 通道探不通时的第二探：用 API 问同一个仓库/分支。 */
+async function probeConnectivityViaApi() {
+  const slug = repositorySlug();
+  if (!slug) return null;
+  probeStartedAt = Date.now();
+  const timeout = networkSettings.connectivityTimeoutSeconds * 1000;
+  const result = await retryUpdateOperation(async () => {
+    const data = await githubApiJson(
+      `/repos/${slug.owner}/${slug.repo}/commits/${encodeURIComponent(branch)}`,
+      timeout
+    );
+    const sha = String(data?.sha || '').trim();
+    if (!/^[0-9a-f]{40}$/.test(sha)) {
+      throw Object.assign(new Error(`GitHub API returned no valid revision for ${branch}`), {
+        retryable: false
+      });
+    }
+    return sha;
+  }, {
+    retries: networkSettings.networkRetries,
+    baseDelayMs: networkSettings.retryBaseMs,
+    maxDelayMs: networkSettings.retryMaxMs,
+    isRetryable: isRetryableUpdateNetworkError,
+    onRetry: retryLog('api probe')
+  });
+  return {
+    status: 'ok',
+    transport: 'api',
+    checkedAt: Date.now(),
+    attempts: result.attempts,
+    latencyMs: Date.now() - probeStartedAt,
+    repository,
+    branch,
+    revision: result.value,
+    error: ''
+  };
+}
+
+/** 用 API 把 tag 解析成 commit sha（tag 也能当 ref 用）。 */
+async function resolveTagRevisionViaApi(tag) {
+  const slug = repositorySlug();
+  if (!slug) throw new Error('Automatic update repository is not an approved GitHub HTTPS URL');
+  const timeout = networkSettings.connectivityTimeoutSeconds * 1000;
+  const data = await githubApiJson(
+    `/repos/${slug.owner}/${slug.repo}/commits/${encodeURIComponent(tag)}`,
+    timeout
+  );
+  const sha = String(data?.sha || '').trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) {
+    throw new Error(`Release ${tag} did not resolve to a valid revision`);
+  }
+  return sha;
+}
+
+/** 拉某个 commit 的源码包并解开到 workDir（顶层目录用 --strip-components=1 去掉）。 */
+async function materializeFromApi(workDir, revision) {
+  const slug = repositorySlug();
+  if (!slug) throw new Error('Automatic update repository is not an approved GitHub HTTPS URL');
+  const url = `${codeloadBase()}/${slug.owner}/${slug.repo}/tar.gz/${revision}`;
+  const timeout = networkSettings.fetchTimeoutSeconds * 1000;
+  // retryUpdateOperation 返回 { value, attempts }，别把包装对象当数据用
+  const downloaded = await retryUpdateOperation(async () => {
+    const res = await fetch(url, {
+      headers: { 'user-agent': 'qq-agent-plus-auto-update' },
+      signal: AbortSignal.timeout(timeout)
+    });
+    if (!res.ok) {
+      const error = new Error(`codeload ${res.status} for ${revision}`);
+      error.retryable = res.status >= 500 || res.status === 429;
+      throw error;
+    }
+    const declared = Number(res.headers.get('content-length') || 0);
+    if (declared > MAX_TARBALL_BYTES) {
+      throw Object.assign(new Error('Source archive is larger than the allowed limit'), {
+        retryable: false
+      });
+    }
+    const body = Buffer.from(await res.arrayBuffer());
+    if (body.length > MAX_TARBALL_BYTES) {
+      throw Object.assign(new Error('Source archive is larger than the allowed limit'), {
+        retryable: false
+      });
+    }
+    return body;
+  }, {
+    retries: networkSettings.networkRetries,
+    baseDelayMs: networkSettings.retryBaseMs,
+    maxDelayMs: networkSettings.retryMaxMs,
+    isRetryable: isRetryableUpdateNetworkError,
+    onRetry: retryLog('codeload download')
+  });
+  const archive = path.join(path.dirname(workDir), `source-${revision.slice(0, 12)}.tar.gz`);
+  fs.writeFileSync(archive, downloaded.value, { mode: 0o600 });
+  try {
+    command('tar', ['-xzf', archive, '-C', workDir, '--strip-components=1'], {
+      timeout: 10 * 60 * 1000
+    });
+  } finally {
+    try { fs.rmSync(archive, { force: true }); } catch { /* 临时文件删不掉不影响部署 */ }
+  }
+  return url;
+}
+
+/**
+ * 解析 tag → commit sha：先试首选的下载通道，失败再试另一条。
+ * 只做解析（不下载源码）——"已经是最新"的常见路径不该白拉一个源码包。
+ * 返回 { revision, transport }；两条都不通时抛出最后一条的错误。
+ */
+async function resolveTargetRevision(tag, preferredTransport) {
+  const lanes = preferredTransport === 'api' ? ['api', 'git'] : ['git', 'api'];
+  let lastError = null;
+  for (const lane of lanes) {
+    try {
+      let revision = '';
+      if (lane === 'api') {
+        revision = await resolveTagRevisionViaApi(tag);
+      } else {
+        await fetchReleaseTag(tag);
+        revision = git([
+          '--git-dir',
+          paths.repository,
+          'rev-parse',
+          `refs/tags/${tag}^{commit}`
+        ]).stdout.trim();
+      }
+      if (!/^[0-9a-f]{40}$/.test(revision)) {
+        throw new Error(`Release ${tag} did not resolve to a valid revision`);
+      }
+      return { revision, transport: lane };
+    } catch (error) {
+      lastError = error;
+      if (lanes.indexOf(lane) === lanes.length - 1) break;
+      console.error(`[auto-update] ${lane} 通道解析失败（${sanitizeUpdateError(error)}），改走另一条通道`);
+    }
+  }
+  throw lastError || new Error('No update transport available');
+}
+
+/** 把已经解析好的 revision 落到 workDir：同样两条通道依次尝试。 */
+async function materializeSource(workDir, revision, preferredTransport) {
+  const lanes = preferredTransport === 'api' ? ['api', 'git'] : ['git', 'api'];
+  let lastError = null;
+  for (const lane of lanes) {
+    // 换通道重来前把工作目录清干净，避免上一条通道的残留文件混进去
+    fs.rmSync(workDir, { recursive: true, force: true });
+    fs.mkdirSync(workDir, { recursive: true, mode: 0o700 });
+    try {
+      if (lane === 'api') {
+        await materializeFromApi(workDir, revision);
+      } else {
+        git([
+          '--git-dir',
+          paths.repository,
+          '--work-tree',
+          workDir,
+          'checkout',
+          '--force',
+          revision,
+          '--',
+          '.'
+        ]);
+      }
+      return lane;
+    } catch (error) {
+      lastError = error;
+      if (lanes.indexOf(lane) === lanes.length - 1) break;
+      console.error(`[auto-update] ${lane} 通道取源码失败（${sanitizeUpdateError(error)}），改走另一条通道`);
+    }
+  }
+  throw lastError || new Error('No update transport available');
 }
 
 /**
@@ -403,6 +618,7 @@ async function run() {
     },
     connectivity: {
       status: 'testing',
+      transport: '',
       checkedAt: 0,
       attempts: 0,
       latencyMs: 0,
@@ -414,7 +630,20 @@ async function run() {
   });
 
   ensureRepository(paths.repository, repository);
-  const connectivity = await probeConnectivity();
+  // 连通性：先按 git 通道探；只有它不通时才启用 API + codeload 那条通道。
+  // 两条都不通才算真的不通（原来的错误原样抛出，通知/自愈逻辑不变）。
+  let transport = 'git';
+  let connectivity;
+  try {
+    connectivity = await probeConnectivity();
+  } catch (gitError) {
+    const fallback = await probeConnectivityViaApi().catch(() => null);
+    if (!fallback) throw gitError;
+    transport = 'api';
+    connectivity = fallback;
+    console.log('[auto-update] git 通道不通，本次改用 GitHub API + codeload 源码包');
+    writeAutoUpdateState(dataDir, { connectivity });
+  }
   if (mode === 'probe') {
     writeAutoUpdateState(dataDir, {
       status: 'idle',
@@ -457,16 +686,10 @@ async function run() {
     return;
   }
 
-  await fetchReleaseTag(targetVersion);
-  targetRevision = git([
-    '--git-dir',
-    paths.repository,
-    'rev-parse',
-    `refs/tags/${targetVersion}^{commit}`
-  ]).stdout.trim();
-  if (!/^[0-9a-f]{40}$/.test(targetRevision)) {
-    throw new Error(`Release ${targetVersion} did not resolve to a valid revision`);
-  }
+  // 解析部署目标：git 通道 fetch + rev-parse，或 API 解析 tag → sha
+  const resolved = await resolveTargetRevision(targetVersion, transport);
+  transport = resolved.transport;
+  targetRevision = resolved.revision;
 
   if (currentRevision === targetRevision) {
     writeAutoUpdateState(dataDir, {
@@ -477,6 +700,7 @@ async function run() {
       currentRevision,
       targetRevision,
       targetVersion,
+      transport,
       error: '',
       autoDisabled: false
     });
@@ -485,17 +709,7 @@ async function run() {
 
   fs.mkdirSync(paths.workRoot, { recursive: true, mode: 0o700 });
   workDir = fs.mkdtempSync(path.join(paths.workRoot, 'checkout-'));
-  git([
-    '--git-dir',
-    paths.repository,
-    '--work-tree',
-    workDir,
-    'checkout',
-    '--force',
-    targetRevision,
-    '--',
-    '.'
-  ]);
+  transport = await materializeSource(workDir, targetRevision, transport);
   validateCheckout(workDir);
 
   phase = 'testing';
@@ -504,7 +718,8 @@ async function run() {
     mode,
     phase,
     targetRevision,
-    targetVersion
+    targetVersion,
+    transport
   });
   const npm = String(
     process.env.QQ_AGENT_UPDATE_NPM
@@ -554,7 +769,8 @@ async function run() {
     mode,
     phase,
     targetRevision,
-    targetVersion
+    targetVersion,
+    transport
   });
   command('/bin/bash', [
     path.join(workDir, 'deploy.sh'),
@@ -584,6 +800,7 @@ async function run() {
     currentRevision: targetRevision,
     targetRevision,
     targetVersion,
+    transport,
     error: '',
     autoDisabled: false
   });
@@ -606,6 +823,7 @@ try {
       autoDisabled: false,
       connectivity: {
         status: 'failed',
+        transport: '',
         checkedAt: Date.now(),
         attempts: Number(error?.attempts) || 1,
         latencyMs: probeStartedAt ? Date.now() - probeStartedAt : 0,
