@@ -1609,6 +1609,8 @@ html.boot-show .loading-overlay { opacity: 1; }
 .control-service-state { font-size: 10.5px; white-space: nowrap; }
 .control-service-state.online { color: var(--green); }
 .control-service-state.offline { color: var(--red); }
+/* 旧架构服务没部署（不是故障）：走灰色，不再报警色 */
+.control-service-state.idle { color: var(--muted); }
 .control-section {
   margin-top: 18px;
   padding-top: 16px;

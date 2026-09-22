@@ -6,6 +6,19 @@ const DEFAULT_ENDPOINTS = Object.freeze({
   novnc: process.env.QQ_AGENT_NOVNC_URL || 'http://127.0.0.1:6081/'
 });
 
+// 旧架构（qq-bridge / DSH）不在本仓库的部署栈里（见 docs/LINUX.md），部署脚本也不会起它们。
+// 没通过环境变量指端点时标记成"未部署"：控制台不再把它们显示成终年「不可达」的故障，
+// 密钥控制里那条指向旧控制台的入口也一并收起。指了端点（迁移期并存、或显式接管）就照旧探测。
+const LEGACY_ENV_BY_ID = Object.freeze({ dsh: 'DSH_URL', bridge: 'BRIDGE_URL' });
+
+function legacyFlags(id, endpoints) {
+  const envName = LEGACY_ENV_BY_ID[id];
+  if (!envName) return { optional: false, configured: true };
+  // 调用方显式传了别的端点（测试、或将来做多地址）也算"配置过"
+  const configured = Boolean(process.env[envName]) || endpoints[id] !== DEFAULT_ENDPOINTS[id];
+  return { optional: true, configured };
+}
+
 export const SNOWLUMA_WEBUI_URL = String(
   process.env.SNOWLUMA_WEBUI_URL || 'http://127.0.0.1:5099'
 ).replace(/\/+$/, '');
@@ -42,7 +55,8 @@ export async function integrationStatus({
   const checks = await Promise.all(
     Object.entries(endpoints).map(async ([id, url]) => ({
       id,
-      online: await probe(fetchFn, url)
+      online: await probe(fetchFn, url),
+      ...legacyFlags(id, endpoints)
     }))
   );
 

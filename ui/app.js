@@ -764,6 +764,23 @@ function serviceUrl(port, path = '/') {
   return `${protocol}//${hostname}:${port}${path}`;
 }
 
+// 服务卡片的状态：旧架构（DSH / Bridge）没配置端点时是「未部署」，不是故障 ——
+// 本仓库的部署栈不含它们（见 docs/LINUX.md），部署脚本也不会起。
+// 配置过（后端给了 optional+configured）却连不上，才照旧报「不可达」。
+function serviceTileState(id, status) {
+  const online = id === 'agent' || status?.online === true;
+  if (online) return { text: '在线', cls: 'online' };
+  if (!status) return { text: '检测中', cls: 'offline' };
+  if (status.optional === true && status.configured === false) return { text: '未部署', cls: 'idle' };
+  return { text: '不可达', cls: 'offline' };
+}
+
+/** 旧架构服务是否落在本部署里（没配置 = 不显示指向它的入口）。 */
+function legacyServiceDeployed(statuses, id) {
+  const status = statuses.get(id);
+  return !(status?.optional === true && status?.configured === false);
+}
+
 // 「更新部署」里的上次更新检查说明：口径是「已发布的 Release」，
 // 让"连不上 GitHub / 没有新 Release / 当前部署领先"这些情况都能看见，而不是完全无声。
 function renderUpdateCheckNote(update = {}) {
@@ -921,12 +938,11 @@ function renderControlHub(data = {}) {
     </div>
     <div class="control-service-grid">
       ${CORE_SERVICE_LINKS.map((service) => {
-        const status = statuses.get(service.id);
-        const online = service.id === 'agent' || status?.online === true;
+        const tile = serviceTileState(service.id, statuses.get(service.id));
         return `<a class="control-service" data-hub-service="${esc(service.id)}" href="${esc(serviceUrl(service.port))}" target="_blank" rel="noreferrer">
           <span class="control-service-mark">${esc(service.mark)}</span>
           <span class="control-service-copy"><strong>${esc(service.name)}</strong><small>${esc(service.detail)} · :${service.port}</small></span>
-          <span class="control-service-state ${online ? 'online' : 'offline'}">${online ? '在线' : status ? '不可达' : '检测中'}</span>
+          <span class="control-service-state ${tile.cls}">${tile.text}</span>
         </a>`;
       }).join('')}
     </div>
@@ -975,7 +991,7 @@ function renderControlHub(data = {}) {
         <button type="button" class="control-key-row" data-open-settings="desktop">
           <span><strong>QQ Agent 控制台 Token</strong><small>系统</small></span><b>管理</b>
         </button>
-        <a class="control-key-row" href="${esc(serviceUrl(3100))}" target="_blank" rel="noreferrer">
+        <a class="control-key-row${legacyServiceDeployed(statuses, 'bridge') ? '' : ' hidden'}" href="${esc(serviceUrl(3100))}" target="_blank" rel="noreferrer">
           <span><strong>Bridge 控制台 Token</strong><small>旧架构控制台</small></span><b>打开</b>
         </a>
       </div>
@@ -1041,10 +1057,9 @@ function updateControlHubFields(box, statuses, update) {
   for (const [id, status] of statuses) {
     const el = box.querySelector('[data-hub-service="' + id + '"] .control-service-state');
     if (!el) continue;
-    const online = id === 'agent' || status?.online === true;
-    const text = online ? '在线' : status ? '不可达' : '检测中';
-    setText(el, text);
-    const cls = 'control-service-state ' + (online ? 'online' : 'offline');
+    const tile = serviceTileState(id, status);
+    setText(el, tile.text);
+    const cls = 'control-service-state ' + tile.cls;
     if (el.className !== cls) el.className = cls;
   }
 

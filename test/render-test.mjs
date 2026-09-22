@@ -794,8 +794,8 @@ try {
   ctx.renderControlHub({
     services: [
       { id: 'agent', online: true },
-      { id: 'dsh', online: true },
-      { id: 'bridge', online: true },
+      { id: 'dsh', online: true, optional: true, configured: true },
+      { id: 'bridge', online: true, optional: true, configured: true },
       { id: 'snowluma', online: true },
       { id: 'novnc', online: false }
     ]
@@ -826,6 +826,47 @@ try {
   } else {
     fail++;
     console.log('  FAIL  服务入口、更新部署或密钥控制视图缺失');
+  }
+
+  // 旧架构服务（DSH / Bridge）不在本仓库的部署栈里：没配置端点时显示「未部署」（灰色）而不是
+  // 终年「不可达」，指向旧控制台的入口也收起；配置过（迁移期并存）才照旧探测、报不可达。
+  const controlBox = document.getElementById('control-page');
+  const renderHubFor = (services) => {
+    // 结构只建一次，要重走模板就手动重置这两个标记
+    controlBox.__hubBuilt = false;
+    controlBox.__renderedHtml = null;
+    ctx.renderControlHub({ services });
+  };
+  // 状态是写进 controlBox 自己的 querySelector 桩里的（假 DOM 不解析 HTML），
+  // 所以要从同一个元素读，不能从 document 上另取一个桩。
+  const tileOf = (id) => controlBox.querySelector(`[data-hub-service="${id}"] .control-service-state`);
+  const bridgeRowHidden = () => /class="control-key-row hidden" href="[^"]*:3100/.test(String(controlBox.innerHTML || ''));
+  renderHubFor([
+    { id: 'agent', online: true },
+    { id: 'dsh', online: false, optional: true, configured: false },
+    { id: 'bridge', online: false, optional: true, configured: false },
+    { id: 'snowluma', online: true },
+    { id: 'novnc', online: false }
+  ]);
+  const legacyOffOk =
+    String(tileOf('dsh')?.textContent) === '未部署'
+    && String(tileOf('dsh')?.className).includes('idle')
+    && String(tileOf('bridge')?.textContent) === '未部署'
+    && String(tileOf('novnc')?.textContent) === '不可达'
+    && String(tileOf('snowluma')?.textContent) === '在线'
+    && bridgeRowHidden();
+  renderHubFor([
+    { id: 'agent', online: true },
+    { id: 'dsh', online: false, optional: true, configured: true },
+    { id: 'bridge', online: true, optional: true, configured: true }
+  ]);
+  const legacyOnOk = String(tileOf('dsh')?.textContent) === '不可达' && !bridgeRowHidden();
+  if (legacyOffOk && legacyOnOk) {
+    pass++;
+    console.log('  OK    旧架构服务未部署时标「未部署」、入口收起，配置过才报不可达');
+  } else {
+    fail++;
+    console.log(`  FAIL  旧架构服务状态文案异常（未部署 ${legacyOffOk} / 已配置 ${legacyOnOk}）`);
   }
 
   // 更新进度行（2026-09-22 反馈：点「立即更新」后提示框不关、也没有任何进度显示）：

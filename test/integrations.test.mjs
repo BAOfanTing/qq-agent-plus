@@ -14,6 +14,29 @@ function response(status, body = {}) {
   };
 }
 
+test('旧架构服务（DSH / Bridge）没配端点时算"未部署"，不是故障', async () => {
+  // 本仓库的部署栈不含 qq-bridge / DSH（docs/LINUX.md）；不把这点说清楚，
+  // 控制台会对着一堆根本不存在的服务终年报「不可达」。
+  const saved = { dsh: process.env.DSH_URL, bridge: process.env.BRIDGE_URL };
+  delete process.env.DSH_URL;
+  delete process.env.BRIDGE_URL;
+  try {
+    const result = await integrationStatus({ fetchFn: async () => response(200) });
+    const byId = Object.fromEntries(result.services.map((item) => [item.id, item]));
+    assert.deepEqual([byId.dsh.optional, byId.dsh.configured], [true, false]);
+    assert.deepEqual([byId.bridge.optional, byId.bridge.configured], [true, false]);
+    assert.deepEqual([byId.snowluma.optional, byId.snowluma.configured], [false, true], '部署栈内的服务没有"未部署"一说');
+
+    process.env.DSH_URL = 'http://127.0.0.1:3080/';
+    const configured = await integrationStatus({ fetchFn: async () => response(200) });
+    const dsh = configured.services.find((item) => item.id === 'dsh');
+    assert.deepEqual([dsh.optional, dsh.configured], [true, true], '指了端点就是"配置过"，连不上照旧报不可达');
+  } finally {
+    if (saved.dsh === undefined) delete process.env.DSH_URL; else process.env.DSH_URL = saved.dsh;
+    if (saved.bridge === undefined) delete process.env.BRIDGE_URL; else process.env.BRIDGE_URL = saved.bridge;
+  }
+});
+
 test('integrationStatus reports each fixed service independently', async () => {
   const result = await integrationStatus({
     endpoints: {
