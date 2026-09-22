@@ -416,10 +416,10 @@ export function isAtMe(text, { selfNickname = '', botName = '', selfId = '' } = 
   const id = String(selfId || '').trim();
   if (/^\d+$/.test(id) && new RegExp(`@${id}(?!\\d)`).test(t)) return true;
   // CQ 码艾特：命中机器人自己的 QQ 号
-  if (selfId) {
+  if (id) {
     const re = /\[CQ:at(?:,[^\]]*?)?qq=(\d+)[^\]]*\]/g;
     let m;
-    while ((m = re.exec(t))) { if (String(m[1]) === String(selfId)) return true; }
+    while ((m = re.exec(t))) { if (String(m[1]) === id) return true; }
   }
   return false;
 }
