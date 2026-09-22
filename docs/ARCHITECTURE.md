@@ -3,7 +3,7 @@
 ## Runtime Topology
 
 QQ Agent is a modular Node.js monolith. The OneBot implementation is an
-independently managed service; DeepSeek Harness and the legacy Bridge are not in
+independently managed service. DeepSeek Harness and the legacy Bridge are not in
 the message-processing path.
 
 ```text
@@ -60,8 +60,8 @@ arrive during a run remain pending for the next batch.
 Every outbound effect is inserted into `outbox` before dispatch. A confirmed
 response becomes `sent`; a timeout or ambiguous failure becomes `unknown`.
 Messages with possible effects are held for operator review instead of being
-automatically replayed. This limits duplicate replies but cannot create an
-exactly-once guarantee that the external QQ API does not provide.
+automatically replayed. This limits duplicate replies but cannot provide the
+exactly-once guarantee that the external QQ API does not offer.
 
 ## Conversation Boundaries
 
@@ -92,8 +92,8 @@ The deployment data directory contains:
 
 SQLite uses WAL and `synchronous=FULL`. JSON stores use temporary-file rename
 where their modules require atomic replacement. These stores and remote API
-effects do not form one global transaction, so each background manager owns its
-own idempotency and recovery rules.
+effects do not form one global transaction, so each background manager defines
+its own idempotency and recovery rules.
 
 ## Security Boundaries
 
@@ -127,7 +127,8 @@ The installer records the exact deployed Node executable. `manage.sh` uses that
 runtime, so status, backup and recovery commands still work when the host has no
 system Node.js installation.
 
-The update timer never modifies the live tree directly. Its oneshot worker
-shallow-fetches GitHub into the data directory, tests a temporary checkout and
-then invokes the same `deploy.sh` transaction. Failed updates disable future
-automatic attempts and are reported through the running or restored Agent.
+The update timer does not modify the running deployment directly. Its oneshot
+worker shallow-fetches GitHub into the data directory, tests a temporary
+checkout and then invokes the same `deploy.sh` transaction. Failed updates
+disable future automatic attempts and are reported through the running or
+restored Agent.

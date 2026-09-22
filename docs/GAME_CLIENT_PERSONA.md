@@ -17,7 +17,7 @@
 控制台里改的是**当前生效的那份拷贝**（`config.json` 的 `persona.roleText`）；
 改 `roles/` 下的文件只影响内置模板（新装实例，以及更新后的模板列表）。
 
-这是 [初步方向稿](GAME_CLIENT_PERSONA_DIRECTION.md) 的第一阶段：人格与交流策略接入。
+这是 [初步方向稿](research/GAME_CLIENT_PERSONA_DIRECTION.md) 的第一阶段：人格与交流策略接入。
 没有新增自主开发工具、长期自身状态、跨群情绪状态或定时承诺系统。
 
 角色保留小鲸鱼的昵称与蓝白网络形象，定位为成年女性、中级 Unity / C# 客户端工程师，

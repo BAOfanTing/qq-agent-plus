@@ -38,18 +38,13 @@ demand; only the manual refresh button reloads the complete QQ favorites list.
 
 ## Slang status
 
-The optional slang corpus pilot can discover terms, run administrator-approved
-research and add approved results to the candidate library. The observatory
-distinguishes:
+`data/slang.json` holds manually maintained slang assets. The observatory displays them together
+with their `candidate` / `confirmed` / `rejected` states.
 
-- `not connected`: no `data/slang.json`;
-- `stored, not connected`: the file exists while the pilot is disabled;
-- `active`: local discovery is enabled and confirmed entries may be injected
-  into their permitted chat scope.
-
-The old Bridge slang file is never imported implicitly.
-Research workflow details are documented in
-[Slang Corpus Pilot](SLANG_PILOT.md).
+The automatic slang research pipeline has been retired: it cannot be enabled, its configuration
+switch has no effect, and no slang is injected into any prompt. The old Bridge slang file is never
+imported implicitly. The current boundaries are documented in
+[Stable Features](STABLE_FEATURES.md).
 
 ## API
 

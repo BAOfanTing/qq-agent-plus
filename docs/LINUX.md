@@ -3,29 +3,31 @@
 ## Isolation
 
 This fork runs independently of qq-bridge/DSH. It never edits, stops, upgrades,
-or imports the old service's session databases. An optional first-install import
-copies the OneBot endpoints, allow/deny lists and model selection into a NEW config.
-Passing `--credential-file` explicitly copies its DeepSeek API key. Both configs
-remain independent. Credentials, login state and runtime data must not be committed.
+or imports the session databases of the old service. An optional first-install
+import copies the OneBot endpoints, allow/deny lists and model selection into a
+new config. Passing `--credential-file` explicitly copies its DeepSeek API key.
+Both configs remain independent. Credentials, login state and runtime data must
+not be committed.
 
-The existing OneBot server may be shared in observe mode. Do not log the same QQ
-account into a second protocol server. To activate both agents concurrently, use
-different QQ accounts or disjoint allowlists. The control panel requires explicit
-exclusive-use confirmation; it does not automatically stop the old instance.
+The existing OneBot server may be shared in observe mode. The same QQ account
+must not be logged into a second protocol server. Concurrent activation of both
+agents requires different QQ accounts or disjoint allowlists. The control panel
+requires explicit exclusive-use confirmation and does not automatically stop
+the old instance.
 
 ## Requirements
 
 - Linux with systemd user services, curl, tar, sha256sum and rsync.
-- A mounted local filesystem for SQLite (not NFS/SMB).
+- A mounted local filesystem for SQLite; NFS and SMB are not supported.
 - A separately managed OneBot v11 HTTP/forward WebSocket service when using
   `deploy.sh`; `deploy-all.sh` installs SnowLuma/OneBot.
 - An OpenAI Chat Completions compatible model with function calling.
-- For boot without interactive login: `loginctl enable-linger USER`.
+- `loginctl enable-linger USER` for boot without an interactive login.
 - A fixed free port; LAN binding requires a console token.
 
 ## Full-stack Installation
 
-Use `deploy-all.sh` on a new host when SnowLuma/OneBot is not installed yet:
+Run `deploy-all.sh` on a new host when SnowLuma/OneBot is not installed yet:
 
 ```bash
 bash deploy-all.sh
@@ -36,9 +38,10 @@ for a local/LAN IP. The Agent console, SnowLuma WebUI and noVNC bind all host
 interfaces; OneBot HTTP and WebSocket bind only `127.0.0.1`. If Docker is
 missing, the installer asks before installing Docker Engine and Compose through
 the host package manager.
-It does not modify UFW, firewalld or cloud security-group policy. Allow only the
-three selected user-facing ports from trusted LAN/VPN ranges when host firewall
-rules are enabled; never expose noVNC or OneBot directly to the public Internet.
+The installer does not modify UFW, firewalld or cloud security-group policy.
+When host firewall rules are enabled, allow only the three selected user-facing
+ports from trusted LAN/VPN ranges. noVNC and OneBot must never be exposed
+directly to the public Internet.
 
 The resulting layout is:
 
@@ -65,18 +68,20 @@ their credentials unless `--rotate-credentials` is selected.
 
 Before generating credentials, writing files, downloading dependencies, or
 changing services, the installer distinguishes a fresh host from a managed
-stack. A `.env` alone is not proof of ownership: an update requires matching
-Agent deployment records, live configuration, Compose configuration and, when
-present, container project labels, bind mounts and port mappings. Changed live
-credentials or endpoints cause a refusal rather than being reset from `.env`.
+stack. A `.env` file alone is not proof of ownership. An update requires
+matching Agent deployment records, live configuration, Compose configuration
+and, when present, container project labels, bind mounts and port mappings.
+Changed live credentials or endpoints cause a refusal rather than a reset from
+`.env`.
 
-Legacy installations, including an existing Agent using an external
+Legacy installations, including an existing Agent that uses an external
 `qq-bridge-snowluma` container, are not automatically adopted. Agent data or
 deployment records without managed-stack metadata cause an immediate exit.
-Partial/failed installations also require operator inspection, not automatic
-credential regeneration. Do not delete data or manufacture metadata to bypass
-these checks. Use `deploy.sh` to update an existing Agent while retaining its
-actual data directory, bind address and OneBot configuration.
+Partial or failed installations also require operator inspection; automatic
+credential regeneration is not performed. Data must not be deleted and metadata
+must not be manufactured to bypass these checks. `deploy.sh` updates an existing
+Agent while retaining its actual data directory, bind address and OneBot
+configuration.
 
 ```bash
 bash deploy-all.sh --check-only --root-dir /mnt/data/qq-agent
@@ -85,20 +90,20 @@ bash deploy-all.sh --check-only --root-dir /mnt/data/qq-agent
 `--check-only` is non-interactive and read-only; it does not request model keys
 or install missing software. It exits nonzero for unowned, inconsistent or
 uninspectable environments. `--yes` and `--rotate-credentials` do not override
-ownership checks. Full-stack preflight requires `realpath`, `ss` (iproute2),
+ownership checks. Full-stack preflight requires `realpath`, `ss` from iproute2,
 and access to the systemd user manager. When Docker is installed, its complete
-container inventory (including stopped containers) must be readable; a daemon
-or permission error is not treated as an empty host. Interactive deployment
-can request sudo; check-only/non-interactive runs require Docker access or
+container inventory, including stopped containers, must be readable; a daemon
+or permission error is not treated as an empty host. Interactive deployment can
+request sudo; check-only/non-interactive runs require Docker access or
 already-authorized non-interactive sudo.
 
 These checks prevent unintended takeover, not failures after deployment has
 started. They do not provide a full-stack transaction or data rollback.
 
 On a fresh interactive install, the script also asks for the model endpoint,
-API key, model name and QQ allowlists. After the infrastructure checks pass,
-open the printed noVNC URL and scan the QQ login QR code, then return to the
-terminal. The installer verifies `get_login_info` and offers to activate the
+API key, model name and QQ allowlists. After the infrastructure checks pass, the
+operator opens the printed noVNC URL, scans the QQ login QR code and returns to
+the terminal. The installer verifies `get_login_info` and offers to activate the
 Agent. QQ login is intentionally the only unavoidable manual protocol step.
 Until activation, the Agent stays in `observe`.
 
@@ -107,7 +112,7 @@ Non-interactive `--yes` installation requires `--model-base-url`,
 will deliberately be configured later in the management console. An empty
 allowlist remains deny-by-default.
 
-Use `deploy.sh` directly when a compatible OneBot service already exists or
+`deploy.sh` is used directly when a compatible OneBot service already exists or
 when only the QQ Agent process should be installed or updated:
 
 ```bash
@@ -120,7 +125,7 @@ bash deploy.sh \
 
 Create the parent directory with appropriate ownership first. Run deployment as
 the service user, not root. The installer uses sudo only for linger if required.
-Dependencies are installed with `--omit=dev --ignore-scripts`: Linux needs no
+Dependencies are installed with `--omit=dev --ignore-scripts`; Linux needs no
 Electron, GUI, X11, browser, compiler or native SQLite add-on.
 If no compatible Node.js is found, the script downloads Node.js 22 into
 `INSTALL_DIR/.runtime` and verifies it against the official SHA-256 manifest.
@@ -129,7 +134,7 @@ Run `bash deploy.sh --help` for the complete option list.
 
 For an existing installation, deployment creates a code snapshot under
 `DATA_DIR/deploy-backups/` before stopping the service. Source synchronization
-uses deletion-aware `rsync`, while preserving the data directory, local runtime,
+uses deletion-aware `rsync` and preserves the data directory, local runtime,
 deployment metadata and credentials. If dependency installation, configuration,
 systemd validation or health checking fails, the installer restores the previous
 code, configuration and service unit before restarting the old service. Use
@@ -144,7 +149,7 @@ cache, tests the candidate checkout, then delegates deployment and rollback to
 `deploy.sh`. Any failure disables automatic updates and queues one administrator
 notification. See [GitHub automatic updates](AUTO_UPDATE.md).
 
-Optional import on FIRST install only:
+The import option is available on the first installation only:
 
 ```bash
 bash deploy.sh --install-dir /mnt/data/qq-agent/app \
@@ -155,18 +160,19 @@ bash deploy.sh --install-dir /mnt/data/qq-agent/app \
 
 The first installation enters observe mode and does not activate replies
 automatically. Updating an existing installation preserves its current mode.
-Model/API settings for non-DeepSeek providers must be configured in the new console.
-The repository contains no Electron shell, Windows installer, bundled protocol
-launcher, community upload client or telemetry client. Manage the external
-OneBot implementation as its own Linux service.
+Model/API settings for non-DeepSeek providers must be configured in the new
+console. The repository contains no Electron shell, Windows installer, bundled
+protocol launcher, community upload client or telemetry client. The external
+OneBot implementation is managed as its own Linux service.
 
 ## Control Panel
 
-Open `http://HOST:PORT`, obtain the token with `bash manage.sh token`, and log in.
-The cookie is HttpOnly and SameSite=Strict; credentials are not returned by
-`/api/config`. On an untrusted network, terminate TLS in front of the service.
-Plain HTTP on the LAN is not encrypted. `/healthz` exposes only a liveness boolean.
-API endpoints accept `x-console-token`; do not put the token in URLs.
+The console is reachable at `http://HOST:PORT`; the token is obtained with
+`bash manage.sh token`. The cookie is HttpOnly and SameSite=Strict, and
+credentials are not returned by `/api/config`. On an untrusted network, TLS must
+be terminated in front of the service. Plain HTTP on the LAN is not encrypted.
+`/healthz` exposes only a liveness boolean. API endpoints accept
+`x-console-token`; the token must not be placed in URLs.
 
 The top selector changes observe/active mode. Observe stores messages but makes
 no automatic model calls and blocks text, stickers, pokes and test sends.
@@ -192,9 +198,10 @@ bash manage.sh start
 bash manage.sh restart
 ```
 
-`activate` does NOT stop qq-bridge. Stop/exclude the old instance's chats first.
-Rollback is simply `manage.sh observe` or `stop`; the old installation is untouched.
-Do not run multiple processes against one data directory.
+`activate` does not stop qq-bridge. The chats of the old instance must be stopped
+or excluded first. Rollback consists of `manage.sh observe` or `stop`; the old
+installation is untouched. Multiple processes must not run against one data
+directory.
 
 ## Message Lifecycle
 
@@ -212,14 +219,14 @@ OneBot -> serialized per-chat ingestion -> deduplicated SQLite message
 - `held`: sending succeeded partially or may have succeeded before failure.
 
 On restart, leases remain durable. Recovery runs every five seconds. Expired
-leases with no send effects become pending; leases with possible send effects are
-held. The default lease lasts four minutes, giving a three-minute run time limit
-one minute to unwind. Do not forcibly steal unexpired leases.
+leases with no send effects become pending; leases with possible send effects
+are held. The default lease lasts four minutes, giving a three-minute run time
+limit one minute to unwind. Unexpired leases must not be forcibly stolen.
 
-OneBot has no exactly-once/idempotency contract. A lost HTTP response cannot prove
-whether QQ received a message. Outgoing intent is persisted before sending;
-unknown delivery stops that batch and holds the chat for operator review.
-It is never automatically replayed. This avoids pretending that retries guarantee
+OneBot has no exactly-once/idempotency contract. A lost HTTP response cannot
+prove whether QQ received a message. Outgoing intent is persisted before
+sending; unknown delivery stops that batch and holds the chat for operator
+review. It is never automatically replayed. Retries therefore do not guarantee
 exactly-once sending.
 
 ```bash
@@ -228,10 +235,10 @@ bash manage.sh retry-failed group:123 --confirm
 bash manage.sh resolve-held group:123 --confirm
 ```
 
-The same actions are available on the archive page. Inspect failure counters there.
-No forced reply policy is added: at full trigger tier every batch reaches the
-model, but the model can finish without sending. Lower tiers intentionally skip
-unmatched messages before calling the model.
+The same actions are available on the archive page. Failure counters are
+available there. No forced reply policy is added: at full trigger tier every
+batch reaches the model, but the model can finish without sending. Lower tiers
+intentionally skip unmatched messages before calling the model.
 
 ## Daily Qzone Moments
 
@@ -310,9 +317,9 @@ provider transcript, including tool traces and provider-returned
 `reasoning_content`, into later runs with the same `threadId`. The console exposes
 the injected transcript, latest complete model request and per-round provider
 Token/cache counters. Total cost still depends on batch size, outputs, images,
-tool use and provider caching. This is bounded context, not a constant-price
+tool use and provider caching. Bounded context does not constitute a constant-price
 guarantee. General DSH Skills/workspace/approval capabilities are intentionally
-not included. Old owner friend-approval commands continue to belong to the old
+not included. Legacy owner friend-approval commands continue to belong to the old
 Bridge.
 
 ## Active Hours
@@ -322,10 +329,10 @@ per-conversation overrides. When enabled, `schedule.mode` is
 `deepseek-offpeak`, `custom`, or `always`. The default uses Shanghai weekday
 off-peak windows 00:00-09:00, 12:00-14:00, 18:00-24:00 and full weekends.
 `overrides["group:<id>"]` and `overrides["private:<id>"]` replace the default;
-removing an override restores inheritance. Custom `windows` contain `days`
-(1=Monday through 7=Sunday), `start` and `end` (HH:mm; end supports 24:00).
-An end earlier than start crosses into the following day. Empty custom windows
-mean no active hours.
+removing an override restores inheritance. Custom `windows` contain `days`,
+`start` and `end`. `days` uses 1=Monday through 7=Sunday; `start` and `end` are
+HH:mm, and `end` supports 24:00. An end earlier than start crosses into the
+following day. Empty custom windows mean no active hours.
 
 Inactive inputs are recorded as acknowledged history, not queued for catch-up.
 Normal conversations retain their legacy/threaded/lifecycle policy during active
@@ -341,9 +348,9 @@ Settings -> Time Control. Status is available at `/api/time-control/status`.
 
 ## Data And Backup
 
-The data directory contains `config.json` (0600), `messages.sqlite` plus WAL/SHM,
-member memory files, per-chat `memory/*/_handoff.json`, `daily-moments.json`,
-`sessions/` and sticker metadata. systemd uses UMask=0077.
+The data directory contains `config.json` with mode 0600, `messages.sqlite` plus
+WAL/SHM, member memory files, per-chat `memory/*/_handoff.json`,
+`daily-moments.json`, `sessions/` and sticker metadata. systemd uses UMask=0077.
 Legacy `messages/group_123.json` files migrate once transactionally and are left
 unchanged. Corrupt archives abort migration rather than being treated as empty.
 Keep messages on a disk with sufficient free space; completed session logs default
@@ -354,13 +361,14 @@ bash manage.sh observe
 bash manage.sh backup /mnt/data/backups/qq-agent-20260911
 ```
 
-Observe/cancel and wait for runs to finish for a consistent multi-file snapshot.
-SQLite backup uses the online backup API, not a raw copy of the database that
-could omit WAL data. Backups contain credentials and private messages.
+A consistent multi-file snapshot requires observe mode or a cancelled run, and
+waiting for runs to finish. SQLite backup uses the online backup API rather than a
+raw copy of the database that could omit WAL data. Backups contain credentials
+and private messages.
 
-For restore: stop this service, archive its current data directory, restore the
-backup into an empty data directory owned by the service user, then start in
-observe mode. Do not overwrite the old qq-bridge data.
+The restore procedure is: stop this service, archive its current data directory,
+restore the backup into an empty data directory owned by the service user, then
+start in observe mode. The old qq-bridge data must not be overwritten.
 
 ## Validation
 
@@ -378,8 +386,8 @@ activation. Observe-mode deployment validates receipt without emitting replies.
 
 ## OneBot Shows "Not Connected"
 
-The control panel only tells whether the socket is up. The actual reason is kept in
-`/api/status` under `onebot.error`, and one read-only audit prints it:
+The control panel reports only whether the socket is up. The actual reason is
+recorded in `/api/status` under `onebot.error`. One read-only audit prints it:
 
 ```bash
 node src/ops.js audit --dir=/mnt/data/qq-agent     # line: "OneBot: connected=false error=…"
@@ -390,28 +398,30 @@ journalctl --user -u qq-agent-linux -n 80 | grep -i onebot
 install uses `3000`. Pass `QQ_AGENT_ONEBOT_HTTP_PORT=3000`, or that line reports a
 reachable server as unreachable.
 
-Match the error text:
+The error text identifies the cause:
 
-- `ECONNREFUSED` — nothing listens on that port. Check the protocol container:
-  `docker ps -a | grep snowluma`, then `docker logs --tail 50 qq-agent-snowluma`.
-- `401` / `403` — token mismatch. The `accessToken` in the protocol side's
-  `onebot.json` must equal the WebSocket token under Settings → OneBot (the HTTP
-  token falls back to the WS token when left empty).
-- `ENOTFOUND` — the host does not resolve; the WS URL is wrong
-  (default `ws://127.0.0.1:3001`).
-- `ETIMEDOUT` — the host is unreachable (address or firewall).
-- `404` / `Unexpected server response` — wrong port: the peer is not a WebSocket
-  server (the HTTP port `3000` cannot serve as the WS port).
+- `ECONNREFUSED`: nothing listens on that port. Check the protocol container
+  with `docker ps -a | grep snowluma`, then
+  `docker logs --tail 50 qq-agent-snowluma`.
+- `401` / `403`: token mismatch. The `accessToken` in the protocol side's
+  `onebot.json` must equal the WebSocket token under Settings → OneBot. The HTTP
+  token falls back to the WS token when left empty.
+- `ENOTFOUND`: the host does not resolve; the WS URL is wrong, with
+  `ws://127.0.0.1:3001` as the default.
+- `ETIMEDOUT`: the host is unreachable, by address or firewall.
+- `404` / `Unexpected server response`: wrong port; the peer is not a WebSocket
+  server. The HTTP port `3000` cannot serve as the WS port.
 
-Three traps worth knowing:
+Three additional failure modes require attention:
 
-- **An address or token change needs a restart.** The connection is created once at
-  startup and is not rebuilt when the control panel saves config; run
+- **Address or token changes require a restart.** The connection is created once
+  at startup and is not rebuilt when the control panel saves config. Run
   `bash manage.sh restart`.
 - The protocol side must expose a **forward WebSocket server**. This service is a
-  forward WS client only; it does not provide a reverse WS server.
-- Status dot: green = connected, yellow = connected before and dropped (it backs off
-  and reconnects by itself, no restart needed), grey = never connected.
+  forward WS client only and does not provide a reverse WS server.
+- **Status dot**: green = connected; yellow = connected before and dropped, with
+  automatic backoff and reconnection and no restart required; grey = never
+  connected.
 
 A logged-out QQ account is not a connection failure: the socket stays up and only
 `get_login_info` is missing. Watch it with `node src/ops.js watch-login`.
