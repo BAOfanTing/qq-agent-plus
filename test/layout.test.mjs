@@ -31,7 +31,11 @@ test('仓库根的关键文件/目录都在', () => {
     'ui/index.html',
     'ui/app.js',
     'roles/xiaojingyu.md',
-    'roles/xiaojingyu-game-client.md'
+    'roles/xiaojingyu-game-client.md',
+    'roles/duzui-sunyou.md',
+    'roles/wenrou-peiliao.md',
+    'roles/jishu-zhai.md',
+    'roles/maoniang.md'
   ]) {
     assert.ok(fs.existsSync(path.join(repoRoot, rel)), `缺少 ${rel}`);
   }

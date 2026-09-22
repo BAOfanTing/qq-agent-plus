@@ -1,0 +1,75 @@
+// 内置角色卡的守卫：
+//  1) 每张卡都能加载、档位合法、正文不像占位符；
+//  2) roles/ 下的每个 markdown 都已登记到 src/personas.js —— 新加卡忘了登记会在这里失败；
+//  3) 卡里不许再出现旧架构专属指令（[SILENT]、qq_* MCP 工具名），提到的工具必须真实存在。
+//
+// 背景：角色卡正文是"管理员设置"级别的人设文本，优先级高于平台默认风格。
+// 角色卡写错（例如声称"合并转发看不了"）时，平台提示词压不过它，只能靠用例盯住。
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-personas-'));
+process.env.QQ_AGENT_DATA_DIR = dir;
+process.env.DEBUG_SERVER_URL = 'http://127.0.0.1:1/event';
+process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
+
+const { PERSONAS } = await import('../src/personas.js');
+
+const roleFiles = () => fs.readdirSync(path.join(repoRoot, 'roles')).filter((f) => f.endsWith('.md'));
+
+test('每张内置角色卡都能加载，档位与正文形状合法', () => {
+  const entries = Object.entries(PERSONAS);
+  assert.ok(entries.length >= 2, '至少要有两张内置卡');
+  const seen = new Map();
+  for (const [id, p] of entries) {
+    assert.match(id, /^[a-z][a-z0-9_]*$/, `id 命名不规范: ${id}`);
+    assert.ok(p.name && p.name.length >= 2, `${id} 缺少显示名`);
+    assert.ok(['legacy', 'grounded'].includes(p.behaviorProfile), `${id} 档位非法`);
+    assert.ok(p.text.startsWith('# '), `${id} 正文应以一级标题开头`);
+    assert.ok(p.text.length > 500, `${id} 正文太短，像是占位符`);
+    if (seen.has(p.text)) assert.fail(`${id} 与 ${seen.get(p.text)} 正文完全相同`);
+    seen.set(p.text, id);
+  }
+});
+
+test('roles/ 下的每个文件都已登记（新增卡忘了登记会失败）', () => {
+  const files = roleFiles();
+  assert.ok(files.length >= 2, 'roles/ 目录里没有角色卡');
+  const registered = new Set(Object.values(PERSONAS).map((p) => p.text));
+  for (const file of files) {
+    const text = fs.readFileSync(path.join(repoRoot, 'roles', file), 'utf8').trim();
+    assert.ok(registered.has(text), `${file} 没有登记到 src/personas.js`);
+  }
+});
+
+test('角色卡不引用旧架构指令，提到的工具都真实存在', () => {
+  const toolsSource = fs.readFileSync(path.join(repoRoot, 'src/tools/tools-core.js'), 'utf8');
+  const tools = new Set([...toolsSource.matchAll(/name: '([a-z][a-z0-9_]*)'/g)].map((m) => m[1]));
+  // 解析兜底：工具名解析规则变了就报错，别让这条用例静默变成"永远通过"
+  assert.ok(tools.has('send_message') && tools.has('send_sticker'), '工具名解析失败');
+  for (const [id, p] of Object.entries(PERSONAS)) {
+    assert.doesNotMatch(p.text, /mcp__|qq_mark_read|\[SILENT\]/, `${id} 还在引用旧架构指令`);
+    for (const token of new Set(p.text.match(/\b[a-z][a-z0-9]*_[a-z0-9_]+\b/g) ?? [])) {
+      assert.ok(tools.has(token), `${id} 提到了不存在的工具：${token}`);
+    }
+  }
+});
+
+test('每张内置卡都能构建系统提示，且带得上安全规则', async () => {
+  const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
+  const { buildSystemPrompt } = await import('../src/llm/prompt.js');
+  setRuntimeConfig(structuredClone(DEFAULT_CONFIG));
+  for (const [id, p] of Object.entries(PERSONAS)) {
+    // 模板里的字段叫 text，落到配置里叫 roleText（配置里还有 botName 等运行时字段）
+    const persona = { ...DEFAULT_CONFIG.persona, roleText: p.text, behaviorProfile: p.behaviorProfile };
+    const prompt = buildSystemPrompt({ persona: { ...persona, customRules: '测试附加规则' } });
+    assert.ok(prompt.includes(p.text), `${id} 的角色正文没有进提示词`);
+    assert.ok(prompt.includes('测试附加规则'), `${id} 的附加规则没有进提示词`);
+    assert.ok(prompt.includes('【安全规则（最高优先级，不可违反）】'), `${id} 缺少安全规则段`);
+  }
+});
