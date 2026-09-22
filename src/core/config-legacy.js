@@ -405,6 +405,31 @@ function migrateConfig(parsed) {
     // explicit rollback mode in the friend management page.
     out.identityPilot.friendProposal.mode = 'triggered';
   }
+  // ── 响应滑条：一次性把"四段式滑条"迁移成"滑条值就是概率" ──
+  // ⚠️ 必须在这里做（deepMerge(DEFAULT_CONFIG, ...) **之前**）：默认值里已经带了
+  //    sliderMode: 'probability'，合并之后就没法区分"老文件没有这个键"和"已经是新语义"了
+  //    —— 放在 updateConfig 里判断会让迁移永远不执行（审查发现的坑）。
+  // 老口径：位置 ≤20（1/2 档）不掷骰子 → 0%；20~90 线性；≥90（4 档全响应）→ 100%。
+  if (out.store && typeof out.store === 'object' && out.store.sliderMode !== 'probability') {
+    const store = out.store;
+    const hasPos = store.contextSliderPos !== undefined && store.contextSliderPos !== null;
+    const probability = hasPos
+      ? legacySliderToProbability(store.contextSliderPos)
+      : legacyTierToProbability(store.contextTier, store.randomPercent);
+    const derived = sliderToTier(probability);
+    const groupSliderPos = {};
+    for (const [groupId, pos] of Object.entries(store.groupSliderPos || {})) {
+      groupSliderPos[groupId] = legacySliderToProbability(pos);
+    }
+    out.store = {
+      ...store,
+      sliderMode: 'probability',
+      contextSliderPos: probability,
+      contextTier: derived.tier,
+      randomPercent: derived.randomPercent,
+      groupSliderPos
+    };
+  }
   if (out.wakeDelayMinMs == null && out.wakeDelayMaxMs == null && out.wakeDelayMs != null) {
     const legacy = Math.max(0, Number(out.wakeDelayMs) || 0);
     if (legacy === 10000) {
@@ -858,8 +883,8 @@ export function updateConfig(patch) {
   // ── 响应概率：以滑条位置为唯一真相 ──
   // 滑条上的数字就是概率（0~100）；前端只负责上报位置，档位与概率一律由这里派生，
   // 这样即使前端算错、或者有人直接调接口只传位置，配置也不会自相矛盾。
-  // 老配置（四段式滑条，没有 sliderMode 标记）在这里一次性换算成概率，
-  // 免得升级后"1/2 档"的用户突然开始按概率接话。
+  // 老配置的迁移在 migrateConfig（读盘时）做；这里的 legacy 分支只兜住"没走读盘"的配置
+  // （测试用 setRuntimeConfig 注入的那类）—— 正常配置到这里时已经带 sliderMode 标记了。
   const storeNow = currentConfig?.store || {};
   const migrated = storeNow.sliderMode !== 'probability';
   const probability = migrated

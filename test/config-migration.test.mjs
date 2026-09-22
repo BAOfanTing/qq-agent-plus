@@ -1,0 +1,98 @@
+// 老配置（四段式滑条）读盘时必须一次性迁移成"滑条上的数字就是概率"。
+//
+// 这条用例专门防一个真踩过的坑（2026-09-22 审查发现）：把 `sliderMode: 'probability'`
+// 写进 DEFAULT_CONFIG 之后，`loadConfig` 的 deepMerge 会替老配置补上这个键，
+// 于是"文件里到底有没有这个键"再也分不出来 —— 迁移判定放进 updateConfig 时永远不成立，
+// 老 1/2 档用户会被当成 5~20% 概率开始接话、老 4 档会丢掉"全响应"。
+// 所以必须**真的写一份老形状的 config.json、再用新进程加载它**：
+// 内存里构造对象（显式 sliderMode: ''）和同进程 import 都测不出这个坑
+// （ESM 模块缓存会让 config-legacy 停留在第一次的 DATA_DIR 上）。
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const CONFIG_URL = pathToFileURL(path.join(REPO, 'src', 'core', 'config.js')).href;
+
+/** 写一份 config.json → 新起一个 Node 进程加载它 → 取回 store（可选再跑一段脚本并取回第二次）。 */
+function loadStoreInNewProcess(config, extraScript = '') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-config-migrate-'));
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, JSON.stringify(config, null, 2));
+  const script = `
+    process.env.QQ_AGENT_DATA_DIR = ${JSON.stringify(dir)};
+    const { getConfig, updateConfig } = await import(${JSON.stringify(CONFIG_URL)});
+    const first = structuredClone(getConfig().store);
+    ${extraScript}
+    console.log(JSON.stringify({ first, after: getConfig().store, file: ${JSON.stringify(file)} }));
+  `;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  const parsed = JSON.parse(out.trim().split('\n').pop());
+  return { ...parsed, dir };
+}
+
+test('老四段式滑条：1/2 档迁移成 0%，3 档保留概率，4 档迁移成 100%', () => {
+  for (const [contextSliderPos, contextTier, randomPercent, wantPct, wantTier] of [
+    [5, 1, 0, 0, 1],       // 老 1 档（仅艾特）：不掷骰子
+    [15, 2, 0, 0, 1],      // 老 2 档（+关键词）：不掷骰子
+    [55, 3, 50, 50, 3],    // 老 3 档正中：概率原样搬过来
+    [95, 4, 100, 100, 4]   // 老 4 档（全响应）
+  ]) {
+    const { first } = loadStoreInNewProcess({ store: { contextSliderPos, contextTier, randomPercent } });
+    assert.equal(first.randomPercent, wantPct, `位置 ${contextSliderPos} 应迁移成 ${wantPct}%`);
+    assert.equal(first.contextSliderPos, wantPct, '滑条位置也落在概率上');
+    assert.equal(first.contextTier, wantTier, `档位展示应为 ${wantTier}`);
+    assert.equal(first.sliderMode, 'probability', '迁移后要打标记，避免二次换算');
+  }
+});
+
+test('老配置连滑条位置都没有：按老档位换算，不能被当成"没填=全响应"', () => {
+  assert.equal(
+    loadStoreInNewProcess({ store: { contextTier: 1, randomPercent: 0 } }).first.randomPercent,
+    0, '老 1 档 → 0%'
+  );
+  assert.equal(
+    loadStoreInNewProcess({ store: { contextTier: 4, randomPercent: 100 } }).first.randomPercent,
+    100, '老 4 档 → 100%'
+  );
+  assert.equal(
+    loadStoreInNewProcess({ store: { contextSliderPos: null, contextTier: 2, randomPercent: 0 } }).first.randomPercent,
+    0, 'null 位置 → 按老 2 档 → 0%'
+  );
+});
+
+test('分群表也换算；新语义原样保留；写回后再加载不漂移', () => {
+  const legacy = loadStoreInNewProcess({
+    store: {
+      contextTier: 4, randomPercent: 100, contextSliderPos: 95,
+      unifiedTier: false, groupSliderPos: { '111': 5, '222': 55, '333': 95 }
+    }
+  }, 'updateConfig({ ui: { refreshMs: 7000 } });');   // 迁移后保存一次（走真实落盘路径）
+  assert.deepEqual(
+    legacy.first.groupSliderPos,
+    { '111': 0, '222': 50, '333': 100 },
+    '老的分群位置要换算成概率'
+  );
+  assert.equal(legacy.after.randomPercent, 100, '保存一次之后仍是 100%');
+
+  // 幂等：写回文件后再加载一次，值不漂移（43 不能再被换算成 32.9）
+  const reloaded = loadStoreInNewProcess(JSON.parse(fs.readFileSync(legacy.file, 'utf8')));
+  assert.equal(reloaded.first.randomPercent, 100);
+  assert.deepEqual(reloaded.first.groupSliderPos, { '111': 0, '222': 50, '333': 100 });
+
+  // 已经是新语义的配置原样保留
+  const fresh = loadStoreInNewProcess({
+    store: { sliderMode: 'probability', contextSliderPos: 43, contextTier: 3, randomPercent: 43 }
+  });
+  assert.equal(fresh.first.randomPercent, 43);
+});
+
+test('完全没有 store 段的老配置：沿用默认（全响应），不报错', () => {
+  const bare = loadStoreInNewProcess({ server: { port: 3210, token: 'x' }, persona: { botName: '小鲸鱼' } });
+  assert.equal(bare.first.randomPercent, 100, '默认是全响应（与老默认档 4 一致）');
+  assert.equal(bare.first.sliderMode, 'probability');
+});

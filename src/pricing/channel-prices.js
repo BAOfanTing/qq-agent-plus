@@ -136,9 +136,14 @@ export async function refreshChannelFeed(vendor, url, options = {}) {
   const v = String(vendor || '').trim();
   const target = String(url || '').trim();
   if (!v || !target) return channelPriceStatus();
-  // 已经被撤销的渠道：不拉、不注入、不落盘（见 revoked 的注释）
-  if (revoked.has(v)) return channelPriceStatus();
-  const wasConfigured = isConfiguredVendor(v);
+  // 被撤销、**且配置里也没有**的渠道：不拉、不注入、不落盘（见 revoked 的注释）。
+  // ⚠️ 必须带上"配置里也没有"这个条件：控制台「添加并拉取」只写配置、不会再走
+  //    initChannelPrices（那里才解禁），所以同进程内把删掉的渠道加回来时，
+  //    光看 revoked 会把这次拉取永久挡掉（审查发现）。
+  const configured = isConfiguredVendor(v);
+  if (revoked.has(v) && !configured) return channelPriceStatus();
+  if (configured) revoked.delete(v);   // 配置里又有它了 → 解禁
+  const wasConfigured = configured;
   const fetchImpl = options.fetchImpl || fetch;
   const timeoutMs = Number(options.timeoutMs) || FETCH_TIMEOUT_MS;
   let loaded = null;   // { prices, url, dropped }

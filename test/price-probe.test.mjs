@@ -382,3 +382,28 @@ test('探测：显式给的汇率优先于站点上的 /api/status', async () =>
   assert.equal(auto.usdRate, 7.2);
   assert.equal(auto.prices['r-model'].in, 14.4);
 });
+
+test('同进程内删掉再加回同一个渠道：拉取不能被 revoked 永久挡住', async () => {
+  const cfgMod = await import('../src/core/config.js');
+  const good = fakeFetch({ '/pricing.json': { prices: { 'again-model': { in: 1, out: 2 } } } });
+  const url = 'https://again.example.com/pricing.json';
+
+  await channel.refreshChannelFeed('重生渠道', url, { fetchImpl: good });
+  assert.equal(channel.channelPriceCounts()['重生渠道'], 1);
+
+  // 控制台删除：先从配置里摘掉，再撤销注入
+  cfgMod.updateConfig({ api: { ...(cfgMod.getConfig().api || {}), channelPriceFeeds: [] } });
+  channel.removeChannelFeed('重生渠道');
+  assert.equal(channel.channelPriceCounts()['重生渠道'], undefined);
+
+  // 控制台「添加并拉取」：只写配置 + 拉取，不会再走 initChannelPrices 去解禁
+  cfgMod.updateConfig({
+    api: { ...(cfgMod.getConfig().api || {}), channelPriceFeeds: [{ vendor: '重生渠道', url }] }
+  });
+  await channel.refreshChannelFeed('重生渠道', url, { fetchImpl: good });
+  assert.equal(good.calls.length, 2, `加回来之后必须真的发请求（实际 ${good.calls.length} 次）`);
+  assert.equal(channel.channelPriceCounts()['重生渠道'], 1, '并且要重新注入');
+
+  cfgMod.updateConfig({ api: { ...(cfgMod.getConfig().api || {}), channelPriceFeeds: [] } });
+  channel.removeChannelFeed('重生渠道');
+});
