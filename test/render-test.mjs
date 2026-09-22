@@ -828,17 +828,22 @@ try {
   }) || '');
   const progressQueuedOk = queuedText.includes('等待更新器接手') && !queuedText.includes('收尾');
   const idleText = String(ctx.updateProgressText({ busy: false, status: 'succeeded', phase: 'complete' }) || '');
+  // 连通性测试（probe）不部署，不能说成"正在更新"
+  const probeText = String(ctx.updateProgressText({
+    busy: true, mode: 'probe', status: 'checking', phase: 'connectivity', progressAt: Date.now() - 3000
+  }) || '');
+  const progressProbeOk = probeText.includes('正在探测更新通道') && probeText.includes('检查网络连通性');
   vm.runInContext('state.autoUpdateStatus = { installed: true, enabled: true, busy: false, status: "succeeded", phase: "complete" };', ctx);
   ctx.renderControlHub({ services: [] });
   const progressHiddenOk = document.getElementById('hub-deploy-progress').classList.contains('hidden') === true
     && String(document.getElementById('hub-deploy-progress-text')?.textContent || '') === ''
     && idleText === '';
-  if (progressShownOk && progressQueuedOk && progressHiddenOk) {
+  if (progressShownOk && progressQueuedOk && progressHiddenOk && progressProbeOk) {
     pass++;
-    console.log('  OK    更新进度行：运行中显示阶段与耗时、排队优先看 status、跑完隐藏');
+    console.log('  OK    更新进度行：运行中显示阶段与耗时、排队优先看 status、探测不写作更新、跑完隐藏');
   } else {
     fail++;
-    console.log(`  FAIL  更新进度行异常（显示 ${progressShownOk} / 排队 ${progressQueuedOk} / 隐藏 ${progressHiddenOk}）`);
+    console.log(`  FAIL  更新进度行异常（显示 ${progressShownOk} / 排队 ${progressQueuedOk} / 隐藏 ${progressHiddenOk} / 探测 ${progressProbeOk}）`);
   }
   const timeHtml = ctx.renderTimeControlSection({
     ...cfg, allow: { groups: ['123'], private: ['456'] }

@@ -841,10 +841,12 @@ function updateProgressText(update = {}) {
     ? UPDATE_STATUS_LABELS.queued
     : (UPDATE_PHASE_LABELS[phase] || UPDATE_STATUS_LABELS[status] || '更新进行中');
   const version = String(update.targetVersion || update.version || '').trim();
+  // 连通性测试（probe）只探通道、不部署，文案别说成"正在更新"
+  const probe = String(update.mode || '') === 'probe';
   const now = Date.now();
   const started = Number(update.startedAt || 0) || Number(update.updatedAt || 0);
   const stageAt = Number(update.progressAt || 0) || started;
-  const parts = [`正在更新${version ? `到 ${version}` : ''}：${label}`];
+  const parts = [probe ? `正在探测更新通道：${label}` : `正在更新${version ? `到 ${version}` : ''}：${label}`];
   if (stageAt) parts.push(`本阶段 ${formatElapsed((now - stageAt) / 1000)}`);
   if (started && stageAt && started !== stageAt) parts.push(`总计 ${formatElapsed((now - started) / 1000)}`);
   return parts.join(' · ');
