@@ -8,6 +8,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+// 仓库根：跨平台取法（曾经用 new URL(...).pathname.slice(1) 去 Windows 前导斜杠，
+// 在 Linux 上会把绝对路径切成相对路径 —— CI 立刻抓到了）
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-prompt-safety-'));
 process.env.QQ_AGENT_DATA_DIR = dir;
@@ -79,10 +84,7 @@ test('昵称与引用预览进提示词前同样被弱化', () => {
 test('提示词里的每个段头都能被弱化（清洗白名单不许落后于 prompt.js）', () => {
   // 这条守卫是给"加新段头忘了同步 util.js"准备的：2026-09-22 加【优先级】时漏过一次，
   // 群里写「【优先级】…」能原样进提示词 —— 而它恰好自称最高优先级。
-  const src = fs.readFileSync(
-    path.join(path.dirname(new URL(import.meta.url).pathname.slice(1)), '..', 'src', 'llm', 'prompt.js'),
-    'utf8'
-  );
+  const src = fs.readFileSync(path.join(repoRoot, 'src', 'llm', 'prompt.js'), 'utf8');
   // 只豁免"我们自己生成、且不授予任何权限"的普通标记
   const ALLOW = new Set(['【拍一拍】', '【表情包】', '【图片】', '【合并转发聊天记录】']);
   const headers = [...new Set(src.match(/【[^】]*】/g) || [])];
