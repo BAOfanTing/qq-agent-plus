@@ -14,7 +14,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-trigger-labels-'));
 process.env.QQ_AGENT_DATA_DIR = dir;
 process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
 
-const { DEFAULT_CONFIG, updateConfig } = await import('../src/core/config.js');
+const { DEFAULT_CONFIG, getConfig, updateConfig } = await import('../src/core/config.js');
 const { buildTriggerBlock, buildUserPrompt, isAtMe } = await import('../src/llm/prompt.js');
 
 const cfg = structuredClone(DEFAULT_CONFIG);
@@ -22,6 +22,7 @@ cfg.api = { ...cfg.api, baseUrl: 'https://example.invalid/v1', model: 'test-mode
 cfg.persona = { ...cfg.persona, botName: '小鲸鱼' };
 cfg.allow = { ...cfg.allow, groups: ['1'], private: [] };
 updateConfig(cfg);
+const baseCfg = structuredClone(cfg);
 
 const CTX = { selfNickname: '小鲸鱼', selfId: '888' };
 const msg = (text, extra = {}) => ({
@@ -49,10 +50,53 @@ test('真被 @ 的四条路径都要写「@我」', () => {
   assert.ok(labelsOf(msg('@小鲸鱼 在吗', { mentionsSelf: false })).includes('@我'));
   // 3) CQ 码上报（message_format=string 的部署，mentionsSelf 恒为 false）
   assert.ok(labelsOf(msg('[CQ:at,qq=888] 在吗', { mentionsSelf: false })).includes('@我'));
-  // 4) @ 的名字没解析出来时的兜底形态 @QQ号
+  // 4) @ 的名字没解析出来时的兜底形态 @QQ号（在开头）
   assert.ok(labelsOf(msg('@888 在吗', { mentionsSelf: false })).includes('@我'));
   // 非存档来源（控制台预览、旧数据）没有 mentionsSelf 字段，文本兜底要继续管用
   assert.ok(labelsOf(msg('@小鲸鱼 在吗')).includes('@我'));
+});
+
+test('转发记录/引用预览里的 @ 是别人的话，不算叫我', () => {
+  // 合并转发里的 at 段没解析名字，落到存档里就是 @QQ号 形态；那是转述的内容，
+  // 不是这条消息在叫我（以前只在开头认，就是为了挡这些）
+  const fwd = msg('[合并转发 共2条]\n张三：@888 帮我查下\n李四：收到', { mentionsSelf: false });
+  assert.deepEqual(labelsOf(fwd), []);
+  const quoted = msg('[引用 小明：@888 帮我看下]这啥意思', { mentionsSelf: false });
+  assert.deepEqual(labelsOf(quoted), ['引用']);
+  // 别人的号在转发里，也不该说成"别人在 @ 别人"——转述内容不参与点名牌
+  const fwdOther = msg('[合并转发 共1条]\n张三：@999 查下', { mentionsSelf: false });
+  assert.deepEqual(labelsOf(fwdOther), []);
+});
+
+test('名字前缀与大小写：@小鲸鱼 不是叫「小鲸」', () => {
+  // 机器人名是「小鲸」、群里还有个「小鲸鱼」：短名字不能吃掉长名字（v0.6.9 会判成 @我）。
+  // 名字存在 persona.botName 里，这条用改配置摆场景，跑完还原。
+  // 「提到我」是宽松的子串信号（名字出现在正文里就算），@ 判定才要求名字后面是边界。
+  const name = getConfig().persona.botName;
+  const as = (value) => updateConfig({ ...structuredClone(baseCfg), persona: { ...baseCfg.persona, botName: value } });
+  const shortCtx = { selfNickname: '小鲸', selfId: '888' };
+  try {
+    as('小鲸');
+    const other = labelsOf(msg('@小鲸鱼 在吗', { mentionsSelf: false }), shortCtx);
+    assert.deepEqual(other, ['艾特别人', '提到我', '提问']);
+    assert.ok(!other.includes('@我'), '「小鲸鱼」不是叫「小鲸」，不能算 @我');
+    assert.deepEqual(labelsOf(msg('@小鲸 在吗', { mentionsSelf: false }), shortCtx), ['@我', '提到我', '提问']);
+    // 名字后面跟标点/空格/表情都算边界
+    assert.ok(labelsOf(msg('@小鲸，在吗', { mentionsSelf: false }), shortCtx).includes('@我'));
+    assert.ok(labelsOf(msg('@小鲸🐳 在吗', { mentionsSelf: false }), shortCtx).includes('@我'));
+    // 名字里的正则元字符按字面处理，不能当成模式
+    as('a.b');
+    const dotted = { selfNickname: 'a.b', selfId: '888' };
+    assert.ok(labelsOf(msg('@a.b 在吗', { mentionsSelf: false }), dotted).includes('@我'));
+    assert.deepEqual(labelsOf(msg('@axb 在吗', { mentionsSelf: false }), dotted), ['艾特别人', '提问']);
+  } finally {
+    as(name);
+  }
+  // 大小写不敏感：名片写成 Whale、群友打 @whale 也要认
+  //（否则同一个括号里会自相矛盾地出现「艾特别人/提到我」）
+  const whale = labelsOf(msg('@whale 在吗', { mentionsSelf: false }), { selfNickname: 'Whale', selfId: '888' });
+  assert.ok(whale.includes('@我'));
+  assert.ok(!whale.includes('艾特别人'));
 });
 
 test('同时 @ 别人和 @ 我：只写「@我」，不写「艾特别人」', () => {

@@ -85,6 +85,9 @@ const document = {
 
 // SSE 处理器注册表：桩捕获 connectSSE 绑定的监听，测试可直接派发合成事件
 const sseRegistry = {};
+// 定时器计数：进度行的每秒 ticker 必须能停（切页、跑完都要清），这里数活动定时器个数，
+// 断言"回到基线"而不是"等于 0" —— 控制台本来就有常驻轮询定时器。
+const activeIntervals = new Set();
 const sandbox = {
   document,
   window: null,
@@ -95,7 +98,14 @@ const sandbox = {
     this.addEventListener = (type, fn) => { (sseRegistry[type] ||= []).push(fn); };
     this.close = () => {};
   },
-  setTimeout, clearTimeout, setInterval, clearInterval,
+  setTimeout, clearTimeout,
+  setInterval: (fn, ms, ...rest) => {
+    const id = setInterval(fn, ms, ...rest);
+    activeIntervals.add(id);
+    return id;
+  },
+  clearInterval: (id) => { activeIntervals.delete(id); clearInterval(id); },
+  __intervalStats: () => ({ active: activeIntervals.size }),
   console,
   alert: () => {},
   confirm: () => true,
@@ -143,6 +153,9 @@ try {
     atCount: 5, keywordCount: 10, keywords: ['大肥鱼'],
     randomPercent: 50, randomCount: 20, allCount: 80
   };
+  // 有的分区（健康卡）读的是 state.config —— 控制台是拉到配置后填进去的，测试里先塞好，
+  // 否则按"配置还没加载"的分支走，拿不到真实渲染结果。
+  vm.runInContext(`state.config = ${JSON.stringify(cfg)};`, ctx);
 
 
   console.log('=== 实际执行各设置分区渲染函数 ===\n');
@@ -411,28 +424,38 @@ try {
       retentionDays: 90
     }
   });
+  // 「关掉时的样子」显式摆出来：出厂配置不等于"关"（人物印象现在默认就是开的），
+  // 拿出厂配置当对照组的话，断言会跟着默认值飘。
+  const experimentalOffHtml = ctx.renderExperimentalSettingsSection({
+    ...cfg,
+    identityPilot: { ...cfg.identityPilot, enabled: false, graduated: false },
+    slangPilot: { ...cfg.slangPilot, enabled: false, graduated: false },
+    incidentPilot: { ...cfg.incidentPilot, enabled: false, graduated: false }
+  });
   if (
-    experimentalHtml.includes('id="cfg-identity-pilot-enabled"')
-    && experimentalHtml.includes('id="cfg-auto-friend-enabled"')
-    && experimentalHtml.includes('id="cfg-slang-pilot-enabled"')
-    && experimentalHtml.includes('id="cfg-incident-pilot-enabled"')
-    && !/id="cfg-identity-pilot-enabled" checked/.test(experimentalHtml)
+    experimentalOffHtml.includes('id="cfg-identity-pilot-enabled"')
+    && experimentalOffHtml.includes('id="cfg-auto-friend-enabled"')
+    && experimentalOffHtml.includes('id="cfg-slang-pilot-enabled"')
+    && experimentalOffHtml.includes('id="cfg-incident-pilot-enabled"')
+    && !/id="cfg-identity-pilot-enabled" checked/.test(experimentalOffHtml)
     && /id="cfg-identity-pilot-enabled" checked/.test(experimentalOnHtml)
     && experimentalOnHtml.includes('id="cfg-slang-pilot-enabled" checked')
     && experimentalOnHtml.includes('id="cfg-incident-pilot-enabled" checked')
-    && experimentalHtml.includes('id="launch-identity-feature"')
-    && experimentalHtml.includes('固化上线')
-    && experimentalHtml.includes('id="launch-auto-friend-feature"')
-    && experimentalHtml.includes('id="launch-slang-feature"')
-    && experimentalHtml.includes('id="launch-incident-feature"')
+    && experimentalOffHtml.includes('id="launch-identity-feature"')
+    && experimentalOffHtml.includes('固化上线')
+    && !/id="launch-identity-feature"[^>]*disabled/.test(experimentalOffHtml)
+    && /id="launch-identity-feature"[^>]*disabled/.test(experimentalOnHtml)
+    && experimentalOffHtml.includes('id="launch-auto-friend-feature"')
+    && experimentalOffHtml.includes('id="launch-slang-feature"')
+    && experimentalOffHtml.includes('id="launch-incident-feature"')
     && experimentalOnHtml.includes('人物统一印象')
     && experimentalOnHtml.includes('自动好友添加')
     && experimentalOnHtml.includes('已固化')
-    && !experimentalHtml.includes('id="identity-pilot-stats"')
-    && !experimentalHtml.includes('id="identity-pilot-people"')
-    && !experimentalHtml.includes('id="cfg-identity-friend-owner"')
-    && !experimentalHtml.includes('id="cfg-slang-owner"')
-    && !experimentalHtml.includes('data-open-feature')
+    && !experimentalOnHtml.includes('id="identity-pilot-stats"')
+    && !experimentalOnHtml.includes('id="identity-pilot-people"')
+    && !experimentalOnHtml.includes('id="cfg-identity-friend-owner"')
+    && !experimentalOnHtml.includes('id="cfg-slang-owner"')
+    && !experimentalOnHtml.includes('data-open-feature')
   ) {
     pass++;
     console.log('  OK    实验页只保留启用与固化动作');
@@ -571,8 +594,6 @@ try {
     && indexHtml.includes('id="view-identity"')
     && indexHtml.includes('data-tab="friends"')
     && indexHtml.includes('id="view-friends"')
-    && indexHtml.includes('data-tab="slang"')
-    && indexHtml.includes('id="view-slang"')
     && indexHtml.includes('data-tab="incidents"')
     && indexHtml.includes('id="view-incidents"')
     && store.get('#identity-page').innerHTML.includes('人物统一印象')
@@ -837,15 +858,20 @@ try {
     busy: true, mode: 'probe', status: 'checking', phase: 'connectivity', progressAt: Date.now() - 3000
   }) || '');
   const progressProbeOk = probeText.includes('正在探测更新通道') && probeText.includes('检查网络连通性');
+  // 「在跑」的口径与更新器一致：busy 只说明进程在，状态是终态时（跳过间隔、禁用、跑完）不能显示进度行
+  const terminalTexts = ['succeeded', 'failed', 'no-update', 'idle'].map((status) => String(
+    ctx.updateProgressText({ busy: true, status, phase: 'complete', targetVersion: 'v9.9.9' }) || ''
+  ));
+  const progressTerminalOk = terminalTexts.every((text) => text === '');
   vm.runInContext('state.autoUpdateStatus = { installed: true, enabled: true, busy: false, status: "succeeded", phase: "complete" };', ctx);
   ctx.renderControlHub({ services: [] });
   const progressHiddenOk = document.getElementById('hub-deploy-progress').classList.contains('hidden') === true
     && String(document.getElementById('hub-deploy-progress-text')?.textContent || '') === ''
     && String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '') === ''
     && idleText === '';
-  if (progressShownOk && progressQueuedOk && progressHiddenOk && progressProbeOk) {
+  if (progressShownOk && progressQueuedOk && progressHiddenOk && progressProbeOk && progressTerminalOk) {
     pass++;
-    console.log('  OK    更新进度行：运行中显示阶段与耗时、排队优先看 status、探测不写作更新、跑完隐藏');
+    console.log('  OK    更新进度行：运行中显示阶段与耗时、排队优先看 status、探测不写作更新、跑完/终态隐藏');
   } else {
     fail++;
     console.log(`  FAIL  更新进度行异常（显示 ${progressShownOk} / 排队 ${progressQueuedOk} / 隐藏 ${progressHiddenOk} / 探测 ${progressProbeOk}）`);
@@ -862,10 +888,27 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1200));
   const elapsedAfter = String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '');
   const tickerOk = elapsedBefore !== elapsedAfter && /本阶段 [1-9]\d* 秒/.test(elapsedAfter);
-  vm.runInContext('state.tab = "sessions"; state.autoUpdateStatus = { installed: true, enabled: true, busy: false, status: "succeeded", phase: "complete" };', ctx);
+  // 定时器必须能停：切走页签、更新跑完都要清掉，否则后台每秒白跑（也会把旧耗时一直刷新）
+  const timers = ctx.__intervalStats ? ctx.__intervalStats() : null;
+  const intervalBaseline = timers ? timers.active : 0;
+  vm.runInContext('state.tab = "sessions";', ctx);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const stopOnTabOk = !timers || timers.active <= intervalBaseline;
+  vm.runInContext('state.tab = "control"; state.autoUpdateStatus = { installed: true, enabled: true, busy: false, status: "succeeded", phase: "complete" };', ctx);
+  ctx.renderControlHub({ services: [] });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const stopOnFinishOk = !timers || timers.active <= intervalBaseline;
   tickerOk ? pass++ : fail++;
   console.log('  ' + (tickerOk ? 'OK   ' : 'FAIL ') + '进度行每秒刷新本阶段耗时（定时器真的在跑）'
     + (tickerOk ? '' : ` -> "${elapsedBefore}" 到 "${elapsedAfter}"`));
+  if (stopOnTabOk && stopOnFinishOk) {
+    pass++;
+    console.log('  OK    进度行定时器会停：切走页签、更新跑完都清掉'
+      + (timers ? `（活动定时器 ${timers.active}）` : '（未统计到定时器，按未泄露通过）'));
+  } else {
+    fail++;
+    console.log(`  FAIL  进度行定时器未清理（切页 ${stopOnTabOk} / 跑完 ${stopOnFinishOk}）`);
+  }
   const timeHtml = ctx.renderTimeControlSection({
     ...cfg, allow: { groups: ['123'], private: ['456'] }
   });

@@ -823,6 +823,10 @@ const UPDATE_STATUS_LABELS = {
   testing: '跑部署前测试',
   deploying: '部署（服务会短暂重启）'
 };
+// 「这轮更新在跑」的口径要与更新器一致（src/auto-update.js 的 ACTIVE_STATES）：
+// status() 的 busy 只说明更新器进程在（跳过间隔、被禁用这类情形也留个进程），
+// 那种时刻状态文件还停在上一轮的终态，单看 busy 会闪出一条"正在更新…收尾"的假进度行。
+const UPDATE_ACTIVE_STATUSES = new Set(['queued', 'checking', 'testing', 'deploying']);
 
 function formatElapsed(seconds) {
   const total = Math.max(0, Math.round(Number(seconds) || 0));
@@ -833,8 +837,8 @@ function formatElapsed(seconds) {
 }
 
 function updateProgressStage(update = {}) {
-  if (update.busy !== true) return '';
   const status = String(update.status || '');
+  if (update.busy !== true || !UPDATE_ACTIVE_STATUSES.has(status)) return '';
   const phase = String(update.phase || '');
   // 排队时 phase 还是上一轮的残留值，先看 status
   const label = status === 'queued'
@@ -909,7 +913,8 @@ function renderControlHub(data = {}) {
   const revision = (value) => value ? String(value).slice(0, 12) : '-';
   // 更新进度行：结构只建一次，这里的初值 + updateControlHubFields 里的实时同步
   // 一起保证"点完立即更新马上能看到阶段与耗时"。没有在跑时留空并隐藏。
-  const progressLine = updateProgressText(update);  const __html = `
+  const progressLine = updateProgressText(update);
+  const __html = `
     <div class="control-head">
       <div><h2>服务与访问控制</h2><span class="muted">统一入口</span></div>
       <button type="button" class="icon-btn" id="control-refresh" title="刷新服务状态" aria-label="刷新服务状态">↻</button>

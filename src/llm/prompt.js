@@ -401,20 +401,31 @@ function formatEntry(m, { withId = true } = {}) {
   return `[${formatShortTime(m.ts)}] ${idPrefix}${adminTag}${who}：${replyPrefix}${m.text}`;
 }
 
+/** 正则元字符转义（名字来自配置与群名片，可能含 . * ( 这类字符）。 */
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * 判断一段消息里是否艾特了机器人。
  * 支持四种写法：@昵称 / @机器人名 / @机器人QQ号 / CQ 码 [CQ:at,qq=机器人QQ号]
- * （@QQ号 是 @ 的名字没解析出来时 segmentsToText 的兜底形态，认它才不会漏。）
+ * 名字大小写不敏感，且后面要求是边界 —— 群里同时有「小鲸」和「小鲸鱼」时，
+ * @小鲸鱼 不算在叫「小鲸」的机器人。
+ * @QQ号 是 @ 名字没解析出来时 segmentsToText 的兜底形态，只有出现在开头才算 ——
+ * 合并转发记录、引用预览、卡片正文里也会带这种形态，那是别人转述的内容，不是叫你。
  */
 export function isAtMe(text, { selfNickname = '', botName = '', selfId = '' } = {}) {
   const t = String(text ?? '');
   if (!t) return false;
-  const nick = String(selfNickname || '').trim();
-  const name = String(botName || '').trim();
-  if (nick && t.includes(`@${nick}`)) return true;
-  if (name && t.includes(`@${name}`)) return true;
+  const lower = t.toLowerCase();
+  // 名字后面不能再跟名字字符（汉字/字母/数字/下划线），否则短名字会吃掉长名字
+  const hitName = (value) => {
+    const n = String(value || '').trim().toLowerCase();
+    return n ? new RegExp(`@${escapeRegExp(n)}(?![\\w\\u3400-\\u9fff])`, 'u').test(lower) : false;
+  };
+  if (hitName(selfNickname) || hitName(botName)) return true;
   const id = String(selfId || '').trim();
-  if (/^\d+$/.test(id) && new RegExp(`@${id}(?!\\d)`).test(t)) return true;
+  if (/^\d+$/.test(id) && new RegExp(`^\\s*@${id}(?!\\d)`).test(t)) return true;
   // CQ 码艾特：命中机器人自己的 QQ 号
   if (id) {
     const re = /\[CQ:at(?:,[^\]]*?)?qq=(\d+)[^\]]*\]/g;
@@ -576,9 +587,11 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
 }
 
 /**
- * 列出消息文本里出现的 @：names 是名字形态（@昵称 / @全体成员），ids 是数字形态（@QQ号 / CQ 码）。
+ * 列出消息文本里出现的 @：names 是名字形态（@昵称 / @全体成员），ids 是数字形态（CQ 码 / 开头的 @QQ号）。
  * 文本形态要求 @ 后面至少跟一个字符，且 @ 在行首或空白/标点之后 ——
  * 邮箱（a@b.com）、只打一个 @ 跟空格，这些都不算点名。
+ * 文本形态的 @QQ号 只在**开头**认：合并转发、引用预览、卡片正文里也会出现这种形态，
+ * 那是在转述别人的话（isAtMe 对 @QQ号 用同一口径）。
  */
 function atTargetsIn(text) {
   const t = String(text ?? '');
@@ -586,9 +599,10 @@ function atTargetsIn(text) {
   const ids = [];
   for (const m of t.matchAll(/\[CQ:at(?:,[^\]]*?)?qq=([^,\]]+)[^\]]*\]/g)) ids.push(m[1]);
   // 括号类字符用 \u 转义写：源码里出现字面方括号段头会让 prompt-safety 的守卫误判成新段头
-  for (const m of t.matchAll(/(?:^|[\s\u3000，。！？；：、,.!?;:（(\u3010\u300c"“])@([^\s\u3000，。！？；：、,.!?;:）)\u3011\u300d"”]+)/g)) {
-    if (/^\d+$/.test(m[1])) ids.push(m[1]);
-    else names.push(m[1]);
+  for (const m of t.matchAll(/(^|[\s\u3000，。！？；：、,.!?;:（(\u3010\u300c"“])@([^\s\u3000，。！？；：、,.!?;:）)\u3011\u300d"”]+)/g)) {
+    const [, prefix, token] = m;
+    if (!/^\d+$/.test(token)) names.push(token);
+    else if (prefix === '') ids.push(token);   // prefix 为空 = 匹配在行首
   }
   const ALL = /^(全体成员?|all)$/i;
   return {

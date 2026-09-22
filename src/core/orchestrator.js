@@ -1328,8 +1328,9 @@ export class Orchestrator {
       slangContext,
       incidentContext,
       selfNickname,
-      // 点名标签的文本兜底要用它认「@QQ号」与 CQ 码形态（存档里的 mentionsSelf 才是主判据）
-      selfId: this.onebot.selfId,
+      // 点名标签的文本兜底要用它认「@QQ号」与 CQ 码形态（存档里的 mentionsSelf 才是主判据）。
+      // 取值与上面的档位判定保持一致，否则两处会对同一条消息给出不同判断。
+      selfId: cfg.onebot?.selfId || this.onebot.selfId || '',
       selfLastMessageAt,
       lastMessageAt,
       recentCount,
