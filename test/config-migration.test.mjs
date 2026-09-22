@@ -21,6 +21,8 @@ const CONFIG_URL = pathToFileURL(path.join(REPO, 'src', 'core', 'config.js')).hr
 /** 写一份 config.json → 新起一个 Node 进程加载它 → 取回 store（可选再跑一段脚本并取回第二次）。 */
 function loadStoreInNewProcess(config, extraScript = '') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-config-migrate-'));
+  // 用例自己造的临时目录自己清（约定见 test/README.md）
+  process.on('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ } });
   const file = path.join(dir, 'config.json');
   fs.writeFileSync(file, JSON.stringify(config, null, 2));
   const script = `
