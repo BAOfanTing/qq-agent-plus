@@ -589,7 +589,7 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
 /**
  * 列出消息文本里出现的 @：names 是名字形态（@昵称 / @全体成员），ids 是数字形态（CQ 码 / 开头的 @QQ号）。
  * 文本形态要求 @ 后面至少跟一个字符，且 @ 在行首或空白/标点之后 ——
- * 邮箱（a@b.com）、只打一个 @ 跟空格，这些都不算点名。
+ * 邮箱（a@example.com）、只打一个 @ 跟空格，这些都不算点名。
  * 文本形态的 @QQ号 只在**开头**认：合并转发、引用预览、卡片正文里也会出现这种形态，
  * 那是在转述别人的话（isAtMe 对 @QQ号 用同一口径）。
  */

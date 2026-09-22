@@ -38,7 +38,8 @@ const LOW_ENTROPY = (value) => new Set(value.toLowerCase()).size <= 3;
 const IPV4_CONTEXT = /(?:\b(?:https?|ssh|git|ftp):\/\/|@)(\d{1,3}(?:\.\d{1,3}){3})\b|\b(\d{1,3}(?:\.\d{1,3}){3}):\d{2,5}\b/g;
 
 // 通用示例不算泄露：文档里出现 /home/user、/home/ubuntu、C:\Users\user 这类占位是正常的。
-const EXAMPLE_USER_PATH = /(?:\/(?:home|Users)\/(?:user|ubuntu|deploy|sourcecode|example|<[^>]+>)|[A-Za-z]:\\Users\\(?:user|public|Public|example|<[^>]+>))/i;
+// qqagent 是部署文档里自己建的服务账号（adduser qqagent），不算本机个人目录。
+const EXAMPLE_USER_PATH = /(?:\/(?:home|Users)\/(?:user|ubuntu|deploy|sourcecode|example|qqagent|<[^>]+>)|[A-Za-z]:\\Users\\(?:user|public|Public|example|<[^>]+>))/i;
 
 /**
  * 本机个人串：`data/sanitize-patterns.json` 里写一个字符串数组。

@@ -106,14 +106,14 @@ test('同时 @ 别人和 @ 我：只写「@我」，不写「艾特别人」', (
 });
 
 test('没有 @ 的消息不打点名牌：邮箱、只打一个 @、普通聊天都不算', () => {
-  assert.deepEqual(labelsOf(msg('发我邮箱 a@b.com', { mentionsSelf: false })), []);
+  assert.deepEqual(labelsOf(msg('发我邮箱 a@example.com', { mentionsSelf: false })), []);
   assert.deepEqual(labelsOf(msg('今天天气不错', { mentionsSelf: false })), []);
   assert.deepEqual(labelsOf(msg('在吗', { mentionsSelf: false })), ['提问']);
   // @ 后面只有空格/标点（手打一个 @ 就发出去了）：算不出指向，不贴点名牌，
   // 也不该像以前那样按"以 @ 开头"记成 @我
   assert.deepEqual(labelsOf(msg('@ 小鲸鱼 在吗', { mentionsSelf: false })), ['提到我', '提问']);
   assert.deepEqual(labelsOf(msg('@ 全体成员 通知一下', { mentionsSelf: false })), []);
-  assert.deepEqual(labelsOf(msg('报价 a @ b.com', { mentionsSelf: false })), []);
+  assert.deepEqual(labelsOf(msg('报价 a @ example.com', { mentionsSelf: false })), []);
 });
 
 test('不知道自己 QQ 号时，数字形态的 @ 不贴「艾特别人」', () => {
