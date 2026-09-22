@@ -786,16 +786,23 @@ test('台账保留期清理：90 天前已了结的删掉，未决的留着', (t
   addOpportunity.run('fo_old_done', 'k1', 'proposed', old, old);
   addOpportunity.run('fo_old_open', 'k2', 'queued', old, old);
   addOpportunity.run('fo_new_done', 'k3', 'proposed', fresh, fresh);
-  store.db.prepare(`
+  const addProposal = store.db.prepare(`
     INSERT INTO friend_proposals (id, uin, source_chat_key, reason_code, reason, status, created_at, updated_at)
-    VALUES ('fp_old_done', '2000', 'group:1', 'manual', 'r', 'rejected', ?, ?)
-  `).run(old, old);
+    VALUES (?, '2000', 'group:1', 'manual', 'r', ?, ?, ?)
+  `);
+  addProposal.run('fp_old_done', 'rejected', old, old);
+  // 这两条是"等管理员处理"的真·未决（批准的提案要手动去 QQ 发起 / 已发送等好友确认），
+  // 曾经因为状态名抄错被清掉 —— 用例把它们钉住。
+  addProposal.run('fp_old_approved_manual', 'approved_manual', old, old);
+  addProposal.run('fp_old_sent', 'sent', old, old);
   const addRequest = store.db.prepare(`
     INSERT INTO incoming_friend_requests (id, request_flag, uin, status, created_at, updated_at)
     VALUES (?, ?, '2000', ?, ?, ?)
   `);
   addRequest.run('ifr_old_decided', 'flag-decided', 'accepted', old, old);
   addRequest.run('ifr_old_pending', 'flag-pending', 'pending', old, old);
+  // held_unknown = "结果未知，等管理员去 QQ 客户端核对"，必须留
+  addRequest.run('ifr_old_held', 'flag-held', 'held_unknown', old, old);
 
   store.pruneLedgers();
 
@@ -805,10 +812,14 @@ test('台账保留期清理：90 天前已了结的删掉，未决的留着', (t
     ['fo_new_done', 'fo_old_open'],
     '过期的已了结机会要删掉；未过期的、以及还在排队的不许动'
   );
-  assert.deepEqual(idsOf('SELECT id FROM friend_proposals'), [], '90 天前已了结的提议应被清掉');
+  assert.deepEqual(
+    idsOf('SELECT id FROM friend_proposals'),
+    ['fp_old_approved_manual', 'fp_old_sent'],
+    '90 天前已了结的提议要清掉；approved_manual / sent 是等管理员处理的，必须留着'
+  );
   assert.deepEqual(
     idsOf('SELECT id FROM incoming_friend_requests'),
-    ['ifr_old_pending'],
-    '未决的入站请求必须留着（那是等管理员处理的待办）'
+    ['ifr_old_held', 'ifr_old_pending'],
+    '未决的入站请求必须留着（含结果未知那些）'
   );
 });

@@ -13,6 +13,15 @@ const OPEN_FRIEND_PROPOSAL_STATES = new Set([
   'sent',
   'held_unknown'
 ]);
+// 入站好友请求里"还没了结"的状态：与触发闸门、friend_add 收尾用的集合一致
+// （identity-store.js 里那两处 `status IN (...)`）。保留期清理不能删这些。
+const OPEN_INCOMING_REQUEST_STATES = new Set([
+  'pending',
+  'deciding',
+  'approved',
+  'held_unknown',
+  'failed'
+]);
 
 function ensureColumn(db, table, name, definition) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
@@ -465,6 +474,10 @@ export class IdentityStore {
    */
   pruneLedgers(retentionDays = 90) {
     const cutoff = Date.now() - Math.max(1, Number(retentionDays) || 90) * 24 * 60 * 60 * 1000;
+    // ⚠️ "未决"集合必须与实际状态名对齐：写错一个名字，删掉的就是"等管理员处理"的待办。
+    //    2026-09-21 审查发现过一版错法（friend_proposals 抄了 incoming 的状态名，
+    //    于是 approved_manual / sent 这些真·未决会被清掉）—— 所以这里直接引用上面两个常量。
+    const inList = (set) => [...set].map((name) => `'${name}'`).join(', ');
     try {
       this.db.prepare(`
         DELETE FROM friend_opportunities
@@ -472,11 +485,11 @@ export class IdentityStore {
       `).run(cutoff);
       this.db.prepare(`
         DELETE FROM friend_proposals
-        WHERE created_at < ? AND status NOT IN ('pending','deciding','approved','held_unknown')
+        WHERE created_at < ? AND status NOT IN (${inList(OPEN_FRIEND_PROPOSAL_STATES)})
       `).run(cutoff);
       this.db.prepare(`
         DELETE FROM incoming_friend_requests
-        WHERE created_at < ? AND status NOT IN ('pending','deciding')
+        WHERE created_at < ? AND status NOT IN (${inList(OPEN_INCOMING_REQUEST_STATES)})
       `).run(cutoff);
     } catch { /* 清理失败不影响运行 */ }
   }

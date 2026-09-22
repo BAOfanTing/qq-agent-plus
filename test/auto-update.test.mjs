@@ -154,6 +154,12 @@ test('已提交未跑完的更新要能被认出来（控制台据此不再重�
   assert.equal(pending.mode, 'manual');
   assert.equal(pending.version, 'v9.9.9');
 
+  // 不带版本地再提交一次（控制页那条路径）：上一次的版本必须被清掉，
+  // 否则前端会拿旧版本跟新提示比对，照样弹
+  writeRaw({ status: 'succeeded', targetVersion: 'v0.0.1' });
+  f.manager.requestManual();
+  assert.equal(autoUpdatePending(f.dataDir).version, '', '没带版本时不能留上一次的');
+
   // 跑完 / 失败：都不再抑制，失败时得让用户能再点一次
   writeRaw({ status: 'succeeded' });
   assert.equal(autoUpdatePending(f.dataDir), null);

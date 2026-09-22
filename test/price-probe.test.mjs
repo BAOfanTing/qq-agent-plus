@@ -177,6 +177,33 @@ test('渠道价目表落盘 + 拉取失败时保留上一次的表', async () =>
   assert.equal(channel.channelPriceStatus().length, 0);
 });
 
+test('拉取过程中被删掉的渠道，晚到的响应不能把表复活', async () => {
+  // 单次 fetch 最长 15 秒（探测更久），这期间用户完全可能把渠道删掉
+  let release = () => {};
+  const slow = () => {
+    slow.calls += 1;
+    return new Promise((resolve) => {
+      release = () => resolve({ ok: true, status: 200, json: async () => ({ prices: { 'ghost-model': { in: 1, out: 2 } } }) });
+    });
+  };
+  slow.calls = 0;
+
+  const promise = channel.refreshChannelFeed('幽灵渠道', 'https://ghost.example.com/pricing.json', { fetchImpl: slow });
+  await new Promise((r) => setTimeout(r, 0));      // 让请求先发出去
+  channel.removeChannelFeed('幽灵渠道');            // 用户在这段时间里删掉了它
+  release();
+  await promise;
+
+  assert.equal(channel.channelPriceCounts()['幽灵渠道'], undefined, '删掉的渠道不该被晚到的响应复活');
+  const priced = prices.resolveModelPrice('ghost-model', { api: { useOfficialPrice: true } }, null, { vendor: '幽灵渠道' });
+  assert.equal(priced.unpriced, true, '也不该再注入查价层');
+  assert.equal(
+    channel.channelPriceStatus().some((f) => f.vendor === '幽灵渠道'),
+    false,
+    '状态里也不该再出现'
+  );
+});
+
 /* ── 自动探测（零配置路径） ── */
 
 test('自动探测：成功就登记成渠道价目表并生效', async () => {

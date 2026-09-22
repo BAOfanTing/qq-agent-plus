@@ -25,7 +25,7 @@ refreshStatus = async function refreshStatus() {
     // 口径后缀与 app.js 保持一致：包月/倍率/未定价都要在顶栏说明，别让金额被误读
     const modeTxt = c?.costMode === 'subscription'
       ? (Number(c.costMonthlyFee) > 0 ? ` · 包月 ¥${Number(c.costMonthlyFee)}/月` : ' · 按月付')
-      : (c?.costMode === 'multiplier' ? `（官方价 ×${Number(c.costMultiplier) || 1}）` : '');
+      : (c?.costMode === 'multiplier' ? `（官方价 ×${mulOf(c.costMultiplier)}）` : '');
     const unpricedTxt = c && c.unpriced ? ' · 含未定价调用' : '';
     const rate = s.cacheHitRate;
     const rateTxt = rate > 0 ? ` · 缓存 ${Math.round(rate * 100)}%` : '';

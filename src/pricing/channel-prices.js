@@ -10,7 +10,7 @@
 // 约束沿用 price-feed：全异步、错误都吞进状态、任何函数都不把异常抛给调用方。
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, updateConfig } from '../core/config.js';
+import { DATA_DIR, getConfig, updateConfig } from '../core/config.js';
 import { setChannelPrices } from './model-prices.js';
 import { normalizePriceFeed } from './price-feed.js';
 import { probeChannelPrices } from './price-probe.js';
@@ -41,6 +41,14 @@ function writeFile() {
  * 删掉的那家会一直留在查价层里按老价算钱，直到重启。
  */
 let injected = new Set();
+
+/**
+ * 被明确撤销、且当前配置里也没有的渠道。
+ * 在飞的刷新（单次 fetch 最长 15s，探测更久）回来时按它丢弃结果 ——
+ * 否则"删掉渠道"这个动作会被一个刚好晚到的响应复活：价目表重新注入查价层、
+ * 还写回 data/channel-prices.json，直到下次保存配置或重启才干净。
+ */
+let revoked = new Set();
 
 /** 注入/撤销一个渠道（同时维护 injected）。 */
 function injectOne(vendor, prices) {
@@ -87,6 +95,9 @@ export function initChannelPrices(feedsConfig = []) {
   }
   injectAll();
 
+  // 配置里重新出现的渠道要解禁（删掉再加回来的情况）
+  for (const vendor of wanted) revoked.delete(vendor);
+
   // 2) 缓存缺失或过旧的，后台拉一次（不阻塞启动，失败只记状态）
   for (const item of (Array.isArray(feedsConfig) ? feedsConfig : [])) {
     const vendor = String(item?.vendor || '').trim();
@@ -100,11 +111,34 @@ export function initChannelPrices(feedsConfig = []) {
   }
 }
 
+/** 配置里现在有没有这个渠道。 */
+function isConfiguredVendor(vendor) {
+  return (getConfig().api?.channelPriceFeeds || [])
+    .some((f) => String(f?.vendor || '').trim() === vendor);
+}
+
+/**
+ * 结果还要不要：单次 fetch 最长 15 秒（探测更久），这期间用户完全可能把渠道删掉，
+ * 一个刚好晚到的响应不能把删掉的表复活（2026-09-21 审查发现）。
+ *   - 被明确撤销过（控制台删除）→ 丢弃；
+ *   - 开始时在配置里、现在不在了（手工改 config 删掉）→ 丢弃；
+ *   - 其余的照旧收下：首次登记（控制台"添加并拉取"是先写配置再拉，但模块本身
+ *     也允许直接拉一个还没登记过的渠道）不该被误伤。
+ */
+function shouldKeepVendor(vendor, wasConfigured) {
+  if (revoked.has(vendor)) return false;
+  if (wasConfigured && !isConfiguredVendor(vendor)) return false;
+  return true;
+}
+
 /** 拉一个渠道的价目并落盘/注入（内部吞异常）。 */
 export async function refreshChannelFeed(vendor, url, options = {}) {
   const v = String(vendor || '').trim();
   const target = String(url || '').trim();
   if (!v || !target) return channelPriceStatus();
+  // 已经被撤销的渠道：不拉、不注入、不落盘（见 revoked 的注释）
+  if (revoked.has(v)) return channelPriceStatus();
+  const wasConfigured = isConfiguredVendor(v);
   const fetchImpl = options.fetchImpl || fetch;
   const timeoutMs = Number(options.timeoutMs) || FETCH_TIMEOUT_MS;
   let loaded = null;   // { prices, url, dropped }
@@ -144,6 +178,8 @@ export async function refreshChannelFeed(vendor, url, options = {}) {
   }
 
   if (loaded) {
+    // 拉的过程中被删掉了：丢弃结果（见 shouldKeepVendor）
+    if (!shouldKeepVendor(v, wasConfigured)) return channelPriceStatus();
     feeds[v] = {
       url: loaded.url,
       ok: true,
@@ -180,6 +216,7 @@ function applyFeed(vendor, url) {
 export function removeChannelFeed(vendor) {
   const v = String(vendor || '').trim();
   if (!v) return channelPriceStatus();
+  revoked.add(v);
   delete feeds[v];
   injectOne(v, null);
   writeFile();

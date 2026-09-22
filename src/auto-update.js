@@ -251,9 +251,9 @@ export class AutoUpdateManager {
     const network = normalizeUpdateNetworkSettings(settings);
     const state = readAutoUpdateState(this.dataDir);
     const intervalMs = Math.max(1, Number(settings.intervalHours) || 6) * 60 * 60 * 1000;
-    const busy = this.serviceActive()
-      || (ACTIVE_STATES.has(state.status)
-        && Date.now() - Number(state.updatedAt || 0) < 30 * 60 * 1000);
+    // 与「发现新版本」提示用同一套判据（autoUpdatePending）：一处说"在跑"、另一处说"卡住"
+    // 会让用户卡在"提示弹出来了、按钮却是灰的"。基准见 autoUpdatePending 的注释。
+    const busy = this.serviceActive() || autoUpdatePending(this.dataDir) !== null;
     let deployedRevision = '';
     try {
       deployedRevision = fs.readFileSync(
@@ -396,7 +396,8 @@ export class AutoUpdateManager {
       startedAt: Date.now(),
       completedAt: 0,
       error: '',
-      ...(targetVersion ? { targetVersion } : {}),
+      // 没带版本也要显式清空：不然上一次的版本会留在状态里，前端拿它比对会误判
+      targetVersion,
       ...(probeOnly ? {
         connectivity: {
           status: 'queued',

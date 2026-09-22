@@ -5420,6 +5420,9 @@ function openBatchPriceModal() {
         // 只有在输入/输出列写了数字（= 明确要按 token 定价）时才转成 token 口径。
         const prev = edits[m] || {};
         const tokenIntent = i !== null || o !== null;
+        // 输入/输出空着、只填了缓存命中：这不算"要按 token 定价"。写进去会得到
+        // in:0/out:0 的"明确免费价"，把官方价变成 0 元 —— 按"清掉自定义价"处理。
+        if (!tokenIntent && !String(prev.billing || '').trim()) { delete edits[m]; return; }
         const next = { ...prev, in: i ?? 0, out: o ?? 0, cached: c ?? (i ?? 0) };
         if (tokenIntent) { delete next.billing; delete next.amount; delete next.period; }
         edits[m] = next;
@@ -9661,10 +9664,12 @@ async function saveConfig({ quiet = false } = {}) {
       const i = Number(val('#cfg-price-in', 0)) || 0;
       const o = Number(val('#cfg-price-out', 0)) || 0;
       const ca = Number(val('#cfg-price-cached', 0)) || 0;
-      if (i || o || ca) {
+      // 输入/输出才是"按 token 定价"的表达：只填缓存命中不算一条价（写进去会变成
+      // in:0/out:0 的"明确免费价"，把官方价直接算成 0 元）。
+      if (i || o) {
         nextMap[curModel] = { in: i, out: o, cached: ca || i };
-      } else {
-        delete nextMap[curModel];   // 全 0 = 清除自定义，回落到官方表
+      } else if (!String(nextMap[curModel]?.billing || '').trim()) {
+        delete nextMap[curModel];   // 全 0（且不是包月/不计费）= 清除自定义，回落到官方表
       }
       // 同样需要整体替换，否则 delete 掉的那一项会在合并时复活
       patch.api.modelPrices = { __replace__: nextMap };
