@@ -13,7 +13,7 @@
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.13-339933?logo=nodedotjs&logoColor=white)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Linux-0b5fff?logo=linux&logoColor=white)](docs/LINUX.md)
 [![OneBot](https://img.shields.io/badge/protocol-OneBot%20v11-12b7f5)](https://github.com/botuniverse/onebot-11)
-[![LLM](https://img.shields.io/badge/LLM-OpenAI%20%E5%85%BC%E5%AE%B9-6b4fbb)](#时间控制)
+[![LLM](https://img.shields.io/badge/LLM-OpenAI%20%E5%85%BC%E5%AE%B9-6b4fbb)](#-特性)
 
 **简体中文** ｜ [English](README.en.md)
 
@@ -48,7 +48,7 @@ $ node src/ops.js audit
   [正常] qq-agent-linux.service  active
   [正常] qq-agent-linux-update.timer  enabled
 ===== 3. 源码语法（全部 js） =====
-  [正常] 所有 js 文件语法通过（193 个）
+  [正常] 所有 js 文件语法通过（75 个）
 ===== 4. 未定义调用扫描 =====
   [正常] 可疑未定义调用点: 0
 ===== 8. 运行态 =====
@@ -59,7 +59,9 @@ $ node src/ops.js audit
 
 $ node src/ops.js watch-send --minutes=5
 基线：outbox 最新 rowid=17，待处理消息 0 条
-SEND_OK 第 1 条新发送：rowid=18（send_message）
+      最近一条人类消息：今晚还打不打
+SEND_OK：机器人通过工具层成功回话 ｜ group:123456789 ｜ run=3f2c… ｜ state=sent ｜ 打啊
+      人类上一条：今晚还打不打
 ```
 
 群聊里的一轮（示意；真实聊天记录不会公开）——接住对方的话之后，
@@ -178,7 +180,7 @@ cd qq-agent-plus
 bash deploy.sh \
   --install-dir /mnt/data/qq-agent/app \
   --data-dir /mnt/data/qq-agent/data \
-  --host 192.168.31.109 \
+  --host 127.0.0.1 \
   --port 3210
 ```
 
@@ -205,7 +207,7 @@ bash deploy.sh --help
 
 ```bash
 bash deploy.sh --install-dir /mnt/data/qq-agent/app \
-  --data-dir /mnt/data/qq-agent/data --host 192.168.31.109 --port 3210 \
+  --data-dir /mnt/data/qq-agent/data --host 127.0.0.1 --port 3210 \
   --no-backup
 ```
 
@@ -225,7 +227,7 @@ git pull --ff-only
 bash deploy.sh \
   --install-dir /mnt/data/qq-agent/app \
   --data-dir /mnt/data/qq-agent/data \
-  --host 192.168.31.109 \
+  --host 127.0.0.1 \
   --port 3210
 ```
 
@@ -370,6 +372,20 @@ Agent 配置或前端存储。旧的 `3110` 门户不再映射。
 `threadId`，控制台不会先显示独立窗口再合并；新 Session 也不会抢占正在查看的
 详情。生命周期批次栏支持横向滚动，切换批次时保留详情和批次栏位置。
 
+“设置 -> 聊天设置”里的响应概率滑条决定机器人对普通消息的回话比例：**滑条上的数字就是
+概率**。`0%` 只回被 @、被点名或命中关键词的消息，`100%` 任何消息都回；被 @、被点名或
+命中关键词的批次一定回，不看概率。概率按批独立抽签、不累计配额，也不是“每 100 条回
+几条”的额度。可以统一设置，也可以关掉统一开关后给每个群单独拖：没单独设置过的群聊和
+所有私聊跟随统一滑条。旧版四段式档位（0-10 仅艾特、10-20 加关键词、20-90 概率、
+90-100 全响应）会在首次读盘时换算一次：0-20 变成 `0%`，20-90 按比例线性映射，
+90 以上变成 `100%`。新语义里没有“只回 @、不回关键词”这一档，所以旧的 0-10 换算后
+也会响应关键词。
+
+“设置 -> 人设 -> 选择人设”里有多张内置角色卡（默认小鲸鱼、游戏客户端开发者，另有损友、
+温柔陪聊、技术宅、猫娘），选中只填入草稿，点“保存人设修改”才生效。交流策略可选“原版群友”
+或“自然可靠”，角色正文和管理员附加规则都能改，也可以基于当前草稿“＋ 添加人设”建自定义
+副本。角色卡正文的单一来源是 [`roles/`](roles) 目录，一张卡一个 markdown 文件。
+
 顶部状态与用量页均按每次模型调用返回的 `usage`、实际模型和调用时刻计价。
 “今日”以及按天统计固定使用 `Asia/Shanghai` 自然日，不受服务器系统时区影响。
 
@@ -390,8 +406,8 @@ Agent 配置或前端存储。旧的 `3110` 门户不再映射。
 上下文窗口的旧条目继续保持未读。首次启用默认只建立基线，不突然互动历史内容。
 设计、状态与幂等规则见[动态互动](docs/QZONE_INTERACTIONS.md)。
 
-存档页的“主动唤醒”是管理员显式运行：有未读消息时绕过普通响应档位并立即
-处理当前批次；没有未读消息时读取该模式配置的最近存档，让模型自行决定是否
+存档页的“主动唤醒”是管理员显式运行：有未读消息时直接处理当前批次（不看响应概率）；
+没有未读消息时读取该模式配置的最近存档，让模型自行决定是否
 发言。该操作仍受运行模式、暂停、白名单、时间控制、并发上限和 `held` 状态保护。
 
 ## ⏰ 时间控制
@@ -426,8 +442,8 @@ bash -n deploy.sh manage.sh
 ```
 
 CI（GitHub Actions）在每次推送和 PR 上跑：语法检查、未定义调用扫描（严格模式）、
-单元测试与本地回归。当前基线上没有待修的已知问题，历史记录见
-[已知问题](docs/KNOWN-ISSUES.md)。
+单元测试与本地回归。当前基线上有两条已确认、暂不修的小问题（都不影响主链路），
+历史记录见[已知问题](docs/KNOWN-ISSUES.md)。
 
 详细说明见 [Linux 运维手册](docs/LINUX.md)；全部文档见 [文档索引](docs/README.md)。
 试验性三模式对话引擎见

@@ -114,7 +114,7 @@ when only the QQ Agent process should be installed or updated:
 bash deploy.sh \
   --install-dir /mnt/data/qq-agent/app \
   --data-dir /mnt/data/qq-agent/data \
-  --host 192.168.31.109 --port 3210 \
+  --host 127.0.0.1 --port 3210 \
   --service qq-agent-linux
 ```
 
@@ -148,7 +148,7 @@ Optional import on FIRST install only:
 
 ```bash
 bash deploy.sh --install-dir /mnt/data/qq-agent/app \
-  --data-dir /mnt/data/qq-agent/data --host 192.168.31.109 --port 3210 \
+  --data-dir /mnt/data/qq-agent/data --host 127.0.0.1 --port 3210 \
   --import-bridge /home/sourcecode/apps/qq-bridge/config.json \
   --credential-file /home/sourcecode/.config/dsh/credentials.env
 ```

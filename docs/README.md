@@ -50,6 +50,7 @@
 
 ## 角色卡与其它
 
-- 角色卡正文：[`roles/`](../roles)（默认 `xiaojingyu.md`、游戏客户端 `xiaojingyu-game-client.md`）
+- 角色卡正文：[`roles/`](../roles)，一张卡一个 markdown（内置默认小鲸鱼、游戏客户端开发者、
+  损友、温柔陪聊、技术宅、猫娘；新增卡要在 `src/personas.js` 登记，`test/personas.test.mjs` 会查）
 - 远程价格表（随版本发布）：[`prices.json`](../prices.json)
 - 运行数据与凭据：`data/`（**不入库**，分享前用 `node scripts/sanitize-release.mjs` 生成干净副本）

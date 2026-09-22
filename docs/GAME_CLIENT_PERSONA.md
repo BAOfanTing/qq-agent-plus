@@ -6,7 +6,11 @@
 **内置角色卡的正文统一放在 [`roles/`](../roles) 目录，一张卡一个 markdown 文件**：
 
 - [`roles/xiaojingyu.md`](../roles/xiaojingyu.md) —— 默认人设“小鲸鱼（默认）”，legacy 档；
-- [`roles/xiaojingyu-game-client.md`](../roles/xiaojingyu-game-client.md) —— 本文这张，grounded 档。
+- [`roles/xiaojingyu-game-client.md`](../roles/xiaojingyu-game-client.md) —— 本文这张，grounded 档；
+- [`roles/duzui-sunyou.md`](../roles/duzui-sunyou.md) —— 损友（毒舌吐槽），legacy 档；
+- [`roles/wenrou-peiliao.md`](../roles/wenrou-peiliao.md) —— 温柔陪聊（知心），grounded 档；
+- [`roles/jishu-zhai.md`](../roles/jishu-zhai.md) —— 技术宅（自建服务），grounded 档；
+- [`roles/maoniang.md`](../roles/maoniang.md) —— 猫娘（二次元），legacy 档。
 
 `src/personas.js` 只做登记（id → 文件 / 显示名 / 语气档位），用相对模块 URL 读取，
 不依赖启动工作目录。部署时必须带上 `roles/`；仓库的完整部署同步会包含该目录。
