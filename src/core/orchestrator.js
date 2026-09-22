@@ -1269,6 +1269,8 @@ export class Orchestrator {
     });
     const openAiTools = toOpenAiTools(toolDefs);
     const systemPrompt = buildSystemPrompt({
+      // 与【此刻状态】用同一个名字（群名片优先），否则同一次请求里会出现两个"你在群里的名字"
+      selfNickname,
       identityPilotAvailable: identityAvailable,
       friendProposalAvailable,
       stickerEntries

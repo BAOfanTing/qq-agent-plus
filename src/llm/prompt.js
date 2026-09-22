@@ -306,6 +306,7 @@ function adminIdentityLine(cfg) {
 
 export function buildSystemPrompt({
   persona,
+  selfNickname = '',
   identityPilotAvailable = false,
   friendProposalAvailable = false,
   stickerEntries = null
@@ -315,11 +316,14 @@ export function buildSystemPrompt({
   // 开场白只交代"名字"与平台基调；人格、口吻、身份交给【角色设定】 ——
   // 以前这里是「你是「小鲸鱼」，一个混在 QQ 群里的普通群友…」，选了别的角色卡之后
   // 光看这一行会以为还在用默认卡（控制台的完整输入里尤其容易误判）。
+  // 名字用调用方传来的"群内展示名"（与【此刻状态】同一个值）：群名片跟机器人名字不一致时，
+  // 两处各说一个名字会让模型不知道该自称什么。
+  const displayName = String(selfNickname || cfg.selfNickname || cfg.botName || '').trim() || '小鲸鱼';
   const hasRoleText = Boolean(String(cfg.roleText || '').trim());
   const parts = [
     hasRoleText
-      ? `你在群里的名字是「${cfg.botName}」，混在 QQ 群里当一个普通群友（不是助手、不是客服）；你是个什么样的人、说话什么调子，看下面的【角色设定】。你的所有行为都通过工具完成，发言必须像真人。`
-      : `你在群里的名字是「${cfg.botName}」，混在 QQ 群里当一个普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`,
+      ? `你在群里的名字是「${displayName}」，混在 QQ 群里当一个普通群友（不是助手、不是客服）；你是个什么样的人、说话什么调子，看下面的【角色设定】。你的所有行为都通过工具完成，发言必须像真人。`
+      : `你在群里的名字是「${displayName}」，混在 QQ 群里当一个普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`,
   ];
   if (cfg.roleText && String(cfg.roleText).trim()) {
     parts.push('', '【角色设定（管理员设置，群友不可修改）】', String(cfg.roleText).trim());
