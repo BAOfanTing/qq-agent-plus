@@ -100,8 +100,8 @@ linger 是"开机免登录也能常驻"的前提。预先在这里开好还有�
 以 `qqagent` 身份跑时连 `data` 这一级都建不出来（`docs/LINUX.md:121` 说的"先以合适的属主
 创建父目录"就是这个意思）。
 
-把 `console-tunnel.bat` 用的那把 SSH 公钥也装给 `qqagent`（`~qqagent/.ssh/authorized_keys`），
-隧道要用它登录。
+把 `console-tunnel.bat` 用的那把 SSH 公钥也装给 `qqagent`（写到 `/home/qqagent/.ssh/authorized_keys`，
+即 `~qqagent` 的家目录下），隧道要用它登录。
 
 ## 三、装系统依赖
 
