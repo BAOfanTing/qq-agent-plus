@@ -1946,11 +1946,9 @@ async function main() {
     assert.equal(drained.length, 1, 'drainUnread 应只取到新的 1 条');
     assert.equal(drained[0]?.text, '三', '取到的应是消息三');
 
-    // 清理
-    try {
-      const f = path.join(process.cwd(), 'data', 'messages', KEY.replace(':', '_') + '.json');
-      if (fs.existsSync(f)) fs.unlinkSync(f);
-    } catch { }
+    // 不需要清理：本次运行的数据目录是 QQ_AGENT_DATA_DIR 指向的临时目录，
+    // 由进程退出时统一删除。以前这里去删 process.cwd()/data/... —— 那个路径既不是
+    // 本次运行的存档（永远清不到），又可能在仓库根跑测试时误删仓库自己的 data/。
     pass('未命中标记已读：消息沉入历史、不重复触发');
   }
 

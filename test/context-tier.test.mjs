@@ -4,8 +4,9 @@
 //   0%   只回 @ 和关键词（关键词表为空时就只回 @）
 //   中间 普通消息按该概率回；被 @ 或命中关键词仍一定回
 //   100% 任何消息都回（全响应）
-// 概率用注入的 roll 钉死，避免随机导致的假红/假绿；真实回复率另有端到端实测
-// （每档位独立进程、40~100 批消息统计模型调用次数）。
+// 概率用注入的 roll 钉死，避免随机导致的假红/假绿。真实回复率做过一次性端到端实测
+// （每档位独立进程、40~100 批消息统计模型调用次数；0%→0、25%→23%、50%→57%、100%→100%，
+// 老配置迁移后的档位同样符合预期），那个测量脚本没进仓库，结论见对应提交说明。
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
@@ -23,6 +24,7 @@ test('100% = 全响应：任何消息都回', () => {
   assert.equal(r.shouldRespond, true);
   assert.equal(r.reason, '全部响应');
   assert.equal(r.count, 300);
+  assert.equal(r.tier, 4, '100% 要标成 4 档（触发方式展示成"全部响应"）');
 });
 
 test('0% = 只回 @ 和关键词', () => {
@@ -32,6 +34,7 @@ test('0% = 只回 @ 和关键词', () => {
   assert.equal(plain.shouldRespond, false, '0% 时普通消息不回');
   assert.equal(plain.reason, '未触发');
   assert.equal(plain.count, 0);
+  assert.equal(plain.tier, 0, '未命中不该带档位');
 
   // 关键词表清空后，0% 就只剩 @ 能唤醒
   const noKeyword = { ...BASE, randomPercent: 0, keywords: [] };
@@ -42,6 +45,7 @@ test('中间概率：掷骰子决定，边界由注入的 roll 钉死', () => {
   const cfg = { ...BASE, randomPercent: 24.3 };
   const at = (roll) => resolveContextTier({ triggerEntries: [entry('普通消息')], cfg, roll });
   assert.equal(at(0).shouldRespond, true, 'roll 在概率内 → 回');
+  assert.equal(at(0).tier, 3, '按概率响应是 3 档');
   assert.equal(at(24).shouldRespond, true);
   assert.equal(at(25).shouldRespond, false, 'roll 超出概率 → 不回');
   assert.equal(at(99).shouldRespond, false);
@@ -55,9 +59,11 @@ test('被 @ 或命中关键词一定回，不受概率影响', () => {
   const at = resolveContextTier({ triggerEntries: [entry('@小鲸鱼 在吗')], ...names, cfg, roll: 100 });
   assert.equal(at.shouldRespond, true);
   assert.equal(at.reason, '被艾特');
+  assert.equal(at.tier, 1);
   const kw = resolveContextTier({ triggerEntries: [entry('救命啊')], cfg, roll: 100 });
   assert.equal(kw.shouldRespond, true);
   assert.equal(kw.reason, '关键词命中');
+  assert.equal(kw.tier, 2);
 });
 
 test('@ 的判定：文本认得出，也认存档里的 mentionsSelf', () => {

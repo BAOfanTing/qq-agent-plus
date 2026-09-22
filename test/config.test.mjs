@@ -222,3 +222,24 @@ test('响应滑条：滑条值就是概率，老配置保存时一次性迁移�
   });
   assert.deepEqual(groupedNew.store.groupSliderPos, { '111': 30 }, '新语义下原样保留');
 });
+
+test('分群响应概率：单独设过的群按它算，别的群与私聊跟全局（0 也是合法值）', async () => {
+  const { updateConfig, storeConfigForChat } = await import('../src/core/config.js');
+
+  updateConfig({
+    store: {
+      sliderMode: 'probability', contextSliderPos: 50, unifiedTier: false,
+      groupSliderPos: { __replace__: { '111': 30, '222': 0 } }
+    }
+  });
+  assert.equal(storeConfigForChat('group:111').randomPercent, 30, '这个群按 30%');
+  assert.equal(storeConfigForChat('group:111').contextTier, 3);
+  assert.equal(storeConfigForChat('group:222').randomPercent, 0, '0% 是合法值：不能被当成"没设"回落全局');
+  assert.equal(storeConfigForChat('group:222').contextTier, 1);
+  assert.equal(storeConfigForChat('group:999').randomPercent, 50, '没单独设的群跟全局');
+  assert.equal(storeConfigForChat('private:2').randomPercent, 50, '私聊永远跟全局');
+
+  // 关掉统一开关之前，全局滑条仍然管所有群
+  updateConfig({ store: { unifiedTier: true, groupSliderPos: { __replace__: {} } } });
+  assert.equal(storeConfigForChat('group:111').randomPercent, 50);
+});

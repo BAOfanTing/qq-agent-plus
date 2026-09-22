@@ -660,7 +660,8 @@ export function buildUserPrompt(ctx) {
   // 此刻状态
   const stateLines = [];
   if (ctx.kind === 'group') {
-    stateLines.push(`当前在群聊「${ctx.chatName || ctx.chatId}」，你在群里的名字是「${ctx.selfNickname || cfg.persona.botName}」`);
+    // 群名由群主/管理员设置，同样是 QQ 侧可控内容 —— 与昵称一样先弱化段标记
+    stateLines.push(`当前在群聊「${sanitizeUserText(ctx.chatName || ctx.chatId)}」，你在群里的名字是「${sanitizeUserText(ctx.selfNickname || cfg.persona.botName)}」`);
   } else {
     stateLines.push('当前在私聊');
   }

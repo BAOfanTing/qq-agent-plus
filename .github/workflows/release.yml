@@ -24,6 +24,17 @@ jobs:
 
       # 发布前再跑一遍与 CI 相同的检查，任何一步失败都不会出 Release
       - run: npm ci
+      - name: 语法检查（src / scripts / test / ui，递归）
+        run: |
+          set -e
+          count=0
+          # 与 ci.yml 同一步：tag push 不会触发 CI，所以这里必须自己跑一遍 ——
+          # 而 ops scan 只扫 src 下的 .js，scripts/test/ui 的语法门禁全在这一步
+          for f in $(find src scripts test ui -type f \( -name '*.js' -o -name '*.mjs' \) | sort); do
+            node --check "$f"
+            count=$((count + 1))
+          done
+          echo "语法检查通过（$count 个文件）"
       - run: node src/ops.js scan --strict
       - run: npm run test:unit
       - run: npm run test:local

@@ -289,6 +289,10 @@ export class Orchestrator {
     this.runningChats = new Set();     // 正在运行的 chatKey
     this.activeRuns = new Map();       // chatKey -> sessionId
     this.runSeq = new Map();           // chatKey -> 第几次处理（跨重启清零即可）
+    // 预判时掷出的随机骰子：{ chatKey -> { roll, at } }。
+    // 概率档下"要不要回"是随机的，预判（建等待会话）与实跑（真跑）必须用同一次，
+    // 否则界面会自相矛盾（2026-09-22 审查发现）。
+    this.pendingRolls = new Map();
     this.paused = getConfig().runtime?.paused === true;
     this.pauseReason = null;
     this.proactiveTimer = null;
@@ -456,7 +460,7 @@ export class Orchestrator {
    *
    * @returns {{shouldRespond:boolean, tier:number, count:number, reason:string}}
    */
-  #predictTier(chatKey) {
+  #predictTier(chatKey, { roll } = {}) {
     const cfg = getConfig();
     const conversation = conversationConfigForChat(chatKey);
     const entries = this.store.peekUnread(chatKey, 100) || [];
@@ -474,7 +478,8 @@ export class Orchestrator {
       selfNickname: cfg.persona?.selfNickname || this.onebot.selfNickname || '',
       botName: cfg.persona?.botName || '',
       selfId: cfg.onebot?.selfId || this.onebot.selfId || '',
-      cfg: storeConfigForChat(chatKey)   // 按会话取档位：统一开关关闭时各群可以有独立滑条
+      cfg: storeConfigForChat(chatKey),  // 按会话取档位：统一开关关闭时各群可以有独立滑条
+      roll                                // 传入已固定的骰子：预判与实跑必须用同一次
     });
     // 没有未读就不算"需要响应"（防抖窗口刚建立时的空转）
     if (entries.length === 0) {
@@ -628,7 +633,12 @@ export class Orchestrator {
     //    等半天最后变成"中止"的条目，既干扰又让人以为出了错。
     //    窗口结束前若来了新消息且命中，届时再创建（见下面 pendingSessions 分支）。
     if (ms > 0 && !this.runningChats.has(chatKey)) {
-      const predicted = this.#predictTier(chatKey);
+      // 概率档下"要不要回"是随机的：预判与实跑必须是同一次掷骰，
+      // 否则会出现"会话页显示等待中、随后又干净消失"或者反过来的自相矛盾
+      // （2026-09-22 审查发现）。这里掷一次存起来，wake 时取走。
+      const roll = Math.random() * 100;
+      this.pendingRolls.set(chatKey, { roll, at: Date.now() });
+      const predicted = this.#predictTier(chatKey, { roll });
       if (predicted.shouldRespond === false) {
         // 不响应：把已存在的等待会话撤掉（例如刚被艾特、随后判定又不成立的情况）
         const stale = this.pendingSessions.get(chatKey);
@@ -801,7 +811,11 @@ export class Orchestrator {
     if (!proactive) {
       // peekUnread 只看不取，limit 给足以免漏判（判定用的是这批的文本）
       pendingEntries = this.store.peekUnread(chatKey, 100) || [];
-      const predicted = this.#predictTier(chatKey);
+      // 取用预判时那颗骰子（超过 2 分钟就当过期，避免串到后面的批次）
+      const pendingRoll = this.pendingRolls.get(chatKey);
+      this.pendingRolls.delete(chatKey);
+      const roll = pendingRoll && Date.now() - pendingRoll.at < 120000 ? pendingRoll.roll : undefined;
+      const predicted = this.#predictTier(chatKey, roll === undefined ? {} : { roll });
       const manualContextCount = Math.min(500, Math.max(
         1,
         Number(conversation.mode === 'lifecycle'
@@ -847,7 +861,7 @@ export class Orchestrator {
         if (waitingSessionId) this.#discardWaiting(waitingSessionId);
         this.emit('chat-update', chatKey);
         if (marked) {
-          console.log(`[orchestrator] ${chatKey} ${marked} 条未命中触发条件（档位 ${tierResult0.tier}），已标记已读、不响应`);
+          console.log(`[orchestrator] ${chatKey} ${marked} 条未命中触发条件（概率 ${storeConfigForChat(chatKey).randomPercent}%，${tierResult0.reason || '未触发'}），已标记已读、不响应`);
         }
         if (this.store.unreadCount(chatKey) > 0) this.scheduleWake(chatKey);
         return;
@@ -862,6 +876,24 @@ export class Orchestrator {
     if (!proactive && triggerEntries.length === 0) {
       if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted');
       return; // 没有未读就不空跑
+    }
+    if (proactive && !tierResult) {
+      // 主动开口（冷场开话题 / 自我安排的唤醒）没有触发消息，**不能**走随机档：
+      // 概率 0 时 resolveContextTier 会给 count=0，提示词就变成"暂无历史记录，这是你第一次
+      // 参与这个会话"（2026-09-22 审查发现）。主动开口一律带全量上下文。
+      tierResult = {
+        tier: 4,
+        count: Math.min(500, Math.max(
+          1,
+          Number(conversation.mode === 'lifecycle'
+            ? conversation.lifecycleContextCount
+            : conversation.mode === 'threaded'
+              ? conversation.continuationContextCount
+              : storeConfigForChat(chatKey).allCount) || 100
+        )),
+        shouldRespond: true,
+        reason: '主动机会'
+      };
     }
 
     // ── 档位：响应时带多少条已读历史 ──

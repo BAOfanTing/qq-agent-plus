@@ -633,7 +633,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         resolveAtName: (qq) => kind === 'group' ? resolveAtName(id, qq) : null
       });
     } else {
-      text = String(event.raw_message ?? event.message ?? '').trim();
+      // 协议端以字符串 / CQ 码上报时（message_format=string）正文也要清洗：
+      // 否则这种部署形态下群友文本可以原样伪造段标记
+      text = sanitizeUserText(String(event.raw_message ?? event.message ?? '').trim());
     }
 
     // 合并转发：占位符 → 展开真实内容（模型要读懂、看懂转发的聊天记录）
@@ -865,7 +867,8 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     }
     let text;
     if (String(targetId) === String(selfId)) {
-      text = `[拍一拍] 你拍了拍${isGroup ? '' : '你'}（来自 ${operatorName}）`;
+      // 拍机器人是最常见的拍法：这条分支以前漏了清洗，群名片里的段标记能原样进提示词
+      text = sanitizeUserText(`[拍一拍] 你拍了拍${isGroup ? '' : '你'}（来自 ${operatorName}）`);
     } else {
       const targetName = isGroup ? (await resolveAtName(id, targetId)) || targetId : targetId;
       text = operatorId === targetId ? `[拍一拍] ${operatorName} 拍了拍自己` : `[拍一拍] ${operatorName} 拍了拍 ${targetName}`;

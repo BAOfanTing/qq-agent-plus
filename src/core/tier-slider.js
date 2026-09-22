@@ -60,8 +60,13 @@ export function legacySliderToProbability(pos) {
 
 /** 老 { tier, randomPercent } → 概率（老配置连滑条位置都没有时走这条）。 */
 export function legacyTierToProbability(tier, randomPercent = 0) {
-  const t = Math.min(4, Math.max(1, Number(tier) || 4));
+  const pct = clampProbability(randomPercent, 0);
+  const rawTier = Number(tier);
+  // 手写的老配置可能只有 randomPercent、没有 contextTier：这时按概率本身读，
+  // 不能回落到"默认 4 档" —— 那会把 0%（只回 @）变成 100%（全响应）
+  if (!Number.isFinite(rawTier)) return pct;
+  const t = Math.min(4, Math.max(1, Math.round(rawTier)));
   if (t >= 4) return 100;
   if (t <= 2) return 0;
-  return clampProbability(randomPercent, 0);
+  return pct;
 }

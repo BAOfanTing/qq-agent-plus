@@ -130,18 +130,23 @@ export function autoUpdatePending(dataDir) {
   const state = readAutoUpdateState(dataDir);
   const status = String(state.status || '');
   if (!ACTIVE_STATES.has(status)) return null;
-  // 基准必须是**只有更新流程会写**的时间戳：updatedAt 会被"检查新版本"这类无关写入
-  // 一路刷新（checkForUpdate 存提示就调 writeAutoUpdateState），用它当基准的话
-  // "卡住 30 分钟就放开"永远不成立 —— 更新器中途被 kill 之后，控制台还一直压着提示、
-  // 手动更新按钮也一直显示在跑。startedAt 由 requestManual 与更新器自己写，别处不碰。
-  const startedAt = Number(state.startedAt || 0) || Number(state.updatedAt || 0);
-  if (!startedAt || Date.now() - startedAt > PENDING_TTL_MS) return null;
+  // 基准是"最近一次进度"：
+  //   progressAt —— requestManual 与更新器**每个阶段**都写（正常更新会一直续期）；
+  //   startedAt  —— 兜底（老版本更新器没写 progressAt）；
+  //   updatedAt  —— 最后兜底。
+  // ⚠️ 不能直接用 updatedAt 当主基准：checkForUpdate 存提示也会调 writeAutoUpdateState，
+  //    控制台一开就把基准推到现在，于是"卡住 30 分钟就放开"永远不成立（更新器被 kill 后
+  //    提示被永久压住、手动更新按钮一直是灰的）。只用 startedAt 也不够：慢机器上一轮正常
+  //    更新就可能超过 30 分钟（npm ci 10 分钟 + 单测 20 分钟 + 部署 20 分钟），会被误判成卡住。
+  const base = Number(state.progressAt || 0) || Number(state.startedAt || 0) || Number(state.updatedAt || 0);
+  if (!base || Date.now() - base > PENDING_TTL_MS) return null;
   return {
     status,
     mode: String(state.mode || ''),
     version: String(state.targetVersion || ''),
     revision: String(state.targetRevision || ''),
-    startedAt,
+    startedAt: Number(state.startedAt || 0),
+    progressAt: Number(state.progressAt || 0),
     updatedAt: Number(state.updatedAt || 0)
   };
 }
@@ -324,14 +329,18 @@ export class AutoUpdateManager {
       },
       ...(adminPatch ? { admin: adminPatch } : {})
     });
-    writeAutoUpdateState(this.dataDir, {
-      status: 'idle',
-      phase: '',
-      error: '',
-      autoDisabled: false,
-      completedAt: Date.now(),
-      lastCheckAt: 0
-    });
+    // 更新正在跑时不要把它写成 idle：那会清掉"已提交未跑完"的抑制与 busy 判据，
+    // 让控制台一边显示在跑、一边又能再点一次（直接调接口才会遇到，2026-09-22 审查发现）
+    if (!this.serviceActive() && !autoUpdatePending(this.dataDir)) {
+      writeAutoUpdateState(this.dataDir, {
+        status: 'idle',
+        phase: '',
+        error: '',
+        autoDisabled: false,
+        completedAt: Date.now(),
+        lastCheckAt: 0
+      });
+    }
     this.emit('auto-update', this.status());
     return cfg.autoUpdate;
   }
@@ -398,6 +407,7 @@ export class AutoUpdateManager {
       error: '',
       // 没带版本也要显式清空：不然上一次的版本会留在状态里，前端拿它比对会误判
       targetVersion,
+      progressAt: Date.now(),
       ...(probeOnly ? {
         connectivity: {
           status: 'queued',

@@ -30,7 +30,7 @@ function writeFile() {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = `${FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: CACHE_VERSION, feeds, autoProbeAt }, null, 2), { mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify({ version: CACHE_VERSION, feeds, autoProbeAt, removedAt }, null, 2), { mode: 0o600 });
     fs.renameSync(tmp, FILE);
   } catch { /* 写不进去不影响查价（内存里已经有表） */ }
 }
@@ -49,6 +49,14 @@ let injected = new Set();
  * 还写回 data/channel-prices.json，直到下次保存配置或重启才干净。
  */
 let revoked = new Set();
+
+/**
+ * 用户明确删掉过的渠道（落盘保留）。控制台删除只改内存里的 revoked 与配置，
+ * 但"自动探测"是按"配置里没有它 + 24h 没探过"来决定的 —— 少了这块墓碑，
+ * 重启进程满 24 小时后会把它重新探回来、静默撤销这次删除（2026-09-22 审查发现）。
+ * 用户重新添加该渠道时清掉墓碑。
+ */
+let removedAt = {};
 
 /** 注入/撤销一个渠道（同时维护 injected）。 */
 function injectOne(vendor, prices) {
@@ -81,6 +89,7 @@ export function initChannelPrices(feedsConfig = []) {
     const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
     const cached = data?.version === CACHE_VERSION && data.feeds && typeof data.feeds === 'object' ? data.feeds : {};
     autoProbeAt = (data?.autoProbeAt && typeof data.autoProbeAt === 'object') ? data.autoProbeAt : {};
+    removedAt = (data?.removedAt && typeof data.removedAt === 'object') ? data.removedAt : {};
     feeds = {};
     for (const [vendor, feed] of Object.entries(cached)) {
       if (!wanted.has(vendor)) continue;
@@ -95,8 +104,11 @@ export function initChannelPrices(feedsConfig = []) {
   }
   injectAll();
 
-  // 配置里重新出现的渠道要解禁（删掉再加回来的情况）
-  for (const vendor of wanted) revoked.delete(vendor);
+  // 配置里重新出现的渠道要解禁（删掉再加回来的情况）：撤销标记与墓碑都清掉
+  for (const vendor of wanted) {
+    revoked.delete(vendor);
+    if (removedAt[vendor]) delete removedAt[vendor];
+  }
 
   // 2) 缓存缺失或过旧的，后台拉一次（不阻塞启动，失败只记状态）
   for (const item of (Array.isArray(feedsConfig) ? feedsConfig : [])) {
@@ -142,7 +154,10 @@ export async function refreshChannelFeed(vendor, url, options = {}) {
   //    光看 revoked 会把这次拉取永久挡掉（审查发现）。
   const configured = isConfiguredVendor(v);
   if (revoked.has(v) && !configured) return channelPriceStatus();
-  if (configured) revoked.delete(v);   // 配置里又有它了 → 解禁
+  if (configured) {
+    revoked.delete(v);                 // 配置里又有它了 → 解禁
+    if (removedAt[v]) delete removedAt[v];
+  }
   const wasConfigured = configured;
   const fetchImpl = options.fetchImpl || fetch;
   const timeoutMs = Number(options.timeoutMs) || FETCH_TIMEOUT_MS;
@@ -196,6 +211,7 @@ export async function refreshChannelFeed(vendor, url, options = {}) {
     };
     injectOne(v, loaded.prices);
   } else {
+    if (!shouldKeepVendor(v, wasConfigured)) return channelPriceStatus();   // 拉的过程中被删掉了
     const previous = feeds[v] || {};
     feeds[v] = {
       url: target,
@@ -222,6 +238,7 @@ export function removeChannelFeed(vendor) {
   const v = String(vendor || '').trim();
   if (!v) return channelPriceStatus();
   revoked.add(v);
+  removedAt[v] = Date.now();
   delete feeds[v];
   injectOne(v, null);
   writeFile();
@@ -271,6 +288,7 @@ export async function maybeAutoProbeChannel({ baseUrl, vendor, feedsConfig = [],
     const configured = (Array.isArray(feedsConfig) ? feedsConfig : [])
       .some((f) => String(f?.vendor || '').trim() === channel);
     if (configured) return { probed: false, reason: 'configured' };
+    if (removedAt[channel]) return { probed: false, reason: 'removed' };   // 用户删过：别再自动探回来
     const last = Number(autoProbeAt[channel] || 0);
     if (last && Date.now() - last < AUTO_PROBE_TTL_MS) return { probed: false, reason: 'recent' };
 

@@ -7978,7 +7978,7 @@ function renderDesktopSection(c) {
           placeholder="${c.server?.hasToken ? '输入当前 Token' : '当前未设置 Token'}" /></div>
       <div class="field"><label>新 Token</label>
         <input type="password" id="cfg-console-token-new" autocomplete="new-password"
-          placeholder="16~128 位字母、数字或 . _ ~ -" /></div>
+          placeholder="16-128 位字母、数字或 . _ ~ -" /></div>
       <div class="field"><label>确认新 Token</label>
         <input type="password" id="cfg-console-token-confirm" autocomplete="new-password"
           placeholder="再次输入新 Token" /></div>
@@ -8475,6 +8475,12 @@ function bindSettingsEvents(c) {
     const syncG = () => {
       const pos = Number(gSlider.value);
       if (gNote) gNote.innerHTML = sliderDesc(pos);
+      // 参数高亮跟着"当前这个群"的概率走（统一滑条隐藏时，①②③④ 的灰显会误导）
+      const on = paramActiveForProbability(pos);
+      const actives = [on.at, on.keyword, on.random, on.all];
+      document.querySelectorAll('.tier-param').forEach((el, idx) => {
+        el.classList.toggle('dim', !actives[idx]);
+      });
       const seg = segOfProbability(pos);
       document.querySelectorAll('#tier-scale-g .tier-seg')
         .forEach((el) => el.classList.toggle('on', Number(el.dataset.seg) === seg));

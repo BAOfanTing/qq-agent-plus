@@ -10,7 +10,7 @@ import { test } from 'node:test';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-price-feed-'));
 process.env.QQ_AGENT_DATA_DIR = root;
-process.on('exit', () => fs.rmSync(root, { recursive: true, force: true }));
+process.on('exit', () => { try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* Windows 上可能还被占用 */ } });
 
 const feed = await import('../src/pricing/price-feed.js');
 

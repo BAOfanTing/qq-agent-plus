@@ -16,13 +16,19 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// 一个进程只挂一个 exit 处理器（每个用例各挂一个会触发 MaxListenersExceededWarning）
+const tempDirs = new Set();
+process.on('exit', () => {
+  for (const dir of tempDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ }
+  }
+});
 const CONFIG_URL = pathToFileURL(path.join(REPO, 'src', 'core', 'config.js')).href;
 
 /** 写一份 config.json → 新起一个 Node 进程加载它 → 取回 store（可选再跑一段脚本并取回第二次）。 */
 function loadStoreInNewProcess(config, extraScript = '') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-config-migrate-'));
-  // 用例自己造的临时目录自己清（约定见 test/README.md）
-  process.on('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ } });
+  tempDirs.add(dir);   // 用例自己造的临时目录自己清（约定见 test/README.md）
   const file = path.join(dir, 'config.json');
   fs.writeFileSync(file, JSON.stringify(config, null, 2));
   const script = `
@@ -93,8 +99,17 @@ test('分群表也换算；新语义原样保留；写回后再加载不漂移',
   assert.equal(fresh.first.randomPercent, 43);
 });
 
-test('完全没有 store 段的老配置：沿用默认（全响应），不报错', () => {
-  const bare = loadStoreInNewProcess({ server: { port: 3210, token: 'x' }, persona: { botName: '小鲸鱼' } });
+test('只有 randomPercent、没有 tier/位置的老配置：按概率本身读，别变成全响应', () => {
+  // 手写配置可能长这样。迁移时若按"没有 tier → 默认 4 档"处理，0% 会被抬成 100%（全响应）
+  const onlyPct = loadStoreInNewProcess({ store: { randomPercent: 0, atCount: 5 } });
+  assert.equal(onlyPct.first.randomPercent, 0, '0% 要原样保留');
+  assert.equal(onlyPct.first.contextTier, 1);
+  const halfPct = loadStoreInNewProcess({ store: { randomPercent: 50 } });
+  assert.equal(halfPct.first.randomPercent, 50);
+  assert.equal(halfPct.first.contextTier, 3);
+
+  // 完全没有 store 段的老配置：沿用默认（全响应），不报错
+  const bare = loadStoreInNewProcess({ server: { port: 3210, token: 'x' } });
   assert.equal(bare.first.randomPercent, 100, '默认是全响应（与老默认档 4 一致）');
   assert.equal(bare.first.sliderMode, 'probability');
 });

@@ -167,15 +167,26 @@ test('已提交未跑完的更新要能被认出来（控制台据此不再重�
   assert.equal(autoUpdatePending(f.dataDir), null);
 
   // 卡住超过 30 分钟：当成没在跑，别把提示永久压住。
-  // 基准必须是 startedAt —— updatedAt 会被"检查新版本"（存提示）这类无关写入刷新，
-  // 用它当基准的话这里永远判不出来。
+  // 基准是 progressAt（更新器每个阶段写一次，正常更新会一直续期）——
+  // 既不能用 updatedAt（"检查新版本"存提示会刷新它），也不能只看 startedAt
+  // （慢机器上一轮正常更新就可能超过 30 分钟）。
   writeRaw({
     status: 'deploying',
     targetVersion: 'v9.9.9',
+    progressAt: 0,
     startedAt: Date.now() - 31 * 60 * 1000,
     updatedAt: Date.now()
   });
-  assert.equal(autoUpdatePending(f.dataDir), null, 'startedAt 超时就不该再压住提示');
+  assert.equal(autoUpdatePending(f.dataDir), null, '最近一次进度超时就该放开');
+
+  // 反过来：跑了 40 分钟但阶段刚推进过（progressAt 新鲜）→ 仍然算"在跑"，别误放开
+  writeRaw({
+    status: 'deploying',
+    targetVersion: 'v9.9.9',
+    progressAt: Date.now() - 60 * 1000,
+    startedAt: Date.now() - 40 * 60 * 1000
+  });
+  assert.notEqual(autoUpdatePending(f.dataDir), null, '阶段推进过就不该判成卡住');
 
   // 还在跑：带上目标版本，前端拿它跟提示里的版本比对
   writeRaw({ status: 'testing', mode: 'scheduled', targetVersion: 'v9.9.9', startedAt: Date.now() });

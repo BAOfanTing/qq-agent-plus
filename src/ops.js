@@ -1544,12 +1544,12 @@ function cmdFaceNames(args) {
     const numbers = [...merged.keys()].filter((key) => /^\d+$/.test(key)).map(Number).sort((a, b) => a - b);
     if (printOnly) {
       say(JSON.stringify(payload, null, 2));
-      noteLine(`（预演：未写入 ${outFile}；共 ${merged.size} 条，编号范围 ${numbers[0] ?? '-'} ~ ${numbers.at(-1) ?? '-'}）`);
+      noteLine(`（预演：未写入 ${outFile}；共 ${merged.size} 条，编号范围 ${numbers[0] ?? '-'} - ${numbers.at(-1) ?? '-'}）`);
       return 0;
     }
     fs.mkdirSync(cfg.dataDir, { recursive: true });
     fs.writeFileSync(outFile, JSON.stringify(payload, null, 0), 'utf8');
-    okLine(`已导出 ${merged.size} 条 -> ${outFile}（编号范围 ${numbers[0] ?? '-'} ~ ${numbers.at(-1) ?? '-'}）`);
+    okLine(`已导出 ${merged.size} 条 -> ${outFile}（编号范围 ${numbers[0] ?? '-'} - ${numbers.at(-1) ?? '-'}）`);
     noteLine('提示：onebot.js 的表情名补丁读取该文件，改完需重启服务。');
     return 0;
   } finally {

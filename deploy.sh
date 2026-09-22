@@ -145,6 +145,9 @@ RSYNC_PRESERVE=(
   --exclude=/.env
   --exclude='/.env.*'
   --exclude='*.log'
+  # 更新器跑测试时会在 checkout 根建这两个目录（runner 会在 rsync 前删掉，这里再兜一层：
+  # rsync 是 `-a --delete` 从 checkout 根同步的，根目录多什么就会被部署什么）
+  --exclude='/.auto-update-test-*/'
 )
 if [[ "$DATA_DIR" == "$INSTALL_DIR/"* ]]; then
   DATA_REL="${DATA_DIR#"$INSTALL_DIR"/}"

@@ -681,6 +681,7 @@ async function run() {
     mode,
     phase,
     startedAt: now,
+    progressAt: now,
     completedAt: 0,
     ...(mode === 'scheduled' ? { lastCheckAt: now } : {}),
     currentRevision,
@@ -788,6 +789,17 @@ async function run() {
   }
 
   fs.mkdirSync(paths.workRoot, { recursive: true, mode: 0o700 });
+  // 上次被强杀（systemd TimeoutStartSec / OOM / 手工 stop）留下的工作目录没人会清：
+  // releaseLock 在 SIGKILL 下不执行，于是每中断一次就堆一个几十 MB 的 checkout。
+  // 顺手清掉超过 6 小时的（正在跑的那次 mtime 是新的，不会误删）。
+  try {
+    for (const name of fs.readdirSync(paths.workRoot)) {
+      if (!/^checkout-/.test(name)) continue;
+      const full = path.join(paths.workRoot, name);
+      const age = Date.now() - Number(fs.statSync(full).mtimeMs || 0);
+      if (age > 6 * 3600 * 1000) fs.rmSync(full, { recursive: true, force: true });
+    }
+  } catch { /* 清不掉不影响本次更新 */ }
   workDir = fs.mkdtempSync(path.join(paths.workRoot, 'checkout-'));
   transport = await materializeSource(workDir, targetRevision, transport, targetVersion);
   validateCheckout(workDir);
@@ -799,7 +811,8 @@ async function run() {
     phase,
     targetRevision,
     targetVersion,
-    transport
+    transport,
+    progressAt: Date.now()   // 给"卡住 30 分钟就放开提示"当基准：阶段推进要续期
   });
   const npm = String(
     process.env.QQ_AGENT_UPDATE_NPM
@@ -857,6 +870,7 @@ async function run() {
     status: 'deploying',
     mode,
     phase,
+    progressAt: Date.now(),
     targetRevision,
     targetVersion,
     transport

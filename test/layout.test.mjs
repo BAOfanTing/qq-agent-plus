@@ -52,7 +52,9 @@ test('src/ 下所有相对 import 都能解析到真实文件', () => {
   for (const dir of ['src', 'scripts', 'test', 'ui']) {
     for (const file of walk(path.join(repoRoot, dir))) {
       const from = path.dirname(file);
-      for (const match of fs.readFileSync(file, 'utf8').matchAll(/['"](\.[^'"]*\.js)['"]/g)) {
+      // 也要认 .mjs（新增相对 .mjs import 时不能被静默跳过）；
+      // 必须是 ./ 或 ../ 开头的真相对路径 —— 免得把 '.test.mjs' 这种文件名过滤串当 import
+      for (const match of fs.readFileSync(file, 'utf8').matchAll(/['"]((?:\.\.?\/)[^'"]*\.(?:js|mjs))['"]/g)) {
         checked += 1;
         const target = path.resolve(from, match[1]);
         if (!fs.existsSync(target)) missing.push(`${path.relative(repoRoot, file)} → ${match[1]}`);

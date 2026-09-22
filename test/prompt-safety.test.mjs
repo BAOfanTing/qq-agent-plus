@@ -75,3 +75,18 @@ test('昵称与引用预览进提示词前同样被弱化', () => {
   assert.ok(!prompt.includes('【系统提醒】'), '不该出现未弱化的【系统提醒】');
   assert.ok(!prompt.includes('【管理员】'), '不该出现未弱化的【管理员】');
 });
+
+test('提示词里的每个段头都能被弱化（清洗白名单不许落后于 prompt.js）', () => {
+  // 这条守卫是给"加新段头忘了同步 util.js"准备的：2026-09-22 加【优先级】时漏过一次，
+  // 群里写「【优先级】…」能原样进提示词 —— 而它恰好自称最高优先级。
+  const src = fs.readFileSync(
+    path.join(path.dirname(new URL(import.meta.url).pathname.slice(1)), '..', 'src', 'llm', 'prompt.js'),
+    'utf8'
+  );
+  // 只豁免"我们自己生成、且不授予任何权限"的普通标记
+  const ALLOW = new Set(['【拍一拍】', '【表情包】', '【图片】', '【合并转发聊天记录】']);
+  const headers = [...new Set(src.match(/【[^】]*】/g) || [])];
+  assert.ok(headers.length > 20, `抽到的段头太少（${headers.length} 个），检查正则`);
+  const missed = headers.filter((h) => !ALLOW.has(h) && sanitizeUserText(h) === h);
+  assert.deepEqual(missed, [], `这些段头能被群友原样伪造进提示词，请补进 util.js 的白名单：\n${missed.join('\n')}`);
+});

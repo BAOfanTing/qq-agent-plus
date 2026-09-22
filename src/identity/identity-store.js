@@ -479,14 +479,18 @@ export class IdentityStore {
     //    于是 approved_manual / sent 这些真·未决会被清掉）—— 所以这里直接引用上面两个常量。
     const inList = (set) => [...set].map((name) => `'${name}'`).join(', ');
     try {
+      // 'skipped' 不能删：模型"跳过这个人"的冷却期就记在这一行的 completed_at 上
+      // （skipCooldownDays 最长可配到 365 天，比这里的保留期长）——删了会对同一个人重新抽签
       this.db.prepare(`
         DELETE FROM friend_opportunities
-        WHERE created_at < ? AND status NOT IN ('queued','reviewing')
+        WHERE created_at < ? AND status NOT IN ('queued','reviewing','skipped')
       `).run(cutoff);
+      // 冷却期（cooldownDays 最长 365 天）也读这几行：冷却没过期就先留着
       this.db.prepare(`
         DELETE FROM friend_proposals
         WHERE created_at < ? AND status NOT IN (${inList(OPEN_FRIEND_PROPOSAL_STATES)})
-      `).run(cutoff);
+          AND cooldown_until < ?
+      `).run(cutoff, cutoff);
       this.db.prepare(`
         DELETE FROM incoming_friend_requests
         WHERE created_at < ? AND status NOT IN (${inList(OPEN_INCOMING_REQUEST_STATES)})

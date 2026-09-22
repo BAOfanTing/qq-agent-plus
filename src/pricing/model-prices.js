@@ -845,7 +845,9 @@ export function resolveModelPrice(modelId, cfg, priceTable = null, options = {})
   //    比公共参考表更具体（就是这个渠道的价），但比不过上面几条手填的价。
   if (cost.mode !== 'subscription' && vendor && id && CHANNEL_PRICES[vendor]) {
     const hit = matchPriceTable(id, CHANNEL_PRICES[vendor], EFFECTIVE_ALIASES, Number(options.at) || 0);
-    if (hit && (Number(hit.in) || Number(hit.out) || hit.billing)) {
+    // 与手填价同一判据（见 hasManualPrice）：写出来的 0/0 是"明确免费"，
+    // 不能用 `Number(x) ||` 判成"没价" —— 否则同一份价目走"手填"是免费、走"渠道表"却是官方价
+    if (hit && hasManualPrice(hit)) {
       const { billing, amount, period } = billingOf(hit);
       const perToken = billing === 'token';
       return {

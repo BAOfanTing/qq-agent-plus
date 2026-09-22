@@ -823,3 +823,29 @@ test('台账保留期清理：90 天前已了结的删掉，未决的留着', (t
     '未决的入站请求必须留着（含结果未知那些）'
   );
 });
+
+test('台账清理的边界：保留期可传参，恰好卡在保留期内的不删', (t) => {
+  const dir = fs.mkdtempSync(path.join(root, 'prune-boundary-'));
+  const store = new IdentityStore({ dataDir: dir });
+  t.after(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const day = 24 * 60 * 60 * 1000;
+  const add = store.db.prepare(`
+    INSERT INTO friend_opportunities (id, account_uin, uin, source_chat_key, trigger_key, status, created_at, updated_at)
+    VALUES (?, '1000', '2000', 'group:1', ?, 'proposed', ?, ?)
+  `);
+  add.run('fo_91d', 'b1', Date.now() - 91 * day, Date.now() - 91 * day);
+  add.run('fo_89d', 'b2', Date.now() - 89 * day, Date.now() - 89 * day);
+
+  const ids = () => store.db.prepare('SELECT id FROM friend_opportunities ORDER BY id').all().map((r) => r.id);
+
+  store.pruneLedgers(90);
+  assert.deepEqual(ids(), ['fo_89d'], '超期 91 天的删掉、89 天的留着');
+
+  // 保留期可传参：收紧到 7 天 → 89 天那条也该走
+  store.pruneLedgers(7);
+  assert.deepEqual(ids(), []);
+});

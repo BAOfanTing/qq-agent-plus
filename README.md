@@ -44,16 +44,18 @@ OpenAI Chat Completions 会话，不依赖 DSH、MCP、Electron 或 Windows 运�
 
 ```text
 $ node src/ops.js audit
-════════ 1. systemd 用户服务 ════════
+===== 1. 服务与定时器 =====
   [正常] qq-agent-linux.service  active
-  [正常] qq-agent-backup.timer   enabled（下次 周日 04:10）
-  [正常] process-guard.timer     enabled（每 10 分钟）
-════════ 4. 代码体检 ════════
-  js 语法: 62/62 通过    未定义调用: 0 处
-════════ 9. 运行态 ════════
-  控制台 API: 200    账号: 在线
+  [正常] qq-agent-linux-update.timer  enabled
+===== 3. 源码语法（全部 js） =====
+  [正常] 所有 js 文件语法通过（193 个）
+===== 4. 未定义调用扫描 =====
+  [正常] 可疑未定义调用点: 0
+===== 8. 运行态 =====
+  [正常] OneBot: connected=true …
 ===== 自检结论 =====
   全部通过（0 项异常）
+（节选：实际共 11 段，含配置 / 数据文件 / 价格缺口 / 最近日志 / 主机资源等）
 
 $ node src/ops.js watch-send --minutes=5
 基线：outbox 最新 rowid=17，待处理消息 0 条
@@ -96,7 +98,7 @@ Docker（需要 sudo 确认）、下载 SnowLuma、配置 OneBot、安装 QQ Age
 
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
-cd qq-agent
+cd qq-agent-plus
 bash deploy-all.sh
 ```
 
@@ -171,7 +173,7 @@ bash deploy-all.sh --help
 
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
-cd qq-agent
+cd qq-agent-plus
 
 bash deploy.sh \
   --install-dir /mnt/data/qq-agent/app \
@@ -342,7 +344,7 @@ Agent 配置或前端存储。旧的 `3110` 门户不再映射。
 断线或响应无法解析会进入“发送结果未知”且禁止自动重试。收到 `friend_add` 事件
 后才闭环为“已成为好友”。收到的好友请求同样需要管理员审批，同意后调用标准
 `set_friend_add_request` 并自动加入私聊白名单。
-实现边界见[统一身份试点](docs/IDENTITY_PILOT.md)。
+实现边界见[已转正的稳定特性](docs/STABLE_FEATURES.md)。
 
 “观测”页展示并管理表情包、黑话与黑话研究数据。人物和旧印象由固化后的独立页面
 管理，不再混放在通用观测入口。手动上传的表情保存在数据目录；QQ 收藏表情的删除
@@ -350,11 +352,9 @@ Agent 配置或前端存储。旧的 `3110` 门户不再映射。
 加载，临时 QQ 图片 URL 不会返回给浏览器。
 详细口径见[资产观测](docs/ASSET_OBSERVABILITY.md)。
 
-“设置 -> 实验功能”还可启用黑话语料库试点。白名单群消息先经过本地零 Token
-检测，达到频次和人数门槛后进入“观测 -> 黑话研究”。管理员先批准是否消耗模型
-和搜索额度进行研究，再批准是否写入候选库；只有之后人工确认的词条才会进入 Agent
-上下文，并遵守群内私有或全局安全作用域。实现细节见
-[黑话语料库试点](docs/SLANG_PILOT.md)。
+自动黑话研究流水线**已退休**（`slangPilotEnabled()` 恒为 false，无法再启用）：
+提示词不再注入任何黑话，历史配置里的开关不会再生效。见
+[已转正的稳定特性](docs/STABLE_FEATURES.md)。
 
 每次 Agent 运行仍有独立的审计记录。`lifecycle` 模式会按 `threadId`
 持久化 provider transcript（包括工具轨迹和供应商返回的
@@ -432,7 +432,7 @@ CI（GitHub Actions）在每次推送和 PR 上跑：语法检查、未定义调
 详细说明见 [Linux 运维手册](docs/LINUX.md)；全部文档见 [文档索引](docs/README.md)。
 试验性三模式对话引擎见
 [Conversation Modes](docs/CONVERSATION_MODES.md)；早期参与者续接方案见
-[Threaded Conversation Pilot](docs/docs/research/THREADED_PILOT.md)。
+[Threaded Conversation Pilot](docs/research/THREADED_PILOT.md)。
 
 ## 📄 许可
 
