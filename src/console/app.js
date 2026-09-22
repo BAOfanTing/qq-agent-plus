@@ -13,7 +13,7 @@ import { ChatStore } from '../core/store.js';
 import { MemoryStore } from '../memory/memory.js';
 import { StickerManager } from '../onebot/sticker-manager.js';
 import { SendQueue } from '../onebot/sender.js';
-import { SessionRegistry } from '../core/sessions.js';
+import { SessionRegistry, personaLabelOfPrompt } from '../core/sessions.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { DailyMomentsManager } from '../features/daily-moments.js';
 import { QzoneInteractionManager } from '../features/qzone-interactions.js';
@@ -3327,6 +3327,9 @@ function buildSessionView(s, store, options = {}) {
   const lifecycle = sessionLifecycleView(s, store, options);
   return {
     ...s,
+    // 列表走索引摘要（带 persona）；详情拿的是完整会话对象，只有 systemPrompt —— 这里补算，
+    // 否则详情头部永远显示"没记录到角色卡"。
+    persona: s.persona || personaLabelOfPrompt(s.systemPrompt),
     threadState: lifecycle?.state || s.threadState || null,
     lifecycle,
     sessionMetrics: buildSessionMetrics(s)
