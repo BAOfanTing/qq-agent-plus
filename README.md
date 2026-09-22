@@ -166,6 +166,9 @@ bash deploy-all.sh --help
 - 已运行的 OneBot v11 HTTP 和正向 WebSocket 服务
 - OpenAI Chat Completions 兼容模型
 
+面板部署（宝塔 / aaPanel）见[宝塔面板部署](docs/BAOTA.md)：宝塔只当面板用，进程仍由 systemd
+用户服务托管，不要在面板里用 Node 项目或 PM2 启动。
+
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent

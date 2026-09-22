@@ -502,7 +502,11 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   const tier = Number.isFinite(rawTier) ? Math.min(4, Math.max(1, Math.round(rawTier))) : 4;
 
   const texts = (triggerEntries || []).map((e) => String(e?.text ?? ''));
-  const atMe = texts.some((t) => isAtMe(t, { selfNickname, botName, selfId }));
+  // 被 @ 的判定优先用入库时按原始消息段算出来的 mentionsSelf：群里给机器人改过名片时，
+  // 消息文本里是**群名片**，跟 botName / 登录昵称都对不上，只按文本判断会漏 —— 表现为
+  // "档位调低之后 @ 它也不回"。文本路径保留给非存档来源的调用方（预览、测试、旧数据）。
+  const atMe = (triggerEntries || []).some((entry) => entry?.mentionsSelf === true)
+    || texts.some((t) => isAtMe(t, { selfNickname, botName, selfId }));
   const keyword = hitKeyword(texts.join('\n'), c.keywords);
   // 掷骰子：调用方可传入已固定的 roll（0-100），避免重复随机
   const rollValue = roll === null || roll === undefined ? Math.random() * 100 : Number(roll);
