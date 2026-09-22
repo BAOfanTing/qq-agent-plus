@@ -160,8 +160,8 @@ try {
   const personaTemplates = {
     ...PERSONAS,
     custom_0: {
-      ...PERSONAS.xiaojingyu_game_client,
-      name: 'Developer copy',
+      ...PERSONAS.jishu_zhai,
+      name: 'Grounded copy',
       customRules: 'Explain version assumptions'
     }
   };

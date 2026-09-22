@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-game-client-'));
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-persona-behavior-'));
 process.env.QQ_AGENT_DATA_DIR = dir;
 process.env.DEBUG_SERVER_URL = 'http://127.0.0.1:1/event';
 process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
@@ -18,8 +18,9 @@ const { buildQzoneInteractionPrompt, qzoneInteractionPersonaHash } = await impor
 const { buildFriendReviewSystemPrompt } = await import('../src/llm/friend-review-prompt.js');
 const { mdToPlain } = await import('../src/llm/md-to-plain.js');
 
-function developerPersona() {
-  const template = PERSONAS.xiaojingyu_game_client;
+// 用技术宅这张卡做 grounded 档的样本（grounded 的行为契约与具体是哪张卡无关）
+function groundedPersona() {
+  const template = PERSONAS.jishu_zhai;
   return {
     ...DEFAULT_CONFIG.persona,
     roleText: template.text,
@@ -27,22 +28,24 @@ function developerPersona() {
   };
 }
 
-test('ships a single-source developer role without changing the existing default', () => {
+test('内置卡单一来源，默认人设不受影响', () => {
   assert.equal(DEFAULT_CONFIG.persona.roleText, PERSONAS.xiaojingyu.text);
   assert.equal(DEFAULT_CONFIG.persona.behaviorProfile, 'legacy');
-  assert.equal(PERSONAS.xiaojingyu_game_client.behaviorProfile, 'grounded');
-  assert.equal(PERSONAS.xiaojingyu_game_client.text, fs.readFileSync(
-    new URL('../roles/xiaojingyu-game-client.md', import.meta.url), 'utf8'
+  assert.equal(PERSONAS.jishu_zhai.behaviorProfile, 'grounded');
+  assert.equal(PERSONAS.jishu_zhai.text, fs.readFileSync(
+    new URL('../roles/jishu-zhai.md', import.meta.url), 'utf8'
   ).trim());
-  for (const text of ['Unity / C#', '27 岁', '3 至 5 年', '不冒充真实公司的员工', '未经运行不说测试通过']) {
-    assert.ok(PERSONAS.xiaojingyu_game_client.text.includes(text), text);
+  for (const text of ['Linux、Docker、网络和二手硬件', '不碰违法和不道德的技术', '没有实际运行结果', '排查口气']) {
+    assert.ok(PERSONAS.jishu_zhai.text.includes(text), text);
   }
-  assert.doesNotMatch(PERSONAS.xiaojingyu_game_client.text, /mcp__|qq_mark_read|\[SILENT\]/);
+  for (const [id, persona] of Object.entries(PERSONAS)) {
+    assert.doesNotMatch(persona.text, /mcp__|qq_mark_read|\[SILENT\]/, id);
+  }
 });
 
-test('grounded chat replaces conflicting style rules but retains permissions and tools', () => {
+test('grounded 档替换冲突的风格规则，但保留权限与工具', () => {
   setRuntimeConfig(structuredClone(DEFAULT_CONFIG));
-  const prompt = buildSystemPrompt({ persona: developerPersona() });
+  const prompt = buildSystemPrompt({ persona: groundedPersona() });
   for (const text of ['【自然交流与可靠边界】', '不受闲聊字数限制', 'finish 的交接不是定时任务',
     '不能执行命令', '发言必须', 'send_message', 'memory_append', '不按轮数凑配额']) {
     assert.ok(prompt.includes(text), text);
@@ -57,11 +60,11 @@ test('grounded chat replaces conflicting style rules but retains permissions and
   assert.equal(legacy, buildSystemPrompt({ persona: DEFAULT_CONFIG.persona }));
   assert.ok(legacy.includes('【反 AI 味：拒绝有求必应】'));
   assert.notEqual(legacy, prompt);
-  assert.equal(prompt, buildSystemPrompt({ persona: developerPersona() }));
+  assert.equal(prompt, buildSystemPrompt({ persona: groundedPersona() }));
 });
 
-test('all social scenes receive the full same role and invalidate stale persona hashes', () => {
-  const persona = developerPersona();
+test('所有社交场景都带上同一份角色与附加规则，人设哈希随之失效', () => {
+  const persona = groundedPersona();
   for (const build of [
     (p) => buildSystemPrompt({ persona: p }),
     buildMomentSystemPrompt,
@@ -79,12 +82,12 @@ test('all social scenes receive the full same role and invalidate stale persona 
   assert.doesNotMatch(buildQzoneInteractionPrompt(persona), /【反 AI 味/);
 });
 
-test('persona behavior persists, keeps edited roles and rejects invalid updates atomically', () => {
+test('人设档位持久化、保留手改正文、原子拒绝非法值', () => {
   setRuntimeConfig(structuredClone(DEFAULT_CONFIG));
   assert.equal(normalizeBehaviorProfile(undefined), 'legacy');
-  updateConfig({ persona: developerPersona() });
+  updateConfig({ persona: groundedPersona() });
   assert.equal(loadConfig().persona.behaviorProfile, 'grounded');
-  updateConfig({ persona: { roleText: `${developerPersona().roleText}\n补充偏好` } });
+  updateConfig({ persona: { roleText: `${groundedPersona().roleText}\n补充偏好` } });
   assert.equal(loadConfig().persona.behaviorProfile, 'grounded');
   assert.ok(loadConfig().persona.roleText.endsWith('补充偏好'));
   const before = fs.readFileSync(path.join(dir, 'config.json'), 'utf8');
@@ -98,7 +101,7 @@ test('persona behavior persists, keeps edited roles and rejects invalid updates 
   assert.equal(loadConfig().persona.roleText, PERSONAS.xiaojingyu.text);
 });
 
-test('grounded formatting preserves code operators, indentation and inline code', () => {
+test('grounded 的代码格式保留运算符、缩进与行内代码', () => {
   const code = [
     '#if DEBUG',
     '    var product = a * b * c;',
@@ -119,13 +122,13 @@ test('grounded formatting preserves code operators, indentation and inline code'
   assert.equal(mdToPlain('`a * b * c`'), 'a  b  c');
 });
 
-test('a developer Agent sends intact code through its session-bound tool and durable outbox', async (t) => {
+test('grounded 会话通过工具与出站队列发出完整代码', async (t) => {
   const { ChatStore } = await import('../src/core/store.js');
   const { SessionRegistry } = await import('../src/core/sessions.js');
   const { Orchestrator } = await import('../src/core/orchestrator.js');
   const { SendQueue } = await import('../src/onebot/sender.js');
   const cfg = structuredClone(DEFAULT_CONFIG);
-  cfg.persona = developerPersona();
+  cfg.persona = groundedPersona();
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['123'];
   cfg.api.model = 'test';
@@ -157,7 +160,7 @@ test('a developer Agent sends intact code through its session-bound tool and dur
     assert.ok(request.messages[0].content.includes('【自然交流与可靠边界】'));
     calls++;
     if (calls === 1) {
-      // A settings change must not change the already-running session's output format.
+      // 运行途中改设置，不能改变已开始这一轮的消息格式
       setRuntimeConfig({ ...cfg, persona: { ...DEFAULT_CONFIG.persona } });
     }
     return Response.json({
@@ -175,7 +178,7 @@ test('a developer Agent sends intact code through its session-bound tool and dur
   assert.equal(store.findByMid('group:123', 1).state, 'acked');
 });
 
-test('console APIs expose, select, customize and roll back the developer persona', async (t) => {
+test('控制台接口能列出、选择、自定义与回退内置卡', async (t) => {
   const server = http.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
@@ -195,13 +198,13 @@ test('console APIs expose, select, customize and roll back the developer persona
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const templates = (await (await request('/api/persona-templates')).json()).templates;
-  const builtin = templates.find((p) => p.id === 'xiaojingyu_game_client');
-  assert.equal(builtin.text, developerPersona().roleText);
+  const builtin = templates.find((p) => p.id === 'jishu_zhai');
+  assert.equal(builtin.text, groundedPersona().roleText);
   assert.equal(builtin.behaviorProfile, 'grounded');
   assert.equal(builtin.builtin, true);
-  assert.equal((await request('/api/config', { persona: developerPersona() })).status, 200);
+  assert.equal((await request('/api/config', { persona: groundedPersona() })).status, 200);
   assert.equal((await (await request('/api/config')).json()).persona.behaviorProfile, 'grounded');
-  const custom = { name: 'Developer copy', text: builtin.text, customRules: 'Prefer concise examples', behaviorProfile: 'grounded' };
+  const custom = { name: 'Grounded copy', text: builtin.text, customRules: 'Prefer concise examples', behaviorProfile: 'grounded' };
   assert.equal((await request('/api/persona-templates', custom)).status, 200);
   const saved = (await (await request('/api/persona-templates')).json()).templates.find((p) => p.name === custom.name);
   assert.equal(saved.customRules, custom.customRules);

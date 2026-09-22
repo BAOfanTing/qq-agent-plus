@@ -31,7 +31,6 @@ test('仓库根的关键文件/目录都在', () => {
     'ui/index.html',
     'ui/app.js',
     'roles/xiaojingyu.md',
-    'roles/xiaojingyu-game-client.md',
     'roles/duzui-sunyou.md',
     'roles/wenrou-peiliao.md',
     'roles/jishu-zhai.md',

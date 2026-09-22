@@ -31,7 +31,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 架构总览：模块划分、消息流、存储与外部依赖 |
 | [CHANGES.md](CHANGES.md) | 本分支相对上游的改动清单，每条附「失败模式 → 现行做法」 |
 | [KNOWN-ISSUES.md](KNOWN-ISSUES.md) | 当前已知但未修复的问题，以及历史上的基线失败记录 |
-| [GAME_CLIENT_PERSONA.md](GAME_CLIENT_PERSONA.md) | 内置角色卡的接入与切换方式，以及游戏客户端开发者这张卡的设定说明 |
+| [PERSONAS.md](PERSONAS.md) | 内置角色卡清单、选择与保存、语气档位（原版群友 / 自然可靠）与生效范围 |
 | [../AGENTS.md](../AGENTS.md) | 面向 AI 协作者的约定：代码风格、验证方式、提交要求 |
 
 ## 调研与方向稿
@@ -44,13 +44,13 @@
 - [INCIDENT_HANDLING_RESEARCH.md](research/INCIDENT_HANDLING_RESEARCH.md)：异常处理与降级策略的调研
 - [FRIEND_TRIGGER_PILOT_RESEARCH.md](research/FRIEND_TRIGGER_PILOT_RESEARCH.md)：主动加好友触发条件的调研
 - [SNOWLUMA_FRIEND_API_RESEARCH.md](research/SNOWLUMA_FRIEND_API_RESEARCH.md)：协议端好友接口调研
-- [GAME_CLIENT_PERSONA_DIRECTION.md](research/GAME_CLIENT_PERSONA_DIRECTION.md)：游戏客户端人设的方向稿
 - [THREADED_PILOT.md](research/THREADED_PILOT.md)：线程化对话的早期方案
 - [MULTIMODAL_CONTEXT_PILOT.md](research/MULTIMODAL_CONTEXT_PILOT.md)：多模态上下文连续性的早期方案
 
 ## 角色卡与其它
 
-- 角色卡正文：[`roles/`](../roles)，一张卡一个 markdown（内置默认小鲸鱼、游戏客户端开发者、
-  损友、温柔陪聊、技术宅、猫娘）。新增卡须在 `src/personas.js` 登记，由 `test/personas.test.mjs` 检查。
+- 角色卡正文：[`roles/`](../roles)，一张卡一个 markdown（内置默认小鲸鱼、损友、温柔陪聊、
+  技术宅、猫娘），说明见 [PERSONAS.md](PERSONAS.md)；新增卡要在 `src/personas.js` 登记，
+  由 `test/personas.test.mjs` 检查。
 - 远程价格表（随版本发布）：[`prices.json`](../prices.json)
 - 运行数据与凭据：`data/`（**不入库**，分享前使用 `node scripts/sanitize-release.mjs` 生成脱敏副本）

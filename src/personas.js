@@ -14,7 +14,6 @@ export function normalizeBehaviorProfile(value) {
 //                                    唤醒配置、空格分条等）适配为本程序的机制
 //                                    （安静结束、send_message 数组分条、原生工具名），
 //                                    人格与示例原样保留。
-//   roles/xiaojingyu-game-client.md  小鲸鱼（游戏客户端开发者）版本，grounded 档。
 //   roles/duzui-sunyou.md            损友（毒舌吐槽），legacy 档：短句接梗、只损能开玩笑的事。
 //   roles/wenrou-peiliao.md          温柔陪聊（知心），grounded 档：会听、不诊断、不承诺陪伴。
 //   roles/jishu-zhai.md              技术宅（自建服务），grounded 档：先问关键信息、留出不确定。
@@ -31,11 +30,6 @@ export const PERSONAS = {
     name: '小鲸鱼（默认）',
     behaviorProfile: 'legacy',
     text: readRole('xiaojingyu.md')
-  },
-  xiaojingyu_game_client: {
-    name: '小鲸鱼（游戏客户端开发者）',
-    behaviorProfile: 'grounded',
-    text: readRole('xiaojingyu-game-client.md')
   },
   duzui_sunyou: {
     name: '损友（毒舌吐槽）',
