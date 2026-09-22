@@ -1002,6 +1002,9 @@ function renderControlHub(data = {}) {
         <a class="btn btn-small" href="${esc(serviceUrl(5099, '/settings?tab=account'))}" target="_blank" rel="noreferrer">打开账号安全</a>
       </div>
       <form id="snowluma-password-form" class="control-password-form" autocomplete="off">
+        <!-- 浏览器要求密码表单带用户名框（可隐藏），否则 F12 里会有一条 DOM 提示。
+             这里是给 SnowLuma 改密钥、不是登录，放个隐藏占位即可。 -->
+        <input type="text" id="snowluma-account" name="username" value="snowluma" autocomplete="username" hidden aria-hidden="true" tabindex="-1" />
         <label><span>当前密钥</span><input type="password" id="snowluma-current-password" autocomplete="current-password" required /></label>
         <label><span>新密钥</span><input type="password" id="snowluma-new-password" autocomplete="new-password" placeholder="至少 10 位，含大小写与符号" required /></label>
         <label><span>确认新密钥</span><input type="password" id="snowluma-confirm-password" autocomplete="new-password" required /></label>
