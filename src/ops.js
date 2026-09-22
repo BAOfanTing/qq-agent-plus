@@ -734,7 +734,9 @@ const AUDIT_MARKERS = [
   ['补话安排', 1, 'src/core/orchestrator.js', 'maybeScheduleFollowUp\\(chatKey'],
   ['重连补课', 2, 'src/console/app.js', 'catchUpMissedMessages|scheduleCatchUp'],
   ['空间互动失败退避', 2, 'src/features/qzone-interactions.js', 'failStreak|backoff'],
-  ['发送网络级重试', 1, 'src/onebot/sender.js', 'isTransient|transient'],
+  // 重试实现早就改成"按可确认未送达的错误判断"，不再用 isTransient 命名 ——
+  // 标记要跟着指向现在的实现，否则每次体检都误报一项。
+  ['发送网络级重试', 1, 'src/onebot/sender.js', '能证明请求没被对方收到|1.5 秒后重试一次'],
   ['QQ表情标签', 1, 'src/onebot/onebot.js', 'QQ表情'],
   ['看图先读情绪', 1, 'src/llm/prompt.js', '看图先读情绪'],
   ['表情编号≠stickerId 提醒', 1, 'src/llm/prompt.js', '别拿这个编号去 get_sticker_image'],
@@ -745,7 +747,9 @@ const AUDIT_MARKERS = [
   ['贴纸选图提示', 1, 'src/onebot/stickers.js', '选图很简单'],
   ['审核拦截重试', 1, 'src/llm/llm.js', '审核拦截整次请求'],
   ['兜底模型接入', 1, 'src/llm/llm.js', '改用兜底模型'],
-  ['人设·别当评委', 1, 'config.json', '聊天是双向的，别当评委'],
+  // 这条以前查 config.json（实例当前人设）：管理员改过人设就不含这句话，于是永远误报。
+  // 改查随版本发布的内置卡，才对应"这个补丁在不在"的本意。
+  ['人设·别当评委', 1, 'roles/xiaojingyu.md', '不要总结、不要升华'],
   ['闲聊带自己', 1, 'src/llm/prompt.js', '把自己的那半句补上'],
   ['表情清单常驻', 1, 'src/llm/prompt.js', '表情清单常驻系统提示']
 ];
