@@ -2605,7 +2605,7 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .list-head, .detail-header, .control-section-title { letter-spacing: .2px; }
 
 /* ── 状态徽标：从描边改成"淡底 + 同色文字"的胶囊 ── */
-.status-badge, .vbadge, .mode-chip, .member-chip, .unread-pill, .sent-badge, .thread-pill, .mode-state-token {
+.status-badge, .vbadge, .mode-chip, .persona-chip, .member-chip, .unread-pill, .sent-badge, .thread-pill, .mode-state-token {
   border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 550;
   border: 1px solid var(--border); background: var(--bg-3); color: var(--muted);
 }

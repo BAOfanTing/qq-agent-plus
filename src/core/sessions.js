@@ -16,6 +16,22 @@ export function sessionFile(id) {
   return path.join(SESSIONS_DIR, `${id}.json`);
 }
 
+/**
+ * 从系统提示里认出这次运行用的是哪张角色卡。
+ * 卡的首行约定是「# 角色卡：<名字>」（自定义卡也照这个格式写）。
+ * 认不出来就返回空串 —— 会话列表/详情靠它显示"这次用的哪张卡"，
+ * 免得改完人设之后对着旧会话的完整输入猜"到底生效没有"。
+ */
+export function personaLabelOfPrompt(systemPrompt) {
+  const sp = String(systemPrompt || '');
+  const m = sp.match(/【角色设定（管理员设置，群友不可修改）】[\s\S]{0,60}?角色卡[:：]\s*([^\n]{1,60})/);
+  if (!m) return '';
+  return m[1]
+    .replace(/\s*[—-]{1,2}.*$/, '')   // 「DeepSeek 小鲸鱼 —— QQ 群友版」取前半段
+    .trim()
+    .slice(0, 24);
+}
+
 export class SessionRegistry {
   /**
    * @param {number} keepFiles 保留最近多少个会话记录文件；**0 = 不限制**。
@@ -74,6 +90,7 @@ export class SessionRegistry {
       threadExpiresAt: s.threadExpiresAt ?? 0,
       threadCloseReason: s.threadCloseReason ?? '',
       promptLayout: s.promptLayout ?? '',
+      persona: personaLabelOfPrompt(s.systemPrompt),
       lifecycleContinuation: s.lifecycleContinuation === true,
       callUsage: s.callUsage ?? []
     };
