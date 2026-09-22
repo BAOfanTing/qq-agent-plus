@@ -403,7 +403,8 @@ function formatEntry(m, { withId = true } = {}) {
 
 /**
  * 判断一段消息里是否艾特了机器人。
- * 支持三种写法：@昵称 / @机器人名 / CQ 码 [CQ:at,qq=机器人QQ号]
+ * 支持四种写法：@昵称 / @机器人名 / @机器人QQ号 / CQ 码 [CQ:at,qq=机器人QQ号]
+ * （@QQ号 是 @ 的名字没解析出来时 segmentsToText 的兜底形态，认它才不会漏。）
  */
 export function isAtMe(text, { selfNickname = '', botName = '', selfId = '' } = {}) {
   const t = String(text ?? '');
@@ -412,6 +413,8 @@ export function isAtMe(text, { selfNickname = '', botName = '', selfId = '' } = 
   const name = String(botName || '').trim();
   if (nick && t.includes(`@${nick}`)) return true;
   if (name && t.includes(`@${name}`)) return true;
+  const id = String(selfId || '').trim();
+  if (/^\d+$/.test(id) && new RegExp(`@${id}(?!\\d)`).test(t)) return true;
   // CQ 码艾特：命中机器人自己的 QQ 号
   if (selfId) {
     const re = /\[CQ:at(?:,[^\]]*?)?qq=(\d+)[^\]]*\]/g;
@@ -572,16 +575,54 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
   return { text: lines.join('\n'), count: lines.length, messages: selected };
 }
 
+/**
+ * 列出消息文本里出现的 @：names 是名字形态（@昵称 / @全体成员），ids 是数字形态（@QQ号 / CQ 码）。
+ * 文本形态要求 @ 后面至少跟一个字符，且 @ 在行首或空白/标点之后 ——
+ * 邮箱（a@b.com）、只打一个 @ 跟空格，这些都不算点名。
+ */
+function atTargetsIn(text) {
+  const t = String(text ?? '');
+  const names = [];
+  const ids = [];
+  for (const m of t.matchAll(/\[CQ:at(?:,[^\]]*?)?qq=([^,\]]+)[^\]]*\]/g)) ids.push(m[1]);
+  // 括号类字符用 \u 转义写：源码里出现字面方括号段头会让 prompt-safety 的守卫误判成新段头
+  for (const m of t.matchAll(/(?:^|[\s\u3000，。！？；：、,.!?;:（(\u3010\u300c"“])@([^\s\u3000，。！？；：、,.!?;:）)\u3011\u300d"”]+)/g)) {
+    if (/^\d+$/.test(m[1])) ids.push(m[1]);
+    else names.push(m[1]);
+  }
+  const ALL = /^(全体成员?|all)$/i;
+  return {
+    names,
+    ids,
+    all: names.some((name) => ALL.test(name)) || ids.some((qq) => ALL.test(qq))
+  };
+}
+
 function triggerLabels(entry, ctx) {
   const labels = [];
   const text = String(entry?.text ?? '');
   const lower = text.toLowerCase();
+  const persona = getConfig().persona || {};
   const nick = String(ctx.selfNickname || '').toLowerCase();
-  const botName = String(getConfig().persona.botName || '').toLowerCase();
+  const botName = String(persona.botName || '').toLowerCase();
   const notes = getConfig().memberNotes || {};
   const noteName = notes[String(entry?.senderId || '')];
   const noteLower = String(noteName || '').toLowerCase();
-  if (text.startsWith('@') || text.includes(`@${ctx.selfNickname}`) || (nick && text.includes(`@${nick}`))) labels.push('@我');
+  // 点名判定以入库时按原始消息段算出的 mentionsSelf 为准：群里给机器人改过群名片时，
+  // 文本里是群名片，跟 selfNickname/botName 都对不上（档位判定优先用它也是这个原因）。
+  // 文本兜底留给非存档来源和 CQ 码上报的部署 —— 那种部署下 mentionsSelf 恒为 false。
+  // 这里以前是 text.startsWith('@')：任何以 @ 开头的消息（@群友、@别的机器人、
+  // @全体成员）都记成「@我」，模型于是把别人的点名当成叫自己。
+  const atMe = entry?.mentionsSelf === true
+    || isAtMe(text, { selfNickname: ctx.selfNickname, botName: persona.botName, selfId: ctx.selfId });
+  const at = atTargetsIn(text);
+  const selfQq = String(ctx.selfId || '').trim();
+  // 数字形态（CQ 码、@QQ号）在不知道自己 QQ 号时判断不出指向：宁可不贴标签，也不贴成「别人」。
+  const atOther = at.names.length > 0
+    || at.ids.some((qq) => /^\d+$/.test(selfQq) && qq !== selfQq);
+  if (atMe) labels.push('@我');
+  else if (at.all) labels.push('艾特全体');
+  else if (atOther) labels.push('艾特别人');
   if ((botName && lower.includes(botName)) || (nick && lower.includes(nick))) labels.push('提到我');
   if (noteName && lower.includes(noteLower)) labels.push('提到我（备注名）');
   if (/[?？]$/.test(text.trim()) || /[吗呢]/.test(text)) labels.push('提问');
@@ -635,7 +676,7 @@ function formatThreadCheckpoint(checkpoint) {
 
 /**
  * 组装一次运行的用户消息（不携带任何 LLM 对话历史）。
- * ctx: { chatKey, kind, chatId, chatName, triggerEntries, trigger, selfLastMessageAt, selfNickname }
+ * ctx: { chatKey, kind, chatId, chatName, triggerEntries, trigger, selfLastMessageAt, selfNickname, selfId }
  */
 export function buildUserPrompt(ctx) {
   const cfg = getConfig();
