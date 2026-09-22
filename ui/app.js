@@ -807,6 +807,64 @@ function renderUpdateCheckNote(update = {}) {
   return `上次更新检查${when}：已是最新（${latest}当前 ${esc(short(check.deployed))}）。`;
 }
 
+// ── 更新进度：更新器把当前阶段写进状态文件（phase），排队阶段只有 status。
+//    这里只做展示，不推断阶段；阶段起点用 progressAt（每次阶段推进都续期）。───────
+const UPDATE_PHASE_LABELS = {
+  startup: '启动更新器',
+  connectivity: '检查网络连通性',
+  checking: '检查最新版本',
+  testing: '跑部署前测试',
+  deploying: '部署（服务会短暂重启）',
+  complete: '收尾'
+};
+const UPDATE_STATUS_LABELS = {
+  queued: '等待更新器接手',
+  checking: '检查最新版本',
+  testing: '跑部署前测试',
+  deploying: '部署（服务会短暂重启）'
+};
+
+function formatElapsed(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} 分 ${String(total % 60).padStart(2, '0')} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${String(minutes % 60).padStart(2, '0')} 分`;
+}
+
+function updateProgressText(update = {}) {
+  if (update.busy !== true) return '';
+  const status = String(update.status || '');
+  const phase = String(update.phase || '');
+  // 排队时 phase 还是上一轮的残留值，先看 status
+  const label = status === 'queued'
+    ? UPDATE_STATUS_LABELS.queued
+    : (UPDATE_PHASE_LABELS[phase] || UPDATE_STATUS_LABELS[status] || '更新进行中');
+  const version = String(update.targetVersion || update.version || '').trim();
+  const now = Date.now();
+  const started = Number(update.startedAt || 0) || Number(update.updatedAt || 0);
+  const stageAt = Number(update.progressAt || 0) || started;
+  const parts = [`正在更新${version ? `到 ${version}` : ''}：${label}`];
+  if (stageAt) parts.push(`本阶段 ${formatElapsed((now - stageAt) / 1000)}`);
+  if (started && stageAt && started !== stageAt) parts.push(`总计 ${formatElapsed((now - started) / 1000)}`);
+  return parts.join(' · ');
+}
+
+// 进度里的耗时每秒刷新；只在控制页且更新仍在跑时工作，跑完或切页后自动停。
+let updateProgressTicker = null;
+function startUpdateProgressTicker() {
+  if (updateProgressTicker) return;
+  updateProgressTicker = setInterval(() => {
+    const box = document.getElementById('hub-deploy-progress');
+    if (state.tab !== 'control' || state.autoUpdateStatus?.busy !== true || !box) {
+      clearInterval(updateProgressTicker);
+      updateProgressTicker = null;
+      return;
+    }
+    setText(document.getElementById('hub-deploy-progress-text'), updateProgressText(state.autoUpdateStatus || {}));
+  }, 1000);
+}
+
 function renderControlHub(data = {}) {
   const box = $('#control-page');
   if (!box) return;
@@ -829,6 +887,9 @@ function renderControlHub(data = {}) {
       ? (updateLabels[update.status] || '等待检查')
       : '已暂停';
   const revision = (value) => value ? String(value).slice(0, 12) : '-';
+  // 更新进度行：结构只建一次，这里的初值 + updateControlHubFields 里的实时同步
+  // 一起保证"点完立即更新马上能看到阶段与耗时"。没有在跑时留空并隐藏。
+  const progressLine = updateProgressText(update);
   const __html = `
     <div class="control-head">
       <div><h2>服务与访问控制</h2><span class="muted">统一入口</span></div>
@@ -857,6 +918,10 @@ function renderControlHub(data = {}) {
         <div><span>下次检查</span><strong data-hub-deploy="nextCheck">${update.nextCheckAt ? esc(fmtTime(update.nextCheckAt)) : '-'}</strong></div>
       </div>
       <div class="muted" data-hub-update-check style="margin-top:6px;font-size:12px;line-height:1.5">${renderUpdateCheckNote(update)}</div>
+      <div class="update-deploy-progress${progressLine ? '' : ' hidden'}" id="hub-deploy-progress">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <span class="update-deploy-progress-text" id="hub-deploy-progress-text" role="status" aria-live="polite">${esc(progressLine)}</span>
+      </div>
       <div class="update-deploy-settings">
         <label><span>告警管理员 QQ</span><input type="text" id="auto-update-owner" inputmode="numeric" value="${esc(update.ownerUin || '')}" /></label>
         <label><span>检查间隔（小时）</span><input type="number" id="auto-update-interval" min="1" max="168" value="${esc(update.intervalHours || 6)}" /></label>
@@ -992,6 +1057,15 @@ function updateControlHubFields(box, statuses, update) {
   if (errorBox) {
     setText(errorBox, update.error || '');
     errorBox.classList.toggle('hidden', !update.error);
+  }
+
+  // 更新进度：排队 / 检查 / 测试 / 部署 各阶段显示一行带耗时，跑完自动隐藏
+  const progressBox = document.getElementById('hub-deploy-progress');
+  if (progressBox) {
+    const line = updateProgressText(update);
+    setText(document.getElementById('hub-deploy-progress-text'), line);
+    progressBox.classList.toggle('hidden', !line);
+    if (line) startUpdateProgressTicker();
   }
 
   // 按钮可用性 / 暂停与恢复的显隐
@@ -1181,11 +1255,13 @@ async function runUpdateFromNotice() {
       body: JSON.stringify({ confirm: true, version: state.updateNoticeVersion || '' })
     });
     state.autoUpdateStatus = response.status;
-    if (result) {
-      result.textContent = '更新任务已提交：先跑测试再部署，失败自动回滚；进度见「控制 → 更新部署」。';
-      result.className = 'control-result';
-    }
+    // 提交成功就关掉提示框，切到「控制 → 更新部署」：进度（阶段 + 已耗时）显示在那一块，
+    // 由状态派生、整页重绘也不会丢。以前这里留着框只把按钮点灰，用户看不到任何进展
+    // （2026-09-22 反馈）。
+    $('#update-notice')?.close();
+    switchTab('control');
   } catch (error) {
+    // 提交失败：框留着，错误直接显示在框里
     if (runBtn) runBtn.disabled = false;
     if (result) { result.textContent = `启动失败：${error.message}`; result.className = 'control-result error'; }
   }

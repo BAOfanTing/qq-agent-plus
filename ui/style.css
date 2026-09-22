@@ -1679,6 +1679,16 @@ html.boot-show .loading-overlay { opacity: 1; }
 .update-deploy-summary strong { display: block; overflow-wrap: anywhere; }
 .update-deploy-summary span { color: var(--muted); font-size: 10.5px; }
 .update-deploy-summary strong { margin-top: 4px; font-family: var(--mono); font-size: 11.5px; }
+/* 更新进度行：更新在跑时显示当前阶段与已耗时，避免"点了立即更新没反应"的观感 */
+.update-deploy-progress {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--hover);
+  font-size: 12px; line-height: 1.5;
+}
+.update-deploy-progress .loading-spinner { width: 14px; height: 14px; border-width: 2px; flex: none; }
+.update-deploy-progress-text { min-width: 0; overflow-wrap: anywhere; }
 .update-deploy-settings {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(140px, .5fr) auto;

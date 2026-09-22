@@ -71,7 +71,14 @@ const document = {
   },
   querySelectorAll: () => [],
   getElementById: (id) => document.querySelector('#' + id),
-  createElement: (tag) => makeEl('', ''),
+  createElement: (tag) => {
+    const el = makeEl('', '');
+    // 假 DOM 不解析 HTML：patchKeyedList 的 makeNode 会读 <template>.content.firstElementChild。
+    // 给个空壳（firstElementChild 为 null），定时器触发的列表渲染就会安全跳过 ——
+    // 否则会在测试收尾阶段抛 TypeError，把整个用例文件带崩（随机复现）。
+    el.content = { firstElementChild: null };
+    return el;
+  },
   addEventListener() {},
   removeEventListener() {}
 };
@@ -770,6 +777,9 @@ try {
     ]
   });
   const controlHtml = String(document.getElementById('control-page').innerHTML || '');
+  // 错误行是运行时填进 #hub-deploy-error 的（结构只建一次、之后只更新字段），
+  // 所以"测试失败"要在元素上找，而不是在首次生成的模板字符串里找。
+  const deployErrorText = String(document.getElementById('hub-deploy-error')?.textContent || '');
   const controlUiOk =
     indexHtml.includes('data-tab="control"')
     && indexHtml.includes('id="view-control"')
@@ -779,7 +789,7 @@ try {
     && controlHtml.includes('手动更新')
     && controlHtml.includes('恢复自动更新')
     && controlHtml.includes('2948771712')
-    && controlHtml.includes('测试失败')
+    && deployErrorText.includes('测试失败')
     && controlHtml.includes('QQ Agent 控制台 Token')
     && controlHtml.includes(':3080')
     && controlHtml.includes(':3100')
@@ -792,6 +802,43 @@ try {
   } else {
     fail++;
     console.log('  FAIL  服务入口、更新部署或密钥控制视图缺失');
+  }
+
+  // 更新进度行（2026-09-22 反馈：点「立即更新」后提示框不关、也没有任何进度显示）：
+  // 运行中显示阶段与耗时；排队阶段优先看 status（phase 是上一轮残留）；跑完隐藏并清空。
+  vm.runInContext(`state.autoUpdateStatus = ${JSON.stringify({
+    installed: true,
+    enabled: true,
+    busy: true,
+    status: 'deploying',
+    phase: 'deploying',
+    targetVersion: 'v9.9.9',
+    startedAt: Date.now() - 125000,
+    progressAt: Date.now() - 65000
+  })};`, ctx);
+  ctx.renderControlHub({ services: [] });
+  const progressText = String(document.getElementById('hub-deploy-progress-text')?.textContent || '');
+  const progressShownOk = !document.getElementById('hub-deploy-progress').classList.contains('hidden')
+    && progressText.includes('v9.9.9')
+    && progressText.includes('部署（服务会短暂重启）')
+    && progressText.includes('本阶段 1 分')
+    && progressText.includes('总计 2 分');
+  const queuedText = String(ctx.updateProgressText({
+    busy: true, status: 'queued', phase: 'complete', progressAt: Date.now() - 4000
+  }) || '');
+  const progressQueuedOk = queuedText.includes('等待更新器接手') && !queuedText.includes('收尾');
+  const idleText = String(ctx.updateProgressText({ busy: false, status: 'succeeded', phase: 'complete' }) || '');
+  vm.runInContext('state.autoUpdateStatus = { installed: true, enabled: true, busy: false, status: "succeeded", phase: "complete" };', ctx);
+  ctx.renderControlHub({ services: [] });
+  const progressHiddenOk = document.getElementById('hub-deploy-progress').classList.contains('hidden') === true
+    && String(document.getElementById('hub-deploy-progress-text')?.textContent || '') === ''
+    && idleText === '';
+  if (progressShownOk && progressQueuedOk && progressHiddenOk) {
+    pass++;
+    console.log('  OK    更新进度行：运行中显示阶段与耗时、排队优先看 status、跑完隐藏');
+  } else {
+    fail++;
+    console.log(`  FAIL  更新进度行异常（显示 ${progressShownOk} / 排队 ${progressQueuedOk} / 隐藏 ${progressHiddenOk}）`);
   }
   const timeHtml = ctx.renderTimeControlSection({
     ...cfg, allow: { groups: ['123'], private: ['456'] }
@@ -1342,9 +1389,25 @@ try {
           // ★ 用量页请求的接口必须真实存在（不能在测试里 mock 掉 404）
           //   上一轮就是凭空捏造了 /api/usage/prices，测试绿、线上白屏。
           const { createApp: createApp2 } = await import('../src/console/app.js');
+          const { setRuntimeConfig: setRuntimeConfig2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await import('../src/core/config.js');
           const http = await import('node:http');
+          // console 的 start() 用的是配置里的端口（不收参数），默认 3210；而本机开着
+          // console 隧道时 3210 是被占的，用例会因为 EADDRINUSE 误报。先探一个空闲
+          // 端口写进配置，用例就不再依赖 3210 空着。
+          const freePort = await new Promise((resolve, reject) => {
+            const probe = http.createServer();
+            probe.once('error', reject);
+            probe.listen(0, '127.0.0.1', () => {
+              const port = probe.address().port;
+              probe.close(() => resolve(port));
+            });
+          });
+          setRuntimeConfig2({
+            ...structuredClone(DEFAULT_CONFIG2),
+            server: { ...DEFAULT_CONFIG2.server, host: '127.0.0.1', port: freePort }
+          });
           const realApp = createApp2({ log: () => {} });
-          const realPort = await realApp.start(40991);
+          const realPort = await realApp.start();
           const hit = (p) => new Promise((r) => {
             http.request({ host: '127.0.0.1', port: realPort, path: p, method: 'GET',
               headers: { 'x-console-token': 'qq-agent-console' } },
