@@ -905,7 +905,7 @@ export class IdentityPilotManager {
         maxChars: 12000
       }
     );
-    const systemPrompt = buildFriendReviewSystemPrompt(snapshot.persona);
+    const systemPrompt = buildFriendReviewSystemPrompt(snapshot.persona, { accountNickname: this.onebot?.selfNickname || '' });
     const userPrompt = buildFriendReviewUserPrompt({
       opportunity,
       person,

@@ -19,7 +19,7 @@ import {
   tierToSlider as _tierToSlider
 } from '../core/tier-slider.js';
 export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider };
-import { formatFullTime, formatShortTime, sanitizeUserText } from '../core/util.js';
+import { formatFullTime, formatShortTime, sanitizeUserText, resolveSelfName } from '../core/util.js';
 import { buildStickerContext, buildStickerStrategyHint } from '../onebot/stickers.js';
 
 // ── 系统提示 ─────────────────────────────────────────────────────────────
@@ -318,7 +318,7 @@ export function buildSystemPrompt({
   // 光看这一行会以为还在用默认卡（控制台的完整输入里尤其容易误判）。
   // 名字用调用方传来的"群内展示名"（与【此刻状态】同一个值）：群名片跟机器人名字不一致时，
   // 两处各说一个名字会让模型不知道该自称什么。
-  const displayName = String(selfNickname || cfg.selfNickname || cfg.botName || '').trim() || '小鲸鱼';
+  const displayName = resolveSelfName(cfg, selfNickname);
   const hasRoleText = Boolean(String(cfg.roleText || '').trim());
   const parts = [
     hasRoleText

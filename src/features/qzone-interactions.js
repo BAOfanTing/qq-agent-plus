@@ -9,6 +9,7 @@ import {
   emptyUsage
 } from '../llm/llm.js';
 import { assertTimeAllowed, watchTimeWindow, withTimeScope } from '../core/time-gate.js';
+import { resolveSelfName } from '../core/util.js';
 import { timeControlState } from '../core/time-control.js';
 import {
   estimateQzoneTokens,
@@ -638,7 +639,7 @@ export class QzoneInteractionManager {
         const post = {
           uin: selfId,
           tid: String(item.tid || ''),
-          nickname: this.onebot.selfNickname || getConfig().persona?.botName || '我',
+          nickname: resolveSelfName(getConfig().persona || {}, this.onebot.selfNickname || ''),
           content: cleanText(item.content, 1200),
           time: Number(item.time) || 0,
           commentCount: Number(item.comment_num) || 0
@@ -713,7 +714,7 @@ export class QzoneInteractionManager {
       ...feeds.map((item) => ({ type: 'feed', item }))
     ].slice(0, cfg.maxBatchItems);
     const root = getConfig();
-    const systemPrompt = buildQzoneInteractionPrompt(root.persona);
+    const systemPrompt = buildQzoneInteractionPrompt(root.persona, { accountNickname: this.onebot?.selfNickname || '' });
     const tools = openAiTools([this.#submitToolDef([], [], cfg)]);
     const hardLimit = Math.min(
       Math.max(16000, Number(root.api?.contextWindowTokens) || 1000000),
@@ -790,7 +791,7 @@ export class QzoneInteractionManager {
 
   async #decide(batch, cfg, session, signal) {
     const root = getConfig();
-    const systemPrompt = buildQzoneInteractionPrompt(root.persona);
+    const systemPrompt = buildQzoneInteractionPrompt(root.persona, { accountNickname: this.onebot?.selfNickname || '' });
     const defs = [this.#submitToolDef(batch.feeds, batch.replies, cfg)];
     const tools = openAiTools(defs);
     const userPrompt = [

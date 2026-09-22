@@ -1,16 +1,17 @@
 import crypto from 'node:crypto';
+import { resolveSelfName } from '../core/util.js';
 
 export const MOMENT_PROMPT_VERSION = 'persona-moment-v2';
 
-export function momentPersonaHash(persona = {}) {
+export function momentPersonaHash(persona = {}, accountNickname = '') {
   return crypto.createHash('sha256').update(JSON.stringify([
-    persona.botName || '', persona.selfNickname || '',
+    persona.botName || '', persona.selfNickname || '', resolveSelfName(persona, accountNickname),
     persona.roleText || '', persona.customRules || '', persona.participation || ''
   ])).digest('hex');
 }
 
-export function buildMomentSystemPrompt(persona = {}) {
-  const name = String(persona.selfNickname || persona.botName || '我');
+export function buildMomentSystemPrompt(persona = {}, { accountNickname = '' } = {}) {
+  const name = resolveSelfName(persona, accountNickname);
   const roleText = String(persona.roleText || '').trim();
   const customRules = String(persona.customRules || '').trim();
   return [

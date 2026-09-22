@@ -377,7 +377,7 @@ export class IdentityPilotManager extends CoreIdentityPilotManager {
     }
 
     const opportunity = created.opportunity;
-    const systemPrompt = buildFriendReviewSystemPrompt(cfg.persona || {});
+    const systemPrompt = buildFriendReviewSystemPrompt(cfg.persona || {}, { accountNickname: this.onebot?.selfNickname || '' });
     const userPrompt = manualPrompt(buildFriendReviewUserPrompt({
       opportunity,
       person,

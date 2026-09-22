@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { OneBotClient, extractMediaFromSegments } from './onebot.js';
 import { DATA_DIR, getConfig } from '../core/config.js';
+import { resolveSelfName } from '../core/util.js';
 import {
   loadStickerStore, saveStickerStore, mergeStickerLibrary,
   findSticker, formatStickerList, applyStickerNote, markStickerUsed,
@@ -451,7 +452,7 @@ export class StickerManager {
   async #judgeSticker(media, message) {
     const signal = AbortSignal.timeout(90000);
     const dataUrl = await this.#stickerDataUrl(media.url, signal);
-    const botName = String(getConfig().persona?.botName || '我');
+    const botName = resolveSelfName(getConfig().persona || {}, this.onebot?.selfNickname || '');
     const sender = String(message?.senderName || '群友').trim().slice(0, 20) || '群友';
     const tool = {
       type: 'function',

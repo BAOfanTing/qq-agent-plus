@@ -81,6 +81,23 @@ export function escapeCqText(text) {
 }
 
 /**
+ * 机器人在这个会话里"叫什么"：**群友/好友实际看到的名字优先** ——
+ * 群内展示名（群名片）→ 账号昵称（QQ 昵称）→ 机器人名字（控制台里的项目标识）。
+ *
+ * 聊天提示词、每日说说、空间互动、好友评估、看图判断全都走这一个口径：
+ * 各处各挑一个来源会出现"群里显示「犊子」、说说里却自称「小鲸鱼」"这类自相矛盾 ——
+ * 模型需要的是"别人叫我什么"，而不是控制台里的名字。
+ */
+export function resolveSelfName(persona = {}, accountNickname = '') {
+  // 逐个 trim 再判空：只写了空格的"群内展示名"要当成没填，落到账号昵称上
+  for (const value of [persona?.selfNickname, accountNickname, persona?.botName]) {
+    const name = String(value ?? '').trim();
+    if (name) return name;
+  }
+  return '我';
+}
+
+/**
  * 防提示注入/泄露：把用户昵称、消息文本里的“指令式方括号标记”弱化，
  * 避免群友伪装成系统段（如【本次唤醒】）骗模型。只处理外观，不改变语义。
  */

@@ -1,19 +1,21 @@
 import crypto from 'node:crypto';
+import { resolveSelfName } from '../core/util.js';
 
 export const QZONE_INTERACTION_PROMPT_VERSION = 'persona-qzone-interaction-v1';
 
-export function qzoneInteractionPersonaHash(persona = {}) {
+export function qzoneInteractionPersonaHash(persona = {}, accountNickname = '') {
   return crypto.createHash('sha256').update(JSON.stringify([
     persona.botName || '',
     persona.selfNickname || '',
+    resolveSelfName(persona, accountNickname),
     persona.roleText || '',
     persona.customRules || '',
     persona.participation || ''
   ])).digest('hex');
 }
 
-export function buildQzoneInteractionPrompt(persona = {}) {
-  const name = String(persona.selfNickname || persona.botName || '我');
+export function buildQzoneInteractionPrompt(persona = {}, { accountNickname = '' } = {}) {
+  const name = resolveSelfName(persona, accountNickname);
   const roleText = String(persona.roleText || '').trim();
   const customRules = String(persona.customRules || '').trim();
   return [

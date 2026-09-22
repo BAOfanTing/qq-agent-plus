@@ -573,7 +573,7 @@ export class DailyMomentsManager {
       scheduleAt: scheduleSlot?.at || 0,
       scheduleEndAt: scheduleSlot?.endAt || 0,
       promptVersion: MOMENT_PROMPT_VERSION,
-      personaHash: momentPersonaHash(getConfig().persona),
+      personaHash: momentPersonaHash(getConfig().persona, this.onebot?.selfNickname || ''),
       accountId: String(this.onebot.selfId || ''),
       publishAttempted: false,
       status: 'running',
@@ -722,7 +722,7 @@ export class DailyMomentsManager {
       throw momentError('MOMENT_ACCOUNT_CHANGED', 'QQ 登录账号已改变，请重新生成草稿');
     }
     if (record.promptVersion !== MOMENT_PROMPT_VERSION
-      || record.personaHash !== momentPersonaHash(cfg.persona)) {
+      || record.personaHash !== momentPersonaHash(cfg.persona, this.onebot?.selfNickname || '')) {
       throw momentError('MOMENT_PERSONA_CHANGED', '草稿的人设或提示词已过期，请按当前设置重新生成');
     }
     if ((record.groupSummaries || []).some((group) => !chatAllowed(group.chatKey, cfg))) {
@@ -1003,8 +1003,8 @@ export class DailyMomentsManager {
   async #decide(snapshot, cfg, session, signal) {
     const rootConfig = getConfig();
     const style = STYLE_SEEDS[Math.floor(this.random() * STYLE_SEEDS.length)] || STYLE_SEEDS[0];
-    const systemPrompt = buildMomentSystemPrompt(rootConfig.persona);
-    const personaHash = momentPersonaHash(rootConfig.persona);
+    const systemPrompt = buildMomentSystemPrompt(rootConfig.persona, { accountNickname: this.onebot?.selfNickname || '' });
+    const personaHash = momentPersonaHash(rootConfig.persona, this.onebot?.selfNickname || '');
     const recentPosts = this.state.records.filter((record) => record.status === 'published')
       .slice(0, 5).map((record) => ({ day: record.dayKey, content: record.content }));
     const userPrompt = [
