@@ -832,7 +832,7 @@ function formatElapsed(seconds) {
   return `${Math.floor(minutes / 60)} 小时 ${String(minutes % 60).padStart(2, '0')} 分`;
 }
 
-function updateProgressText(update = {}) {
+function updateProgressStage(update = {}) {
   if (update.busy !== true) return '';
   const status = String(update.status || '');
   const phase = String(update.phase || '');
@@ -840,19 +840,35 @@ function updateProgressText(update = {}) {
   const label = status === 'queued'
     ? UPDATE_STATUS_LABELS.queued
     : (UPDATE_PHASE_LABELS[phase] || UPDATE_STATUS_LABELS[status] || '更新进行中');
-  const version = String(update.targetVersion || update.version || '').trim();
+  // targetVersion 只有"手动更新提交时"和"更新器解析出 Release 后"才有；
+  // 不能拿 state.version 兜底 —— 那是状态文件的 schema 版本（恒为 1）。
+  const version = String(update.targetVersion || '').trim();
   // 连通性测试（probe）只探通道、不部署，文案别说成"正在更新"
   const probe = String(update.mode || '') === 'probe';
+  return probe ? `正在探测更新通道：${label}` : `正在更新${version ? `到 ${version}` : ''}：${label}`;
+}
+
+function updateProgressElapsed(update = {}) {
+  if (update.busy !== true) return '';
   const now = Date.now();
   const started = Number(update.startedAt || 0) || Number(update.updatedAt || 0);
   const stageAt = Number(update.progressAt || 0) || started;
-  const parts = [probe ? `正在探测更新通道：${label}` : `正在更新${version ? `到 ${version}` : ''}：${label}`];
+  const parts = [];
   if (stageAt) parts.push(`本阶段 ${formatElapsed((now - stageAt) / 1000)}`);
   if (started && stageAt && started !== stageAt) parts.push(`总计 ${formatElapsed((now - started) / 1000)}`);
   return parts.join(' · ');
 }
 
+function updateProgressText(update = {}) {
+  const stage = updateProgressStage(update);
+  if (!stage) return '';
+  const elapsed = updateProgressElapsed(update);
+  return elapsed ? `${stage} · ${elapsed}` : stage;
+}
+
 // 进度里的耗时每秒刷新；只在控制页且更新仍在跑时工作，跑完或切页后自动停。
+// 注意：这里直接写 textContent —— setText 是 updateControlHubFields 里的局部函数，
+// 模块作用域拿不到（曾经在这里调它，导致更新期间每秒抛一次 ReferenceError）。
 let updateProgressTicker = null;
 function startUpdateProgressTicker() {
   if (updateProgressTicker) return;
@@ -863,7 +879,9 @@ function startUpdateProgressTicker() {
       updateProgressTicker = null;
       return;
     }
-    setText(document.getElementById('hub-deploy-progress-text'), updateProgressText(state.autoUpdateStatus || {}));
+    const el = document.getElementById('hub-deploy-progress-elapsed');
+    const next = updateProgressElapsed(state.autoUpdateStatus || {});
+    if (el && el.textContent !== next) el.textContent = next;
   }, 1000);
 }
 
@@ -891,8 +909,7 @@ function renderControlHub(data = {}) {
   const revision = (value) => value ? String(value).slice(0, 12) : '-';
   // 更新进度行：结构只建一次，这里的初值 + updateControlHubFields 里的实时同步
   // 一起保证"点完立即更新马上能看到阶段与耗时"。没有在跑时留空并隐藏。
-  const progressLine = updateProgressText(update);
-  const __html = `
+  const progressLine = updateProgressText(update);  const __html = `
     <div class="control-head">
       <div><h2>服务与访问控制</h2><span class="muted">统一入口</span></div>
       <button type="button" class="icon-btn" id="control-refresh" title="刷新服务状态" aria-label="刷新服务状态">↻</button>
@@ -922,7 +939,8 @@ function renderControlHub(data = {}) {
       <div class="muted" data-hub-update-check style="margin-top:6px;font-size:12px;line-height:1.5">${renderUpdateCheckNote(update)}</div>
       <div class="update-deploy-progress${progressLine ? '' : ' hidden'}" id="hub-deploy-progress">
         <span class="loading-spinner" aria-hidden="true"></span>
-        <span class="update-deploy-progress-text" id="hub-deploy-progress-text" role="status" aria-live="polite">${esc(progressLine)}</span>
+        <span class="update-deploy-progress-text" id="hub-deploy-progress-text" role="status" aria-live="polite">${esc(updateProgressStage(update))}</span>
+        <span class="update-deploy-progress-elapsed" id="hub-deploy-progress-elapsed" aria-hidden="true">${esc(updateProgressElapsed(update))}</span>
       </div>
       <div class="update-deploy-settings">
         <label><span>告警管理员 QQ</span><input type="text" id="auto-update-owner" inputmode="numeric" value="${esc(update.ownerUin || '')}" /></label>
@@ -1065,7 +1083,9 @@ function updateControlHubFields(box, statuses, update) {
   const progressBox = document.getElementById('hub-deploy-progress');
   if (progressBox) {
     const line = updateProgressText(update);
-    setText(document.getElementById('hub-deploy-progress-text'), line);
+    // 阶段走 aria-live（变化时播报），耗时放 aria-hidden —— 否则读屏每秒念一次
+    setText(document.getElementById('hub-deploy-progress-text'), updateProgressStage(update));
+    setText(document.getElementById('hub-deploy-progress-elapsed'), updateProgressElapsed(update));
     progressBox.classList.toggle('hidden', !line);
     if (line) startUpdateProgressTicker();
   }
@@ -1103,6 +1123,11 @@ async function loadControlHub({ force = false } = {}) {
     state.autoUpdateStatus = update;
     if (state.tab === 'control') renderControlHub(state.integrationStatus);
   } catch (error) {
+    // 读取失败（部署重启期间很常见）会把结构换成错误提示，此时必须把 __hubBuilt 归零：
+    // 否则下一次成功刷新只跑 updateControlHubFields，元素已不在 DOM，页面永远停在
+    // 这句错误提示上（按钮也失效）——进度行同样会被吞掉。
+    box.__hubBuilt = false;
+    box.__renderedHtml = null;
     box.innerHTML = `<div class="empty-hint">服务状态读取失败：${esc(error.message)}</div>`;
   }
 }

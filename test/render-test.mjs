@@ -817,12 +817,13 @@ try {
     progressAt: Date.now() - 65000
   })};`, ctx);
   ctx.renderControlHub({ services: [] });
-  const progressText = String(document.getElementById('hub-deploy-progress-text')?.textContent || '');
+  const progressStage = String(document.getElementById('hub-deploy-progress-text')?.textContent || '');
+  const progressElapsed = String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '');
   const progressShownOk = !document.getElementById('hub-deploy-progress').classList.contains('hidden')
-    && progressText.includes('v9.9.9')
-    && progressText.includes('部署（服务会短暂重启）')
-    && progressText.includes('本阶段 1 分')
-    && progressText.includes('总计 2 分');
+    && progressStage.includes('v9.9.9')
+    && progressStage.includes('部署（服务会短暂重启）')
+    && progressElapsed.includes('本阶段 1 分')
+    && progressElapsed.includes('总计 2 分');
   const queuedText = String(ctx.updateProgressText({
     busy: true, status: 'queued', phase: 'complete', progressAt: Date.now() - 4000
   }) || '');
@@ -837,6 +838,7 @@ try {
   ctx.renderControlHub({ services: [] });
   const progressHiddenOk = document.getElementById('hub-deploy-progress').classList.contains('hidden') === true
     && String(document.getElementById('hub-deploy-progress-text')?.textContent || '') === ''
+    && String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '') === ''
     && idleText === '';
   if (progressShownOk && progressQueuedOk && progressHiddenOk && progressProbeOk) {
     pass++;
@@ -845,6 +847,22 @@ try {
     fail++;
     console.log(`  FAIL  更新进度行异常（显示 ${progressShownOk} / 排队 ${progressQueuedOk} / 隐藏 ${progressHiddenOk} / 探测 ${progressProbeOk}）`);
   }
+
+  // 1 秒定时器必须真的能跑：曾经回调里调了 updateControlHubFields 的局部 setText，
+  // 更新期间每秒抛 ReferenceError；只因当时 tab 没停在 control，测试没抓到。
+  vm.runInContext(`state.tab = 'control'; state.autoUpdateStatus = ${JSON.stringify({
+    installed: true, enabled: true, busy: true, status: 'deploying', phase: 'deploying',
+    targetVersion: 'v9.9.9', startedAt: Date.now() - 3000, progressAt: Date.now() - 3000
+  })};`, ctx);
+  ctx.renderControlHub({ services: [] });
+  const elapsedBefore = String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '');
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const elapsedAfter = String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '');
+  const tickerOk = elapsedBefore !== elapsedAfter && /本阶段 [1-9]\d* 秒/.test(elapsedAfter);
+  vm.runInContext('state.tab = "sessions"; state.autoUpdateStatus = { installed: true, enabled: true, busy: false, status: "succeeded", phase: "complete" };', ctx);
+  tickerOk ? pass++ : fail++;
+  console.log('  ' + (tickerOk ? 'OK   ' : 'FAIL ') + '进度行每秒刷新本阶段耗时（定时器真的在跑）'
+    + (tickerOk ? '' : ` -> "${elapsedBefore}" 到 "${elapsedAfter}"`));
   const timeHtml = ctx.renderTimeControlSection({
     ...cfg, allow: { groups: ['123'], private: ['456'] }
   });

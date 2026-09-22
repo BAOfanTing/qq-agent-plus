@@ -1689,6 +1689,7 @@ html.boot-show .loading-overlay { opacity: 1; }
 }
 .update-deploy-progress .loading-spinner { width: 14px; height: 14px; border-width: 2px; flex: none; }
 .update-deploy-progress-text { min-width: 0; overflow-wrap: anywhere; }
+.update-deploy-progress-elapsed { color: var(--muted); flex: none; }
 .update-deploy-settings {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(140px, .5fr) auto;

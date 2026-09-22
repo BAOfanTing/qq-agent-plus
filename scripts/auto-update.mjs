@@ -743,6 +743,9 @@ async function run() {
     mode,
     phase,
     lastCheckAt: now,
+    // 阶段推进要续期：这一阶段包含 GitHub 查询与 git fetch，可能几分钟；
+    // 不续期的话控制台进度行会把"整轮耗时"当成"本阶段耗时"显示。
+    progressAt: Date.now(),
     connectivity
   });
 
