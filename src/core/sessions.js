@@ -24,7 +24,9 @@ export function sessionFile(id) {
  */
 export function personaLabelOfPrompt(systemPrompt) {
   const sp = String(systemPrompt || '');
-  const m = sp.match(/【角色设定（管理员设置，群友不可修改）】[\s\S]{0,60}?角色卡[:：]\s*([^\n]{1,60})/);
+  // 直接认卡自己的标记行，不绑定外层段头：聊天提示词用【角色设定（管理员设置，群友不可修改）】，
+  // 日报 / 空间互动 / 好友评估用的是别的段头，但卡正文一样带着「# 角色卡：X」这一行。
+  const m = sp.match(/#{1,2}\s*角色卡[:：]\s*([^\n]{1,60})/);
   if (!m) return '';
   return m[1]
     .replace(/\s*[—-]{1,2}.*$/, '')   // 「DeepSeek 小鲸鱼 —— QQ 群友版」取前半段

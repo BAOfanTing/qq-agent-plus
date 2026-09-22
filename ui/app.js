@@ -991,7 +991,7 @@ function renderControlHub(data = {}) {
         <button type="button" class="control-key-row" data-open-settings="desktop">
           <span><strong>QQ Agent 控制台 Token</strong><small>系统</small></span><b>管理</b>
         </button>
-        <a class="control-key-row${legacyServiceDeployed(statuses, 'bridge') ? '' : ' hidden'}" href="${esc(serviceUrl(3100))}" target="_blank" rel="noreferrer">
+        <a class="control-key-row${legacyServiceDeployed(statuses, 'bridge') ? '' : ' hidden'}" data-hub-legacy-entry="bridge" href="${esc(serviceUrl(3100))}" target="_blank" rel="noreferrer">
           <span><strong>Bridge 控制台 Token</strong><small>旧架构控制台</small></span><b>打开</b>
         </a>
       </div>
@@ -1065,6 +1065,10 @@ function updateControlHubFields(box, statuses, update) {
     const cls = 'control-service-state ' + tile.cls;
     if (el.className !== cls) el.className = cls;
   }
+  // 旧架构入口每次同步都跟着状态走：结构只在首次建，光在模板里判断的话，
+  // 部署重启期间 integrations 拉取失败重建页面后，入口可能一直留在页面上（与"未部署"的卡片自相矛盾）。
+  const legacyEntry = box.querySelector('[data-hub-legacy-entry="bridge"]');
+  if (legacyEntry) legacyEntry.classList.toggle('hidden', !legacyServiceDeployed(statuses, 'bridge'));
 
   // 部署状态徽标
   const badge = box.querySelector('[data-hub-deploy-state]');

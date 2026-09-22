@@ -840,7 +840,7 @@ try {
   // 状态是写进 controlBox 自己的 querySelector 桩里的（假 DOM 不解析 HTML），
   // 所以要从同一个元素读，不能从 document 上另取一个桩。
   const tileOf = (id) => controlBox.querySelector(`[data-hub-service="${id}"] .control-service-state`);
-  const bridgeRowHidden = () => /class="control-key-row hidden" href="[^"]*:3100/.test(String(controlBox.innerHTML || ''));
+  const bridgeRowHidden = () => /class="control-key-row hidden" data-hub-legacy-entry="bridge" href="[^"]*:3100/.test(String(controlBox.innerHTML || ''));
   renderHubFor([
     { id: 'agent', online: true },
     { id: 'dsh', online: false, optional: true, configured: false },

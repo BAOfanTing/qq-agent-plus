@@ -133,6 +133,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
             activity: s.activity ?? '',
             webSearchCount: s.webSearchCount ?? 0,
             rounds: s.rounds ?? 0,
+            // 人设标记要随 SSE 一起推：session-start 早于 systemPrompt 赋值，
+            // 不带的话新会话的卡片要等下一次 HTTP 轮询（默认 4 秒）才补上。
+            persona: view.persona || '',
             usage: s.usage ?? null,
             trigger: s.triggerSummary ?? '',
             triggerSummary: s.triggerSummary ?? '',
