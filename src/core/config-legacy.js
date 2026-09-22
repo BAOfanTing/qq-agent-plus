@@ -3,7 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PERSONAS, normalizeBehaviorProfile } from '../personas.js';
-import { sliderToTier } from './tier-slider.js';   // 零依赖模块，避免循环依赖
+import {
+  clampProbability,
+  legacySliderToProbability,
+  legacyTierToProbability,
+  sliderToTier
+} from './tier-slider.js';   // 零依赖模块，避免循环依赖
 import { DEFAULT_TIME_CONTROL, normalizeTimeControl } from './time-control.js';
 import { normalizeMomentWindows } from '../features/moment-schedule.js';
 
@@ -338,22 +343,24 @@ export const DEFAULT_CONFIG = {
     //   - store 的 #trim 在 maxPerChat<=0 时直接跳过
     // 注意：单群文件会随时间增长，磁盘占用请自行留意。
     maxMessagesPerChat: 0,
-    // ── 上下文读取档位（决定本次唤醒读多少条历史）──
-    // 档位是"累积生效"的：选 4 档时 1/2/3 档也都生效，按 4→3→2→1 顺序检查，
-    // 第一个命中的决定读取条数。这个设置替代了原来的 pastStateLimit 固定值。
-    contextTier: 4,             // 1=仅艾特 2=+关键词 3=+随机 4=全读
-    atCount: 300,
-    keywordCount: 100,
-    keywords: [],               // 档2 的关键词表
-    randomPercent: 10,          // 档3：y% 概率
-    randomCount: 60,
-    allCount: 300,
+    // ── 响应概率（滑条上的数字就是概率）──
+    // 0 = 只回 @ 和关键词；100 = 任何消息都响应；中间值 = 普通消息按该概率响应。
+    // 被 @ 或命中关键词一定响应，不受这个数字影响。
+    contextSliderPos: 100,      // 滑条位置 = 概率（0~100）
+    sliderMode: 'probability',  // 标记这套语义；老配置（四段式滑条）保存时一次性换算
+    contextTier: 4,             // 派生：0%→1、中间→3、100%→4（决定读多少条已读、触发方式展示）
+    atCount: 300,               // 被艾特时读多少条已读
+    keywordCount: 100,          // 命中关键词时读多少条
+    keywords: [],               // 关键词表（清空就只回 @）
+    randomPercent: 100,         // 派生 = 概率（运行时判定用的就是它）
+    randomCount: 60,            // 按概率响应时读多少条
+    allCount: 300,              // 全响应时读多少条
     batchLimit: 100,
     batchMaxChars: 32000,
     pastStateMaxChars: 24000,
     // ── 响应档位的作用范围 ──
     unifiedTier: true,          // true = 上方滑条对所有会话生效；false = 可按群单独设置
-    groupSliderPos: {},         // { [群号]: 0~100 } 仅 unifiedTier=false 时生效；未设置的群/私聊跟随全局滑条
+    groupSliderPos: {},         // { [群号]: 概率 0~100 } 仅 unifiedTier=false 时生效；未设置的群/私聊跟随全局
     keepSessionFiles: 2000
   },
   // 屏蔽名单：{ [群号]: [QQ号, ...] }
@@ -848,15 +855,31 @@ export function updateConfig(patch) {
   }
   currentConfig = next;
 
-  // ── 响应档位：以滑条位置为唯一真相，派生 tier 与随机概率 ──
-  // 前端只负责上报滑条位置（contextSliderPos），档位和概率一律由这里换算。
+  // ── 响应概率：以滑条位置为唯一真相 ──
+  // 滑条上的数字就是概率（0~100）；前端只负责上报位置，档位与概率一律由这里派生，
   // 这样即使前端算错、或者有人直接调接口只传位置，配置也不会自相矛盾。
-  const posRaw = currentConfig?.store?.contextSliderPos;
-  if (posRaw !== undefined && posRaw !== null) {
-    const { tier, randomPercent } = sliderToTier(posRaw);
-    currentConfig.store.contextTier = tier;
-    currentConfig.store.randomPercent = randomPercent;
+  // 老配置（四段式滑条，没有 sliderMode 标记）在这里一次性换算成概率，
+  // 免得升级后"1/2 档"的用户突然开始按概率接话。
+  const storeNow = currentConfig?.store || {};
+  const migrated = storeNow.sliderMode !== 'probability';
+  const probability = migrated
+    ? (storeNow.contextSliderPos !== undefined && storeNow.contextSliderPos !== null
+        ? legacySliderToProbability(storeNow.contextSliderPos)
+        : legacyTierToProbability(storeNow.contextTier, storeNow.randomPercent))
+    : clampProbability(storeNow.contextSliderPos);
+  const derived = sliderToTier(probability);
+  const groupSliderPos = {};
+  for (const [groupId, pos] of Object.entries(storeNow.groupSliderPos || {})) {
+    groupSliderPos[groupId] = migrated ? legacySliderToProbability(pos) : clampProbability(pos);
   }
+  currentConfig.store = {
+    ...storeNow,
+    sliderMode: 'probability',
+    contextSliderPos: probability,
+    contextTier: derived.tier,
+    randomPercent: derived.randomPercent,
+    groupSliderPos
+  };
 
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   const tmp = `${CONFIG_FILE}.tmp`;
@@ -875,7 +898,7 @@ export function setRuntimeConfig(cfg) {
 /**
  * 取某个会话实际生效的 store 档位配置。
  * unifiedTier 开启 → 全局 store 原样返回；
- * 关闭 → 群聊查 groupSliderPos，有单独设置就换算出该群的 tier/randomPercent，
+ * 关闭 → 群聊查 groupSliderPos（存的就是概率），换算出该群的 tier/randomPercent，
  * 其余字段（各档读取条数、关键词表）沿用全局值。私聊永远跟随全局档位。
  */
 export function storeConfigForChat(chatKey) {
@@ -885,7 +908,11 @@ export function storeConfigForChat(chatKey) {
   if (kind !== 'group' || !id) return store;
   const pos = store.groupSliderPos?.[id];
   if (pos === undefined || pos === null) return store;
-  const { tier, randomPercent } = sliderToTier(Number(pos));
+  // 老配置（还没保存过）里的分群位置是四段式的，先换算成概率
+  const probability = store.sliderMode === 'probability'
+    ? clampProbability(pos)
+    : legacySliderToProbability(pos);
+  const { tier, randomPercent } = sliderToTier(probability);
   return { ...store, contextTier: tier, randomPercent };
 }
 

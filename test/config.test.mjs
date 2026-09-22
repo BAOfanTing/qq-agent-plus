@@ -179,3 +179,46 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.equal(saved.incidentPilot.enabled, true);
   assert.deepEqual(saved.slangPilot, { enabled: false, graduated: false });
 });
+
+test('响应滑条：滑条值就是概率，老配置保存时一次性迁移过来', async () => {
+  const { updateConfig } = await import('../src/core/config.js');
+
+  // 新语义：传什么就是多少概率（0 是合法值，不能被当成"没填"回落成 100）
+  const zero = updateConfig({ store: { contextSliderPos: 0, sliderMode: 'probability' } });
+  assert.equal(zero.store.randomPercent, 0, '0% = 只回 @ 和关键词');
+  assert.equal(zero.store.contextTier, 1, '0% 归 1 档展示');
+  const mid = updateConfig({ store: { contextSliderPos: 43, sliderMode: 'probability' } });
+  assert.equal(mid.store.randomPercent, 43);
+  assert.equal(mid.store.contextTier, 3);
+  const full = updateConfig({ store: { contextSliderPos: 100, sliderMode: 'probability' } });
+  assert.equal(full.store.randomPercent, 100);
+  assert.equal(full.store.contextTier, 4, '100% = 全响应');
+
+  // 老配置（四段式，没打标记）保存时换算：老 1/2 档不掷骰子 → 0%
+  const legacy1 = updateConfig({ store: { contextSliderPos: 5, sliderMode: '', contextTier: 1, randomPercent: 0 } });
+  assert.equal(legacy1.store.randomPercent, 0, '老 1 档（仅艾特）迁移成 0%');
+  const legacy2 = updateConfig({ store: { contextSliderPos: 15, sliderMode: '', contextTier: 2, randomPercent: 0 } });
+  assert.equal(legacy2.store.randomPercent, 0, '老 2 档（+关键词）迁移成 0%');
+  const legacy3 = updateConfig({ store: { contextSliderPos: 55, sliderMode: '', contextTier: 3, randomPercent: 50 } });
+  assert.equal(legacy3.store.randomPercent, 50, '老 3 档的概率原样保留');
+  const legacy4 = updateConfig({ store: { contextSliderPos: 95, sliderMode: '', contextTier: 4, randomPercent: 100 } });
+  assert.equal(legacy4.store.randomPercent, 100, '老 4 档（全响应）迁移成 100%');
+  assert.equal(legacy4.store.sliderMode, 'probability', '迁移后要打上标记，别重复换算');
+
+  // 老配置连滑条位置都没有（只有 tier/概率）也要能迁
+  const legacyNoPos = updateConfig({ store: { contextSliderPos: null, sliderMode: '', contextTier: 3, randomPercent: 24.3 } });
+  assert.equal(legacyNoPos.store.randomPercent, 24.3);
+  const legacyNoPos4 = updateConfig({ store: { contextSliderPos: null, sliderMode: '', contextTier: 4, randomPercent: 0 } });
+  assert.equal(legacyNoPos4.store.randomPercent, 100, '老 4 档没有位置时按全响应');
+
+  // 分群滑条（存的是概率）跟着迁移
+  const grouped = updateConfig({
+    store: { sliderMode: '', contextTier: 4, randomPercent: 100, groupSliderPos: { '111': 5, '222': 55 } }
+  });
+  assert.deepEqual(grouped.store.groupSliderPos, { '111': 0, '222': 50 }, '分群的老位置也要换算成概率');
+  // 界面保存分群表时带 __replace__（删掉的群要真删），这里用同一套写法
+  const groupedNew = updateConfig({
+    store: { sliderMode: 'probability', groupSliderPos: { __replace__: { '111': 30 } } }
+  });
+  assert.deepEqual(groupedNew.store.groupSliderPos, { '111': 30 }, '新语义下原样保留');
+});

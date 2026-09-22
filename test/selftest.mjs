@@ -1694,9 +1694,10 @@ async function main() {
   {
     const { resolveContextTier, isAtMe, hitKeyword } = await import('../src/llm/prompt.js');
     const OPT = { selfNickname: '小鲸鱼', botName: '小鲸鱼', selfId: '3113678561' };
-    // 各档条数刻意设成不同值，便于验证"触发原因决定条数"
+    // 各条数刻意设成不同值，便于验证"触发原因决定读多少条"
+    // （2026-09-22 起滑条值就是概率：判定只看 randomPercent，tier 仅用于展示与选条数）
     const CFG = {
-      contextTier: 1, atCount: 5, keywordCount: 10,
+      atCount: 5, keywordCount: 10,
       keywords: ['大肥鱼'], randomPercent: 10, randomCount: 20, allCount: 50
     };
 
@@ -1715,41 +1716,37 @@ async function main() {
     const kw = [{ text: '大肥鱼 帮我' }];
     const plain = [{ text: '今天天气不错' }];
 
-    // ── 核心：各档条数独立，由"触发原因"决定，不是由"档位上限"决定 ──
+    // ── 核心：读多少条由"触发原因"决定 ──
     const tbl = [
-      // [档位, 消息, 应响应?, 应带已读条数, 说明]
-      [1, at, true, 5, '1档+艾特 → atCount'],
-      [1, kw, false, 0, '1档+关键词 → 不响应'],
-      [1, plain, false, 0, '1档+普通 → 不响应'],
-      [2, at, true, 5, '2档+艾特 → 仍是艾特档 5 条'],
-      [2, kw, true, 10, '2档+关键词 → keywordCount'],
-      [2, plain, false, 0, '2档+普通 → 不响应'],
-      [3, at, true, 5, '3档+艾特 → 仍是艾特档 5 条（关键）'],
-      [3, kw, true, 10, '3档+关键词 → 仍是关键词档 10 条'],
-      [3, plain, true, 20, '3档+普通随机命中 → randomCount'],
-      [4, plain, true, 50, '4档+普通 → allCount']
+      // [概率, 消息, 掷骰子, 应响应?, 应带已读条数, 说明]
+      [0, at, 5, true, 5, '0% + 艾特 → 一定回，atCount'],
+      [0, kw, 5, true, 10, '0% + 关键词 → 一定回，keywordCount'],
+      [0, plain, 5, false, 0, '0% + 普通 → 不回'],
+      [10, at, 5, true, 5, '10% + 艾特 → 仍是 atCount'],
+      [10, kw, 50, true, 10, '10% + 关键词 → 仍是 keywordCount（不看概率）'],
+      [10, plain, 5, true, 20, '10% + 普通且掷中 → randomCount'],
+      [10, plain, 50, false, 0, '10% + 普通未掷中 → 不回'],
+      [100, plain, 99, true, 50, '100% + 普通 → allCount'],
+      [100, at, 99, true, 5, '100% + 艾特 → 还是 atCount']
     ];
-    for (const [tier, ents, should, count, desc] of tbl) {
-      const r = resolveContextTier({ triggerEntries: ents, cfg: { ...CFG, contextTier: tier }, ...OPT, roll: 5 });
+    for (const [probability, ents, roll, should, count, desc] of tbl) {
+      const r = resolveContextTier({
+        triggerEntries: ents, cfg: { ...CFG, randomPercent: probability }, ...OPT, roll
+      });
       assert.equal(r.shouldRespond, should, `${desc}：shouldRespond 应为 ${should}`);
       assert.equal(r.count, count, `${desc}：应带 ${count} 条，实际 ${r.count}`);
     }
 
-    // 随机未中时不响应（1~3 档）
-    for (const tier of [1, 2, 3]) {
-      const r = resolveContextTier({ triggerEntries: plain, cfg: { ...CFG, contextTier: tier }, ...OPT, roll: 50 });
-      assert.equal(r.shouldRespond, false, `${tier} 档随机未中应不响应`);
-    }
-
-    // 档位钳制：0 不能被当成"未设置"回落成 4
-    const r0 = resolveContextTier({ triggerEntries: plain, cfg: { ...CFG, contextTier: 0 }, ...OPT, roll: 50 });
-    assert.ok(r0.tier <= 1, `档位 0 应钳到 1，实际 ${r0.tier}`);
+    // 概率 0 不能被当成"未设置"回落成全响应
+    const r0 = resolveContextTier({ triggerEntries: plain, cfg: { ...CFG, randomPercent: 0 }, ...OPT, roll: 50 });
+    assert.equal(r0.shouldRespond, false, '概率 0 时普通消息不该响应');
+    assert.ok(r0.tier <= 1, `概率 0 应归到 1 档展示，实际 ${r0.tier}`);
 
     // 随机结果可固定
-    const a = resolveContextTier({ triggerEntries: plain, cfg: { ...CFG, contextTier: 3 }, ...OPT, roll: 5 });
-    const b = resolveContextTier({ triggerEntries: plain, cfg: { ...CFG, contextTier: 3 }, ...OPT, roll: 5 });
+    const a = resolveContextTier({ triggerEntries: plain, cfg: { ...CFG, randomPercent: 50 }, ...OPT, roll: 5 });
+    const b = resolveContextTier({ triggerEntries: plain, cfg: { ...CFG, randomPercent: 50 }, ...OPT, roll: 5 });
     assert.equal(a.tier, b.tier, '同一 roll 结果应一致（不重掷）');
-    pass('响应档位：未命中不响应，各档已读条数互相独立');
+    pass('响应概率：被@/关键词一定回，其余按概率，读数由触发原因决定');
   }
 
   // ── 场景 30：关键控件的基础样式完整性 ──
@@ -1957,55 +1954,69 @@ async function main() {
     pass('未命中标记已读：消息沉入历史、不重复触发');
   }
 
-  // ── 场景 33：响应档位滑条（位置↔档位/概率）──
+  // ── 场景 33：响应滑条（滑条值 = 概率）──
   {
-    const { sliderToTier, tierToSlider } = await import('../src/core/tier-slider.js');
+    const {
+      clampProbability, legacySliderToProbability, legacyTierToProbability, sliderToTier, tierToSlider
+    } = await import('../src/core/tier-slider.js');
 
-    // 分区边界
-    for (const [pos, want] of [[0, 1], [5, 1], [10, 1], [15, 2], [20, 2], [30, 3], [55, 3], [90, 3], [95, 4], [100, 4]]) {
-      assert.equal(sliderToTier(pos).tier, want, `滑条 ${pos}% 应为 ${want} 档`);
+    // 滑条值就是概率：拖到多少就是多少（不再分段换算）
+    for (const pos of [0, 5, 24.3, 50, 55, 90, 99, 100]) {
+      assert.ok(Math.abs(sliderToTier(pos).randomPercent - pos) < 0.05,
+        `滑条 ${pos}% 的概率就该是 ${pos}%，实际 ${sliderToTier(pos).randomPercent}%`);
     }
+    // 档位只剩三种展示口径：0 → 1、中间 → 3、100 → 4
+    assert.equal(sliderToTier(0).tier, 1);
+    for (const pos of [0.5, 50, 99]) assert.equal(sliderToTier(pos).tier, 3, `${pos}% 应是 3 档（中间概率）`);
+    assert.equal(sliderToTier(100).tier, 4);
 
-    // 3 档概率线性（关键：55% 处正好 50%）
-    for (const [pos, want] of [[20, 0], [55, 50], [90, 100]]) {
-      const r = sliderToTier(pos);
-      assert.ok(Math.abs(r.randomPercent - want) < 0.6,
-        `滑条 ${pos}% 概率应约 ${want}%，实际 ${r.randomPercent}%`);
-    }
-    // 单调递增：拖得越右概率越高
-    let prev = -1;
-    for (let p = 20; p <= 90; p += 5) {
-      const cur = sliderToTier(p).randomPercent;
-      assert.ok(cur > prev, `概率应随位置递增（${p}% 处 ${cur} 不大于前一个 ${prev}）`);
-      prev = cur;
-    }
+    // 越界与非法值：钳到 0~100；非法回落 100（与"没填=全响应"的老默认一致）
+    assert.equal(clampProbability(-10), 0, '负数钳到 0');
+    assert.equal(clampProbability(150), 100, '超 100 钳到 100');
+    assert.equal(clampProbability(NaN), 100, 'NaN 回落 100');
+    assert.equal(clampProbability(undefined, 0), 0, '迁移场景可指定回落值');
 
-    // 往返一致：位置 → 档位 → 位置，档位不变
-    for (const pos of [5, 15, 30, 55, 80, 95]) {
-      const r = sliderToTier(pos);
-      const back = tierToSlider(r.tier, r.randomPercent);
-      assert.equal(sliderToTier(back).tier, r.tier, `${pos}% 往返后档位应保持一致`);
-    }
+    // 老配置（tier/概率）→ 概率：1/2 档不掷骰子 → 0%；3 档保留概率；4 档 → 100%
+    assert.equal(tierToSlider(1, 0), 0);
+    assert.equal(tierToSlider(2, 0), 0);
+    assert.equal(tierToSlider(3, 24.3), 24.3);
+    assert.equal(tierToSlider(4, 100), 100);
 
-    // 越界与非法值
-    assert.equal(sliderToTier(-10).tier, 1, '负数应钳到 1 档');
-    assert.equal(sliderToTier(150).tier, 4, '超 100 应钳到 4 档');
-    assert.equal(sliderToTier(NaN).tier, 4, 'NaN 应回落到 4 档');
+    // 老四段式滑条位置 → 概率（一次性迁移）：0~20 → 0；20~90 线性；90~100 → 100
+    assert.equal(legacySliderToProbability(5), 0, '老 1 档（仅艾特）→ 0%');
+    assert.equal(legacySliderToProbability(15), 0, '老 2 档（+关键词）→ 0%');
+    assert.equal(legacySliderToProbability(55), 50, '老 3 档正中 → 50%');
+    assert.equal(legacySliderToProbability(95), 100, '老 4 档（全响应）→ 100%');
+    assert.equal(legacyTierToProbability(2, 0), 0);
+    assert.equal(legacyTierToProbability(3, 24.3), 24.3);
+    assert.equal(legacyTierToProbability(4, 0), 100);
 
-    // 后端权威派生：只传滑条位置，后端应算出档位与概率
+    // 后端权威派生：只传滑条位置，后端应算出概率与档位；老配置保存时一次性迁移
     const { updateConfig } = await import('../src/core/config.js');
     const fs2 = await import('node:fs');
     const configPath = path.join(dataDir, 'config.json');
     const backup = fs2.readFileSync(configPath, 'utf8');
     try {
-      const n = updateConfig({ store: { contextSliderPos: 55 } });
-      assert.equal(n.store.contextTier, 3, '后端应把 55% 派生为 3 档');
-      assert.ok(Math.abs(n.store.randomPercent - 50) < 1, '后端应把 55% 派生为 50% 概率');
+      const n = updateConfig({ store: { contextSliderPos: 43 } });
+      assert.equal(n.store.randomPercent, 43, '后端应把滑条 43 派生为 43%');
+      assert.equal(n.store.contextTier, 3, '中间概率归 3 档展示');
+      assert.equal(n.store.sliderMode, 'probability', '要打上新语义的标记');
+
+      // 模拟"没迁移过的老配置"：四段式位置 15（老 2 档）→ 0%
+      const legacy = updateConfig({ store: { contextSliderPos: 15, sliderMode: '', contextTier: 2, randomPercent: 0 } });
+      assert.equal(legacy.store.randomPercent, 0, '老 2 档迁移后是 0%（不掷骰子）');
+      assert.equal(legacy.store.contextSliderPos, 0, '滑条位置也落在 0');
+      // 老 3 档带概率 24.3 → 原样保留
+      const legacy3 = updateConfig({ store: { contextSliderPos: 37, sliderMode: '', contextTier: 3, randomPercent: 24.3 } });
+      assert.equal(legacy3.store.randomPercent, 24.3, '老 3 档的概率要原样搬过来');
+      // 连滑条位置都没有的老配置（只有 tier/概率）
+      const legacyTierOnly = updateConfig({ store: { contextSliderPos: null, sliderMode: '', contextTier: 4, randomPercent: 100 } });
+      assert.equal(legacyTierOnly.store.randomPercent, 100, '老 4 档 → 100%（全响应不变）');
     } finally {
       fs2.writeFileSync(configPath, backup, 'utf8');
       updateConfig({ store: { contextSliderPos: 100 } });
     }
-    pass('响应档位滑条：分区 + 概率线性 + 后端权威派生');
+    pass('响应滑条：滑条值=概率 + 老配置一次性迁移 + 后端权威派生');
   }
 
   // ── 场景 34：搜索次数 + 工具调用明细（次数不进成本）──

@@ -7628,43 +7628,83 @@ function clampInt(raw, min, max, fallback) {
  *    但两边不一致会让"界面显示的档位"和"实际生效的档位"对不上，造成困惑。
  *    ui/app.js 是普通 script（非 ES module），无法 import，只能镜像一份。
  */
-const TIER_SLIDER_BANDS = { tier1End: 10, tier2End: 20, tier3End: 90 };
-
-function sliderToTierUI(pos) {
-  const b = TIER_SLIDER_BANDS;
-  const raw = Number(pos);
-  if (!Number.isFinite(raw)) return { tier: 4, randomPercent: 100 };
-  const p = Math.min(100, Math.max(0, raw));
-  if (p <= b.tier1End) return { tier: 1, randomPercent: 0 };
-  if (p <= b.tier2End) return { tier: 2, randomPercent: 0 };
-  if (p <= b.tier3End) {
-    const pct = ((p - b.tier2End) / (b.tier3End - b.tier2End)) * 100;
-    return { tier: 3, randomPercent: Math.round(pct * 10) / 10 };
-  }
-  return { tier: 4, randomPercent: 100 };
+/** 概率取值（与后端 tier-slider.js 的 clampProbability 同一套规则）。 */
+function clampProbabilityUI(value, fallback = 100) {
+  // 与后端一致：先判"有没有值"，Number(null)/Number('') 都是 0，不能拿来当概率
+  const missing = value === undefined || value === null || String(value).trim() === '';
+  const n = missing ? NaN : Number(value);
+  if (!Number.isFinite(n)) return Math.min(100, Math.max(0, Number(fallback) || 0));
+  return Math.min(100, Math.max(0, Math.round(n * 10) / 10));
 }
 
-/** 已保存配置 → 滑条位置（优先用存下来的位置，老配置没有就从 tier/概率反推）。 */
+/** 滑条值 = 概率；tier 只用来选读多少条与展示触发方式。 */
+function sliderToTierUI(pos) {
+  const probability = clampProbabilityUI(pos, 100);
+  return {
+    tier: probability <= 0 ? 1 : (probability >= 100 ? 4 : 3),
+    randomPercent: probability
+  };
+}
+
+/** 老四段式滑条位置 → 概率（与后端 legacySliderToProbability 同一套规则）。 */
+function legacySliderToProbabilityUI(pos) {
+  const raw = Number(pos);
+  if (!Number.isFinite(raw)) return 100;
+  const p = Math.min(100, Math.max(0, raw));
+  if (p <= 20) return 0;
+  if (p >= 90) return 100;
+  return Math.round(((p - 20) / 70) * 1000) / 10;
+}
+
+/**
+ * 已保存配置 → 滑条位置。存的就是概率；
+ * 老配置（四段式，没打 sliderMode 标记）要先按老口径换算 ——
+ * 否则界面会把"老 1 档的位置 5"当成"5% 概率"显示并回写，用户一保存就被悄悄改掉。
+ */
 function sliderToTierUI_tierToSlider(st) {
-  const b = TIER_SLIDER_BANDS;
-  const saved = Number(st?.contextSliderPos);
-  if (Number.isFinite(saved)) return Math.min(100, Math.max(0, saved));
+  const rawPos = st?.contextSliderPos;
+  // ⚠️ 不能用 Number(rawPos) 判有没有值：Number(null) === 0，会把"没设位置"当成"位置 0"
+  const hasPos = rawPos !== undefined && rawPos !== null && String(rawPos).trim() !== '';
+  const legacyMode = String(st?.sliderMode || '') !== 'probability';
+  if (hasPos) {
+    return legacyMode ? legacySliderToProbabilityUI(rawPos) : clampProbabilityUI(rawPos);
+  }
   const t = Math.min(4, Math.max(1, Number(st?.contextTier) || 4));
-  const pct = Math.min(100, Math.max(0, Number(st?.randomPercent) || 0));
-  if (t === 1) return b.tier1End / 2;
-  if (t === 2) return (b.tier1End + b.tier2End) / 2;
-  if (t === 3) return b.tier2End + (pct / 100) * (b.tier3End - b.tier2End);
-  return (b.tier3End + 100) / 2;
+  if (t >= 4) return 100;
+  if (t <= 2) return 0;
+  return clampProbabilityUI(st?.randomPercent, 0);
+}
+
+/** 分群表：老配置的值也要换算成概率（界面上显示的与保存的都按新语义）。 */
+function groupSliderPosForUi(st) {
+  const map = st?.groupSliderPos || {};
+  if (String(st?.sliderMode || '') === 'probability') return map;
+  const out = {};
+  for (const [groupId, pos] of Object.entries(map)) out[groupId] = legacySliderToProbabilityUI(pos);
+  return out;
+}
+
+/** 概率落在刻度条的哪一段（只影响高亮）。 */
+function segOfProbability(value) {
+  const p = clampProbabilityUI(value);
+  if (p <= 0) return 1;
+  if (p >= 100) return 4;
+  return p < 50 ? 2 : 3;
+}
+
+/** 四个"读取条数"参数里哪些现在用得上：被 @ / 关键词那两条始终算数。 */
+function paramActiveForProbability(value) {
+  const p = clampProbabilityUI(value);
+  return { at: true, keyword: true, random: p > 0 && p < 100, all: p >= 100 };
 }
 
 /** 滑条位置 → 一句话说明（给用户的即时反馈）。 */
 function sliderDesc(pos) {
-  const { tier, randomPercent } = sliderToTierUI(pos);
+  const p = clampProbabilityUI(pos);
   let main;
-  if (tier === 1) main = '<b>1 档 · 仅艾特</b>：只有被 @ 时才响应，其余消息标记已读、不调模型（最省）';
-  else if (tier === 2) main = '<b>2 档 · +关键词</b>：被 @ 或命中关键词时响应';
-  else if (tier === 3) main = `<b>3 档 · +随机</b>：被 @ / 关键词必响应；此外每批普通消息有 <b>${randomPercent}%</b> 概率响应`;
-  else main = '<b>4 档 · 全响应</b>：任何消息都响应，且艾特/关键词/随机的判定全部失效';
+  if (p <= 0) main = '<b>0%</b>：普通消息不回（标记已读、不调模型）；<b>被 @ 或命中关键词一定回</b>';
+  else if (p >= 100) main = '<b>100% · 全响应</b>：任何消息都回';
+  else main = `普通消息 <b>${p}%</b> 概率回（大约每 100 批接 ${p} 批）；<b>被 @ 或命中关键词一定回</b>`;
   // 档位管的是"它没在跟人对话时，要不要接这句话"。下面两条路不受档位限制，
   // 不写清楚就会被当成"档位调了没生效"。
   return main
@@ -7774,13 +7814,12 @@ function renderConversationModePanels(conversation = {}) {
 function renderChatSection(c) {
   const st = c.store || {};
   const conversation = c.conversation || {};
-  // 滑条位置是唯一真相；档位与概率都由它派生（与后端 tier-slider.js 同一套规则）
+  // 滑条位置是唯一真相，而且**滑条上的数字就是概率**（与后端 tier-slider.js 同一套规则）
   const sliderPos = sliderToTierUI_tierToSlider(st);
-  const { tier: curTier, randomPercent: curPct } = sliderToTierUI(sliderPos);
-  // 模板里要按各段占比画刻度条，这里简写成 B 供下方 ${B.xxx} 使用。
-  // ⚠️ 这个别名不能删 —— 曾经漏掉它，导致模板里 B 未定义，
-  //    整个 renderChatSection 抛 ReferenceError，聊天设置页直接打不开。
-  const B = TIER_SLIDER_BANDS;
+  const { randomPercent: curPct } = sliderToTierUI(sliderPos);
+  // 刻度高亮与参数高亮都按"当前概率落在哪一段"来点
+  const curSeg = segOfProbability(curPct);
+  const paramOn = paramActiveForProbability(curPct);
 return `
     <h3>对话模式</h3>
     ${renderConversationModePanels(conversation)}
@@ -7860,19 +7899,19 @@ return `
     <div class="hint conversation-trigger-hint" id="conversation-trigger-hint"></div>
 
     <div class="checkbox-row"><input type="checkbox" id="cfg-unifiedtier" ${st.unifiedTier !== false ? 'checked' : ''} />
-      <label for="cfg-unifiedtier">统一设置全部响应档位（关掉就能给每个白名单群聊单独拖档位）</label></div>
+      <label for="cfg-unifiedtier">统一设置响应概率（关掉就能给每个白名单群聊单独拖）</label></div>
 
     <!-- 统一模式：一个滑条管所有会话（原行为） -->
     <div id="tier-unified-wrap"${st.unifiedTier === false ? ' style="display:none"' : ''}>
     <div class="tier-slider-wrap">
       <input type="range" id="ctx-tier-slider" class="tier-slider"
              min="0" max="100" step="0.5" value="${esc(sliderPos)}"
-             aria-label="响应档位滑条" />
+             aria-label="响应概率滑条" />
       <div class="tier-scale" id="tier-scale">
-        <span class="tier-seg seg1${curTier === 1 ? ' on' : ''}" data-seg="1" style="flex:${B.tier1End}">仅艾特</span>
-        <span class="tier-seg seg2${curTier === 2 ? ' on' : ''}" data-seg="2" style="flex:${B.tier2End - B.tier1End}">+关键词</span>
-        <span class="tier-seg seg3${curTier === 3 ? ' on' : ''}" data-seg="3" style="flex:${B.tier3End - B.tier2End}">+随机（概率递增）</span>
-        <span class="tier-seg seg4${curTier === 4 ? ' on' : ''}" data-seg="4" style="flex:${100 - B.tier3End}">全响应</span>
+        <span class="tier-seg seg1${curSeg === 1 ? ' on' : ''}" data-seg="1" style="flex:12">0% · 只回 @/关键词</span>
+        <span class="tier-seg seg2${curSeg === 2 ? ' on' : ''}" data-seg="2" style="flex:30">约 33%</span>
+        <span class="tier-seg seg3${curSeg === 3 ? ' on' : ''}" data-seg="3" style="flex:30">约 66%</span>
+        <span class="tier-seg seg4${curSeg === 4 ? ' on' : ''}" data-seg="4" style="flex:28">100% · 全响应</span>
       </div>
     </div>
 
@@ -7884,41 +7923,42 @@ return `
       <div class="field"><label>选择要单独设置的群聊（来自白名单）</label>
         <select id="tier-group-select"></select>
       </div>
-      <input type="hidden" id="tier-group-json" value="${esc(JSON.stringify(st.groupSliderPos || {}))}" />
+      <input type="hidden" id="tier-group-json" value="${esc(JSON.stringify(groupSliderPosForUi(st)))}" />
       <div class="tier-slider-wrap">
         <input type="range" id="ctx-tier-slider-g" class="tier-slider"
                min="0" max="100" step="0.5" value="${esc(sliderPos)}"
-               aria-label="该群响应档位滑条" />
+               aria-label="该群响应概率滑条" />
         <div class="tier-scale" id="tier-scale-g">
-          <span class="tier-seg seg1" data-seg="1" style="flex:${B.tier1End}">仅艾特</span>
-          <span class="tier-seg seg2" data-seg="2" style="flex:${B.tier2End - B.tier1End}">+关键词</span>
-          <span class="tier-seg seg3" data-seg="3" style="flex:${B.tier3End - B.tier2End}">+随机（概率递增）</span>
-          <span class="tier-seg seg4" data-seg="4" style="flex:${100 - B.tier3End}">全响应</span>
+          <span class="tier-seg seg1" data-seg="1" style="flex:12">0% · 只回 @/关键词</span>
+          <span class="tier-seg seg2" data-seg="2" style="flex:30">约 33%</span>
+          <span class="tier-seg seg3" data-seg="3" style="flex:30">约 66%</span>
+          <span class="tier-seg seg4" data-seg="4" style="flex:28">100% · 全响应</span>
         </div>
       </div>
       <div class="hint" id="ctx-tier-note-g" style="margin-top:8px"></div>
       <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
         <button class="btn btn-small btn-danger" id="tier-group-clear-btn">清除该群的单独设置</button>
-        <span class="hint" style="margin:0">没单独设置过的群聊和所有私聊，跟随上方统一档位的滑条位置。</span>
+        <span class="hint" style="margin:0">没单独设置过的群聊和所有私聊，跟随上方统一滑条的概率。</span>
       </div>
     </div>
 
     <div class="tier-params">
-      <div class="tier-param${curTier === 1 ? '' : ' dim'}">
+      <div class="tier-param${paramOn.at ? '' : ' dim'}">
         <label>① 被艾特时：发未读 + <input type="number" id="cfg-atcount" min="0" max="500" value="${esc(st.atCount ?? 20)}" /> 条已读</label>
-        <div class="hint">有人 @机器人时才响应。<b>任何档位下被艾特都会响应</b>。</div>
+        <div class="hint">有人 @ 机器人时<b>一定响应</b>，不受上面概率的影响。</div>
       </div>
-      <div class="tier-param${curTier === 2 ? '' : ' dim'}">
+      <div class="tier-param${paramOn.keyword ? '' : ' dim'}">
         <label>② 命中关键词时：发未读 + <input type="number" id="cfg-kwcount" min="0" max="500" value="${esc(st.keywordCount ?? 15)}" /> 条已读</label>
-        <div class="hint">关键词（每行一个，不区分大小写）：</div>
+        <div class="hint">关键词（每行一个，不区分大小写）；命中<b>一定响应</b>。留空就只回 @：</div>
         <textarea id="cfg-keywords" rows="3" placeholder="小鲸鱼&#10;bot">${esc((st.keywords || []).join('\n'))}</textarea>
       </div>
-      <div class="tier-param${curTier === 3 ? '' : ' dim'}">
-        <label>③ 随机命中时：发未读 + <input type="number" id="cfg-randcount" min="0" max="500" value="${esc(st.randomCount ?? 8)}" /> 条已读</label>
+      <div class="tier-param${paramOn.random ? '' : ' dim'}">
+        <label>③ 按概率响应时：发未读 + <input type="number" id="cfg-randcount" min="0" max="500" value="${esc(st.randomCount ?? 8)}" /> 条已读</label>
+        <div class="hint">概率在 0 和 100 之间时，普通消息按这个概率接。</div>
       </div>
-      <div class="tier-param${curTier >= 4 ? '' : ' dim'}">
-        <label>④ 其余情况也响应：发未读 + <input type="number" id="cfg-allcount" min="0" max="500" value="${esc(st.allCount ?? 80)}" /> 条已读</label>
-        <div class="hint"><b>任何消息都响应</b>。</div>
+      <div class="tier-param${paramOn.all ? '' : ' dim'}">
+        <label>④ 全响应时：发未读 + <input type="number" id="cfg-allcount" min="0" max="500" value="${esc(st.allCount ?? 80)}" /> 条已读</label>
+        <div class="hint">滑条拖到 <b>100%</b> 时，任何消息都响应。</div>
       </div>
     </div>
 
@@ -8284,23 +8324,21 @@ function bindSettingsEvents(c) {
   if (tierSlider) {
     const sync = () => {
       const pos = Number(tierSlider.value);
-      const { tier: t } = sliderToTierUI(pos);
-      // 提示行：显示当前档位与概率
+      // 提示行：显示当前概率与"哪些一定回"
       const note = $('#ctx-tier-note');
       if (note) note.innerHTML = sliderDesc(pos);
-      // 参数区高亮：只点亮"当前真正会用到的那一档"
-      // 1档→只亮①；2档→亮②；3档→亮③；4档→亮④（且①②③失效）
-      const params = document.querySelectorAll('.tier-param');
-      params.forEach((el, idx) => {
-        const n = idx + 1;
-        el.classList.toggle('dim', n !== t);
+      // 参数区高亮：①②（被 @ / 关键词）始终算数；③ 概率在中间时用得上；④ 只有 100% 才用得上
+      const on = paramActiveForProbability(pos);
+      const actives = [on.at, on.keyword, on.random, on.all];
+      document.querySelectorAll('.tier-param').forEach((el, idx) => {
+        el.classList.toggle('dim', !actives[idx]);
       });
-      // 刻度段高亮：滑到哪一档，那一档的标签 + 上边线一起变色。
+      // 刻度段高亮：概率落在哪一段就点亮哪一段。
       // ⚠️ 之前这段完全没做，颜色全靠 CSS 写死（.s1 永远亮、.s4 永远橙），
       //    所以拖动滑条时刻度毫无反应 —— 看起来就像"没生效"。
-      const segs = document.querySelectorAll('#tier-scale .tier-seg');
-      segs.forEach((el) => {
-        el.classList.toggle('on', Number(el.dataset.seg) === t);
+      const seg = segOfProbability(pos);
+      document.querySelectorAll('#tier-scale .tier-seg').forEach((el) => {
+        el.classList.toggle('on', Number(el.dataset.seg) === seg);
       });
       // 滑条填充色（用 CSS 变量告诉样式当前百分比）
       tierSlider.style.setProperty('--pos', pos + '%');
@@ -8436,10 +8474,10 @@ function bindSettingsEvents(c) {
 
     const syncG = () => {
       const pos = Number(gSlider.value);
-      const { tier: t } = sliderToTierUI(pos);
       if (gNote) gNote.innerHTML = sliderDesc(pos);
+      const seg = segOfProbability(pos);
       document.querySelectorAll('#tier-scale-g .tier-seg')
-        .forEach((el) => el.classList.toggle('on', Number(el.dataset.seg) === t));
+        .forEach((el) => el.classList.toggle('on', Number(el.dataset.seg) === seg));
       gSlider.style.setProperty('--pos', pos + '%');
     };
     const loadGroup = () => {
@@ -9876,6 +9914,8 @@ async function saveConfig({ quiet = false } = {}) {
       allCount: clampInt(val('#cfg-allcount', c.store?.allCount), 1, 500, 80),
       // 统一开关 + 分群滑条表（__replace__：删掉的群设置要真删，深合并做不到）
       unifiedTier: chk('#cfg-unifiedtier', c.store?.unifiedTier !== false),
+      // 明确声明语义：滑条上的数字就是概率（后端据此跳过老配置迁移）
+      sliderMode: 'probability',
       groupSliderPos: {
         __replace__: (() => { try { return JSON.parse($('#tier-group-json')?.value || '{}'); } catch { return {}; } })()
       }

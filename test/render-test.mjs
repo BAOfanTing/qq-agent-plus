@@ -1077,17 +1077,23 @@ try {
     try {
       if (fnName === 'sliderToTierUI') {
         const r = fn(55);
-        const ok = r.tier === 3 && Math.abs(r.randomPercent - 50) < 0.6;
+        const ok = r.tier === 3 && Math.abs(r.randomPercent - 55) < 0.6;
         ok ? pass++ : fail++;
         console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + ' sliderToTierUI(55) → 档' + r.tier + '/' + r.randomPercent + '%');
       } else if (fnName === 'sliderToTierUI_tierToSlider') {
-        const r = fn({ contextSliderPos: 55 });
-        const ok = r === 55;
+        // 新语义：滑条位置就是概率，原样还原
+        const now = fn({ contextSliderPos: 55, sliderMode: 'probability' });
+        // 老配置（四段式位置 55 = 老 3 档 50%）要先换算成概率，不能被直接当成 55%
+        const legacy = fn({ contextSliderPos: 55 });
+        const legacyTier = fn({ contextSliderPos: null, contextTier: 4, randomPercent: 0 });
+        const ok = now === 55 && legacy === 50 && legacyTier === 100;
         ok ? pass++ : fail++;
-        console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + ' sliderToTierUI_tierToSlider() → ' + r);
+        console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + ' sliderToTierUI_tierToSlider() → 新 ' + now
+          + ' / 老位置 55 → ' + legacy + ' / 老 4 档 → ' + legacyTier);
       } else {
         const r = fn(55);
-        const ok = typeof r === 'string' && r.includes('3 档');
+        // 滑条值就是概率：55 位置应当说明"55% 概率回"
+        const ok = typeof r === 'string' && r.includes('55%');
         ok ? pass++ : fail++;
         console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + ' sliderDesc(55) → ' + String(r).slice(0, 46));
       }
@@ -1129,10 +1135,10 @@ try {
     });
 
     for (const [pos, want, desc] of [
-      [0, 1, '最左端'], [5, 1, '1档中段'], [10, 1, '1档右界'],
-      [15, 2, '2档'], [20, 2, '2档右界'],
-      [30, 3, '3档靠左'], [55, 3, '3档正中(50%)'], [75, 3, '3档靠右'], [90, 3, '3档右界'],
-      [95, 4, '4档'], [100, 4, '最右端']
+      [0, 1, '最左端(0%)'],
+      [5, 2, '5%'], [10, 2, '10%'], [15, 2, '15%'], [20, 2, '20%'], [30, 2, '30%'],
+      [55, 3, '55%'], [75, 3, '75%'], [90, 3, '90%'], [99, 3, '99%'],
+      [100, 4, '最右端(100%)']
     ]) {
       try {
         const on = activeSegs(renderAt(pos));
@@ -1144,7 +1150,7 @@ try {
     }
 
     // 任何时候只亮一段
-    for (const pos of [0, 10, 15, 20, 55, 90, 95, 100]) {
+    for (const pos of [0, 10, 30, 55, 90, 99, 100]) {
       const on = activeSegs(renderAt(pos));
       const ok = on.length === 1;
       ok ? pass++ : fail++;
@@ -1160,19 +1166,23 @@ try {
       console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + '四段都能被点亮' + (ok ? '' : '  实际 [' + [...lit].sort().join(',') + ']'));
     }
 
-    // 刻度与参数区一致（亮哪段就亮哪个参数块）
+    // 参数块高亮的规则（2026-09-22 起滑条值就是概率，不再与刻度段一一对应）：
+    //   ① 被艾特、② 关键词 —— 始终算数（任何概率下都一定响应，所以都要能读条数）
+    //   ③ 按概率响应 —— 只当概率在 (0, 100) 之间
+    //   ④ 全响应 —— 只有概率 = 100
+    const brightParams = (html) => [...html.matchAll(/class="tier-param(?!s)([^"]*)"/g)]
+      .map((m, i) => ({ idx: i + 1, dim: /\bdim\b/.test(m[1]) }))
+      .filter((x) => !x.dim)
+      .map((x) => x.idx);
     // 注意正则要带边界：容器是 tier-params（复数），不能被当前缀匹配进来
-    for (const [pos, want] of [[5, 1], [15, 2], [55, 3], [95, 4]]) {
-      const html = renderAt(pos);
-      const on = activeSegs(html);
-      const params = [...html.matchAll(/class="tier-param(?!s)([^"]*)"/g)].map((m, i) => ({
-        idx: i + 1, dim: /\bdim\b/.test(m[1])
-      }));
-      const bright = params.filter((x) => !x.dim).map((x) => x.idx);
-      const ok = on[0] === want && bright.length === 1 && bright[0] === want;
+    for (const [pos, want] of [
+      [0, [1, 2]], [5, [1, 2, 3]], [30, [1, 2, 3]], [99, [1, 2, 3]], [100, [1, 2, 4]]
+    ]) {
+      const bright = brightParams(renderAt(pos));
+      const ok = bright.join(',') === want.join(',');
       ok ? pass++ : fail++;
-      console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + pos + '% 刻度第' + on[0] + '段 / 参数第' + bright.join(',') + '块 一致'
-        + (ok ? '' : '  （期望均为 ' + want + '）'));
+      console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + String(pos).padStart(3) + '% 参数高亮 [' + bright.join(',') + ']'
+        + (ok ? '' : '  期望 [' + want.join(',') + ']'));
     }
 
 

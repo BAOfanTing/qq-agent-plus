@@ -1,57 +1,67 @@
-// 响应档位滑条的换算：滑条位置（0~100）↔ 档位 / 随机概率。
+// 响应滑条：**滑条上的数字就是概率**。
 //
-// 刻意做成**零依赖模块**：不 import config.js、prompt.js 等任何东西。
-// 因为 config.js（保存配置时派生档位）和 prompt.js（运行时判定档位）
-// 都需要它，而 prompt.js 又 import config.js —— 若把这个函数放进任一方
-// 都会形成循环依赖（config → prompt → config）。
+// 语义（2026-09-22 改）：
+//   - 滑条 0~100 = 普通消息的响应概率：拖到 30，就是大约每 100 批普通消息接 30 批。
+//   - 被 @ 或命中关键词**一定**响应，不受这个数字影响（清空关键词表就只回 @）。
+//   - 100% = 任何消息都响应（全响应）。
 //
-// 滑条分段（长度由用户指定）：
+// 以前是四段式（0~10 仅艾特 / 10~20 +关键词 / 20~90 概率线性增长 / 90~100 全响应），
+// "只有中间那 70% 才是概率、两端是特例" —— 用户反馈"概率调中等还是都回"就是这么来的。
+// 老配置由 legacySliderToProbability / legacyTierToProbability 一次性换算（见 config-legacy.js）。
 //
-//   0 ──── 10 ──── 20 ───────────────── 90 ──── 100
-//   │  1 档  │  2 档 │      3 档（70%）      │ 4 档 │
-//   仅艾特    +关键词   概率线性增长 0→100%    全响应
-//
-// 3 档概率线性，公式 prob = (pos - 20) / 70 * 100
-//   pos=20 → 0%   pos=55（该段正中）→ 50%   pos=90 → 100%
-
-/** 滑条各段的分界位置 */
-export const TIER_SLIDER_BANDS = {
-  tier1End: 10,     // 0~10  → 1 档
-  tier2End: 20,     // 10~20 → 2 档
-  tier3End: 90      // 20~90 → 3 档；90~100 → 4 档
-};
+// 刻意做成**零依赖模块**：config.js（保存配置时派生）与 prompt.js（运行时判定）都要用它，
+// 而 prompt.js 又 import config.js —— 放进任一方都会形成循环依赖。
 
 /**
- * 滑条位置 → { tier, randomPercent }
- * @param {number} pos 0~100，非法值或 NaN 按 100（4 档）处理
+ * 概率取值：0~100；非法（NaN/空/负）按 fallback 处理。
+ * @param {*} value 待解析的值
+ * @param {number} fallback 非法时用的值（滑条默认 100 = 全响应，迁移场景传 0）
  */
-export function sliderToTier(pos) {
-  const b = TIER_SLIDER_BANDS;
-  const raw = Number(pos);
-  if (!Number.isFinite(raw)) return { tier: 4, randomPercent: 100 };
-  const p = Math.min(100, Math.max(0, raw));
-
-  if (p <= b.tier1End) return { tier: 1, randomPercent: 0 };
-  if (p <= b.tier2End) return { tier: 2, randomPercent: 0 };
-  if (p <= b.tier3End) {
-    const pct = ((p - b.tier2End) / (b.tier3End - b.tier2End)) * 100;
-    return { tier: 3, randomPercent: Math.round(pct * 10) / 10 };
-  }
-  return { tier: 4, randomPercent: 100 };
+export function clampProbability(value, fallback = 100) {
+  // ⚠️ 先判"有没有值"：Number(null)/Number('') 都是 0，直接 Number() 会把"没填"读成 0%
+  const missing = value === undefined || value === null || String(value).trim() === '';
+  const n = missing ? NaN : Number(value);
+  if (!Number.isFinite(n)) return Math.min(100, Math.max(0, Number(fallback) || 0));
+  return Math.min(100, Math.max(0, Math.round(n * 10) / 10));
 }
 
 /**
- * { tier, randomPercent } → 滑条位置（把已保存的配置还原成滑条位置）
- * @param {number} tier 1~4
- * @param {number} randomPercent 仅 tier===3 时有效（0~100）
+ * 概率 → { tier, randomPercent }。
+ * tier 只用来选"读多少条已读"和展示触发方式：0%→1、中间→3、100%→4。
  */
-export function tierToSlider(tier, randomPercent = 0) {
-  const b = TIER_SLIDER_BANDS;
-  const t = Math.min(4, Math.max(1, Number(tier) || 4));
-  const pct = Math.min(100, Math.max(0, Number(randomPercent) || 0));
+export function sliderToTier(pos) {
+  const probability = clampProbability(pos, 100);
+  return {
+    tier: probability <= 0 ? 1 : (probability >= 100 ? 4 : 3),
+    randomPercent: probability
+  };
+}
 
-  if (t === 1) return Math.round(b.tier1End / 2);                     // 该段中点
-  if (t === 2) return Math.round((b.tier1End + b.tier2End) / 2);
-  if (t === 3) return Math.round(b.tier2End + (pct / 100) * (b.tier3End - b.tier2End));
-  return Math.round((b.tier3End + 100) / 2);
+/** { tier, randomPercent } → 概率（把已保存的老配置还原成滑条位置）。 */
+export function tierToSlider(tier, randomPercent = 0) {
+  const t = Math.min(4, Math.max(1, Number(tier) || 4));
+  if (t >= 4) return 100;
+  if (t <= 2) return 0;   // 老的 1/2 档都不掷骰子；现在等价于"只回 @ 和关键词"
+  return clampProbability(randomPercent, 0);
+}
+
+/**
+ * 老四段式滑条位置 → 概率（一次性迁移用）。
+ * 0~20 → 0；20~90 → 线性 ((pos-20)/70*100)；90~100 → 100。
+ */
+export function legacySliderToProbability(pos) {
+  const raw = Number(pos);
+  if (!Number.isFinite(raw)) return 100;
+  const p = Math.min(100, Math.max(0, raw));
+  if (p <= 20) return 0;
+  if (p >= 90) return 100;
+  return Math.round(((p - 20) / 70) * 1000) / 10;
+}
+
+/** 老 { tier, randomPercent } → 概率（老配置连滑条位置都没有时走这条）。 */
+export function legacyTierToProbability(tier, randomPercent = 0) {
+  const t = Math.min(4, Math.max(1, Number(tier) || 4));
+  if (t >= 4) return 100;
+  if (t <= 2) return 0;
+  return clampProbability(randomPercent, 0);
 }

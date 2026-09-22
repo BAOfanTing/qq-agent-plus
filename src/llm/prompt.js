@@ -13,8 +13,12 @@
 import { getConfig } from '../core/config.js';
 // 滑条换算放在独立模块（零依赖），避免 config.js ↔ prompt.js 循环依赖。
 // 这里 re-export 是为了让已经从 prompt.js 引用的代码不受影响。
-import { sliderToTier as _sliderToTier, tierToSlider as _tierToSlider, TIER_SLIDER_BANDS as _TIER_SLIDER_BANDS } from '../core/tier-slider.js';
-export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider, _TIER_SLIDER_BANDS as TIER_SLIDER_BANDS };
+import {
+  clampProbability,
+  sliderToTier as _sliderToTier,
+  tierToSlider as _tierToSlider
+} from '../core/tier-slider.js';
+export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider };
 import { formatFullTime, formatShortTime, sanitizeUserText } from '../core/util.js';
 import { buildStickerContext, buildStickerStrategyHint } from '../onebot/stickers.js';
 
@@ -496,10 +500,8 @@ export function hitKeyword(text, keywords = []) {
  */
 export function resolveContextTier({ triggerEntries = [], selfNickname = '', botName = '', selfId = '', cfg = null, roll = null } = {}) {
   const c = cfg || getConfig().store || {};
-  // 注意：不能用 `Number(x) || 4` —— 0 是 falsy，会被误当成"未设置"回落到 4。
-  // 必须先判断是不是有效数字，再钳到 [1,4]。
-  const rawTier = Number(c.contextTier);
-  const tier = Number.isFinite(rawTier) ? Math.min(4, Math.max(1, Math.round(rawTier))) : 4;
+  // 滑条上的数字就是概率（0~100），存在 randomPercent 里；老配置由 config 层迁移过。
+  const probability = clampProbability(c.randomPercent, 100);
 
   const texts = (triggerEntries || []).map((e) => String(e?.text ?? ''));
   // 被 @ 的判定优先用入库时按原始消息段算出来的 mentionsSelf：群里给机器人改过名片时，
@@ -510,24 +512,26 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   const keyword = hitKeyword(texts.join('\n'), c.keywords);
   // 掷骰子：调用方可传入已固定的 roll（0-100），避免重复随机
   const rollValue = roll === null || roll === undefined ? Math.random() * 100 : Number(roll);
-  const randomHit = rollValue < Math.max(0, Math.min(100, Number(c.randomPercent) || 0));
-
   const n0 = (v) => Math.max(0, Number(v) || 0);
 
-  // 4 档：无条件响应（兜底），用 allCount
-  if (tier >= 4) {
-    return { tier: 4, count: n0(c.allCount), reason: '全部响应', shouldRespond: true };
-  }
-
-  // 1~3 档：先看最明确的召唤信号，命中就用它自己那一档的条数
+  // 必回的两种：被 @、命中关键词 —— 不受概率影响（清空关键词表就只剩 @ 必回）
   if (atMe) {
     return { tier: 1, count: n0(c.atCount), reason: '被艾特', shouldRespond: true };
   }
-  if (tier >= 2 && keyword) {
+  if (keyword) {
     return { tier: 2, count: n0(c.keywordCount), reason: '关键词命中', shouldRespond: true };
   }
-  if (tier >= 3 && randomHit) {
-    return { tier: 3, count: n0(c.randomCount), reason: `随机命中(${rollValue.toFixed(0)}%)`, shouldRespond: true };
+  // 100% = 全响应（比掷骰子更省事，也让"触发方式"显示成"全部响应"）
+  if (probability >= 100) {
+    return { tier: 4, count: n0(c.allCount), reason: '全部响应', shouldRespond: true };
+  }
+  if (probability > 0 && rollValue < probability) {
+    return {
+      tier: 3,
+      count: n0(c.randomCount),
+      reason: `随机命中（概率 ${probability}%）`,
+      shouldRespond: true
+    };
   }
 
   // 都没命中：不响应（调用方会把这批标记已读）
