@@ -146,10 +146,13 @@ test('已提交未跑完的更新要能被认出来（控制台据此不再重�
   }));
 
   // 点过「立即更新」→ queued：要认出来（不然部署完成前每次刷新都会再弹一次"发现新版本"）
-  f.manager.requestManual();
+  // 版本号也要记下来：更新器跑到 testing 阶段才会自己写 targetVersion，在那之前
+  // 靠版本号比对会一直弹，所以控制台点更新时就把版本一起提交上来。
+  f.manager.requestManual({ version: 'v9.9.9' });
   const pending = autoUpdatePending(f.dataDir);
   assert.equal(pending.status, 'queued');
   assert.equal(pending.mode, 'manual');
+  assert.equal(pending.version, 'v9.9.9');
 
   // 跑完 / 失败：都不再抑制，失败时得让用户能再点一次
   writeRaw({ status: 'succeeded' });
@@ -157,12 +160,19 @@ test('已提交未跑完的更新要能被认出来（控制台据此不再重�
   writeRaw({ status: 'failed' });
   assert.equal(autoUpdatePending(f.dataDir), null);
 
-  // 活跃状态卡住超过 30 分钟：当成没在跑，别把提示永久压住
-  writeRaw({ status: 'deploying', targetVersion: 'v9.9.9', updatedAt: Date.now() - 31 * 60 * 1000 });
-  assert.equal(autoUpdatePending(f.dataDir), null);
+  // 卡住超过 30 分钟：当成没在跑，别把提示永久压住。
+  // 基准必须是 startedAt —— updatedAt 会被"检查新版本"（存提示）这类无关写入刷新，
+  // 用它当基准的话这里永远判不出来。
+  writeRaw({
+    status: 'deploying',
+    targetVersion: 'v9.9.9',
+    startedAt: Date.now() - 31 * 60 * 1000,
+    updatedAt: Date.now()
+  });
+  assert.equal(autoUpdatePending(f.dataDir), null, 'startedAt 超时就不该再压住提示');
 
   // 还在跑：带上目标版本，前端拿它跟提示里的版本比对
-  writeRaw({ status: 'testing', mode: 'scheduled', targetVersion: 'v9.9.9', updatedAt: Date.now() });
+  writeRaw({ status: 'testing', mode: 'scheduled', targetVersion: 'v9.9.9', startedAt: Date.now() });
   assert.deepEqual(
     { status: autoUpdatePending(f.dataDir).status, version: autoUpdatePending(f.dataDir).version },
     { status: 'testing', version: 'v9.9.9' }

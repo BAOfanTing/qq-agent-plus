@@ -1125,11 +1125,14 @@ async function checkUpdateNotice() {
   const version = String(notice.version || '');
   // 「忽略」只屏蔽这一个版本；出现新的 tag 时照常提示
   if (version && version === String(payload.ignoredVersion || '')) return;
-  // 这个版本的更新已经提交过、还没跑完（队列里/正在跑）：别再弹。
+  // 已经有一次部署在队列里/正在跑：别再弹。
   // 部署完成前 deployed-revision 还是旧的，光比版本会一直认为"有新版本没装"，
   // 于是每次刷新都弹一遍，看着像"点了更新没反应"（2026-09-21 反馈）。
+  // 版本号可能还没解析出来（更新器跑到 testing 阶段才写），所以"排队中且不知道版本"
+  // 也要压住；但 probe（只探连通性、不部署）不算。
   const pending = payload?.pending || null;
-  if (version && pending && String(pending.version || '') === version) return;
+  if (pending && pending.mode !== 'probe'
+    && (!pending.version || String(pending.version) === version)) return;
   openUpdateNoticeDialog(notice);
 }
 
@@ -1174,7 +1177,8 @@ async function runUpdateFromNotice() {
   try {
     const response = await api('/api/auto-update/run', {
       method: 'POST',
-      body: JSON.stringify({ confirm: true })
+      // 带上当前提示的版本：写进状态里，"别再弹同一个版本"才能立刻生效
+      body: JSON.stringify({ confirm: true, version: state.updateNoticeVersion || '' })
     });
     state.autoUpdateStatus = response.status;
     if (result) {
@@ -7538,7 +7542,7 @@ function renderPersonaSection(c) {
           <option value="high" ${c.persona.participation === 'high' ? 'selected' : ''}>活跃型</option>
         </select></div>
     </div>
-    <div class="hint">交流策略：「原版群友」那套允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据。嫌它冲或想让它听话，选后者。</div>
+    <div class="hint">交流策略：「原版群友」那套允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据。嫌它冲或想让它听话，选后者。角色设定里写了相反的脾气时，以角色设定为准（它优先级更高）；参与度（安静/普通/活跃）不受角色设定影响。</div>
     <div class="field"><label>角色设定</label>
       <textarea id="cfg-roletext" class="persona-role-text" placeholder="例如：你是运维群里的老油条……">${esc(c.persona.roleText || '')}</textarea></div>
     <div class="field"><label>管理员附加规则（可选；排在所有平台规则之后 —— 想压过默认风格就写这里）</label>
@@ -8439,7 +8443,9 @@ function bindSettingsEvents(c) {
       const gid = groupSel.value;
       const m = readMap();
       // 没单独设置过的群：从全局滑条当前值起步，所见即所得
-      gSlider.value = m[gid] !== undefined ? m[gid] : (Number($('#ctx-tier-slider')?.value) || 100);
+      // 注意 0 是合法位置（1 档），不能写 `|| 100`
+      const globalPos = Number($('#ctx-tier-slider')?.value);
+      gSlider.value = m[gid] !== undefined ? m[gid] : (Number.isFinite(globalPos) ? globalPos : 100);
       syncG();
     };
     groupSel.addEventListener('change', loadGroup);

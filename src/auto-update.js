@@ -130,14 +130,19 @@ export function autoUpdatePending(dataDir) {
   const state = readAutoUpdateState(dataDir);
   const status = String(state.status || '');
   if (!ACTIVE_STATES.has(status)) return null;
-  const updatedAt = Number(state.updatedAt || 0);
-  if (!updatedAt || Date.now() - updatedAt > PENDING_TTL_MS) return null;
+  // 基准必须是**只有更新流程会写**的时间戳：updatedAt 会被"检查新版本"这类无关写入
+  // 一路刷新（checkForUpdate 存提示就调 writeAutoUpdateState），用它当基准的话
+  // "卡住 30 分钟就放开"永远不成立 —— 更新器中途被 kill 之后，控制台还一直压着提示、
+  // 手动更新按钮也一直显示在跑。startedAt 由 requestManual 与更新器自己写，别处不碰。
+  const startedAt = Number(state.startedAt || 0) || Number(state.updatedAt || 0);
+  if (!startedAt || Date.now() - startedAt > PENDING_TTL_MS) return null;
   return {
     status,
     mode: String(state.mode || ''),
     version: String(state.targetVersion || ''),
     revision: String(state.targetRevision || ''),
-    updatedAt
+    startedAt,
+    updatedAt: Number(state.updatedAt || 0)
   };
 }
 
@@ -349,7 +354,7 @@ export class AutoUpdateManager {
     return cfg.autoUpdate;
   }
 
-  requestManual() {
+  requestManual({ version = '' } = {}) {
     if (!this.installed()) {
       throw updateError('自动更新服务尚未安装，请先用 deploy.sh 部署当前版本');
     }
@@ -380,6 +385,10 @@ export class AutoUpdateManager {
 
     const mode = probeOnly ? 'probe' : 'manual';
     writeAutoUpdateRequest(this.dataDir, mode);
+    // 记下这次要更到哪个版本：控制台的「发现新版本」提示要用它判断"这个版本的更新
+    // 已经提交过了，别再弹"（更新器跑到能解析 tag 的阶段才会自己写 targetVersion，
+    // 在那之前状态里是空的，只靠版本号比对会一直弹）。
+    const targetVersion = mode === 'manual' ? cleanText(version, 64).trim() : '';
     writeAutoUpdateState(this.dataDir, {
       status: 'queued',
       mode,
@@ -387,6 +396,7 @@ export class AutoUpdateManager {
       startedAt: Date.now(),
       completedAt: 0,
       error: '',
+      ...(targetVersion ? { targetVersion } : {}),
       ...(probeOnly ? {
         connectivity: {
           status: 'queued',

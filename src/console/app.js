@@ -1205,7 +1205,7 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           return json(res, 409, { error: '手动更新需要显式确认' });
         }
         try {
-          const status = autoUpdate.requestManual();
+          const status = autoUpdate.requestManual({ version: body.version });
           return json(res, 202, { ok: true, status });
         } catch (error) {
           return json(res, error.httpStatus || 409, {
