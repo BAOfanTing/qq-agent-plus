@@ -180,7 +180,9 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.deepEqual(saved.slangPilot, { enabled: false, graduated: false });
 });
 
-test('响应滑条：滑条值就是概率，老配置保存时一次性迁移过来', async () => {
+test('响应滑条：滑条值就是概率；updateConfig 的兜底分支按老口径换算', async () => {
+  // 说明：生产里老配置在**读盘时**就由 migrateConfig 迁移好了（见 config-migration.test.mjs），
+  // 这里覆盖的是"没走读盘"的配置（setRuntimeConfig 注入那类）走 updateConfig 时的兜底换算
   const { updateConfig } = await import('../src/core/config.js');
 
   // 新语义：传什么就是多少概率（0 是合法值，不能被当成"没填"回落成 100）
