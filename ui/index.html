@@ -191,6 +191,9 @@
   <dialog id="console-login">
     <form id="console-login-form">
       <h2>QQ Agent Linux</h2>
+      <!-- 浏览器要求密码表单带用户名框（可隐藏），否则 F12 里会有一条 DOM 提示。
+           控制台登录本来就是单令牌，放个隐藏占位即可。 -->
+      <input id="console-account" type="text" name="username" value="console" autocomplete="username" hidden aria-hidden="true" tabindex="-1" />
       <label for="console-token">控制台 Token</label>
       <input id="console-token" type="password" autocomplete="current-password" required />
       <p id="console-login-error" role="alert"></p>
