@@ -54,3 +54,8 @@ v0.6.0..v0.6.4 之间复审成本口径时记录的 6 项“不影响主链路�
 
 在 Windows 上执行 `npm run test:unit` 会有约 46 个用例失败（涉及 docker、systemd、
 Unix 路径与文件权限位等）；在 Linux 服务器与 CI（ubuntu-latest）上全量通过。
+
+`test/usage-e2e.mjs` 起的真服务用的是配置里的控制台端口（`app.start()` 不收参数，
+文件里那个 40995 不起作用），所以机器上已经跑着机器人时它会以 `EADDRINUSE` 退出 ——
+只有在本机没有实例占用该端口时才能跑。它不在更新器的部署前测试集里
+（那一集只跑 `test/*.test.mjs`），因此不影响「立即更新」。
