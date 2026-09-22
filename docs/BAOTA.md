@@ -4,6 +4,36 @@
 `deploy-all.sh` 原样可用。差异全在**宝塔默认以 root 操作、并希望由面板托管进程**这套习惯上。
 本文只讲这些差异；通用步骤、数据与备份说明见 [LINUX.md](LINUX.md)。
 
+## 三句话版
+
+**能装吗？** 能。宝塔跑在同一套 Linux + systemd 上，`deploy.sh` / `deploy-all.sh` 原样可用。
+
+**怎么装？** 建一个 `qqagent` 用户，SSH 进去跑 `deploy.sh`，宝塔只用来看文件、放行端口、
+做反向代理。
+
+**别怎么做？** 别用宝塔的 Node 项目 / PM2 启动它，别以 root 部署。
+
+### 更常被问到的几个
+
+**能不能在宝塔里建个 Node 项目，点几下就跑起来？**
+不推荐。项目注册的是 systemd 用户服务，`manage.sh` 与自动更新都依赖它
+（`scripts/manage.mjs:11,31`）。走 PM2 会绕过部署前代码快照与失败回滚、健康检查、
+unit 的自动重启，以及 Release 驱动的自动更新。
+
+**要在宝塔「安全」里放行哪些端口？**
+默认一个都不用放：控制台走 SSH 隧道访问（`console-tunnel.bat` 或
+`node src/ops.js console`）。只有挂域名做反向代理时才需要，而且别忘了关掉
+`proxy_buffering`，否则控制台的事件流会像卡住。
+
+**为什么非要新建一个 `qqagent` 用户？直接 root 不行吗？**
+`deploy-all.sh:379` 直接拒绝 root，`docs/LINUX.md:121` 也要求以服务用户身份部署。
+更常见的坑是运维时：用 root 跑 `manage.sh` 会因为查的是 root 自己的 user manager
+而误报"服务不存在"，服务其实正常。
+
+**宝塔的 Docker 管理器能用来装 SnowLuma 吗？**
+能，而且建议先装好再跑 `deploy-all.sh --check-only` 探一遍，避免两套 Docker 来源打架。
+但装完不要用面板去改 SnowLuma 容器的端口或挂载，下次部署的归属校验会因此报错退出。
+
 ## 结论：宝塔只当面板，进程仍交给 systemd
 
 三件不要做的事：
