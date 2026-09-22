@@ -1148,7 +1148,7 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           return json(res, 403, { error: '当前 Token 不正确' });
         }
         if (!/^[A-Za-z0-9._~-]{16,128}$/.test(next)) {
-          return json(res, 400, { error: '新 Token 必须为 16~128 位字母、数字或 . _ ~ -' });
+          return json(res, 400, { error: '新 Token 必须为 16-128 位字母、数字或 . _ ~ -' });
         }
         if (next !== confirm) return json(res, 400, { error: '两次输入的新 Token 不一致' });
         if (sameSecret(next, cfgNow.server.token)) return json(res, 400, { error: '新 Token 不能与当前 Token 相同' });

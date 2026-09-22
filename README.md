@@ -77,7 +77,7 @@ SEND_OK 第 1 条新发送：rowid=18（send_message）
 OneBot WebSocket
   -> 按会话串行入库
   -> SQLite/WAL 消息状态机
-  -> 默认随机 8~12 秒、最长 20 秒有界聚合
+  -> 默认随机 8-12 秒、最长 20 秒有界聚合
   -> legacy / threaded / lifecycle 路由
   -> 可选持久化线程与检查点
   -> 一次性 Agent 会话

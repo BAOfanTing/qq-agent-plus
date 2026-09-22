@@ -80,7 +80,7 @@
 
 - `promptMaxStickers`：系统提示里常驻的可用表情条数（按使用频次挑选）。
 - `autoCollect`：别人发来的表情包是否自动入库（同图只存一次，`maxCollectPerHour` 限频）。
-- `encourage`：鼓励使用表情的力度（0~3），太频繁可调回 1~2。
+- `encourage`：鼓励使用表情的力度（0-3），太频繁可调回 1-2。
 
 ## pacing：自主节奏（实验性，默认关闭）
 
