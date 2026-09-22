@@ -186,8 +186,11 @@ try {
   }
   document.querySelector('#cfg-roletext').value += '\nEdited';
   ctx.syncPersonaButtons();
+  // 选择框留空（不错误标记为原模板），但提示行要说清"这是按自定义处理"，
+  // 否则升级后（模板改过、实例存的是旧正文）看起来像人设丢了。
   if (ctx.currentPersonaId() === ''
-      && document.querySelector('#cfg-persona-pick').value === '') {
+      && document.querySelector('#cfg-persona-pick').value === ''
+      && document.querySelector('#persona-pick-hint').textContent.includes('与内置模板不一致')) {
     pass++;
     console.log('  OK    修改人设后不错误标记为原模板');
   } else {

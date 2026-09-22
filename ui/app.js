@@ -5597,7 +5597,14 @@ function syncPersonaButtons() {
   const input = $('#cfg-persona-pick');
   if (input) input.value = tpl?.name || '';
   const hint = $('#persona-pick-hint');
-  if (hint) hint.textContent = tpl ? (tpl.builtin ? '内置人设' : '自定义人设') : '';
+  // 正文与内置模板不一致时（升级改了模板而实例里存的是旧正文，或管理员手改过），
+  // 选择框会是空的，容易让人以为人设丢了 —— 用提示行说明这是按自定义处理。
+  const hasText = String($('#cfg-roletext')?.value ?? '').trim().length > 0;
+  if (hint) {
+    hint.textContent = tpl
+      ? (tpl.builtin ? '内置人设' : '自定义人设')
+      : (hasText ? '当前正文与内置模板不一致（按自定义处理，可从列表改选）' : '');
+  }
 }
 
 function applyPersonaDraft(tpl) {
