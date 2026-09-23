@@ -1091,10 +1091,11 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
 
   /**
    * 已保存的 Key 只允许发往配置里已知的地址。
-   * 那两个 provider 探测端点会拿服务端已保存的 Key 去请求调用方给的 baseUrl；不挡住的话，
-   * 拿到控制台令牌的人填一个自己的地址，就能让服务端把明文 Key 送过去 —— 等于绕开
-   * keyEndpointAllowed 那道"明文密钥只准本机读"的闸门。前端正常流程都是显式传 Key，
-   * 只有"测试当前配置的 provider"会走这个回退，目标的 baseUrl 本来就等于配置里的值。
+   * 目的只是不让"随手填个地址点测试"把已保存的 Key 送出去，**它不构成安全边界**：
+   * 控制台令牌本身就是完全管理凭据，持有令牌的人可以直接从 /api/api-key 等端点读到明文
+   * Key（见 keyEndpointAllowed 的第一条分支：令牌通过即放行）；也可以先 POST /api/providers
+   * 把自己的地址注册进来，再走这个回退。前端正常流程都显式传 Key，只有"测试当前配置的
+   * provider"会用到回退，而那个地址本来就等于配置里的值。
    */
   function storedKeyAllowedFor(cfgNow, baseUrl) {
     const norm = (v) => String(v || '').trim().replace(/\/+$/, '').toLowerCase();
