@@ -4296,6 +4296,15 @@ function renderMemoryList() {
   });
 }
 
+/** 记忆页每条印象前面的标记：「[09-20 · 模型记的] 」——多老 + 谁写的，一眼分得开。
+ *  时间戳以前会被每次整理刷成当天（已修），所以这个日期现在真能当"年龄"看。 */
+function impressionMetaLabel(entry) {
+  const at = Number(entry?.lastObservedAt || entry?.createdAt) || 0;
+  const when = at ? new Date(at + 8 * 60 * 60 * 1000).toISOString().slice(5, 10) : '??-??';
+  const origin = { model: '模型记的', consolidated: '整理改写', manual: '手动编辑' }[entry?.origin] || '早先的';
+  return `[${when} · ${origin}] `;
+}
+
 async function loadMemoryDetail(chatKey) {
   const detail = $('#memory-detail');
   detail.innerHTML = '<div class="empty-hint">加载中…</div>';
@@ -4351,7 +4360,7 @@ async function loadMemoryDetail(chatKey) {
     const rows = members.map((m) => {
       const who = notes[String(m.userId)] || m.name || m.userId || '某人';
       const qq = m.userId ? ` <span class="muted">(QQ ${esc(m.userId)})</span>` : '';
-      const imps = m.impressions.map((e) => `- ${e.content}`).join('\n');
+      const imps = m.impressions.map((e) => `- ${impressionMetaLabel(e)}${e.content}`).join('\n');
       return `<div class="collapsible" open>
         <summary>${esc(who)}${qq}（${m.impressions.length} 条）
           <button class="btn btn-small mem-edit-imp" data-qq="${esc(m.userId)}" data-name="${esc(m.name)}" style="margin-left:8px">编辑</button>

@@ -52,6 +52,15 @@ function sourceKeys(value, fallback = '') {
 function emptyMember(userId = '', name = '') {
   return { version: 2, userId: String(userId || ''), name: String(name || ''), impressions: [], sourceChatKeys: [], updatedAt: 0, lastConsolidatedAt: 0 };
 }
+// origin：这条印象是怎么来的 —— 'model'（机器人自己 memory_append 记的）、
+// 'consolidated'（记忆整理/提炼改写的）、'manual'（控制台手动编辑的）；
+// 老数据没有这个字段，保持空串，UI 上显示成"早先"。
+export const IMPRESSION_ORIGINS = ['model', 'consolidated', 'manual'];
+function normalizeOrigin(raw) {
+  const value = String(raw ?? '').trim();
+  return IMPRESSION_ORIGINS.includes(value) ? value : '';
+}
+
 function normalizeEntry(raw, fallbackChatKey = '') {
   const content = clean(raw?.content ?? raw);
   if (!content) return null;
@@ -60,6 +69,7 @@ function normalizeEntry(raw, fallbackChatKey = '') {
     content,
     createdAt,
     lastObservedAt: Math.max(createdAt, Number(raw?.lastObservedAt) || 0),
+    origin: normalizeOrigin(raw?.origin),
     sourceChatKeys: sourceKeys(raw?.sourceChatKeys, raw?.sourceChatKey || fallbackChatKey)
   };
 }
@@ -69,6 +79,7 @@ function mergeEntry(member, entry) {
     member.impressions.push({ ...entry, sourceChatKeys: [...entry.sourceChatKeys] });
     return;
   }
+  // 同一句话再被记一次：正文没变，来源也不该被改写（手动写的那条别被标成自动）
   old.createdAt = Math.min(Number(old.createdAt) || entry.createdAt, entry.createdAt);
   old.lastObservedAt = Math.max(Number(old.lastObservedAt) || old.createdAt, entry.lastObservedAt || entry.createdAt);
   old.sourceChatKeys = sourceKeys([...(old.sourceChatKeys || []), ...(entry.sourceChatKeys || [])]);
@@ -210,7 +221,7 @@ export class GlobalPersonMemoryStore {
     const key = memberKey(userId, name);
     const member = map.get(key) || emptyMember(userId, name);
     const now = Date.now();
-    const entry = normalizeEntry({ content, createdAt, lastObservedAt: now, sourceChatKeys: [chatKey] }, chatKey);
+    const entry = normalizeEntry({ content, createdAt, lastObservedAt: now, origin: 'model', sourceChatKeys: [chatKey] }, chatKey);
     if (!entry) return null;
     mergeEntry(member, entry);
     member.userId = String(userId || member.userId || '');
@@ -220,7 +231,7 @@ export class GlobalPersonMemoryStore {
     this.#persist(member); map.set(memberKey(member.userId, member.name), member);
     return structuredClone(entry);
   }
-  replace(chatKey, userId, name, contents) {
+  replace(chatKey, userId, name, contents, { origin = 'consolidated' } = {}) {
     const uid = String(userId || '').trim();
     if (!/^\d{1,15}$/.test(uid)) throw new Error('userId 必须是数字 QQ 号');
     const map = this.#ensure();
@@ -245,6 +256,7 @@ export class GlobalPersonMemoryStore {
           content,
           createdAt: now,
           lastObservedAt: now,
+          origin: normalizeOrigin(origin),
           sourceChatKeys: sourceKeys([chatKey])
         });
       }
@@ -264,6 +276,8 @@ export class GlobalPersonMemoryStore {
             content,
             createdAt,
             lastObservedAt: Math.max(createdAt, Number(prev?.lastObservedAt) || 0),
+            // 正文没变就沿用旧来源（整理原样保留的一条，不该被记成"整理改写的"）
+            origin: prev ? normalizeOrigin(prev.origin) : normalizeOrigin(origin),
             sourceChatKeys: [...sources]
           };
         })

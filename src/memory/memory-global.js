@@ -106,12 +106,13 @@ export class MemoryStore {
   query(chatKey, category = '') {
     if (category && category !== 'memberImpression') return { [category]: [] };
     const memberImpression = [];
-    for (const member of this.people.members(chatKey)) for (const e of member.impressions) memberImpression.push({ userId: member.userId, target: member.name || member.userId || '某人', content: e.content, createdAt: e.createdAt, lastObservedAt: e.lastObservedAt, sourceChatKeys: e.sourceChatKeys });
+    for (const member of this.people.members(chatKey)) for (const e of member.impressions) memberImpression.push({ userId: member.userId, target: member.name || member.userId || '某人', content: e.content, createdAt: e.createdAt, lastObservedAt: e.lastObservedAt, origin: e.origin || '', sourceChatKeys: e.sourceChatKeys });
     memberImpression.sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt));
     return { memberImpression };
   }
   editMemberImpression(chatKey, { userId, name = '', note = '', impressions = [] }) {
-    const member = this.replaceMember(chatKey, userId, name, impressions);
+    // 控制台手动改的：来源标成 manual，跟模型自动记的/整理改写的区分开
+    const member = this.people.replace(chatKey, userId, name, impressions, { origin: 'manual' });
     const notes = { ...(getConfig().memberNotes || {}) }; const n = String(note ?? '').trim();
     if (n) notes[String(userId)] = n; else delete notes[String(userId)]; updateConfig({ memberNotes: notes });
     return { ...member, note: n };

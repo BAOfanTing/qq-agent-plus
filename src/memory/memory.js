@@ -49,7 +49,7 @@ export class MemoryStore extends BaseMemoryStore {
    * 现有全局印象；因此在写入前保存完整人物快照。若人物只是第一次出现在一个新 chat，
    * 基础实现会做 merge 而不是覆盖，此时不制造无意义备份。
    */
-  replaceMember(chatKey, userId, name, contents) {
+  replaceMember(chatKey, userId, name, contents, options = {}) {
     const source = String(chatKey || '').trim();
     const person = this.getMember('', userId);
     const destructive = Array.isArray(person?.impressions)
@@ -62,20 +62,20 @@ export class MemoryStore extends BaseMemoryStore {
         at: Date.now()
       });
     }
-    return super.replaceMember(chatKey, userId, name, contents);
+    return super.replaceMember(chatKey, userId, name, contents, options);
   }
 
   /**
    * 显式 consolidation 入口，供后续调用方使用；避免通过普通 replace 语义猜测意图。
    * 当前 Orchestrator 的历史实现仍直接调用 replaceMember，因此上面的写前保护是必要兜底。
    */
-  replaceMemberForConsolidation(chatKey, userId, name, contents) {
+  replaceMemberForConsolidation(chatKey, userId, name, contents, options = {}) {
     const person = this.getMember('', userId);
     backupPersonBeforeConsolidation(person, {
       sourceChatKey: chatKey,
       at: Date.now()
     });
-    return super.replaceMember(chatKey, userId, name, contents);
+    return super.replaceMember(chatKey, userId, name, contents, { origin: 'consolidated', ...options });
   }
 
   /**

@@ -256,7 +256,7 @@ export function shouldAutoConsolidate({
  * 规则（整理模式只在"合并/删减/按事实改写"的范围内可信）：
  *   - 新建模式：条数不受限（本来就是从零提炼）；
  *   - 条数减少或持平：采纳；
- *   - 比原来多 1 条、且总字数没有明显变多：采纳 —— 这是"把一条混着两件事的印象拆开"
+ *   - 比原来多 1 条、且总字数没有明显变多（≤20% 或 80 字内）：采纳 —— 这是"把一条混着两件事的印象拆开"
  *     的正常改写。以前一律按"条数变多 = 疑似幻觉"拒绝，好改写会被旧文本顶回去
  *     （实测：模型想把"扬言改人设"那条改干净，拆成 4 条就被拦下）；
  *   - 条数多出 2 条以上、或总字数明显膨胀：拒绝（那才像在编内容）。
@@ -284,7 +284,7 @@ export function consolidationRejectionReason({ isNew = false, existing = [], nex
     }
     return '';
   }
-  if (list.length === prev.length + 1 && grew <= Math.max(40, Math.round(prevChars * 0.2))) {
+  if (list.length === prev.length + 1 && grew <= Math.max(80, Math.round(prevChars * 0.2))) {
     return '';
   }
   return `结果变多（${prev.length}→${list.length} 条、${prevChars}→${nextChars} 字），疑似幻觉`;

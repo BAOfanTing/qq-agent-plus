@@ -41,9 +41,17 @@ test('拆开一条（+1 条、字数没膨胀）采纳 —— 今天修好的那
 
 test('条数多出两条以上，或字数明显膨胀 → 拒绝（疑似编造）', () => {
   assert.match(consolidationRejectionReason({ existing, next: [...existing.map((e) => e.content), '新的一条', '又一条'] }), /结果变多/);
-  // +1 条，但每条都塞满字数（总字数翻了倍）也算编造
-  const bloated = [...existing.map((e) => e.content), '这条凭空多出来的印象'.repeat(6)];
+  // +1 条，但多出一大段（超过 80 字的容忍度）也算编造
+  const bloated = [...existing.map((e) => e.content), '这条凭空多出来的印象'.repeat(12)];
   assert.match(consolidationRejectionReason({ existing, next: bloated }), /结果变多/);
+});
+
+test('短印象的拆分容忍度是 80 字：加点解释放行，塞一大段拒绝', () => {
+  const short = [{ content: '爱问人设，也爱逗你' }];   // prevChars = 9
+  // 拆成两条、补了点解释（+50 字）→ 放行（以前 40 字的下限会误杀这种正常拆分）
+  assert.equal(consolidationRejectionReason({ existing: short, next: ['爱问你"现在什么人设"，反复问', '爱逗人表演，会要你喵一声'] }), '');
+  // 同一条里塞进远超容忍度的新内容（+119 字）→ 拒绝
+  assert.match(consolidationRejectionReason({ existing: short, next: ['爱问人设，也爱逗你', '这条完全是新编的'.repeat(15)] }), /结果变多/);
 });
 
 test('条数没变多、但字数翻倍地涨 → 也拒绝（往里塞新内容）', () => {

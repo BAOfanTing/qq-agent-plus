@@ -347,6 +347,18 @@ try {
   console.log('  ' + (editorOk ? 'OK   ' : 'FAIL ') + '正在编辑的那节渲染成 textarea + 保存/取消'
     + (editorOk ? '' : ` -> ${editingView.match(/<div class="pd-sec[^"]*"/g)?.join(' | ') || '(没找到小节容器)'}`));
 
+  // 记忆页每条印象的来源标记：多老 + 谁写的
+  const metaNow = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now(), origin: 'model' });
+  const metaOld = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() - 40 * 24 * 3600 * 1000, origin: 'manual' });
+  const metaLegacy = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() });
+  const metaOk = /^\[\d{2}-\d{2} · 模型记的\] $/.test(metaNow)
+    && /· 手动编辑\] $/.test(metaOld)
+    && /· 早先的\] $/.test(metaLegacy)
+    && metaNow !== metaOld;
+  metaOk ? pass++ : fail++;
+  console.log('  ' + (metaOk ? 'OK   ' : 'FAIL ') + '印象标记带日期与来源（模型记的/手动编辑/早先的）'
+    + (metaOk ? '' : ` -> ${metaNow} | ${metaOld} | ${metaLegacy}`));
+
   vm.runInContext('state.personaTemplates = {};', ctx);
   const desktopHtml = ctx.renderDesktopSection(cfg);
   const apiHtml = ctx.renderApiSection(cfg);

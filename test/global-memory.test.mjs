@@ -100,6 +100,19 @@ test('global person memory migration and isolation rules', async (t) => {
     assert.ok(added.createdAt > oldAt, '新写的条目才用 now');
   });
 
+  await t.test('印象来源（origin）：模型记的 / 整理改写 / 手动编辑分得开', () => {
+    memory.append('group:900', 'memberImpression', '模型自己记的一条', { userId: '97531', target: 'Eve' });
+    const appended = () => memory.getMember('group:900', '97531').impressions;
+    assert.equal(appended().find((e) => e.content === '模型自己记的一条')?.origin, 'model');
+
+    memory.replaceMemberForConsolidation('group:900', '97531', 'Eve', ['模型自己记的一条', '整理新写的一条']);
+    assert.equal(appended().find((e) => e.content === '模型自己记的一条')?.origin, 'model', '原样保留的条目来源不该被改成整理');
+    assert.equal(appended().find((e) => e.content === '整理新写的一条')?.origin, 'consolidated');
+
+    memory.editMemberImpression('group:900', { userId: '97531', name: 'Eve', impressions: ['手动写的一条'] });
+    assert.equal(appended()[0]?.origin, 'manual', '控制台手改的要标成 manual');
+  });
+
   await t.test('每条印象带日期（模型才能判断"这是昨天还是两周前"）', () => {
     const line = memory.formatForPrompt('group:999', { userIds: ['12345'] });
     assert.match(line, /- Alice：\[\d{2}-\d{2}\] /, `印象行要带 [MM-DD]：${line.split('\n')[1]}`);
