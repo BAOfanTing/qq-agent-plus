@@ -308,3 +308,45 @@ test('creates, updates, and deletes managed AI assets', async (t) => {
   }), true);
   assert.equal(observer.memorySummary().entries.length, 0);
 });
+
+// 2026-09-23 全面审查发现：人物印象改成按人存（memory/people/<QQ>.json）之后，
+// 这份统计还在读旧的按会话目录，人数与印象数在真实实例上永远是 0。
+test('人物记忆统计读全局布局（memory/people/<QQ>.json），不重复计算旧布局残留', (t) => {
+  const dir = fs.mkdtempSync(path.join(root, 'global-people-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const memoryDir = path.join(dir, 'memory');
+  const peopleDir = path.join(memoryDir, 'people');
+  fs.mkdirSync(peopleDir, { recursive: true });
+  fs.writeFileSync(path.join(peopleDir, '111.json'), JSON.stringify({
+    version: 2, userId: '111', name: '甲', updatedAt: 3000,
+    sourceChatKeys: ['group:100', 'private:111'],
+    impressions: [
+      { content: '印象一', createdAt: 1, sourceChatKeys: ['group:100'] },
+      { content: '印象二', createdAt: 2, sourceChatKeys: ['private:111'] }
+    ]
+  }));
+  fs.writeFileSync(path.join(peopleDir, '222.json'), JSON.stringify({
+    version: 2, userId: '222', name: '乙', updatedAt: 2000,
+    sourceChatKeys: ['group:100'],
+    impressions: [{ content: '印象三', createdAt: 3, sourceChatKeys: ['group:100'] }]
+  }));
+  const chatDir = path.join(memoryDir, 'group_100');
+  fs.mkdirSync(chatDir, { recursive: true });
+  fs.writeFileSync(path.join(chatDir, '_handoff.json'), JSON.stringify({ topic: '测试' }));
+  // 迁移前的按会话文件（已归档的机器上可能还有残留）：有全局文件时不该被重复计算
+  fs.writeFileSync(path.join(chatDir, '111.json'), JSON.stringify({
+    userId: '111', impressions: [{ content: '旧布局里的同一条' }]
+  }));
+
+  const summary = readMemoryAssetSummary(dir);
+  assert.equal(summary.people, 2, '两个人都要算上');
+  assert.equal(summary.impressions, 3, '按全局文件里的印象数算');
+  assert.equal(summary.handoffs, 1);
+  assert.equal(summary.chats, 2, '两个会话：群100（有交接）与私聊111');
+  const group = summary.items.find((x) => x.chatKey === 'group:100');
+  assert.equal(group.people, 2, '两个人都出现在群100');
+  assert.equal(group.impressions, 2, '群100 只算它自己的两条');
+  const priv = summary.items.find((x) => x.chatKey === 'private:111');
+  assert.equal(priv.people, 1);
+  assert.equal(priv.impressions, 1);
+});

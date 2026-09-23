@@ -399,6 +399,10 @@ export const DEFAULT_CONFIG = {
 };
 
 function migrateConfig(parsed) {
+  // 顶层必须是对象：手改坏的 config.json 可能是 null / 5 / "x" / true（都是合法 JSON）。
+  // 放它过去，下面 out.persona = … 那一步就会抛（Cannot create property 'persona' on number '5'），
+  // 被 loadConfig 的 catch 吞掉后静默退回默认值、还会被持久化 —— 用户配置整份没了。
+  if (!isPlainObject(parsed)) parsed = {};
   const out = structuredClone(parsed);
   // 人设段必须是对象：手改坏的 config.json 里可能是 "persona": "小鲸鱼" 这类标量或数组，
   // 放它过去会在保存时炸（Cannot create property 'behaviorProfile' on string），
@@ -413,6 +417,12 @@ function migrateConfig(parsed) {
   // 让默认值补上的话，老实例（例如选的是猫娘）载入后会被当成绑定了默认卡、正文被换掉。
   // 空串 = 未绑定（正文按自定义处理，不改动）；在控制台重选一次卡就会自动绑上。
   if (out.persona.templateId === undefined) out.persona.templateId = '';
+  // identityPilot 及子段同样可能是手改坏的标量（true / "off" / 5）：直接写 .mode 一样会抛，
+  // 落进同一个"静默退回默认值"的坑，所以先归一化成对象再谈迁移。
+  if (out.identityPilot !== undefined && !isPlainObject(out.identityPilot)) out.identityPilot = {};
+  if (out.identityPilot && out.identityPilot.friendProposal !== undefined && !isPlainObject(out.identityPilot.friendProposal)) {
+    out.identityPilot.friendProposal = {};
+  }
   if (
     out.identityPilot?.friendProposal
     && out.identityPilot.friendProposal.mode == null
@@ -511,7 +521,13 @@ export function loadConfig() {
     const merged = deepMerge(DEFAULT_CONFIG, parsed);
     applyPersonaTemplate(merged);   // 绑了内置卡就按 roles/*.md 刷新正文（卡文件是唯一来源）
     return merged;
-  } catch {
+  } catch (error) {
+    // 读不动/解析不了就**先把原件留一份**再退回默认值：config.js 的 stabilize 会把结果持久化，
+    // 原来这里只是静默返回默认配置 —— 手改坏一个字符，apiKey、白名单、人设就整份被覆盖掉了。
+    if (fs.existsSync(CONFIG_FILE)) {
+      try { fs.copyFileSync(CONFIG_FILE, `${CONFIG_FILE}.broken-${Date.now()}`); } catch { /* 备份失败不阻断启动 */ }
+      console.warn('[config] 读取 config.json 失败，原文件已备份成 config.json.broken-*：', error?.message ?? error);
+    }
     const fresh = structuredClone(DEFAULT_CONFIG);
     applyPersonaTemplate(fresh);
     return fresh;

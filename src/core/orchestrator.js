@@ -251,6 +251,22 @@ export function shouldAutoConsolidate({
 }
 
 /**
+ * 同一份记忆的两条记录合成一条时用（遗留条目反查出的 QQ 与本人记录指向同一个人）：
+ * 按正文去重，保留先出现那条的时间戳与来源。
+ */
+function mergeImpressionLists(base = [], extra = []) {
+  const out = [...(Array.isArray(base) ? base : [])];
+  const seen = new Set(out.map((e) => String(e?.content ?? '')));
+  for (const entry of Array.isArray(extra) ? extra : []) {
+    const content = String(entry?.content ?? '');
+    if (!content || seen.has(content)) continue;
+    seen.add(content);
+    out.push(entry);
+  }
+  return out;
+}
+
+/**
  * 记忆整理的结果能不能采纳（纯函数，便于单测）。
  *
  * 规则（整理模式只在"合并/删减/按事实改写"的范围内可信）：
@@ -1985,9 +2001,13 @@ export class Orchestrator {
     } else {
       // 先整理记忆里已有的人
       const knownUserIds = new Set();
+      // 反查之后，同一个人的两条记录（"只有名字的遗留条目" + 本人的记录）会指向同一个 QQ 号：
+      // 必须并成一条再送给模型 —— 分开整理的话，后写回的那条会把前一条的并集结果覆盖掉。
+      const targetByUid = new Map();
       for (const mem of existing) {
         const resolved = this.#resolveIdentity(chatKey, mem, stats, notes);
-        if (String(resolved.userId || '')) knownUserIds.add(String(resolved.userId));
+        const uid = String(resolved.userId || '');
+        if (uid) knownUserIds.add(uid);
         if (this.#shouldSkip(resolved, force)) {
           skipped.push({
             userId: resolved.userId,
@@ -1996,7 +2016,15 @@ export class Orchestrator {
           });
           continue;
         }
-        targets.push({ ...resolved, isNew: false });
+        const dup = uid ? targetByUid.get(uid) : null;
+        if (dup) {
+          dup.impressions = mergeImpressionLists(dup.impressions, resolved.impressions);
+          if (!dup.name && resolved.name) dup.name = resolved.name;
+          continue;
+        }
+        const target = { ...resolved, isNew: false };
+        if (uid) targetByUid.set(uid, target);
+        targets.push(target);
       }
 
       // 再"发现"聊天记录里的活跃群友：他们发言很多却没有任何印象。
@@ -2079,6 +2107,7 @@ export class Orchestrator {
     const memberMsgCount = new Map();
     const nameMsgCount = new Map();
     const nameToUserId = new Map();
+    const nameToUids = new Map();   // 名字 → 出现过的 QQ 号集合：nameToUserId 是"先见到先赢"，看不出重名
     const uidToName = new Map();
     for (const m of this.store.recent(chatKey, { limit: 2000 })) {
       if (m.self || !m.senderId) continue;
@@ -2089,35 +2118,49 @@ export class Orchestrator {
       if (nm && !PLACEHOLDER_NAMES.has(nm)) {
         nameMsgCount.set(nm, (nameMsgCount.get(nm) || 0) + 1);
         if (!nameToUserId.has(nm)) nameToUserId.set(nm, uid);
+        if (!nameToUids.has(nm)) nameToUids.set(nm, new Set());
+        nameToUids.get(nm).add(uid);
         if (!uidToName.has(uid)) uidToName.set(uid, nm);
       }
     }
-    return { memberMsgCount, nameMsgCount, nameToUserId, uidToName };
+    return { memberMsgCount, nameMsgCount, nameToUserId, nameToUids, uidToName };
   }
 
   /** 确定一个记忆条目的 QQ 号（必要时反查名字并回写记忆文件）。 */
   #resolveIdentity(chatKey, mem, stats, notes) {
-    let userId = String(mem.userId || '').trim();
+    const own = String(mem.userId || '').trim();
+    let userId = own;
+    let impressions = mem.impressions || [];
     let msgCount = userId ? (stats.memberMsgCount.get(userId) || 0) : 0;
 
-    if (msgCount < Orchestrator.MEMBER_MIN_MESSAGES) {
-      const candidates = [notes[userId], mem.name, userId].filter(Boolean);
-      for (const name of candidates) {
+    // 只有"自己没带 QQ 号的遗留条目"才按名字反查：条目已经带了号码就以它为准 ——
+    // 名字映射是"先见到先赢"的启发式，把一个号码改写成同名另一个人的之后，
+    // 这轮整理的结果会写到别人头上（重名时尤其危险）。
+    if (!/^\d{1,15}$/.test(userId) && msgCount < Orchestrator.MEMBER_MIN_MESSAGES) {
+      for (const name of [notes[userId], mem.name, userId].filter(Boolean)) {
+        const uids = stats.nameToUids.get(name);
+        // 同名多个号：不敢猜，宁可这条不整理，也不能把印象挂错人
+        if (!uids || uids.size !== 1) continue;
         const byName = stats.nameMsgCount.get(name) || 0;
-        if (byName >= Orchestrator.MEMBER_MIN_MESSAGES) {
-          const matched = stats.nameToUserId.get(name) || '';
-          if (matched) {
-            userId = matched;
-            msgCount = byName;
-            try {
-              this.memory.replaceMember(chatKey, userId, mem.name, mem.impressions.map((e) => e.content));
-            } catch { /* 回写失败不阻塞整理 */ }
-          }
-          break;
+        if (byName < Orchestrator.MEMBER_MIN_MESSAGES) continue;
+        const matched = [...uids][0];
+        if (matched) {
+          userId = matched;
+          msgCount = byName;
+          try {
+            // 合并写入，不能整份替换：这个人名下可能已经有印象（他也在这个群里说过话），
+            // replace 会拿这条遗留记录的内容把人家原有的印象全部覆盖掉。
+            this.memory.adoptImpressions(chatKey, userId, mem.name, impressions);
+            // 送模型整理的必须是**合并后**的全量印象：否则模型看不到本人原有的印象，
+            // 写回时（replace 是整份替换）那些印象会连同这次整理一起消失。
+            const merged = this.memory.getMember(chatKey, userId);
+            if (merged?.impressions?.length) impressions = merged.impressions;
+          } catch { /* 回写失败不阻塞整理 */ }
         }
+        break;
       }
     }
-    return { ...mem, userId, name: mem.name || stats.uidToName.get(userId) || '', msgCount };
+    return { ...mem, userId, impressions, name: mem.name || stats.uidToName.get(userId) || '', msgCount };
   }
 
   /** 批量整理时是否跳过某人（指定群友 / 强制模式不跳过）。 */
@@ -2221,8 +2264,18 @@ export class Orchestrator {
 
   /** 整理模式：合并/删减已有印象。 */
   #buildConsolidatePrompt(mem) {
-    // 与"今天"同口径（上海）：原来用 UTC，凌晨产生的印象在模型眼里会算成前一天
-    const fmtTs = (t) => new Date((Number(t) || Date.now()) + ZONE_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ');
+    // 与"今天"同口径（上海）：原来用 UTC，凌晨产生的印象在模型眼里会算成前一天。
+    // 坏时间戳（负数/纳秒级/超范围）必须先夹住：toISOString 碰到 Invalid Date 会抛 RangeError，
+    // 这条人物会因此永远整理不了（异常被记成 failed，坏值本身没人清理）。
+    // 上界要扣掉时区偏移：格式化时会再加 ZONE_OFFSET_MS，贴着 8.64e15 的值加完就溢出成 Invalid Date
+    const clampTs = (t) => {
+      const raw = Number(t) || 0;
+      return Number.isFinite(raw) && raw > 0 && raw <= 8.64e15 - ZONE_OFFSET_MS ? raw : 0;
+    };
+    const fmtTs = (t) => {
+      const at = clampTs(t);
+      return at ? new Date(at + ZONE_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ') : '日期未知';
+    };
     const cfg = getConfig();
     // 整理这次调用是"另一个进程"：它看不到角色卡，也不知道谁是管理员。
     // 不点明身份的话，"他改人设、问人设"就容易被写成性格缺陷（"扬言改人设提示词"就是这么来的）。
@@ -2234,9 +2287,9 @@ export class Orchestrator {
     const lines = [`群友 QQ：${mem.userId}`, `当前名字：${mem.name}`, `今天：${today}（Asia/Shanghai）`];
     if (isOwner) lines.push('身份：这是机器人管理员本人（设置角色卡、管这台机器人的人）');
     for (const e of mem.impressions) {
-      const created = fmtTs(e.createdAt);
-      const observed = Number(e.lastObservedAt || 0);
-      lines.push(`- ${e.content}（记于 ${created}${observed && observed !== Number(e.createdAt) ? `，最近观察到 ${fmtTs(observed)}` : ''}）`);
+      const created = clampTs(e.createdAt);
+      const observed = clampTs(e.lastObservedAt);
+      lines.push(`- ${e.content}（记于 ${fmtTs(created)}${observed && observed !== created ? `，最近观察到 ${fmtTs(observed)}` : ''}）`);
     }
     const maxKeep = Number(cfg.memory?.maxImpressionsPerMember) || 5;
     return {

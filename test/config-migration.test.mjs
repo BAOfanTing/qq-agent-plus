@@ -113,3 +113,49 @@ test('只有 randomPercent、没有 tier/位置的老配置：按概率本身读
   assert.equal(bare.first.randomPercent, 100, '默认是全响应（与老默认档 4 一致）');
   assert.equal(bare.first.sliderMode, 'probability');
 });
+
+/** 同 loadStoreInNewProcess，但回传整个配置（顶层），用于验证"坏字段不连累其他配置"。 */
+function loadWholeConfigInNewProcess(rawText) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-config-malformed-'));
+  tempDirs.add(dir);
+  const file = path.join(dir, 'config.json');
+  fs.writeFileSync(file, rawText);
+  const script = `
+    process.env.QQ_AGENT_DATA_DIR = ${JSON.stringify(dir)};
+    const { getConfig } = await import(${JSON.stringify(CONFIG_URL)});
+    console.log(JSON.stringify(structuredClone(getConfig())));
+  `;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  return { config: JSON.parse(out.trim().split('\n').pop()), dir };
+}
+
+// ── 2026-09-23 全面审查发现：坏字段会连累整份配置（apiKey/白名单/人设一起没） ──
+
+test('子段被手改成标量：其余配置不许被整份退回默认值', () => {
+  // identityPilot.friendProposal 被手改成 true 时，老代码在迁移里抛 TypeError
+  // （Cannot create property 'mode' on boolean），被 loadConfig 的 catch 吞掉 →
+  // 整份配置退回默认值并持久化 → apiKey、白名单、人设正文全丢。
+  const { config } = loadWholeConfigInNewProcess(JSON.stringify({
+    api: { apiKey: 'keep-me', model: 'm1', baseUrl: 'https://example.invalid/v1' },
+    identityPilot: { friendProposal: true },
+    aiNames: { self: '小鲸鱼' }
+  }));
+  assert.equal(config.api.apiKey, 'keep-me', '一个坏子段不能把整份配置冲掉');
+  assert.equal(config.api.model, 'm1');
+  assert.equal(config.identityPilot.friendProposal.mode, 'triggered', '坏掉的子段按默认模式恢复');
+});
+
+test('config.json 解析不了：退回默认值，但先把原件留一份', () => {
+  const { config, dir } = loadWholeConfigInNewProcess('{"api": {"apiKey": "keep-me"},');
+  const backups = fs.readdirSync(dir).filter((name) => name.startsWith('config.json.broken-'));
+  assert.equal(backups.length, 1, '解析失败必须留下 config.json.broken-* 备份');
+  assert.match(fs.readFileSync(path.join(dir, backups[0]), 'utf8'), /keep-me/);
+  assert.equal(String(config.api.apiKey || ''), '', '退回默认值（apiKey 为空）');
+});
+
+test('整个 config.json 是个标量：按空配置恢复，不抛错', () => {
+  const { config } = loadWholeConfigInNewProcess('5');
+  assert.equal(typeof config, 'object');
+  // 按"未绑定"恢复（与 persona 段被写坏时的规则一致）：坏字段不许被治好成绑定默认卡
+  assert.equal(config.persona.templateId, '', '按未绑定恢复，不静默绑上默认卡');
+});

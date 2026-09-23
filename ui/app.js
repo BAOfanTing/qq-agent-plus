@@ -4482,8 +4482,13 @@ async function loadMemoryDetail(chatKey) {
           });
           el.textContent = '已提交 ✓';
         } catch (err) {
+          // 请求在客户端就失败时不会有 SSE 的 consolidate-done 来收尾：
+          // 必须自己把"整理中"摘掉，否则列表永远显示"整理中…"、计时器也一直空转
+          delete state.consolidating[chatKey];
+          state.consolidateResult[chatKey] = { note: `失败：${err.message}`, at: Date.now(), failed: true };
           el.textContent = '失败';
           alert(`更新记忆失败：${err.message}`);
+          renderMemoryList();
         }
         setTimeout(() => { el.disabled = false; el.textContent = old; }, 2500);
       });
@@ -5775,6 +5780,10 @@ function flushPersonaSectionEdit() {
   const roleBox = $('#cfg-roletext');
   const box = document.querySelector(`#persona-card-view .pd-edit-text[data-sec="${personaEditingSection}"]`);
   if (!roleBox || !box) return false;
+  // 输入框内容与"按渲染规则解析出来的正文"逐字一致 → 这一节根本没改过，别写回。
+  // replacePersonaSectionBody 会规范化行尾空白与多余空行：原样写回也会让正文与卡文件不再逐字节相同，
+  // 保存时 currentPersonaId() 按整串比较就把它当成"自定义" → 静默解绑内置卡（用户什么都没改）。
+  if (box.value === personaSectionBody(roleBox.value, personaEditingSection)) return false;
   const next = replacePersonaSectionBody(roleBox.value, personaEditingSection, box.value);
   if (next === roleBox.value) return false;
   roleBox.value = next;
@@ -6949,11 +6958,25 @@ async function loadIncomingFriendRequests(status) {
   const box = $('#identity-incoming-friend-requests');
   if (!box) return;
   const feature = status?.incomingFriendRequest || {};
+  // 总开关开着、但统一身份库没起来（active=false，比如启动时出错）时，下面这个接口是 409：
+  // 直接给提示，别让请求失败把整页（连同设置表单）换成一整块错误信息。
+  if (status?.active === false) {
+    box.innerHTML = '<div class="empty-hint">统一身份库没有启动：先看页面上提示的启动错误</div>';
+    return;
+  }
   if (!feature.enabled) {
     box.innerHTML = '<div class="empty-hint">入站好友请求审批当前关闭</div>';
     return;
   }
-  const data = await api('/api/identity-pilot/incoming-friend-requests?limit=100');
+  let data;
+  try {
+    data = await api('/api/identity-pilot/incoming-friend-requests?limit=100');
+  } catch (error) {
+    // 外层是 Promise.allSettled，不再替它兜错：失败要显示在这个框里，
+    // 否则页面看起来像"没有好友请求"，而不是"读不到"
+    box.innerHTML = `<div class="empty-hint">读取失败：${esc(error.message)}</div>`;
+    return;
+  }
   const requests = data.requests || [];
   if (!requests.length) {
     box.innerHTML = '<div class="empty-hint">当前没有收到好友请求</div>';
@@ -7018,7 +7041,18 @@ async function loadFriendProposals(status) {
     box.innerHTML = '<div class="empty-hint">主动好友候选当前关闭</div>';
     return;
   }
-  const data = await api('/api/identity-pilot/friend-proposals?limit=100');
+  // 同 loadIncomingFriendRequests：身份库没起来时下面两个接口都是 409
+  if (status?.active === false) {
+    box.innerHTML = '<div class="empty-hint">统一身份库没有启动：先看页面上提示的启动错误</div>';
+    return;
+  }
+  let data;
+  try {
+    data = await api('/api/identity-pilot/friend-proposals?limit=100');
+  } catch (error) {
+    box.innerHTML = `<div class="empty-hint">读取失败：${esc(error.message)}</div>`;
+    return;
+  }
   const proposals = data.proposals || [];
   if (!proposals.length) {
     box.innerHTML = '<div class="empty-hint">当前没有好友候选</div>';
@@ -7060,7 +7094,18 @@ async function loadFriendOpportunities(status) {
     box.innerHTML = '<div class="empty-hint">当前使用提示词提名模式，没有消息触发记录</div>';
     return;
   }
-  const data = await api('/api/identity-pilot/friend-opportunities?limit=100');
+  // 同 loadIncomingFriendRequests：身份库没起来时下面这个接口是 409
+  if (status?.active === false) {
+    box.innerHTML = '<div class="empty-hint">统一身份库没有启动：先看页面上提示的启动错误</div>';
+    return;
+  }
+  let data;
+  try {
+    data = await api('/api/identity-pilot/friend-opportunities?limit=100');
+  } catch (error) {
+    box.innerHTML = `<div class="empty-hint">读取失败：${esc(error.message)}</div>`;
+    return;
+  }
   const opportunities = data.opportunities || [];
   if (!opportunities.length) {
     box.innerHTML = '<div class="empty-hint">尚无抽签或评估记录</div>';
@@ -7352,7 +7397,9 @@ async function loadFriendFeaturePage() {
     state.config = cfg;
     syncGraduatedFeatureNavigation(cfg);
     renderFriendFeaturePage(cfg, status);
-    await Promise.all([
+    // 三个列表各自把失败显示在自己的框里（各自的 try/catch）：用 allSettled 而不是 all，
+    // 一个接口出错不会把整页（含下面的设置表单与刷新按钮）换成一整块错误信息。
+    await Promise.allSettled([
       loadIncomingFriendRequests(status),
       loadFriendProposals(status),
       loadFriendOpportunities(status)
@@ -9575,6 +9622,9 @@ function bindSettingsEvents(c) {
       if (!Number.isFinite(idx)) return;
       // 正在编辑的那节不许收起：一收起就会重画视图，输入框里没保存的字会丢
       if (idx === personaEditingSection) return;
+      // 收起/展开会重画整个视图（viewKey 里含折叠集合）：先把正在编辑的另一节落回草稿，
+      // 否则它的输入框会被按旧正文重建 —— 刚敲的字静默消失
+      flushPersonaSectionEdit();
       if (personaCollapsedSections.has(idx)) personaCollapsedSections.delete(idx);
       else personaCollapsedSections.add(idx);
       syncPersonaButtons();

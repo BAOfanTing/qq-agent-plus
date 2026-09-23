@@ -813,7 +813,7 @@ export function buildToolDefs() {
     },
     {
       name: 'memory_remove',
-      description: '删除一条过时/不再准确的对群友印象。userId 优先按 QQ 号删；target 按名字删；两者都不传则删全部印象。',
+      description: '删除一条过时/不再准确的对群友印象。userId 优先按 QQ 号删；target 按名字删（重名时不删）；只给 content 就删本会话里的这条内容；三个都不给则清空这个会话记的全部印象（不动会话交接）。',
       parameters: {
         type: 'object',
         properties: {

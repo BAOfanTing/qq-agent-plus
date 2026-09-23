@@ -347,6 +347,55 @@ try {
   console.log('  ' + (editorOk ? 'OK   ' : 'FAIL ') + '正在编辑的那节渲染成 textarea + 保存/取消'
     + (editorOk ? '' : ` -> ${editingView.match(/<div class="pd-sec[^"]*"/g)?.join(' | ') || '(没找到小节容器)'}`));
 
+  // 分节编辑：没改过的节不许"原样写回"（会规范化行尾空白/多余空行 → 与卡文件不再逐字节相同
+  // → 保存时被当成"自定义" → 静默解绑内置卡）；收起别的节前必须先落草稿（否则正在敲的字会丢）
+  const editorRoleBox = document.querySelector('#cfg-roletext');
+  const messyCard = '## 一、你是谁\n\n\n你是群里的猫娘，带喵。   \n\n## 二、说话方式\n\n短句。\n';
+  const editorField = (idx) => document.querySelector(`#persona-card-view .pd-edit-text[data-sec="${idx}"]`);
+  vm.runInContext('personaEditingSection = 0;', ctx);
+  editorRoleBox.value = messyCard;
+  editorField(0).value = ctx.personaSectionBody(messyCard, 0);
+  const flushedNoop = ctx.flushPersonaSectionEdit();
+  const noopOk = flushedNoop === false && editorRoleBox.value === messyCard;
+  noopOk ? pass++ : fail++;
+  console.log('  ' + (noopOk ? 'OK   ' : 'FAIL ') + '没改过的小节原样写回不落草稿（正文与卡文件保持逐字节相同）'
+    + (noopOk ? '' : ` -> flushed=${flushedNoop} len=${editorRoleBox.value.length}/${messyCard.length}`));
+
+  editorField(0).value = '你是群里的新正文，就这一句。';
+  const flushedEdit = ctx.flushPersonaSectionEdit();
+  const editFlushOk = flushedEdit === true && editorRoleBox.value.includes('你是群里的新正文，就这一句。')
+    && !editorRoleBox.value.includes('带喵。   ');
+  editFlushOk ? pass++ : fail++;
+  console.log('  ' + (editFlushOk ? 'OK   ' : 'FAIL ') + '改过的小节落回草稿（并去掉行尾空白）');
+
+  // 正在编辑第 1 节时收起第 0 节：先落草稿再重画，输入框里的字不能丢。
+  // 注意顺序：先让折叠基准对齐这张卡（section 数变了的话 refreshPersonaFold 会取消编辑态，
+  // 那是"换卡"时的正常行为，不是这条用例要测的东西）。
+  const collapseRoleBox = document.querySelector('#cfg-roletext');
+  collapseRoleBox.value = catText;
+  ctx.syncPersonaButtons();
+  vm.runInContext('personaEditingSection = 1;', ctx);
+  editorField(1).value = '正在编辑、还没保存的正文';
+  // 这些点击行为挂在 bindSettingsEvents 里：测试要显式绑一次（真实控制台是渲染设置页时绑的）。
+  // 绑定过程中会同步"视觉开关"，它读 state.config —— 前面的用例把它清过，这里补上。
+  vm.runInContext(`state.config = ${JSON.stringify(cfg)};`, ctx);
+  ctx.bindSettingsEvents(cfg);
+  const fakeSection = { dataset: { sec: '0' } };
+  const fakeHead = { closest: (sel) => (sel === '.pd-sec' ? fakeSection : null) };
+  const fakeTarget = { closest: (sel) => (sel === '.pd-sec-head' ? fakeHead : null) };
+  for (const handler of document.querySelector('#persona-card-view')._listeners?.click || []) {
+    handler({ target: fakeTarget });
+  }
+  const collapsedNow = vm.runInContext('[...personaCollapsedSections].join(",")', ctx);
+  const stillEditing = vm.runInContext('personaEditingSection', ctx) === 1;
+  const collapseOk = collapseRoleBox.value.includes('正在编辑、还没保存的正文')
+    && collapsedNow.split(',').includes('0') && stillEditing;
+  collapseOk ? pass++ : fail++;
+  console.log('  ' + (collapseOk ? 'OK   ' : 'FAIL ') + '收起别的小节前先落草稿（编辑中的字不会丢）'
+    + (collapseOk ? '' : ` -> 折叠=${collapsedNow} 含草稿=${collapseRoleBox.value.includes('正在编辑、还没保存的正文')} 编辑态=${stillEditing}`));
+  vm.runInContext('personaEditingSection = -1; personaCollapsedSections = new Set();', ctx);
+  collapseRoleBox.value = '';
+
   // 记忆页每条印象的来源标记：多老 + 谁写的
   const metaNow = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now(), origin: 'model' });
   const metaOld = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() - 40 * 24 * 3600 * 1000, origin: 'manual' });
@@ -755,6 +804,41 @@ try {
     fail++;
     console.log('  FAIL  固化实验功能独立页面不完整');
   }
+
+  // 总开关开着、但统一身份库没起来时（active=false），好友页的三个接口都会 409：
+  // 加载器要自己给提示，不能因为请求失败把整页（连同设置表单）换成一整块错误信息。
+  let friendFetchCalls = 0;
+  const fetchBeforeFriends = sandbox.fetch;
+  sandbox.fetch = async () => {
+    friendFetchCalls++;
+    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+  };
+  await ctx.loadIncomingFriendRequests({ active: false, incomingFriendRequest: { enabled: true } });
+  await ctx.loadFriendProposals({ active: false, friendProposal: { enabled: true } });
+  await ctx.loadFriendOpportunities({ active: false, friendProposal: { enabled: true, mode: 'triggered' } });
+  sandbox.fetch = fetchBeforeFriends;
+  const inactiveHint = '统一身份库没有启动';
+  const inactiveOk = friendFetchCalls === 0
+    && store.get('#identity-incoming-friend-requests').innerHTML.includes(inactiveHint)
+    && store.get('#identity-friend-proposals').innerHTML.includes(inactiveHint)
+    && store.get('#identity-friend-opportunities').innerHTML.includes(inactiveHint);
+  inactiveOk ? pass++ : fail++;
+  console.log('  ' + (inactiveOk ? 'OK   ' : 'FAIL ') + '身份库没起来时好友页给提示、不去撞 409'
+    + (inactiveOk ? '' : ` -> fetch=${friendFetchCalls} 入站=${store.get('#identity-incoming-friend-requests').innerHTML.slice(0, 40)}`));
+
+  // 接口真的报错时，错误要显示在那个列表自己的框里（外层用 allSettled 之后没人替它兜错）
+  sandbox.fetch = async () => ({
+    ok: false, status: 500, json: async () => ({ error: '内部错误' }), text: async () => ''
+  });
+  await ctx.loadIncomingFriendRequests({ active: true, incomingFriendRequest: { enabled: true } });
+  await ctx.loadFriendProposals({ active: true, friendProposal: { enabled: true } });
+  await ctx.loadFriendOpportunities({ active: true, friendProposal: { enabled: true, mode: 'triggered' } });
+  sandbox.fetch = fetchBeforeFriends;
+  const boxes = ['#identity-incoming-friend-requests', '#identity-friend-proposals', '#identity-friend-opportunities'];
+  const errorShown = boxes.every((sel) => store.get(sel).innerHTML.includes('读取失败：内部错误'));
+  errorShown ? pass++ : fail++;
+  console.log('  ' + (errorShown ? 'OK   ' : 'FAIL ') + '好友页单个接口报错时只在该列表里显示错误'
+    + (errorShown ? '' : ` -> ${boxes.map((sel) => store.get(sel).innerHTML.slice(0, 30)).join(' | ')}`));
   const assetSummaryHtml = ctx.renderAssetSummary({
     generatedAt: Date.now(),
     stickers: { enabled: true, total: 3, annotated: 2, used: 1 },
