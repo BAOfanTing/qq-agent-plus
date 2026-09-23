@@ -216,12 +216,12 @@ export class GlobalPersonMemoryStore {
     const uid = String(userId || '').trim();
     return structuredClone(this.#ensure().get(uid) || emptyMember(uid));
   }
-  append(chatKey, userId, name, content, createdAt = Date.now()) {
+  append(chatKey, userId, name, content, createdAt = Date.now(), origin = 'model') {
     const map = this.#ensure();
     const key = memberKey(userId, name);
     const member = map.get(key) || emptyMember(userId, name);
     const now = Date.now();
-    const entry = normalizeEntry({ content, createdAt, lastObservedAt: now, origin: 'model', sourceChatKeys: [chatKey] }, chatKey);
+    const entry = normalizeEntry({ content, createdAt, lastObservedAt: now, origin, sourceChatKeys: [chatKey] }, chatKey);
     if (!entry) return null;
     mergeEntry(member, entry);
     member.userId = String(userId || member.userId || '');

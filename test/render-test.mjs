@@ -351,13 +351,18 @@ try {
   const metaNow = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now(), origin: 'model' });
   const metaOld = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() - 40 * 24 * 3600 * 1000, origin: 'manual' });
   const metaLegacy = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() });
+  const metaAncient = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() - 400 * 24 * 3600 * 1000, origin: 'consolidated' });
+  const metaBroken = ctx.impressionMetaLabel({ content: 'x', createdAt: 0 });
   const metaOk = /^\[\d{2}-\d{2} · 模型记的\] $/.test(metaNow)
     && /· 手动编辑\] $/.test(metaOld)
     && /· 早先的\] $/.test(metaLegacy)
-    && metaNow !== metaOld;
+    && metaNow !== metaOld
+    // 一年以上的要带年份（只给月-日会被读成"还没到的那天"）
+    && /^\[\d{4}-\d{2}-\d{2} · 整理改写\] $/.test(metaAncient)
+    && /^\[\?\?-\?\? · 早先的\] $/.test(metaBroken);
   metaOk ? pass++ : fail++;
-  console.log('  ' + (metaOk ? 'OK   ' : 'FAIL ') + '印象标记带日期与来源（模型记的/手动编辑/早先的）'
-    + (metaOk ? '' : ` -> ${metaNow} | ${metaOld} | ${metaLegacy}`));
+  console.log('  ' + (metaOk ? 'OK   ' : 'FAIL ') + '印象标记带日期与来源（今年的月-日 / 往年带年份 / 坏时间戳给 ??)'
+    + (metaOk ? '' : ` -> ${metaNow} | ${metaOld} | ${metaLegacy} | ${metaAncient} | ${metaBroken}`));
 
   vm.runInContext('state.personaTemplates = {};', ctx);
   const desktopHtml = ctx.renderDesktopSection(cfg);

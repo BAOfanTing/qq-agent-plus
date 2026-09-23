@@ -4297,10 +4297,19 @@ function renderMemoryList() {
 }
 
 /** 记忆页每条印象前面的标记：「[09-20 · 模型记的] 」——多老 + 谁写的，一眼分得开。
- *  时间戳以前会被每次整理刷成当天（已修），所以这个日期现在真能当"年龄"看。 */
+ *  时间戳以前会被每次整理刷成当天（已修），所以这个日期现在真能当"年龄"看。
+ *  今年的只显示月-日；往年的要带年份，否则 1 月看到 [12-20] 会像是"还没到的那天"。 */
 function impressionMetaLabel(entry) {
-  const at = Number(entry?.lastObservedAt || entry?.createdAt) || 0;
-  const when = at ? new Date(at + 8 * 60 * 60 * 1000).toISOString().slice(5, 10) : '??-??';
+  const raw = Number(entry?.lastObservedAt || entry?.createdAt) || 0;
+  // 坏数据（负数/纳秒级/超范围）会让 toISOString 抛 RangeError，整页记忆一起挂 —— 回退成 ??
+  const at = Number.isFinite(raw) && raw > 0 && raw <= 8.64e15 ? raw : 0;
+  const shanghai = (ts) => new Date(ts + 8 * 60 * 60 * 1000).toISOString();
+  const thisYear = shanghai(Date.now()).slice(0, 4);
+  let when = '??-??';
+  if (at > 0) {
+    const key = shanghai(at);
+    when = key.startsWith(thisYear) ? key.slice(5, 10) : key.slice(0, 10);
+  }
   const origin = { model: '模型记的', consolidated: '整理改写', manual: '手动编辑' }[entry?.origin] || '早先的';
   return `[${when} · ${origin}] `;
 }

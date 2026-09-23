@@ -113,6 +113,30 @@ test('global person memory migration and isolation rules', async (t) => {
     assert.equal(appended()[0]?.origin, 'manual', '控制台手改的要标成 manual');
   });
 
+  await t.test('来源能穿过子类透传到存储层（曾经在 replaceMember 少写形参处静默丢掉）', () => {
+    // 走真实实例（memory.js 的子类）→ memory-global → 存储层，端到端确认 options 没丢
+    memory.replaceMember('group:910', '86420', 'Frank', ['人手改的一条'], { origin: 'manual' });
+    assert.equal(
+      memory.getMember('group:910', '86420').impressions[0]?.origin,
+      'manual',
+      'replaceMember 的第 5 个参数必须透传'
+    );
+    memory.replaceMember('group:910', '86420', 'Frank', ['整理写的一条']);
+    assert.equal(memory.getMember('group:910', '86420').impressions[0]?.origin, 'consolidated', '不传时按整理默认');
+    // 控制台"新增印象"走 append，也要能标 manual
+    memory.append('group:910', 'memberImpression', '手加的一条', { userId: '86420', target: 'Frank', origin: 'manual' });
+    assert.equal(
+      memory.getMember('group:910', '86420').impressions.find((e) => e.content === '手加的一条')?.origin,
+      'manual'
+    );
+    // 模型自己记的仍然是 model
+    memory.append('group:910', 'memberImpression', '模型记的一条', { userId: '86420', target: 'Frank' });
+    assert.equal(
+      memory.getMember('group:910', '86420').impressions.find((e) => e.content === '模型记的一条')?.origin,
+      'model'
+    );
+  });
+
   await t.test('每条印象带日期（模型才能判断"这是昨天还是两周前"）', () => {
     const line = memory.formatForPrompt('group:999', { userIds: ['12345'] });
     assert.match(line, /- Alice：\[\d{2}-\d{2}\] /, `印象行要带 [MM-DD]：${line.split('\n')[1]}`);

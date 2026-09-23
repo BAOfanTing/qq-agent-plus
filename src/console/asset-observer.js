@@ -642,7 +642,8 @@ export class AssetObserver {
     if (!text) throw new Error('记忆内容不能为空');
     const entry = this.memory?.append(source, 'memberImpression', text, {
       userId: uin,
-      target: cleanText(name, 60)
+      target: cleanText(name, 60),
+      origin: 'manual'   // 控制台手动新增的，不是模型自己记的
     });
     if (!entry) throw new Error('记忆存储不可用');
     return { chatKey: source, userId: uin, ...entry };
@@ -656,11 +657,13 @@ export class AssetObserver {
       .map((entry) => cleanText(entry, 300))
       .filter(Boolean);
     if (!entries.length) throw new Error('至少保留一条记忆；删除请使用删除按钮');
+    // 控制台里人手改的：标成 manual，别让它在记忆页显示成"整理改写"
     return this.memory.replaceMember(
       source,
       String(userId || '').trim(),
       cleanText(name, 60),
-      entries
+      entries,
+      { origin: 'manual' }
     );
   }
 

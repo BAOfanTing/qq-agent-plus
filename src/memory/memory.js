@@ -33,6 +33,7 @@ export class MemoryStore extends BaseMemoryStore {
           content: entry.content,
           createdAt: entry.createdAt,
           lastObservedAt: entry.lastObservedAt,
+          origin: entry.origin || '',
           sourceChatKeys: Array.isArray(entry.sourceChatKeys) ? [...entry.sourceChatKeys] : []
         });
       }

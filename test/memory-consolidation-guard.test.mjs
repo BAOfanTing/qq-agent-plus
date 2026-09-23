@@ -46,11 +46,16 @@ test('条数多出两条以上，或字数明显膨胀 → 拒绝（疑似编造
   assert.match(consolidationRejectionReason({ existing, next: bloated }), /结果变多/);
 });
 
-test('短印象的拆分容忍度是 80 字：加点解释放行，塞一大段拒绝', () => {
-  const short = [{ content: '爱问人设，也爱逗你' }];   // prevChars = 9
-  // 拆成两条、补了点解释（+50 字）→ 放行（以前 40 字的下限会误杀这种正常拆分）
+test('短印象的拆分容忍度是 80 字：增量落在 41~80 放行、超过 80 拒绝', () => {
+  // prevChars = 100（单条），拆成两条合计 170 → grew = 70：
+  // 旧阈值（40）会拒、新阈值（80）放行 —— 这条才真正卡住这次的改动
+  const hundred = [{ content: 'x'.repeat(100) }];
+  assert.equal(consolidationRejectionReason({ existing: hundred, next: ['y'.repeat(85), 'z'.repeat(85)] }), '');
+  // 同一起点，增量 81 字（合计 181）→ 必须拒绝，钉住上边界
+  assert.match(consolidationRejectionReason({ existing: hundred, next: ['y'.repeat(90), 'z'.repeat(91)] }), /结果变多/);
+  // 极短记忆（prevChars=9）的绝对增量上限同样是 80：塞 80 字就超
+  const short = [{ content: '爱问人设，也爱逗你' }];
   assert.equal(consolidationRejectionReason({ existing: short, next: ['爱问你"现在什么人设"，反复问', '爱逗人表演，会要你喵一声'] }), '');
-  // 同一条里塞进远超容忍度的新内容（+119 字）→ 拒绝
   assert.match(consolidationRejectionReason({ existing: short, next: ['爱问人设，也爱逗你', '这条完全是新编的'.repeat(15)] }), /结果变多/);
 });
 

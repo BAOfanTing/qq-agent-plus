@@ -99,7 +99,8 @@ export class MemoryStore {
     if (category !== 'memberImpression') return null;
     const userId = String(extra.userId || '').trim(); const target = clean(extra.target, 60);
     if (!userId && !target) return null;
-    return this.people.append(chatKey, userId, target || userId, content);
+    // origin 默认 model（机器人自己记的）；控制台手动新增的传 'manual'
+    return this.people.append(chatKey, userId, target || userId, content, Date.now(), String(extra.origin || '').trim() || 'model');
   }
   members(chatKey = '') { return this.people.members(chatKey); }
   getMember(chatKey, userId) { return this.people.get(userId); }
@@ -117,7 +118,11 @@ export class MemoryStore {
     if (n) notes[String(userId)] = n; else delete notes[String(userId)]; updateConfig({ memberNotes: notes });
     return { ...member, note: n };
   }
-  replaceMember(chatKey, userId, name, contents) { return this.people.replace(chatKey, userId, name, contents); }
+  // options 要透传：memory.js 的子类会传 { origin }（整理=consolidated / 控制台手动=manual），
+  // 少写这个形参会让调用方传的来源被静默丢掉，只剩存储层默认值恰好对得上（整理那条）。
+  replaceMember(chatKey, userId, name, contents, options = {}) {
+    return this.people.replace(chatKey, userId, name, contents, options);
+  }
   removeMember(chatKey, userId) {
     // 语义修正：调用方（控制台记忆页按群删除、资产页删除）以为只影响这个会话，
     // 原来却直接删掉 memory/people/<QQ>.json —— 这个人**在所有会话**的印象一起消失。
@@ -152,7 +157,9 @@ export class MemoryStore {
       // 只有 MM-DD 时跨年无法判断，甚至会被读成"还没到的那天"。
       const thisYear = todayKey().slice(0, 4);
       for (const e of recent) {
-        const at = Number(e.lastObservedAt || e.createdAt) || 0;
+        const raw = Number(e.lastObservedAt || e.createdAt) || 0;
+        // 坏时间戳（负数/超范围）不喂给 todayKey：它会给出 NaN-NaN-NaN 这种垃圾
+        const at = Number.isFinite(raw) && raw > 0 && raw <= 8.64e15 ? raw : 0;
         const key = at ? todayKey(at) : '';
         const stamp = !key ? '日期未知' : (key.startsWith(thisYear) ? key.slice(5) : key);
         lines.push(`- ${who}：[${stamp}] ${e.content}`);
