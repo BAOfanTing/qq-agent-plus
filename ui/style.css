@@ -2811,13 +2811,17 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 /* ── 字段容器：flex 拉伸 → 自适应网格 ── */
 .field-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 340px));
+  /* 列宽 ≥280 后把剩余空间均分（1fr）：以前是 minmax(220px, 340px)，列宽封顶 + 左对齐，
+     内容区宽到 860 以后右侧就空出一大片，整行看着"全挤在左边"。 */
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px 18px;
   align-items: end;
   margin-bottom: 14px;
 }
-/* 数字/短文本字段不必占满列宽；文本框（URL、模型名等）保留较宽的列 */
-.field:has(input[type=number]) { max-width: 220px; }
+/* 行里只有一个字段时占满整行，不要缩成半宽挂在左侧 */
+.field-row > :only-child { grid-column: 1 / -1; }
+/* 数字/短文本字段不再额外限宽：以前给它们 max-width:220px，在均分列宽的网格里
+   会缩在格子左侧、右边空出一截，"框都偏左"的观感主要来自这里。 */
 .update-deploy-settings > label:has(input[type=number]) { max-width: 220px; }
 .field { min-width: 0; }
 .field label {
