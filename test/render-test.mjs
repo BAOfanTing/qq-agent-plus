@@ -137,7 +137,7 @@ try {
     'renderQzoneInteractionSection', 'renderTimeControlSection',
     'renderPersonaSection', 'renderAllowSection',
     'renderChatSection', 'renderDesktopSection', 'renderOnebotSection',
-    'renderPersonaPicker', 'renderHealthCard',
+    'renderPersonaLibrary', 'renderPersonaGrid', 'renderHealthCard',
     'renderAssetSummary', 'renderStickerAssets', 'renderSlangAssets',
     'renderSlangResearch', 'renderIdentityAssets', 'renderMemoryAssets'
   ];
@@ -177,8 +177,10 @@ try {
     }
   }
   const { PERSONAS } = await import('../src/personas.js');
+  // 夹具照控制台 /api/persona-templates 的真实载荷来：内置卡带 builtin: true
+  // （卡库靠它显示"内置 · 跟随卡文件"，少了这个标志会一律显示成"自定义"）。
   const personaTemplates = {
-    ...PERSONAS,
+    ...Object.fromEntries(Object.entries(PERSONAS).map(([id, p]) => [id, { ...p, builtin: true }])),
     custom_0: {
       ...PERSONAS.jishu_zhai,
       name: 'Grounded copy',
@@ -232,6 +234,63 @@ try {
     fail++;
     console.log('  FAIL  交流策略未回显');
   }
+  // ── 人设页改版：卡库 + 结构化正文视图 ──
+  // 角色正文原来只给一个 textarea（"留言板"）；现在解析成分节面板，
+  // 招牌渲染成标签、黑名单渲染成打叉标签、示例渲染成聊天气泡。
+  const catText = PERSONAS.maoniang.text;
+  const catParsed = ctx.parsePersonaCard(catText);
+  const parseOk = catParsed.title === '角色卡：猫娘（二次元）'
+    && catParsed.sections.length >= 8
+    && catParsed.sections.some((s) => s.name.includes('你的标志'));
+  parseOk ? pass++ : fail++;
+  console.log('  ' + (parseOk ? 'OK   ' : 'FAIL ') + '正文解析出分节与卡名'
+    + (parseOk ? '' : ` -> title=${catParsed.title} sections=${catParsed.sections.length}`));
+
+  const exampleSection = catParsed.sections.find((s) => s.name.includes('示例'));
+  const exampleBlocks = exampleSection ? exampleSection.blocks.filter((b) => b.type === 'example') : [];
+  const askGranted = exampleBlocks.some((b) => b.turns.some((t) => t.role === 'peer' && t.text.includes('给我喵一个'))
+    && b.turns.some((t) => t.role === 'ok' && t.text.includes('喵')));
+  const exOk = exampleBlocks.length >= 8 && askGranted;
+  exOk ? pass++ : fail++;
+  console.log('  ' + (exOk ? 'OK   ' : 'FAIL ') + '示例按"群友/你不要/你可以"分组（含"给我喵一个"的给法）'
+    + (exOk ? '' : ` -> blocks=${exampleBlocks.length} askGranted=${askGranted}`));
+
+  const catView = ctx.renderPersonaCardBody(catText);
+  const viewOk = catView.includes('pd-tag star') && catView.includes('招牌特征')
+    && catView.includes('pd-tag bad')
+    && catView.includes('pd-quote')
+    && catView.includes('pd-msg bad') && catView.includes('pd-msg ok');
+  viewOk ? pass++ : fail++;
+  console.log('  ' + (viewOk ? 'OK   ' : 'FAIL ') + '招牌=标签、黑名单=打叉标签、示例=气泡、原则=引用块');
+
+  const plainView = ctx.renderPersonaCardBody('就一段没分节的正文，说明这是自定义内容');
+  const plainOk = plainView.includes('pd-empty');
+  plainOk ? pass++ : fail++;
+  console.log('  ' + (plainOk ? 'OK   ' : 'FAIL ') + '没分节的正文给出提示而不是空白');
+
+  const personaSectionHtml = ctx.renderPersonaSection(cfg);
+  const keepOk = ['id="persona-grid"', 'id="persona-card-view"', 'id="cfg-roletext"',
+    'id="cfg-behavior-profile"', 'id="persona-pick-hint"', 'id="toggle-persona-edit"',
+    'id="new-persona-btn"', 'id="del-persona-btn"'].every((needle) => personaSectionHtml.includes(needle));
+  keepOk ? pass++ : fail++;
+  console.log('  ' + (keepOk ? 'OK   ' : 'FAIL ') + '人设页改版后保留原有 DOM 契约（保存/绑定/删除按钮仍在）');
+
+  const gridHtml = ctx.renderPersonaGrid(cfg, {});
+  const gridOk = gridHtml.includes('persona-card') && gridHtml.includes('使用中')
+    && gridHtml.includes('内置 · 跟随卡文件');
+  gridOk ? pass++ : fail++;
+  console.log('  ' + (gridOk ? 'OK   ' : 'FAIL ') + '卡库渲染出卡片与"内置 · 跟随卡文件"来源标记'
+    + (gridOk ? '' : ' -> ' + gridHtml.replace(/\s+/g, ' ').slice(0, 240)));
+
+  // 附加规则不再是空白框：给几个点一下就填进去的例子
+  const ruleChipsOk = personaSectionHtml.includes('id="persona-rule-chips"')
+    && personaSectionHtml.includes('class="pd-tag rule-chip"')
+    && personaSectionHtml.includes('＋ 别装傻、别反问，不想接就安静')
+    && personaSectionHtml.includes('id="persona-expand-btn"')
+    && personaSectionHtml.includes('全部收起');
+  ruleChipsOk ? pass++ : fail++;
+  console.log('  ' + (ruleChipsOk ? 'OK   ' : 'FAIL ') + '附加规则给出可点选的例子、正文有全部收起按钮');
+
   vm.runInContext('state.personaTemplates = {};', ctx);
   const desktopHtml = ctx.renderDesktopSection(cfg);
   const apiHtml = ctx.renderApiSection(cfg);

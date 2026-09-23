@@ -4645,7 +4645,7 @@ async function openMemberNoteModal(qq, chatKey) {
 async function loadSettings() {
   const [cfg, tplData, provData, visionData, priceData] = await Promise.all([
     api('/api/config'),
-    api('/api/persona-templates').catch(() => ({ templates: [] })),
+    api('/api/persona-templates').catch(() => ({ templates: [], failed: true })),
     api('/api/providers').catch(() => ({ providers: [] })),
     api('/api/vision/results').catch(() => ({ results: {}, scanning: false })),
     api('/api/model-prices').catch(() => ({ prices: [], current: null }))
@@ -4657,6 +4657,7 @@ async function loadSettings() {
   state.visionScanning = !!visionData.scanning;
   state.modelPrices = priceData || { prices: [], current: null };
   state.personaTemplates = {};
+  state.personaTemplatesFailed = tplData.failed === true;
   for (const t of tplData.templates || []) state.personaTemplates[t.id] = {
     name: t.name, text: t.text, customRules: t.customRules || '',
     behaviorProfile: t.behaviorProfile || 'legacy', builtin: !!t.builtin
@@ -5618,22 +5619,67 @@ function currentPersonaId() {
   );
 }
 
+/** 草稿与生效配置不一致时，卡库/详情头要跟着草稿说，不能只认已保存的那份。 */
+function personaDraftState() {
+  const cfg = state.config || {};
+  return {
+    id: currentPersonaId(),
+    roleText: $('#cfg-roletext')?.value ?? (cfg.persona?.roleText || ''),
+    behaviorProfile: $('#cfg-behavior-profile')?.value || cfg.persona?.behaviorProfile || 'legacy',
+    customRules: $('#cfg-customrules')?.value ?? (cfg.persona?.customRules || '')
+  };
+}
+
 function syncPersonaButtons() {
-  const id = currentPersonaId();
-  const tpl = state.personaTemplates[id];
+  const draft = personaDraftState();
+  const tpl = state.personaTemplates[draft.id];
+  // 卡库还没读出来时，"匹配不到任何卡"并不等于"正文被改过" —— 下面几处提示都要区分这两种情况
+  const templatesKnown = Object.keys(state.personaTemplates || {}).length > 0;
   const delBtn = $('#del-persona-btn');
-  if (delBtn) delBtn.classList.toggle('hidden', !id.startsWith('custom_'));
+  if (delBtn) delBtn.classList.toggle('hidden', !String(draft.id).startsWith('custom_'));
   const input = $('#cfg-persona-pick');
   if (input) input.value = tpl?.name || '';
   const hint = $('#persona-pick-hint');
   // 正文与内置模板不一致时（升级改了模板而实例里存的是旧正文，或管理员手改过），
   // 选择框会是空的，容易让人以为人设丢了 —— 用提示行说明这是按自定义处理。
-  const hasText = String($('#cfg-roletext')?.value ?? '').trim().length > 0;
+  const hasText = String(draft.roleText || '').trim().length > 0;
   if (hint) {
     hint.textContent = tpl
-      ? (tpl.builtin ? '内置人设' : '自定义人设')
-      : (hasText ? '当前正文与内置模板不一致（按自定义处理，可从列表改选）' : '');
+      ? (tpl.builtin ? `内置卡：跟着 roles/ 下的卡文件走，改卡重启即生效。` : `自定义卡「${tpl.name}」。`)
+      : (hasText
+        ? (templatesKnown ? '当前正文与内置模板不一致（按自定义处理，可在上面的卡库里点一张卡换回来）'
+          : (state.personaTemplatesFailed ? '人设卡读取失败，刷新页面重试。' : '正在读取人设卡…'))
+        : '');
   }
+  // 详情视图：正文、档位、绑定状态都按草稿渲染
+  const detail = $('#persona-card-view');
+  if (detail) detail.innerHTML = renderPersonaCardBody(draft.roleText, { collapsed: personaCollapsedSections });
+  const title = $('#persona-view-title');
+  if (title) title.textContent = tpl?.name || (hasText ? (templatesKnown ? '自定义正文' : '角色设定') : '（还没设置角色设定）');
+  const profileChip = $('#persona-view-profile');
+  if (profileChip) profileChip.textContent = draft.behaviorProfile === 'grounded' ? '自然可靠' : '原版群友';
+  const bindChip = $('#persona-view-binding');
+  if (bindChip) {
+    const boundId = String((state.config?.persona?.templateId) || '');
+    bindChip.className = 'chip';
+    if (tpl?.builtin) {
+      // 只有草稿正文就是这张卡的正文、且实例确实绑着它，才算"正在跟随卡文件"
+      bindChip.classList.add(draft.id === boundId ? 'ok' : 'warn');
+      bindChip.textContent = draft.id === boundId ? '跟随卡文件' : '保存后跟随卡文件';
+    } else if (tpl) {
+      bindChip.textContent = '自定义卡';
+    } else if (hasText && templatesKnown) {
+      bindChip.classList.add('warn');
+      bindChip.textContent = '自定义正文 · 与卡文件解绑';
+    } else if (hasText) {
+      // 卡库还没读出来（或读取失败）时别断言"已解绑"——那时根本不知道有没有对应的卡
+      bindChip.textContent = state.personaTemplatesFailed ? '卡库读取失败' : '读取卡库中…';
+    } else {
+      bindChip.textContent = '';
+    }
+  }
+  const grid = $('#persona-grid');
+  if (grid) grid.innerHTML = renderPersonaGrid(state.config || {}, draft);
 }
 
 function applyPersonaDraft(tpl) {
@@ -5643,23 +5689,205 @@ function applyPersonaDraft(tpl) {
   syncPersonaButtons();
 }
 
-function renderPersonaPicker(c) {
-  const currentId = findPersonaTemplateId(
+// ── 角色正文的结构化渲染 ──
+// 卡正文是 markdown，只给一个大 textarea 太糙：这里解析成分节面板 ——
+// 「你的标志」渲染成一排标签、「AI 味黑名单」渲染成打叉标签、示例渲染成聊天气泡，
+// 让人一眼看出这张卡会让它怎么说话。保存仍然以 #cfg-roletext 的原文为准（视图只读）。
+/** 管理员附加规则的常用例子：点一下就填进去，省得对着空白框发呆。 */
+const PERSONA_RULE_EXAMPLES = [
+  '别装傻、别反问，不想接就安静',
+  '说话短一点，一轮最多两条',
+  '被怼只淡淡带过，不还嘴',
+  '称呼固定用「老板」',
+  '不用网络梗和颜文字'
+];
+
+let personaCollapsedSections = new Set();
+
+const PERSONA_SECTION_EMOJI = {
+  你是谁: '🪪',
+  说话方式: '💬',
+  偏好: '🍜',
+  工具: '🧰',
+  分寸: '🧭'
+};
+
+/** 行内格式：`code`、**加粗**（先转义再替换，避免注入）。 */
+function personaInline(text) {
+  return esc(String(text))
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+/**
+ * 把角色正文解析成 { title, sections: [{ num, name, blocks }] }。
+ * 只认卡里实际用的写法：一级标题、`## 一、小节`、`>` 引用、`-`/`1.` 列表、正文续行，
+ * 以及示例段的 `群友：/你不要：/你可以：/或者：`（同一组群友发言归到一个气泡组里）。
+ */
+function parsePersonaCard(text) {
+  const card = { title: '', sections: [] };
+  let section = null;
+  const blocks = () => (section ? section.blocks : (card.intro ||= []));
+  const lastBlock = () => blocks()[blocks().length - 1];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    const h1 = line.match(/^#\s+(.*)$/);
+    if (h1) { card.title = h1[1].trim(); continue; }
+    const h2 = line.match(/^##\s*(?:([一二三四五六七八九十]+|\d+)\s*[、.．]\s*)?(.*)$/);
+    if (h2) {
+      section = { num: (h2[1] || '').trim(), name: (h2[2] || '').trim(), blocks: [] };
+      card.sections.push(section);
+      continue;
+    }
+    const quote = line.match(/^>\s?(.*)$/);
+    if (quote) {
+      const last = lastBlock();
+      if (last?.type === 'quote') last.lines.push(quote[1]);
+      else blocks().push({ type: 'quote', lines: [quote[1]] });
+      continue;
+    }
+    const listItem = line.match(/^\s*(?:[-*]|\d+[.．])\s+(.*)$/);
+    if (listItem) {
+      const last = lastBlock();
+      if (last?.type === 'list') last.items.push(listItem[1]);
+      else blocks().push({ type: 'list', items: [listItem[1]] });
+      continue;
+    }
+    const turn = line.trim().match(/^(群友|你不要|你可以|或者|但|示例)[：:]\s*(.*)$/);
+    if (turn) {
+      const role = turn[1] === '群友' ? 'peer' : (turn[1] === '你不要' ? 'bad' : 'ok');
+      const last = lastBlock();
+      if (role === 'peer' || last?.type !== 'example') {
+        blocks().push({ type: 'example', turns: [{ role, text: turn[2] }] });
+      } else {
+        last.turns.push({ role, text: turn[2] });
+      }
+      continue;
+    }
+    // 续行：接到上一段/上一条列表项后面（卡里的换行大多是折行，不是新句）
+    const last = lastBlock();
+    if (last?.type === 'list' && last.items.length) last.items[last.items.length - 1] += ` ${line.trim()}`;
+    else if (last?.type === 'p') last.text += ` ${line.trim()}`;
+    else blocks().push({ type: 'p', text: line.trim() });
+  }
+  return card;
+}
+
+function renderPersonaBlock(block, { asTags = '' } = {}) {
+  if (block.type === 'quote') {
+    return `<div class="pd-quote">${block.lines.map(personaInline).join('<br>')}</div>`;
+  }
+  if (block.type === 'list') {
+    if (asTags) {
+      return `<div class="pd-tags">${block.items.map((item) => `<span class="pd-tag ${asTags}">${personaInline(item)}</span>`).join('')}</div>`;
+    }
+    return `<ul class="pd-list">${block.items.map((item) => `<li>${personaInline(item)}</li>`).join('')}</ul>`;
+  }
+  if (block.type === 'example') {
+    const MARK = { peer: '', bad: '✗', ok: '✓' };
+    return `<div class="pd-chat">${block.turns.map((t) => `
+      <div class="pd-msg ${t.role}">
+        <span class="mark">${MARK[t.role] || ''}</span>
+        <span class="bubble">${t.role === 'peer' ? '<span class="who">群友 </span>' : ''}${personaInline(t.text)}</span>
+      </div>`).join('')}</div>`;
+  }
+  if (block.type === 'p') return `<p>${personaInline(block.text)}</p>`;
+  return '';
+}
+
+const PERSONA_TAG_SECTIONS = /标志|招牌/;
+const PERSONA_BAD_SECTIONS = /黑名单|禁止|不要/;
+
+/** 把卡正文渲染成分节视图；collapsed 是"收起来的小节序号"集合。 */
+function renderPersonaCardBody(text, { collapsed = new Set(), showTitle = true } = {}) {
+  const card = parsePersonaCard(text);
+  if (!card.sections.length) {
+    return `<div class="pd-empty">这段正文还没分节，点「编辑正文」直接改；想有分节视图就按内置卡的写法用 <code>## 一、小节名</code>。</div>`;
+  }
+  const sections = card.sections.map((sec, i) => {
+    const isStar = PERSONA_TAG_SECTIONS.test(sec.name);
+    const isBad = PERSONA_BAD_SECTIONS.test(sec.name);
+    const emoji = isStar ? '✨' : (isBad ? '🚫' : (PERSONA_SECTION_EMOJI[sec.name.replace(/（.*?）/g, '')] || ''));
+    const body = sec.blocks.map((block) => renderPersonaBlock(block, {
+      asTags: isStar ? 'star' : (isBad ? 'bad' : '')
+    })).join('');
+    const chips = [];
+    if (isStar) chips.push('<span class="chip star">招牌特征</span>');
+    if (/示例/.test(sec.name)) chips.push('<span class="chip">✓ 可用 / ✗ 禁用</span>');
+    return `
+      <div class="pd-sec ${collapsed.has(i) ? 'collapsed' : ''}" data-sec="${i}">
+        <div class="pd-sec-head">
+          <span class="idx">${esc(sec.num || String(i + 1))}</span>
+          <span class="name">${emoji ? `${emoji} ` : ''}${esc(sec.name)}</span>
+          ${chips.join('')}
+          <span class="caret">▾</span>
+        </div>
+        <div class="pd-sec-body">${body}</div>
+      </div>`;
+  }).join('');
+  const head = showTitle && card.title
+    ? `<div class="pd-headline">${esc(card.title)}</div>`
+    : '';
+  return `${head}${sections}`;
+}
+
+/** 卡库里的一张卡：草稿中的那张会高亮，真正生效且绑着卡文件的那张挂「使用中」。 */
+function renderPersonaGrid(c, draft = {}) {
+  const draftText = draft.roleText ?? c.persona?.roleText ?? '';
+  const draftProfile = draft.behaviorProfile ?? c.persona?.behaviorProfile ?? 'legacy';
+  const draftRules = draft.customRules ?? c.persona?.customRules ?? '';
+  const draftId = findPersonaTemplateId(draftText, draftProfile, draftRules);
+  const savedId = findPersonaTemplateId(
     c.persona?.roleText || '', c.persona?.behaviorProfile || 'legacy', c.persona?.customRules || ''
   );
-  const currentName = state.personaTemplates[currentId]?.name || '';
-  return `
-    <div class="field-row" style="align-items:flex-end">
-      <div class="field">
-        <label>选择人设</label>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="cfg-persona-pick" readonly placeholder="点击选择人设" value="${esc(currentName)}" style="flex:1;cursor:pointer" />
-          <button class="btn btn-small" id="new-persona-btn">＋ 添加人设</button>
-          <button class="btn btn-small btn-danger hidden" id="del-persona-btn">删除当前自定义人设</button>
+  const boundId = String(c.persona?.templateId || '');
+  const templates = Object.entries(state.personaTemplates || {});
+  if (!templates.length) {
+    // 区分"卡库还没读出来/读取失败"和"真的一张卡都没有"，别让人以为人设丢了
+    return state.personaTemplatesFailed
+      ? '<div class="pd-empty">人设卡读取失败，刷新页面重试。</div>'
+      : '<div class="pd-empty">正在读取人设卡…</div>';
+  }
+  return templates.map(([id, tpl]) => {
+    const isDraft = id === draftId;
+    const isInUse = id === savedId && id === boundId;
+    const desc = (() => {
+      const parsed = parsePersonaCard(tpl.text);
+      const sec = parsed.sections.find((s) => s.name.includes('你是谁'));
+      const text = sec?.blocks.find((b) => b.type === 'p')?.text || '';
+      return text.length > 46 ? `${text.slice(0, 46)}…` : text;
+    })();
+    return `
+      <div class="persona-card ${isDraft ? 'selected' : ''}" data-persona-id="${esc(id)}" role="button" tabindex="0">
+        <div class="pc-top">
+          <span class="pc-name">${esc(tpl.name)}</span>
+          ${isInUse ? '<span class="chip ok">使用中</span>' : (isDraft ? '<span class="chip">草稿中</span>' : '')}
         </div>
-        <span id="persona-pick-hint" class="muted" style="font-size:12px"></span>
+        <div class="pc-meta">
+          <span class="pc-tag">${tpl.behaviorProfile === 'grounded' ? '自然可靠' : '原版群友'}</span>
+          <span class="pc-src">${tpl.builtin ? '内置 · 跟随卡文件' : '自定义'}</span>
+        </div>
+        <div class="pc-desc">${esc(desc)}</div>
+      </div>`;
+  }).join('');
+}
+
+/** 人设卡库：点一张卡就把它的正文填进草稿（保存后才生效）。 */
+function renderPersonaLibrary(c) {
+  return `
+    <div class="persona-lib">
+      <div class="persona-lib-head">
+        <span class="pl-title">人设卡库</span>
+        <span class="spacer"></span>
+        <button class="btn btn-small" id="persona-expand-btn">全部收起</button>
+        <button class="btn btn-small" id="new-persona-btn">＋ 新建自定义卡</button>
+        <button class="btn btn-small btn-danger hidden" id="del-persona-btn">删除当前自定义卡</button>
       </div>
-    </div>`;
+      <div class="persona-grid" id="persona-grid">${renderPersonaGrid(c)}</div>
+    </div>
+    <input type="text" id="cfg-persona-pick" hidden />
+    <span id="persona-pick-hint" class="muted" style="font-size:12px"></span>`;
 }
 
 function renderPersonaSaveBar() {
@@ -7666,9 +7894,25 @@ async function loadQzoneInteractionStatus() {
 }
 
 function renderPersonaSection(c) {
+  const roleText = c.persona.roleText || '';
   return `
     <h3>人设</h3>
-    ${renderPersonaPicker(c)}
+    ${renderPersonaLibrary(c)}
+    <div class="persona-detail">
+      <div class="pd-head">
+        <span class="pd-title" id="persona-view-title"></span>
+        <span class="chip" id="persona-view-profile"></span>
+        <span class="chip" id="persona-view-binding"></span>
+        <span class="spacer"></span>
+        <button class="btn btn-small" id="toggle-persona-edit">编辑正文</button>
+      </div>
+      <div class="pd-body" id="persona-card-view">${renderPersonaCardBody(roleText)}</div>
+    </div>
+    <div class="field hidden" id="persona-raw-field">
+      <label>角色设定（原文）</label>
+      <textarea id="cfg-roletext" class="persona-role-text" placeholder="例如：你是运维群里的老油条……">${esc(roleText)}</textarea>
+      <div class="hint">上面那屏是这份原文的读法，保存的也是这份原文。改一个字就会<strong>解除与内置卡的绑定</strong>（正文归你自己管），想重新跟随卡文件，回上面的卡库里点一下那张卡。</div>
+    </div>
     <div class="field-row">
       <div class="field"><label>机器人名字</label><input type="text" id="cfg-botname" value="${esc(c.persona.botName)}" /></div>
       <div class="field"><label>群内展示名（可选）</label><input type="text" id="cfg-selfnick" value="${esc(c.persona.selfNickname || '')}" /></div>
@@ -7685,11 +7929,12 @@ function renderPersonaSection(c) {
         </select></div>
     </div>
     <div class="hint">交流策略：「原版群友」那套允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据。嫌它冲或想让它听话，选后者。角色设定里写了相反的脾气时，以角色设定为准（它优先级更高）；参与度（安静/普通/活跃）不受角色设定影响。</div>
-    <div class="field"><label>角色设定</label>
-      <textarea id="cfg-roletext" class="persona-role-text" placeholder="例如：你是运维群里的老油条……">${esc(c.persona.roleText || '')}</textarea></div>
     <div class="field"><label>管理员附加规则（可选；排在所有平台规则之后 —— 想压过默认风格就写这里）</label>
+      <div class="pd-tags" id="persona-rule-chips">
+        ${PERSONA_RULE_EXAMPLES.map((rule) => `<button type="button" class="pd-tag rule-chip" data-rule="${esc(rule)}">＋ ${esc(rule)}</button>`).join('')}
+      </div>
       <textarea id="cfg-customrules" class="persona-role-text" style="min-height:100px" placeholder="例如：别装傻、别反问，不接话就安静；称呼固定用「老板」；被怼只淡淡带过">${esc(c.persona.customRules || '')}</textarea>
-      <div class="hint">冲突时优先级：安全规则 &gt; 这里 &gt; 角色设定 &gt; 平台默认风格。角色的口吻/称呼/脾气写在「角色设定」里就行，这里的硬要求会盖过平台默认风格。</div></div>
+      <div class="hint">冲突时优先级：安全规则 &gt; 这里 &gt; 角色设定 &gt; 平台默认风格。角色的口吻/称呼/脾气写在「角色设定」里就行，这里的硬要求会盖过平台默认风格。上面几个例子点一下就加进去，可以再改。</div></div>
     ${renderPersonaSaveBar()}`;
 }
 
@@ -9018,6 +9263,68 @@ function bindSettingsEvents(c) {
   if (personaPick) {
     personaPick.addEventListener('click', () => openPersonaPicker());
   }
+  // 卡库：点一张卡（或回车/空格）就把它的正文填进草稿。事件挂在容器上 ——
+  // syncPersonaButtons 会重画卡库，挂在卡片上会被重画冲掉。
+  const personaGrid = $('#persona-grid');
+  if (personaGrid) {
+    const pickCard = (target) => {
+      const card = target?.closest?.('.persona-card');
+      const id = card?.dataset?.personaId;
+      const tpl = id ? state.personaTemplates[id] : null;
+      if (tpl) applyPersonaDraft(tpl);
+    };
+    personaGrid.addEventListener('click', (event) => pickCard(event.target));
+    personaGrid.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickCard(event.target); }
+    });
+  }
+  // 正文视图：点小节标题折叠/展开（状态记在 personaCollapsedSections 里，重画后仍然保持）
+  const personaView = $('#persona-card-view');
+  if (personaView) {
+    personaView.addEventListener('click', (event) => {
+      const head = event.target?.closest?.('.pd-sec-head');
+      const sec = head?.closest?.('.pd-sec');
+      if (!sec) return;
+      const idx = Number(sec.dataset.sec);
+      if (!Number.isFinite(idx)) return;
+      if (personaCollapsedSections.has(idx)) personaCollapsedSections.delete(idx);
+      else personaCollapsedSections.add(idx);
+      syncPersonaButtons();
+    });
+  }
+  const expandBtn = $('#persona-expand-btn');
+  if (expandBtn) expandBtn.addEventListener('click', () => {
+    const total = parsePersonaCard($('#cfg-roletext')?.value || '').sections.length;
+    // 只要还有展开的就全收，全收了就全展 —— 一个按钮两种状态，省一个开关
+    if (personaCollapsedSections.size < total) {
+      personaCollapsedSections = new Set(Array.from({ length: total }, (_, i) => i));
+      expandBtn.textContent = '全部展开';
+    } else {
+      personaCollapsedSections = new Set();
+      expandBtn.textContent = '全部收起';
+    }
+    syncPersonaButtons();
+  });
+  // 「编辑正文」：默认看结构化视图，点一下才露出原文 textarea
+  const editToggle = $('#toggle-persona-edit');
+  if (editToggle) editToggle.addEventListener('click', () => {
+    const field = $('#persona-raw-field');
+    if (!field) return;
+    const collapsed = field.classList.toggle('hidden');
+    editToggle.textContent = collapsed ? '编辑正文' : '收起正文编辑';
+    if (!collapsed) $('#cfg-roletext')?.focus();
+  });
+  // 附加规则的示例标签：点一下追加到 textarea（已经写过就不重复加）
+  const ruleChips = $('#persona-rule-chips');
+  if (ruleChips) ruleChips.addEventListener('click', (event) => {
+    const chip = event.target?.closest?.('.rule-chip');
+    const rule = chip?.dataset?.rule;
+    const box = $('#cfg-customrules');
+    if (!rule || !box) return;
+    if (String(box.value).includes(rule)) return;
+    box.value = box.value.trim() ? `${box.value.replace(/\s+$/, '')}\n${rule}` : rule;
+    syncPersonaButtons();
+  });
   const newPersonaBtn = $('#new-persona-btn');
   if (newPersonaBtn) newPersonaBtn.addEventListener('click', () => openPersonaCreateModal());
   const delPersonaBtn = $('#del-persona-btn');
