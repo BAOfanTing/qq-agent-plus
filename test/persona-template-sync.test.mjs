@@ -33,10 +33,11 @@ test('登记的模板 id 都能取到卡，未知 id 返回 null', () => {
 });
 
 test('绑定的内置卡：载入时按卡文件刷新正文（改了卡不用重选）', () => {
-  writeConfig({ templateId: 'maoniang', roleText: '# 角色卡：猫娘（二次元）\n（实例里的旧正文）', behaviorProfile: 'legacy' });
+  // 档位故意写成与卡不同的值：绑定的卡只管正文，档位是实例自己的开关（见 personas.js 注释）
+  writeConfig({ templateId: 'maoniang', roleText: '# 角色卡：猫娘（二次元）\n（实例里的旧正文）', behaviorProfile: 'grounded' });
   const cfg = loadConfig();
   assert.equal(cfg.persona.roleText, PERSONAS.maoniang.text, '正文应被卡文件刷新');
-  assert.equal(cfg.persona.behaviorProfile, PERSONAS.maoniang.behaviorProfile);
+  assert.equal(cfg.persona.behaviorProfile, 'grounded', '刷新正文不该顺手改掉档位');
 });
 
 test('卡文件改了以后，下次载入就跟着变（模拟升级带的正文更新）', () => {
@@ -48,8 +49,23 @@ test('卡文件改了以后，下次载入就跟着变（模拟升级带的正�
   } finally {
     PERSONAS.maoniang.text = original;
   }
-  // 换回旧正文后，绑定关系还在：下次载入又把正文刷回文件内容
+  // 绑定关系还在：磁盘上放一份过期正文，下次载入照样被刷回文件内容
+  writeConfig({ templateId: 'maoniang', roleText: '（绑定还在，但这正文过期了）', behaviorProfile: 'legacy' });
   assert.equal(loadConfig().persona.roleText, PERSONAS.maoniang.text);
+});
+
+test('磁盘上人设段是标量/数组/字符串时：载入与保存都不打崩', () => {
+  for (const bad of ['小鲸鱼', 42, true, []]) {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify({ persona: bad }, null, 2), { mode: 0o600 });
+    const cfg = loadConfig();
+    assert.equal(typeof cfg.persona, 'object', `persona=${JSON.stringify(bad)} 应被换回对象`);
+    assert.ok(cfg.persona.botName, '换回的人设对象应带默认字段');
+    assert.doesNotThrow(() => updateConfig({ runtime: { mode: 'observe' } }), `persona=${JSON.stringify(bad)} 时保存不该抛错`);
+    assert.equal(getConfig().persona.botName, '小鲸鱼');
+  }
+  // roleText 空串是合法状态（故意不挂卡），不该被"兜底"成默认卡
+  writeConfig({ templateId: '', roleText: '', behaviorProfile: 'legacy' });
+  assert.equal(loadConfig().persona.roleText, '');
 });
 
 test('未绑定（手改正文 / 自定义卡）：正文原样保留', () => {

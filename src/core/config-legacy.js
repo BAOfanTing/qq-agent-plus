@@ -400,13 +400,19 @@ export const DEFAULT_CONFIG = {
 
 function migrateConfig(parsed) {
   const out = structuredClone(parsed);
+  // 人设段必须是对象：手改坏的 config.json 里可能是 "persona": "小鲸鱼" 这类标量或数组，
+  // 放它过去会在保存时炸（Cannot create property 'behaviorProfile' on string），
+  // 而控制台保存与 scripts/configure-linux.mjs 都要走这条路径 —— 恢复成默认人设对象。
+  // 恢复时把 templateId 清空（未绑定）：坏字段不该被"治好"成绑定默认卡，那会在下一次
+  // 保存时把正文换成默认卡的正文，比报错更难发现。roleText 是空串（故意"不挂卡"）不受影响。
+  if (!isPlainObject(out.persona)) {
+    out.persona = { ...structuredClone(DEFAULT_CONFIG.persona), templateId: '' };
+  }
   // ── 人设模板绑定：老配置没有 persona.templateId ──
   // 必须在这里显式补空串（deepMerge 之前）：默认值里带的是 "xiaojingyu"，
   // 让默认值补上的话，老实例（例如选的是猫娘）载入后会被当成绑定了默认卡、正文被换掉。
   // 空串 = 未绑定（正文按自定义处理，不改动）；在控制台重选一次卡就会自动绑上。
-  if (out.persona && typeof out.persona === 'object' && out.persona.templateId === undefined) {
-    out.persona.templateId = '';
-  }
+  if (out.persona.templateId === undefined) out.persona.templateId = '';
   if (
     out.identityPilot?.friendProposal
     && out.identityPilot.friendProposal.mode == null
@@ -472,6 +478,9 @@ function migrateConfig(parsed) {
   if (out.ui?.theme === '?') out.ui.theme = 'dark';
   return out;
 }
+
+/** 真对象判定（排除 null / 数组 / 标量）——人设段这类"必须是对象"的字段用它兜底。 */
+const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 function deepMerge(base, override) {
   if (override === null || override === undefined) return structuredClone(base);
@@ -567,20 +576,18 @@ export function incidentPilotEnabled(cfg = getConfig()) {
 
 /** 更新并持久化配置（浅合并到当前值；patch 里传对象字段则整体替换该字段）。 */
 export function updateConfig(patch) {
-  const next = migrateConfig(deepMerge(getConfig(), patch));
+  // 人设段传了 null / 数组 / 标量（手写 API 调用、坏客户端）时当"没改人设"处理：
+  // 直接把这个键从 patch 里摘掉，免得它在合并/迁移里被当成"恢复默认人设"，甚至抛错。
+  const safePatch = isPlainObject(patch) ? { ...patch } : {};
+  if ('persona' in safePatch && !isPlainObject(safePatch.persona)) delete safePatch.persona;
+  const next = migrateConfig(deepMerge(getConfig(), safePatch));
   const oldTimeControl = JSON.stringify(getConfig().timeControl);
   // 人设绑定与正文的优先级，只在配置保存这一层定：
   //   1) patch 里写了 roleText 但没给 templateId = 手写正文 → 自动解绑，正文按你写的来；
   //   2) patch 里给了 templateId（控制台选卡）→ 卡文件说了算，正文按 roles/*.md 刷新；
   //   3) 两者都没给（改别的字段、升级带的正文更新）→ 绑着就刷新。
-  const patchPersona = patch?.persona ?? {};
-  // 传了 null / 数组 / 字符串这类非对象（手写的 API 调用、坏掉的客户端）时当"没改人设"处理：
-  // 以前的写法会在这里因为 next.persona.behaviorProfile 直接抛错，把整次保存打崩。
-  if (!next.persona || typeof next.persona !== 'object' || Array.isArray(next.persona)) {
-    next.persona = structuredClone(getConfig().persona || DEFAULT_CONFIG.persona);
-  }
-  if (patchPersona && typeof patchPersona === 'object' && !Array.isArray(patchPersona)
-    && patchPersona.templateId === undefined && patchPersona.roleText !== undefined) {
+  const patchPersona = safePatch.persona ?? {};
+  if (patchPersona.templateId === undefined && patchPersona.roleText !== undefined) {
     next.persona.templateId = '';
   }
   next.persona.behaviorProfile = normalizeBehaviorProfile(next.persona.behaviorProfile);
