@@ -857,8 +857,15 @@ html.boot-show .loading-overlay { opacity: 1; }
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   background: var(--bg-2);
-  overflow-y: auto;
+  overflow-y: auto;          /* 菜单比窗口还高时自己滚 */
   padding: 14px 10px;
+  /* 设置页整体滚动后：侧栏钉在视图顶部、保持一屏高（边框与底色不会中途断掉）。
+     它自己没超出内容时不拦截滚轮 —— Chrome 会把手势交给外层可滚动祖先。 */
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100%;
+  max-height: 100%;
 }
 .settings-runstate {
   border: 1px solid var(--border);
@@ -883,7 +890,21 @@ html.boot-show .loading-overlay { opacity: 1; }
 .settings-menu-item:hover { background: var(--bg-3); color: var(--text); }
 .settings-menu-item.active { background: var(--bg-3); color: var(--accent); font-weight: 600; }
 
-.settings-pane { flex: 1; max-width: 860px; margin: 0 auto; padding: 22px 26px 40px; overflow-y: auto; width: 100%; }
+/* ── 设置页：滚动轴放在整个视图上（窄屏本来就是这么做的）──
+   原来 .settings-pane 自己是 max-width:860px 居中的滚动容器：它左右两侧的空白
+   没人接滚轮，光标落在那边时滚轮"没反应"，只有落在中间那一列（或它贴着的滚动条）
+   才滚得动 —— 反馈就是"滚轮只有放滚动条旁边才能滚"。现在整片视图一起滚。 */
+#view-settings { overflow-x: hidden; overflow-y: auto; }
+.settings-menu { padding-top: 2px; }
+.settings-pane {
+  flex: 1; width: 100%; min-width: 0;
+  max-width: none; margin: 0; overflow: visible;
+  /* 盒子要跟着内容长高（不拉伸成一屏高）：否则里面的 sticky「保存设置」条
+     会以为父容器只有一屏，滚过一屏就不粘了。 */
+  align-self: flex-start;
+  /* 内容仍然按 860px 的阅读宽度居中，但容器盒子铺满整列 —— 滚轮落在哪一侧都能滚 */
+  padding: 22px max(26px, calc((100% - 860px) / 2)) 40px;
+}
 .settings-pane h3 { margin: 22px 0 12px; font-size: 14px; color: var(--accent); }
 .settings-pane h3:first-child { margin-top: 0; }
 .settings-divider { border: none; border-top: 1px dashed var(--border); margin: 22px 0; }
@@ -1038,7 +1059,10 @@ html.boot-show .loading-overlay { opacity: 1; }
 .chip.warn { color: var(--orange); border-color: rgba(247, 185, 85, .45); background: rgba(247, 185, 85, .08); }
 .chip.star { color: var(--accent); border-color: rgba(76, 141, 255, .45); background: rgba(76, 141, 255, .1); }
 
-.pd-body { padding: 12px 14px; max-height: 520px; overflow: auto; }
+/* 正文视图不自己滚：整页只留 .settings-pane 一个纵向滚轮轴。
+   之前这里是 max-height:520px + overflow:auto，卡片正文却有三千多像素，
+   光标停在上面时滚轮全被内层吃掉，外面几乎不动 —— 用起来就像"滚轮失灵"。 */
+.pd-body { padding: 12px 14px; }
 .pd-headline { font-size: 12px; color: var(--muted); margin-bottom: 8px; font-family: var(--mono); }
 .pd-sec { border-top: 1px dashed var(--border); padding: 9px 0 3px; }
 .pd-sec:first-child { border-top: none; padding-top: 0; }
@@ -1224,6 +1248,8 @@ html.boot-show .loading-overlay { opacity: 1; }
   #view-settings { flex-direction: column; overflow-y: auto; }
   #view-settings .settings-sidebar {
     width: 100%; flex: 0 0 auto; border-right: 0; border-bottom: 1px solid var(--border);
+    /* 窄屏是"菜单横条在上、内容在下"的单列布局：这里不钉住，跟着一起滚 */
+    position: static; height: auto; max-height: none;
   }
   #view-settings .settings-runstate { display: none; }
   #view-settings .settings-menu {

@@ -5632,6 +5632,7 @@ function personaDraftState() {
 
 function syncPersonaButtons() {
   const draft = personaDraftState();
+  refreshPersonaFold(draft.roleText);
   const tpl = state.personaTemplates[draft.id];
   // 卡库还没读出来时，"匹配不到任何卡"并不等于"正文被改过" —— 下面几处提示都要区分这两种情况
   const templatesKnown = Object.keys(state.personaTemplates || {}).length > 0;
@@ -5703,6 +5704,29 @@ const PERSONA_RULE_EXAMPLES = [
 ];
 
 let personaCollapsedSections = new Set();
+let personaFoldKey = null;
+
+/**
+ * 默认折叠策略：只展开"你是谁"和"你的标志"，其余小节收起来。
+ * 一张卡的正文能有三千多像素，全展开会把下面的名字/参与度/附加规则/保存按钮压到很远，
+ * 用起来像"页面滚不动"。想看全的点「全部展开」。
+ */
+function defaultPersonaFold(roleText) {
+  const card = parsePersonaCard(roleText);
+  const folded = new Set();
+  card.sections.forEach((section, index) => {
+    if (!/你是谁|标志|招牌/.test(section.name)) folded.add(index);
+  });
+  return folded;
+}
+
+/** 换了一张卡（正文变了）就重算默认折叠；同一张卡内保留用户手动折的状态。 */
+function refreshPersonaFold(roleText) {
+  const key = String(roleText || '');
+  if (personaFoldKey === key) return;
+  personaFoldKey = key;
+  personaCollapsedSections = defaultPersonaFold(key);
+}
 
 const PERSONA_SECTION_EMOJI = {
   你是谁: '🪪',
@@ -7895,6 +7919,7 @@ async function loadQzoneInteractionStatus() {
 
 function renderPersonaSection(c) {
   const roleText = c.persona.roleText || '';
+  refreshPersonaFold(roleText);
   return `
     <h3>人设</h3>
     ${renderPersonaLibrary(c)}
