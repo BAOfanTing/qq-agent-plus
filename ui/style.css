@@ -1069,7 +1069,25 @@ html.boot-show .loading-overlay { opacity: 1; }
 .pd-sec-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
 .pd-sec-head .idx { font-family: var(--mono); font-size: 11px; color: var(--faint); min-width: 14px; }
 .pd-sec-head .name { font-size: 12.5px; font-weight: 600; }
-.pd-sec-head .caret { margin-left: auto; color: var(--faint); transition: transform var(--dur-base) var(--ease-in-out); }
+.pd-sec-head .caret { margin-left: 6px; color: var(--faint); transition: transform var(--dur-base) var(--ease-in-out); }
+/* 逐节编辑：平时淡淡的，鼠标移上去才明显（触屏没有 hover，所以不做成完全隐藏） */
+.pd-sec-actions { margin-left: auto; display: flex; gap: 6px; opacity: .5; transition: opacity var(--dur-fast) var(--ease-in-out); }
+.pd-sec:hover .pd-sec-actions, .pd-sec.editing .pd-sec-actions { opacity: 1; }
+.pd-sec-actions button {
+  font: inherit; font-size: 11px; padding: 1px 8px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: none; color: var(--muted);
+}
+.pd-sec-actions button:hover { color: var(--text); border-color: var(--accent); background: var(--hover); }
+.pd-sec.editing .pd-sec-head .name { color: var(--accent); }
+.pd-edit { padding: 6px 0 2px; }
+.pd-edit-text {
+  width: 100%; min-height: 170px; box-sizing: border-box; resize: vertical;
+  background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 8px;
+  padding: 9px 11px; font-family: var(--mono); font-size: 12px; line-height: 1.65; outline: none;
+}
+.pd-edit-text:focus { box-shadow: 0 0 0 3px rgba(76, 141, 255, .16); }
+.pd-edit-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; flex-wrap: wrap; }
+.pd-edit-hint { font-size: 11.5px; }
 .pd-sec.collapsed .caret { transform: rotate(-90deg); }
 .pd-sec.collapsed .pd-sec-body { display: none; }
 .pd-sec-body { padding: 7px 0 2px; font-size: 12.5px; line-height: 1.75; color: var(--text); }

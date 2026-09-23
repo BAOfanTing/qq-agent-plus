@@ -291,6 +291,58 @@ try {
   ruleChipsOk ? pass++ : fail++;
   console.log('  ' + (ruleChipsOk ? 'OK   ' : 'FAIL ') + '附加规则给出可点选的例子、正文有全部收起按钮');
 
+  // ── 逐节编辑：解析出小节的行号区间，改动按节拼回去 ──
+  const catLines = catText.split(/\r?\n/);
+  const sec0 = catParsed.sections[0];
+  const sec1 = catParsed.sections[1];
+  const rangeOk = catLines[sec0.from].startsWith('## ') && catLines[sec1.from].startsWith('## ')
+    && sec0.to === sec1.from && catParsed.sections[catParsed.sections.length - 1].to === catLines.length;
+  rangeOk ? pass++ : fail++;
+  console.log('  ' + (rangeOk ? 'OK   ' : 'FAIL ') + '小节记录了自己在原文里的行号区间');
+
+  const sec0Body = ctx.personaSectionBody(catText, 0);
+  // 用"只出现在下一节里的句子"来判断没串到隔壁：'说话方式' 这种词正文里本来就有，不能当判据
+  const bodyOk = sec0Body.includes('二次元猫娘') && !sec0Body.includes('## ')
+    && !sec0Body.includes('颜文字和表情符号偶尔用');
+  bodyOk ? pass++ : fail++;
+  console.log('  ' + (bodyOk ? 'OK   ' : 'FAIL ') + '取单节正文不含标题、不含隔壁小节'
+    + (bodyOk ? '' : ` -> len=${sec0Body.length} head=${JSON.stringify(sec0Body.slice(0, 60))}`));
+
+  const edited = ctx.replacePersonaSectionBody(catText, 0, '你是群里的新正文，就这一句。');
+  const editedCard = ctx.parsePersonaCard(edited);
+  const editOk = editedCard.sections.length === catParsed.sections.length
+    && edited.includes('## 一、你是谁') && edited.includes('你是群里的新正文，就这一句。')
+    && edited === catText.replace(ctx.personaSectionBody(catText, 0), '你是群里的新正文，就这一句。');
+  editOk ? pass++ : fail++;
+  console.log('  ' + (editOk ? 'OK   ' : 'FAIL ') + '按节替换只动那一节，其余部分逐字节不变');
+
+  const roundTrip = ctx.replacePersonaSectionBody(catText, 3, ctx.personaSectionBody(catText, 3));
+  const roundOk = roundTrip === catText;
+  roundOk ? pass++ : fail++;
+  console.log('  ' + (roundOk ? 'OK   ' : 'FAIL ') + '原样写回时正文逐字节不变（可反复编辑）'
+    + (roundOk ? '' : ` -> ${roundTrip.length} vs ${catText.length}`));
+
+  const dirtyText = ctx.replacePersonaSectionBody(catText, 0, '手改过的一节');
+  const dirtyView = ctx.renderPersonaCardBody(dirtyText, { fileText: catText });
+  const revertOk = dirtyView.includes('pd-sec-edit') && dirtyView.includes('pd-sec-revert')
+    && dirtyView.includes('data-sec="0"');
+  revertOk ? pass++ : fail++;
+  console.log('  ' + (revertOk ? 'OK   ' : 'FAIL ') + '改过的小节出现「编辑」「恢复本节」按钮');
+
+  const cleanView = ctx.renderPersonaCardBody(catText, { fileText: catText });
+  const cleanOk = cleanView.includes('pd-sec-edit') && !cleanView.includes('pd-sec-revert');
+  cleanOk ? pass++ : fail++;
+  console.log('  ' + (cleanOk ? 'OK   ' : 'FAIL ') + '没改过的小节不给"恢复本节"（本来就跟卡文件一致）');
+
+  const editingView = ctx.renderPersonaCardBody(catText, { editing: 1 });
+  const editorOk = editingView.includes('pd-edit-text') && editingView.includes('pd-sec-save')
+    && editingView.includes('pd-sec-cancel')
+    && /<div class="pd-sec[^"]*\bediting\b/.test(editingView)
+    && editingView.includes('正在编辑');
+  editorOk ? pass++ : fail++;
+  console.log('  ' + (editorOk ? 'OK   ' : 'FAIL ') + '正在编辑的那节渲染成 textarea + 保存/取消'
+    + (editorOk ? '' : ` -> ${editingView.match(/<div class="pd-sec[^"]*"/g)?.join(' | ') || '(没找到小节容器)'}`));
+
   vm.runInContext('state.personaTemplates = {};', ctx);
   const desktopHtml = ctx.renderDesktopSection(cfg);
   const apiHtml = ctx.renderApiSection(cfg);

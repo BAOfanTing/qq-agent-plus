@@ -5652,9 +5652,31 @@ function syncPersonaButtons() {
           : (state.personaTemplatesFailed ? '人设卡读取失败，刷新页面重试。' : '正在读取人设卡…'))
         : '');
   }
-  // 详情视图：正文、档位、绑定状态都按草稿渲染
+  // 详情视图：正文、档位、绑定状态都按草稿渲染。
+  // 绑着内置卡时把卡文件正文传进去 —— 每节能显示「恢复本节」，正文被改过时头部还能「整张恢复」。
+  const boundTpl = state.personaTemplates[String(state.config?.persona?.templateId || '')];
+  const fileText = boundTpl?.builtin ? boundTpl.text : '';
   const detail = $('#persona-card-view');
-  if (detail) detail.innerHTML = renderPersonaCardBody(draft.roleText, { collapsed: personaCollapsedSections });
+  if (detail) {
+    detail.innerHTML = renderPersonaCardBody(draft.roleText, {
+      collapsed: personaCollapsedSections,
+      editing: personaEditingSection,
+      fileText
+    });
+  }
+  const restoreBtn = $('#restore-persona-btn');
+  if (restoreBtn) {
+    const dirty = Boolean(fileText) && String(draft.roleText || '').trim() !== String(fileText).trim();
+    restoreBtn.classList.toggle('hidden', !dirty);
+  }
+  const note = $('#persona-edit-note');
+  if (note) {
+    // 提示只在"草稿与卡文件不一致"时留着；一旦恢复成卡文件原文就自动消失
+    const dirty = Boolean(fileText)
+      ? String(draft.roleText || '').trim() !== String(fileText).trim()
+      : true;
+    note.textContent = dirty ? personaEditNote : '';
+  }
   const title = $('#persona-view-title');
   if (title) title.textContent = tpl?.name || (hasText ? (templatesKnown ? '自定义正文' : '角色设定') : '（还没设置角色设定）');
   const profileChip = $('#persona-view-profile');
@@ -5687,6 +5709,8 @@ function applyPersonaDraft(tpl) {
   $('#cfg-roletext').value = tpl.text;
   $('#cfg-customrules').value = tpl.customRules || '';
   $('#cfg-behavior-profile').value = tpl.behaviorProfile || 'legacy';
+  personaEditingSection = -1;
+  personaEditNote = '';
   syncPersonaButtons();
 }
 
@@ -5705,6 +5729,8 @@ const PERSONA_RULE_EXAMPLES = [
 
 let personaCollapsedSections = new Set();
 let personaFoldKey = null;
+let personaEditingSection = -1;   // 正在按小节编辑的序号；-1 = 没在编辑
+let personaEditNote = '';         // 小节编辑后的提示（"还得点保存人设修改"这类）
 
 /**
  * 默认折叠策略：只展开"你是谁"和"你的标志"，其余小节收起来。
@@ -5720,12 +5746,21 @@ function defaultPersonaFold(roleText) {
   return folded;
 }
 
-/** 换了一张卡（正文变了）就重算默认折叠；同一张卡内保留用户手动折的状态。 */
+/**
+ * 正文变了就更新折叠基准：换了另一张卡就按默认折叠重算，
+ * 只是改了某一节（小节数没变）就保留用户当前展开/收起的状态。
+ */
 function refreshPersonaFold(roleText) {
   const key = String(roleText || '');
   if (personaFoldKey === key) return;
+  const previousKey = personaFoldKey;
+  const sameShape = previousKey !== null
+    && parsePersonaCard(previousKey).sections.length === parsePersonaCard(key).sections.length;
   personaFoldKey = key;
-  personaCollapsedSections = defaultPersonaFold(key);
+  if (!sameShape) {
+    personaCollapsedSections = defaultPersonaFold(key);
+    personaEditingSection = -1;
+  }
 }
 
 const PERSONA_SECTION_EMOJI = {
@@ -5744,23 +5779,28 @@ function personaInline(text) {
 }
 
 /**
- * 把角色正文解析成 { title, sections: [{ num, name, blocks }] }。
+ * 把角色正文解析成 { title, sections: [{ num, name, blocks, from, to }] }。
  * 只认卡里实际用的写法：一级标题、`## 一、小节`、`>` 引用、`-`/`1.` 列表、正文续行，
  * 以及示例段的 `群友：/你不要：/你可以：/或者：`（同一组群友发言归到一个气泡组里）。
+ *
+ * from / to 是这一节在原始文本里的行号区间（`from` 是小节标题那一行、`to` 是下一节标题
+ * 那一行或文末，左闭右开）—— 按小节编辑时要靠它把改动精确地拼回去。
  */
 function parsePersonaCard(text) {
   const card = { title: '', sections: [] };
   let section = null;
   const blocks = () => (section ? section.blocks : (card.intro ||= []));
   const lastBlock = () => blocks()[blocks().length - 1];
-  for (const raw of String(text || '').split(/\r?\n/)) {
-    const line = raw.replace(/\s+$/, '');
+  const lines = String(text || '').split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].replace(/\s+$/, '');
     if (!line.trim()) continue;
     const h1 = line.match(/^#\s+(.*)$/);
     if (h1) { card.title = h1[1].trim(); continue; }
     const h2 = line.match(/^##\s*(?:([一二三四五六七八九十]+|\d+)\s*[、.．]\s*)?(.*)$/);
     if (h2) {
-      section = { num: (h2[1] || '').trim(), name: (h2[2] || '').trim(), blocks: [] };
+      if (section) section.to = index;
+      section = { num: (h2[1] || '').trim(), name: (h2[2] || '').trim(), blocks: [], from: index, to: lines.length };
       card.sections.push(section);
       continue;
     }
@@ -5798,6 +5838,42 @@ function parsePersonaCard(text) {
   return card;
 }
 
+/** 取某一节的正文（不含小节标题那一行）。 */
+function personaSectionBody(text, index) {
+  const source = String(text || '');
+  const section = parsePersonaCard(source).sections[index];
+  if (!section) return '';
+  return source.split(/\r?\n/).slice(section.from + 1, section.to).join('\n').replace(/^\n+|\n+$/g, '');
+}
+
+/**
+ * 用 newBody 替换第 index 节的正文，其余部分原样保留（小节标题不动）。
+ * "按小节编辑"就落在这里：正文全文仍是唯一数据源，只是改哪节拼哪节。
+ * 标题与正文之间的空行、正文与下一节之间的空行，都按原文的样子决定 ——
+ * 这样"原样写回"逐字节不变，编辑别的节也不会把整篇格式弄乱。
+ */
+function replacePersonaSectionBody(text, index, newBody) {
+  const source = String(text || '');
+  const section = parsePersonaCard(source).sections[index];
+  if (!section) return source;
+  const lines = source.split(/\r?\n/);
+  const blankAfterHeader = lines[section.from + 1] !== undefined && !lines[section.from + 1].trim();
+  const blankBeforeNext = section.to < lines.length && !String(lines[section.to - 1] ?? '').trim();
+  const body = String(newBody ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+$/, ''))
+    .join('\n')
+    .replace(/^\n+|\n+$/g, '');
+  const next = lines.slice(0, section.from + 1);   // 含小节标题那行
+  if (body) {
+    if (blankAfterHeader) next.push('');
+    next.push(...body.split('\n'));
+    if (blankBeforeNext) next.push('');
+  }
+  next.push(...lines.slice(section.to));
+  return next.join('\n');
+}
+
 function renderPersonaBlock(block, { asTags = '' } = {}) {
   if (block.type === 'quote') {
     return `<div class="pd-quote">${block.lines.map(personaInline).join('<br>')}</div>`;
@@ -5823,12 +5899,19 @@ function renderPersonaBlock(block, { asTags = '' } = {}) {
 const PERSONA_TAG_SECTIONS = /标志|招牌/;
 const PERSONA_BAD_SECTIONS = /黑名单|禁止|不要/;
 
-/** 把卡正文渲染成分节视图；collapsed 是"收起来的小节序号"集合。 */
-function renderPersonaCardBody(text, { collapsed = new Set(), showTitle = true } = {}) {
+/**
+ * 把卡正文渲染成分节视图。
+ * @param {object} options
+ *   collapsed  收起来的小节序号集合
+ *   editing    正在按小节编辑的序号（-1 = 没在编辑）
+ *   fileText   这张卡对应的卡文件正文（有值时每节出现「恢复本节」）
+ */
+function renderPersonaCardBody(text, { collapsed = new Set(), showTitle = true, editing = -1, fileText = '' } = {}) {
   const card = parsePersonaCard(text);
   if (!card.sections.length) {
     return `<div class="pd-empty">这段正文还没分节，点「编辑正文」直接改；想有分节视图就按内置卡的写法用 <code>## 一、小节名</code>。</div>`;
   }
+  const fileCard = fileText ? parsePersonaCard(fileText) : null;
   const sections = card.sections.map((sec, i) => {
     const isStar = PERSONA_TAG_SECTIONS.test(sec.name);
     const isBad = PERSONA_BAD_SECTIONS.test(sec.name);
@@ -5839,15 +5922,36 @@ function renderPersonaCardBody(text, { collapsed = new Set(), showTitle = true }
     const chips = [];
     if (isStar) chips.push('<span class="chip star">招牌特征</span>');
     if (/示例/.test(sec.name)) chips.push('<span class="chip">✓ 可用 / ✗ 禁用</span>');
+    const isEditing = editing === i;
+    // 卡文件里同一节还在、而且写法不同 → 给一个"只把这一节改回卡文件写法"的入口
+    const fileBody = fileCard && fileCard.sections[i] && fileCard.sections[i].name === sec.name
+      ? personaSectionBody(fileText, i) : null;
+    const canRevert = fileBody !== null && fileBody !== personaSectionBody(text, i);
+    const actions = `
+      <span class="pd-sec-actions">
+        ${canRevert ? `<button type="button" class="pd-sec-revert" data-sec="${i}">恢复本节</button>` : ''}
+        <button type="button" class="pd-sec-edit" data-sec="${i}">${isEditing ? '正在编辑' : '编辑'}</button>
+      </span>`;
+    const sectionBody = isEditing
+      ? `<div class="pd-edit">
+           <textarea class="pd-edit-text" data-sec="${i}" spellcheck="false" placeholder="这一节的正文（markdown）。小节标题不在这里改。">${esc(personaSectionBody(text, i))}</textarea>
+           <div class="pd-edit-row">
+             <button type="button" class="btn btn-small btn-primary pd-sec-save" data-sec="${i}">保存本节</button>
+             <button type="button" class="btn btn-small pd-sec-cancel">取消</button>
+             <span class="muted pd-edit-hint">保存只是改草稿；要生效还得点最下面的「保存人设修改」。</span>
+           </div>
+         </div>`
+      : body;
     return `
-      <div class="pd-sec ${collapsed.has(i) ? 'collapsed' : ''}" data-sec="${i}">
+      <div class="pd-sec ${collapsed.has(i) && !isEditing ? 'collapsed' : ''} ${isEditing ? 'editing' : ''}" data-sec="${i}">
         <div class="pd-sec-head">
           <span class="idx">${esc(sec.num || String(i + 1))}</span>
           <span class="name">${emoji ? `${emoji} ` : ''}${esc(sec.name)}</span>
           ${chips.join('')}
+          ${actions}
           <span class="caret">▾</span>
         </div>
-        <div class="pd-sec-body">${body}</div>
+        <div class="pd-sec-body">${sectionBody}</div>
       </div>`;
   }).join('');
   const head = showTitle && card.title
@@ -7929,14 +8033,17 @@ function renderPersonaSection(c) {
         <span class="chip" id="persona-view-profile"></span>
         <span class="chip" id="persona-view-binding"></span>
         <span class="spacer"></span>
-        <button class="btn btn-small" id="toggle-persona-edit">编辑正文</button>
+        <button class="btn btn-small hidden" id="restore-persona-btn">恢复整张卡</button>
+        <button class="btn btn-small" id="toggle-persona-edit">编辑全文</button>
       </div>
       <div class="pd-body" id="persona-card-view">${renderPersonaCardBody(roleText)}</div>
     </div>
+    <div class="hint" id="persona-edit-note"></div>
     <div class="field hidden" id="persona-raw-field">
       <label>角色设定（原文）</label>
       <textarea id="cfg-roletext" class="persona-role-text" placeholder="例如：你是运维群里的老油条……">${esc(roleText)}</textarea>
-      <div class="hint">上面那屏是这份原文的读法，保存的也是这份原文。改一个字就会<strong>解除与内置卡的绑定</strong>（正文归你自己管），想重新跟随卡文件，回上面的卡库里点一下那张卡。</div>
+      <div class="hint">上面那屏是这份原文的读法，保存的也是这份原文。平时逐节改就够了（每节右上角有「编辑」「恢复本节」）；
+        这里改一个字也会<strong>解除与内置卡的绑定</strong>（正文归你自己管），想重新跟随卡文件，回上面的卡库里点一下那张卡。</div>
     </div>
     <div class="field-row">
       <div class="field"><label>机器人名字</label><input type="text" id="cfg-botname" value="${esc(c.persona.botName)}" /></div>
@@ -9303,20 +9410,70 @@ function bindSettingsEvents(c) {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickCard(event.target); }
     });
   }
-  // 正文视图：点小节标题折叠/展开（状态记在 personaCollapsedSections 里，重画后仍然保持）
+  // 正文视图：点小节标题折叠/展开；小节上的「编辑/保存本节/取消/恢复本节」按钮优先处理
   const personaView = $('#persona-card-view');
   if (personaView) {
     personaView.addEventListener('click', (event) => {
+      const roleBox = $('#cfg-roletext');
+      const button = event.target?.closest?.('button');
+      const buttonIsAction = button && (button.classList.contains('pd-sec-edit')
+        || button.classList.contains('pd-sec-save')
+        || button.classList.contains('pd-sec-cancel')
+        || button.classList.contains('pd-sec-revert'));
+      if (buttonIsAction && roleBox) {
+        const idx = Number(button.closest('.pd-sec')?.dataset?.sec);
+        if (!Number.isFinite(idx)) return;
+        const boundTpl = state.personaTemplates[String(state.config?.persona?.templateId || '')];
+        if (button.classList.contains('pd-sec-edit')) {
+          // 切到另一节继续编辑时，先把当前这节未保存的改动落回草稿，别让输入白白丢掉
+          const pending = personaView.querySelector(`.pd-edit-text[data-sec="${personaEditingSection}"]`);
+          if (pending && personaEditingSection !== idx && personaEditingSection >= 0) {
+            roleBox.value = replacePersonaSectionBody(roleBox.value, personaEditingSection, pending.value);
+            personaEditNote = '上一节已更新（还没生效）：确认无误后点最下面的「保存人设修改」。';
+          }
+          personaEditingSection = personaEditingSection === idx ? -1 : idx;
+        } else if (button.classList.contains('pd-sec-save')) {
+          const box = personaView.querySelector(`.pd-edit-text[data-sec="${idx}"]`);
+          if (box) {
+            roleBox.value = replacePersonaSectionBody(roleBox.value, idx, box.value);
+            personaEditingSection = -1;
+            personaEditNote = '这一节已更新（还没生效）：确认无误后点最下面的「保存人设修改」。';
+          }
+        } else if (button.classList.contains('pd-sec-cancel')) {
+          personaEditingSection = -1;
+        } else if (button.classList.contains('pd-sec-revert')) {
+          if (boundTpl?.builtin) {
+            roleBox.value = replacePersonaSectionBody(roleBox.value, idx, personaSectionBody(boundTpl.text, idx));
+            personaEditingSection = -1;
+            personaEditNote = `这一节已恢复成卡文件「${boundTpl.name}」里的写法（还没生效）：记得点「保存人设修改」。`;
+          }
+        }
+        syncPersonaButtons();
+        return;
+      }
       const head = event.target?.closest?.('.pd-sec-head');
       const sec = head?.closest?.('.pd-sec');
       if (!sec) return;
       const idx = Number(sec.dataset.sec);
       if (!Number.isFinite(idx)) return;
+      // 正在编辑的那节不许收起：一收起就会重画视图，输入框里没保存的字会丢
+      if (idx === personaEditingSection) return;
       if (personaCollapsedSections.has(idx)) personaCollapsedSections.delete(idx);
       else personaCollapsedSections.add(idx);
       syncPersonaButtons();
     });
   }
+  // 整张卡恢复成卡文件原文（手改乱了就用它撤回）
+  const restoreBtn = $('#restore-persona-btn');
+  if (restoreBtn) restoreBtn.addEventListener('click', () => {
+    const boundTpl = state.personaTemplates[String(state.config?.persona?.templateId || '')];
+    const roleBox = $('#cfg-roletext');
+    if (!boundTpl?.builtin || !roleBox) return;
+    roleBox.value = boundTpl.text;
+    personaEditingSection = -1;
+    personaEditNote = `正文已恢复成卡文件「${boundTpl.name}」的原文（还没生效）：点「保存人设修改」确认。`;
+    syncPersonaButtons();
+  });
   const expandBtn = $('#persona-expand-btn');
   if (expandBtn) expandBtn.addEventListener('click', () => {
     const total = parsePersonaCard($('#cfg-roletext')?.value || '').sections.length;
@@ -9330,13 +9487,13 @@ function bindSettingsEvents(c) {
     }
     syncPersonaButtons();
   });
-  // 「编辑正文」：默认看结构化视图，点一下才露出原文 textarea
+  // 「编辑全文」：平时看分节视图（逐节可编辑），点它才露出整段原文 textarea
   const editToggle = $('#toggle-persona-edit');
   if (editToggle) editToggle.addEventListener('click', () => {
     const field = $('#persona-raw-field');
     if (!field) return;
     const collapsed = field.classList.toggle('hidden');
-    editToggle.textContent = collapsed ? '编辑正文' : '收起正文编辑';
+    editToggle.textContent = collapsed ? '编辑全文' : '收起全文编辑';
     if (!collapsed) $('#cfg-roletext')?.focus();
   });
   // 附加规则的示例标签：点一下追加到 textarea（已经写过就不重复加）
