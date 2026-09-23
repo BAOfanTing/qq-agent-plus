@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR, getConfig } from '../core/config.js';
-import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
 import {
   addUsage,
   cachedTokensOfUsage,
@@ -43,9 +42,6 @@ const automaticRecord = (record) => record.publicationSource === 'manual'
 function samePublicationScope(existing, target) {
   if (target.scheduleSlotId && existing.scheduleSlotId === target.scheduleSlotId) return true;
   if (existing.dayKey !== target.dayKey) return false;
-  // 同一天已经发布过：手动发布也必须走重复风险确认。否则下面的"自动/手动不一致就返回
-  // false"会让当天已自动发过的记录挡不住「立即发布」，确认对话框永远走不到（同一天发两条）。
-  if (existing.status === 'published' && !automaticRecord(target)) return true;
   // An unresolved external write remains a hold across both publication paths.
   if (['publishing', 'publish-unknown'].includes(existing.status)) return true;
   if (automaticRecord(existing) !== automaticRecord(target)) return false;
@@ -94,7 +90,7 @@ function normalizedConfig(cfg = getConfig().dailyMoments || {}) {
     targetUins: (Array.isArray(cfg.targetUins) ? cfg.targetUins : [])
       .map(Number).filter(Number.isFinite).slice(0, 200),
     maxResearchCalls: Math.min(10, Math.max(0, Number(cfg.maxResearchCalls) || 0)),
-    maxRounds: Math.min(16, Math.max(2, cappedByTokenSaver(Number(cfg.maxRounds) || 8, tokenSaverCapsOf(getConfig())?.maxRounds)))
+    maxRounds: Math.min(16, Math.max(2, Number(cfg.maxRounds) || 8))
   };
 }
 
