@@ -1090,6 +1090,24 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
   }
 
   /**
+   * 已保存的 Key 只允许发往配置里已知的地址。
+   * 那两个 provider 探测端点会拿服务端已保存的 Key 去请求调用方给的 baseUrl；不挡住的话，
+   * 拿到控制台令牌的人填一个自己的地址，就能让服务端把明文 Key 送过去 —— 等于绕开
+   * keyEndpointAllowed 那道"明文密钥只准本机读"的闸门。前端正常流程都是显式传 Key，
+   * 只有"测试当前配置的 provider"会走这个回退，目标的 baseUrl 本来就等于配置里的值。
+   */
+  function storedKeyAllowedFor(cfgNow, baseUrl) {
+    const norm = (v) => String(v || '').trim().replace(/\/+$/, '').toLowerCase();
+    const target = norm(baseUrl);
+    if (!target) return true;   // 没给地址 = 用配置里的那个
+    const known = [
+      norm(cfgNow.api?.baseUrl),
+      ...(cfgNow.providers || []).map((p) => norm(p?.baseUrl))
+    ].filter(Boolean);
+    return known.includes(target);
+  }
+
+  /**
    * 提供商对象脱敏：去掉明文 apiKey，只留 hasKey。
    * upsertProvider / addModelsToProvider / removeModelFromProvider 的返回值都带
    * 明文 key（来自 withResolvedKey），不能直接 json 给前端。
@@ -1701,7 +1719,11 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           const body = await readBody(req);
           const cfgNow = getConfig();
           const baseUrl = String(body.baseUrl || cfgNow.api.baseUrl || '');
-          const apiKey = body.apiKey !== undefined ? String(body.apiKey ?? '') : String(cfgNow.api.apiKey || '');
+          const submitted = String(body.apiKey ?? '').trim();
+          // 掩码 / 空 → 用服务端已保存的 Key，但仅限配置里已知的地址（见 storedKeyAllowedFor）。
+          const apiKey = (submitted && submitted !== '******')
+            ? submitted
+            : (storedKeyAllowedFor(cfgNow, baseUrl) ? String(cfgNow.api.apiKey || '') : '');
           const models = await fetchModelsFrom(baseUrl, apiKey);
           return json(res, 200, { ok: true, models });
         } catch (error) {
@@ -1731,10 +1753,15 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         try {
           const body = await readBody(req);
           const submitted = String(body.apiKey ?? '').trim();
-          // 掩码 / 空 → 说明客户端没有新 Key，用服务端已保存的
-          const apiKey = (submitted && submitted !== '******') ? submitted : resolveApiKey(getConfig());
+          const baseUrl = String(body.baseUrl ?? '');
+          // 掩码 / 空 → 说明客户端没有新 Key，用服务端已保存的；但只发往配置里已知的地址
+          // （见 storedKeyAllowedFor：否则等于把明文 Key 送到调用方指定的任意主机）。
+          const cfgNow = getConfig();
+          const apiKey = (submitted && submitted !== '******')
+            ? submitted
+            : (storedKeyAllowedFor(cfgNow, baseUrl) ? resolveApiKey(cfgNow) : '');
           const result = await testModelChat({
-            baseUrl: String(body.baseUrl ?? ''),
+            baseUrl,
             apiKey,
             model: String(body.model ?? '')
           });
