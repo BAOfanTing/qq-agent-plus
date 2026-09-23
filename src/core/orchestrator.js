@@ -21,6 +21,7 @@ import {
   storeConfigForChat,
   updateConfig
 } from './config.js';
+import { cappedByTokenSaver, effectiveRunLimits, tokenSaverCapsOf } from './token-saver.js';
 // ── 主动开话题的时间段：窗口外不主动开口（聊天回复不受影响）──
 
 // 主动开话题的"上次判定时间"要落盘：否则服务一重启，15 秒后的第一个 tick 就又能开一次话题，
@@ -527,10 +528,12 @@ export class Orchestrator {
     const conversation = conversationConfigForChat(chatKey);
     const entries = this.store.peekUnread(chatKey, 100) || [];
     if (chatKey.startsWith('private:')) {
+      const caps = tokenSaverCapsOf(cfg);
       return {
         shouldRespond: entries.length > 0,
         tier: 4,
-        count: getConfig().store.atCount,
+        // 私聊与群聊同口径：省 Token 模式下也要夹（以前这里直接取 atCount，模式对它不生效）
+        count: cappedByTokenSaver(Number(cfg.store?.atCount) || 300, caps?.atCount),
         reason: '私聊',
         conversationMode: conversation.mode
       };
@@ -878,14 +881,14 @@ export class Orchestrator {
       this.pendingRolls.delete(chatKey);
       const roll = pendingRoll && Date.now() - pendingRoll.at < 120000 ? pendingRoll.roll : undefined;
       const predicted = this.#predictTier(chatKey, roll === undefined ? {} : { roll });
-      const manualContextCount = Math.min(500, Math.max(
+      const manualContextCount = cappedByTokenSaver(Math.min(500, Math.max(
         1,
         Number(conversation.mode === 'lifecycle'
           ? conversation.lifecycleContextCount
           : conversation.mode === 'threaded'
             ? conversation.continuationContextCount
             : storeConfigForChat(chatKey).allCount) || 100
-      ));
+      )), tokenSaverCapsOf(getConfig())?.allCount);
       if (pendingEntries.length === 0) {
         if (!manual) {
           if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted');
@@ -945,14 +948,14 @@ export class Orchestrator {
       // 参与这个会话"（2026-09-22 审查发现）。主动开口一律带全量上下文。
       tierResult = {
         tier: 4,
-        count: Math.min(500, Math.max(
+        count: cappedByTokenSaver(Math.min(500, Math.max(
           1,
           Number(conversation.mode === 'lifecycle'
             ? conversation.lifecycleContextCount
             : conversation.mode === 'threaded'
               ? conversation.continuationContextCount
               : storeConfigForChat(chatKey).allCount) || 100
-        )),
+        )), tokenSaverCapsOf(getConfig())?.allCount),
         shouldRespond: true,
         reason: '主动机会'
       };
@@ -1487,7 +1490,9 @@ export class Orchestrator {
       scheduleWake: (delayMs, note) => this.scheduleInitiativeWake(chatKey, delayMs, note)
     };
 
-    const maxRounds = Math.max(1, Number(cfg.api.maxRounds) || 12);
+    // 省 Token 模式：轮数与单次运行预算夹上限（关闭时与升级前逐字一致）
+    const runLimits = effectiveRunLimits(cfg);
+    const maxRounds = runLimits.maxRounds;
     let finish = false;
     let completed = false;
     let roundBudgetExceeded = false;   // 轮次用尽（见下方收尾逻辑，写进 session.roundBudgetStopped）
@@ -1502,10 +1507,7 @@ export class Orchestrator {
     for (let round = 0; round < maxRounds && !finish; round++) {
       signal.throwIfAborted();
       if (this.aborted || !canRun(chatKey)) throw new Error('Run cancelled');
-      const maxRunTokens = Math.min(
-        1000000,
-        Math.max(20000, Number(cfg.api.maxRunTokens) || 160000)
-      );
+      const maxRunTokens = runLimits.maxRunTokens;
       const requestPayloadChars = JSON.stringify({
         messages,
         tools: openAiTools

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, getConfig, updateConfig } from '../core/config.js';
 import { todayKey, sanitizeUserText, ZONE_OFFSET_MS } from '../core/util.js';
+import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
 import { GlobalPersonMemoryStore } from './global-person-memory-store.js';
 
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
@@ -96,7 +97,11 @@ export class MemoryStore {
     if (h.facts.length) lines.push(`- 已确认事实：${s(h.facts.join('；'))}`); if (h.decisions.length) lines.push(`- 已作决定：${s(h.decisions.join('；'))}`);
     if (h.rejectedDirections.length) lines.push(`- 已排除方向：${s(h.rejectedDirections.join('；'))}`); if (h.openQuestions.length) lines.push(`- 未解决问题：${s(h.openQuestions.join('；'))}`);
     if (h.nextStep) lines.push(`- 下一步意图：${s(h.nextStep)}`); if (h.lastReply) lines.push(`- 上次实际发言：${s(h.lastReply)}`);
-    return lines.join('\n').slice(0, Math.min(12000, Math.max(500, Number(getConfig().memory?.handoffMaxChars) || 4000)));
+    // 省 Token 模式：交接注入的字符上限再收紧（关闭时上限为 null，取用户设置）
+    return lines.join('\n').slice(0, Math.min(12000, Math.max(500, cappedByTokenSaver(
+      Number(getConfig().memory?.handoffMaxChars) || 4000,
+      tokenSaverCapsOf(getConfig())?.handoffMaxChars
+    ))));
   }
   append(chatKey, category, content, extra = {}) {
     if (category !== 'memberImpression') return null;
@@ -188,12 +193,14 @@ export class MemoryStore {
         lines.push(`- ${who}：[${stamp}] ${sanitizeUserText(e.content)}`);
       }
     }
-    // 按行截断：直接 slice 字符串会把某条印象切成半句，模型读到半句话更糟
+    // 按行截断：直接 slice 字符串会把某条印象切成半句，模型读到半句话更糟。
+    // 上限 6000 字符；省 Token 模式下再收紧（关闭时上限为 null，即不夹）。
+    const blockCap = cappedByTokenSaver(6000, tokenSaverCapsOf(getConfig())?.memoryBlockChars);
     const out = [];
     let used = 0;
     for (const line of lines) {
       const cost = line.length + (out.length ? 1 : 0);
-      if (used + cost > 6000) break;
+      if (used + cost > blockCap) break;
       out.push(line);
       used += cost;
     }

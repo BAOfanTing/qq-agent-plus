@@ -137,7 +137,7 @@ try {
     'renderQzoneInteractionSection', 'renderTimeControlSection',
     'renderPersonaSection', 'renderAllowSection',
     'renderChatSection', 'renderDesktopSection', 'renderOnebotSection',
-    'renderPersonaLibrary', 'renderPersonaGrid', 'renderHealthCard',
+    'renderPersonaLibrary', 'renderPersonaGrid', 'renderHealthCard', 'renderTokenSaverSection',
     'renderAssetSummary', 'renderStickerAssets', 'renderSlangAssets',
     'renderSlangResearch', 'renderIdentityAssets', 'renderMemoryAssets'
   ];
@@ -804,6 +804,33 @@ try {
     fail++;
     console.log('  FAIL  固化实验功能独立页面不完整');
   }
+
+  // 省 Token 分区：三档选择 + "用户值 / 生效值"对照表（上限数字来自服务端，界面不另抄一份）
+  vm.runInContext(`state.status = { ...(state.status || {}), tokenSaver: ${JSON.stringify({
+    mode: 'balanced',
+    label: '省',
+    active: true,
+    capsByMode: {
+      off: null,
+      balanced: { atCount: 80, keywordCount: 50, randomCount: 30, allCount: 80, maxRounds: 8, maxRunTokens: 80000, handoffMaxChars: 2000, memoryBlockChars: 3000, promptMaxStickers: 5 },
+      aggressive: { atCount: 40, keywordCount: 30, randomCount: 20, allCount: 40, maxRounds: 5, maxRunTokens: 50000, handoffMaxChars: 1200, memoryBlockChars: 1500, promptMaxStickers: 3 }
+    },
+    rows: [
+      { key: 'atCount', label: '被艾特时读多少条已读', user: 300, cap: 80, effective: 80, clamped: true },
+      { key: 'maxRounds', label: '单次运行最大工具轮数', user: 6, cap: 8, effective: 6, clamped: false }
+    ]
+  })} };`, ctx);
+  const saverHtml = ctx.renderTokenSaverSection({ ...cfg, tokenSaver: { mode: 'balanced' } });
+  ctx.renderSettingsSidebar();
+  const saverOk = saverHtml.includes('name="token-saver-mode"')
+    && /value="balanced"[^>]*checked/.test(saverHtml)
+    && /value="off"[^>]*checked/.test(saverHtml) === false
+    && saverHtml.includes('档位读 80/50/30 条')
+    && saverHtml.includes('<strong>80</strong>') && saverHtml.includes('（被夹住）')
+    && saverHtml.includes('单次运行最大工具轮数')
+    && store.get('#settings-sidebar').innerHTML.includes('省 Token');
+  saverOk ? pass++ : fail++;
+  console.log('  ' + (saverOk ? 'OK   ' : 'FAIL ') + '省 Token 分区：三档选择 + 生效值对照表 + 设置菜单入口');
 
   // 总开关开着、但统一身份库没起来时（active=false），好友页的三个接口都会 409：
   // 加载器要自己给提示，不能因为请求失败把整页（连同设置表单）换成一整块错误信息。

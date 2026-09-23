@@ -6271,6 +6271,7 @@ function renderSettingsSidebar() {
     ['moments', '每日动态'],
     ['qzone-interactions', '动态互动'],
     ['time-control', '时间控制'],
+    ['token-saver', '省 Token'],
     ['persona', '人设'],
     ['allow', '聊天白名单'],
     ['chat', '聊天设置'],
@@ -6314,6 +6315,7 @@ function renderSettingsSection(c) {
     moments: () => renderDailyMomentsSection(c),
     'qzone-interactions': () => renderQzoneInteractionSection(c),
     'time-control': () => renderTimeControlSection(c),
+    'token-saver': () => renderTokenSaverSection(c),
     persona: () => renderPersonaSection(c),
     allow: () => renderAllowSection(c),
     chat: () => renderChatSection(c),
@@ -8620,6 +8622,41 @@ return `
     </div>`;
 }
 
+function renderTokenSaverSection(c) {
+  const mode = ['off', 'balanced', 'aggressive'].includes(c.tokenSaver?.mode) ? c.tokenSaver.mode : 'off';
+  const saver = state.status?.tokenSaver || null;
+  const caps = saver?.capsByMode || {};
+  // 档位条数按 被艾特/关键词/随机 三档说明（allCount 与被艾特档同值），数字全部来自服务端上限表
+  const summarize = (m) => {
+    const k = caps[m];
+    if (!k) return '';
+    return `档位读 ${k.atCount}/${k.keywordCount}/${k.randomCount} 条，轮数 ≤${k.maxRounds}、单次预算 ≤${Math.round(k.maxRunTokens / 10000)} 万 token，`
+      + `交接 ≤${k.handoffMaxChars} 字符、印象 ≤${k.memoryBlockChars} 字符、表情清单 ≤${k.promptMaxStickers} 条`;
+  };
+  const rows = (saver?.rows || []).map((row) => `<tr>
+      <td>${esc(row.label)}</td>
+      <td class="muted">${esc(row.user)}</td>
+      <td>${row.clamped ? `<strong>${esc(row.effective)}</strong> <span class="muted">（被夹住）</span>` : esc(row.effective)}</td>
+    </tr>`).join('');
+  return `
+    <h3 id="settings-token-saver">省 Token</h3>
+    <div class="hint" style="margin-bottom:8px">开启后只给下面这些项<b>夹上限</b>，不改写你在各分区填的值 —— 关掉立刻恢复原样。
+      每次模型调用的固定底（系统提示 + 工具定义，约 1.2 万-1.5 万 token）不受此影响，
+      想再省就配合「聊天设置」的响应概率与「搜索服务 / 图片输入」开关。</div>
+    <label class="radio-row"><input type="radio" name="token-saver-mode" value="off" ${mode === 'off' ? 'checked' : ''} />
+      <span>关闭：完全按你自己的设置</span></label>
+    <label class="radio-row"><input type="radio" name="token-saver-mode" value="balanced" ${mode === 'balanced' ? 'checked' : ''} />
+      <span>省：${esc(summarize('balanced') || '档位条数、轮数、预算、交接/印象、表情清单都收一档')}</span></label>
+    <label class="radio-row"><input type="radio" name="token-saver-mode" value="aggressive" ${mode === 'aggressive' ? 'checked' : ''} />
+      <span>很省：${esc(summarize('aggressive') || '再收一档，接话更省但读的历史更少')}</span></label>
+    <div class="settings-divider"></div>
+    <h3>实际生效值</h3>
+    ${rows
+      ? `<div class="table-wrap"><table class="usage-table"><thead><tr><th>项目</th><th>你的设置</th><th>当前生效</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<div class="hint">正在读取生效值…（刷新页面后显示）</div>'}
+    <div class="hint" style="margin-top:8px">改完点底部「保存设置」生效；效果在「用量」页按天看得到。</div>`;
+}
+
 function renderDesktopSection(c) {
   return `
     <h3>控制台安全</h3>
@@ -8693,7 +8730,11 @@ function bindSettingsEvents(c) {
         const note = $('#persona-edit-note');
         if (note) note.textContent = '';
       }
-      refreshStatus();
+      refreshStatus().then(() => {
+        // 省 Token 的"实际生效值"表按 /api/status 渲染：保存完要等状态回来再重画一次，
+        // 否则切了档位、表格还显示上一档的数字（要刷新页面才对得上）。
+        if (state.settingsSection === 'token-saver') renderSettings();
+      }).catch(() => {});
       startListPoller();   // 刷新间隔可能刚被改过，用新值重启轮询
     } catch (e) {
       $('#cfg-save-result').textContent = `保存失败：${e.message}`;
@@ -10266,6 +10307,13 @@ async function saveConfig({ quiet = false } = {}) {
   const sec = state.settingsSection || 'api';
 
   const patch = {};
+
+  if (sec === 'token-saver') {
+    const picked = $('input[name="token-saver-mode"]:checked')?.value;
+    patch.tokenSaver = {
+      mode: ['off', 'balanced', 'aggressive'].includes(picked) ? picked : (c.tokenSaver?.mode || 'off')
+    };
+  }
 
   if (sec === 'time-control') {
     captureTimeControlRule();

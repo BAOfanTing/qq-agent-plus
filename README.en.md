@@ -411,6 +411,30 @@ edited, or a custom copy created from the current draft. Editing a file under `r
 the built-in templates of new installations; an existing instance keeps the role text saved in its
 configuration.
 
+## Token saver
+
+“设置 -> 省 Token” is a one-click way to cut token usage: it only **caps** a few tunable items and
+never rewrites the values you filled in elsewhere, so switching it off restores your settings
+immediately. Three levels: off (default), “省” and “很省”; the page lists your value and the
+effective value for every item.
+
+| Item | 省 | 很省 |
+| --- | --- | --- |
+| History read on mention / always-respond | ≤80 | ≤40 |
+| History read on keyword / random tier | ≤50 / ≤30 | ≤30 / ≤20 |
+| Tool rounds per run | ≤8 | ≤5 |
+| Cumulative tokens per run | ≤80k | ≤50k |
+| Session handoff injected (chars) | ≤2000 | ≤1200 |
+| Global impressions injected (chars) | ≤3000 | ≤1500 |
+| Sticker list in the prompt | ≤5 | ≤3 |
+
+Context: the **fixed floor** of every model call (system prompt + 23 tool schemas) is about
+12k-15k tokens and cannot be changed by settings. Measured over 7 days on a live instance
+(867 calls / 18.4M tokens): input is 98.8% of all tokens, and the **uncached** part of the input
+accounts for 76% of the cost — so saving tokens means reading less history, running fewer rounds
+and making fewer calls, not trimming output. To save more, also lower the response probability,
+turn off search or image input when unused, and use time control to stay inside off-peak hours.
+
 ## Time control
 
 “设置 -> 时间控制” is disabled by default and, while disabled, ignores every time rule without

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR, getConfig } from '../core/config.js';
+import { effectiveRunLimits } from '../core/token-saver.js';
 import {
   addUsage,
   cachedTokensOfUsage,
@@ -90,7 +91,8 @@ function normalizedConfig(cfg = getConfig().dailyMoments || {}) {
     targetUins: (Array.isArray(cfg.targetUins) ? cfg.targetUins : [])
       .map(Number).filter(Number.isFinite).slice(0, 200),
     maxResearchCalls: Math.min(10, Math.max(0, Number(cfg.maxResearchCalls) || 0)),
-    maxRounds: Math.min(16, Math.max(2, Number(cfg.maxRounds) || 8))
+    // 省 Token 模式：日说说的工具轮数也夹上限（关闭时上限为 null，取用户设置）
+    maxRounds: Math.min(16, Math.max(2, effectiveRunLimits(getConfig()).maxRounds))
   };
 }
 

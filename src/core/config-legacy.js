@@ -10,6 +10,7 @@ import {
   sliderToTier
 } from './tier-slider.js';   // 零依赖模块，避免循环依赖
 import { DEFAULT_TIME_CONTROL, normalizeTimeControl } from './time-control.js';
+import { normalizeTokenSaverMode } from './token-saver.js';   // 零依赖模块，避免循环依赖
 import { normalizeMomentWindows } from '../features/moment-schedule.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -382,6 +383,12 @@ export const DEFAULT_CONFIG = {
     provider: '',                         // 专用模型所属提供商 id（useChatModel=false 时生效）
     model: ''                             // 专用模型 id（useChatModel=false 时生效）
   },
+  // 省 Token 模式：只给"可控项"夹上限（上下文档位条数、单次运行轮数与预算、
+  // 交接/印象注入字符数、提示词里的表情清单条数），不改写上面那些用户填的值。
+  // off = 完全按用户设置；balanced = 省；aggressive = 很省。见 src/core/token-saver.js
+  tokenSaver: {
+    mode: 'off'
+  },
   // Linux Web 控制台
   server: {
     port: 3210,
@@ -417,6 +424,10 @@ function migrateConfig(parsed) {
   // 让默认值补上的话，老实例（例如选的是猫娘）载入后会被当成绑定了默认卡、正文被换掉。
   // 空串 = 未绑定（正文按自定义处理，不改动）；在控制台重选一次卡就会自动绑上。
   if (out.persona.templateId === undefined) out.persona.templateId = '';
+  // ── 省 Token 模式：老配置没有这个键 ──
+  // 缺键/坏值一律按 off 处理（默认关闭，行为与升级前完全一致）；坏值不许把整份配置带崩。
+  if (!isPlainObject(out.tokenSaver)) out.tokenSaver = { mode: 'off' };
+  else out.tokenSaver.mode = normalizeTokenSaverMode(out.tokenSaver.mode);
   // identityPilot 及子段同样可能是手改坏的标量（true / "off" / 5）：直接写 .mode 一样会抛，
   // 落进同一个"静默退回默认值"的坑，所以先归一化成对象再谈迁移。
   if (out.identityPilot !== undefined && !isPlainObject(out.identityPilot)) out.identityPilot = {};
@@ -610,6 +621,7 @@ export function updateConfig(patch) {
   if (patchPersona?.templateId !== undefined || patchPersona?.roleText === undefined) {
     applyPersonaTemplate(next);
   }
+  next.tokenSaver = { ...(next.tokenSaver || {}), mode: normalizeTokenSaverMode(next.tokenSaver?.mode) };
   next.timeControl = normalizeTimeControl(next.timeControl);
   next.dailyMoments.scheduleWindows = normalizeMomentWindows(next.dailyMoments.scheduleWindows);
   if (!['observe', 'active'].includes(next.runtime?.mode)) throw new Error('Invalid runtime mode');

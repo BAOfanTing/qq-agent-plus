@@ -159,3 +159,15 @@ test('整个 config.json 是个标量：按空配置恢复，不抛错', () => {
   // 按"未绑定"恢复（与 persona 段被写坏时的规则一致）：坏字段不许被治好成绑定默认卡
   assert.equal(config.persona.templateId, '', '按未绑定恢复，不静默绑上默认卡');
 });
+
+test('省 Token：老配置缺键补 off、坏值不许带崩整份配置', () => {
+  const missing = loadWholeConfigInNewProcess(JSON.stringify({ api: { apiKey: 'keep-me' } }));
+  assert.equal(missing.config.tokenSaver?.mode, 'off', '缺键时补 off（默认关闭）');
+  const bad = loadWholeConfigInNewProcess(JSON.stringify({ tokenSaver: { mode: 5 }, api: { apiKey: 'keep-me' } }));
+  assert.equal(bad.config.tokenSaver.mode, 'off', '坏值按 off');
+  assert.equal(bad.config.api.apiKey, 'keep-me', '坏值不许把整份配置冲掉');
+  const scaled = loadWholeConfigInNewProcess(JSON.stringify({ tokenSaver: 'balanced', api: { apiKey: 'keep-me' } }));
+  assert.equal(scaled.config.tokenSaver.mode, 'off', '整段被写成字符串时也按 off');
+  const good = loadWholeConfigInNewProcess(JSON.stringify({ tokenSaver: { mode: 'aggressive' } }));
+  assert.equal(good.config.tokenSaver.mode, 'aggressive', '合法值原样保留');
+});

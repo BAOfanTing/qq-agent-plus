@@ -11,6 +11,7 @@
 // 沉睡/唤醒/等待机制（由编排器的"已读/未读驱动"取代）。
 
 import { getConfig } from '../core/config.js';
+import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
 // 滑条换算放在独立模块（零依赖），避免 config.js ↔ prompt.js 循环依赖。
 // 这里 re-export 是为了让已经从 prompt.js 引用的代码不受影响。
 import {
@@ -374,7 +375,14 @@ export function buildSystemPrompt({
   // 表情清单常驻系统提示：续接运行的 userPrompt 不再重复它（避免 transcript 里堆积），
   // 放这里保证每次运行模型都直接看得到有哪些图可发（2026-09-18：只放会话首轮的旧上下文里=等于没有）。
   if (Array.isArray(stickerEntries) && stickerEntries.length) {
-    const stickerCtx = buildStickerContext(stickerEntries, Number(getConfig().sticker?.promptMaxStickers) || 10);
+    // 省 Token 模式下调小清单条数（关闭时上限为 null，取用户设置）；
+    // 非正数/坏值按默认 10 处理（以前会把 -5 这种手改坏值原样传下去）
+    const stickerCap = tokenSaverCapsOf(getConfig())?.promptMaxStickers;
+    const wantStickers = Number(getConfig().sticker?.promptMaxStickers);
+    const stickerCtx = buildStickerContext(
+      stickerEntries,
+      cappedByTokenSaver(wantStickers > 0 ? wantStickers : 10, stickerCap)
+    );
     if (stickerCtx) parts.push('', stickerCtx);
   }
   parts.push('', closingDiscipline());
@@ -503,23 +511,25 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   const keyword = hitKeyword(texts.join('\n'), c.keywords);
   // 掷骰子：调用方可传入已固定的 roll（0-100），避免重复随机
   const rollValue = roll === null || roll === undefined ? Math.random() * 100 : Number(roll);
-  const n0 = (v) => Math.max(0, Number(v) || 0);
+  // 省 Token 模式：各档读多少条"夹上限"（关闭时上限为 null，行为与以前完全一致）
+  const saverCaps = tokenSaverCapsOf(getConfig());
+  const n0 = (v, cap) => cappedByTokenSaver(v, cap);
 
   // 必回的两种：被 @、命中关键词 —— 不受概率影响（清空关键词表就只剩 @ 必回）
   if (atMe) {
-    return { tier: 1, count: n0(c.atCount), reason: '被艾特', shouldRespond: true };
+    return { tier: 1, count: n0(c.atCount, saverCaps?.atCount), reason: '被艾特', shouldRespond: true };
   }
   if (keyword) {
-    return { tier: 2, count: n0(c.keywordCount), reason: '关键词命中', shouldRespond: true };
+    return { tier: 2, count: n0(c.keywordCount, saverCaps?.keywordCount), reason: '关键词命中', shouldRespond: true };
   }
   // 100% = 全响应（比掷骰子更省事，也让"触发方式"显示成"全部响应"）
   if (probability >= 100) {
-    return { tier: 4, count: n0(c.allCount), reason: '全部响应', shouldRespond: true };
+    return { tier: 4, count: n0(c.allCount, saverCaps?.allCount), reason: '全部响应', shouldRespond: true };
   }
   if (probability > 0 && rollValue < probability) {
     return {
       tier: 3,
-      count: n0(c.randomCount),
+      count: n0(c.randomCount, saverCaps?.randomCount),
       reason: `随机命中（概率 ${probability}%）`,
       shouldRespond: true
     };

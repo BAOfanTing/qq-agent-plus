@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { conversationConfigForChat, getConfig, identityPilotEnabled, incidentPilotEnabled, slangPilotEnabled, updateConfig, onTimeControlChange, DATA_DIR, ROOT } from '../core/config.js';
+import { tokenSaverEffective } from '../core/token-saver.js';
 import { customSearch } from '../llm/web-search.js';
 import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes } from '../onebot/onebot.js';
 import { readForwardMessages } from '../onebot/forward-reader.js';
@@ -1415,6 +1416,8 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           webSearchCount: dailyStats.searchCount
         };
         const cfgNow = getConfig();
+        // 省 Token 模式的"用户值 / 生效值"对照表：控制台设置页直接渲染，避免两边各写一份上限数字
+        const tokenSaver = tokenSaverEffective(cfgNow);
         const currentVendor = vendorOfConfig(cfgNow) || '';
         const currentPrice = resolveModelPrice(cfgNow.api?.model, cfgNow, null, { vendor: currentVendor });
         const currentTier = currentPrice.peak
@@ -1471,6 +1474,8 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
           cost,
           cacheHitRate: totals.cacheHitRate,
           webSearchCount: usage.webSearchCount || 0,
+          // 省 Token 模式：模式 + 每项的"用户值 / 生效值"（设置页渲染用）
+          tokenSaver,
           ...(cfgNow.timeControl?.enabled ? {
             timeControl: timeControlState(cfgNow.timeControl)
           } : {}),
