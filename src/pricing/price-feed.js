@@ -291,6 +291,15 @@ export function initPriceFeed(configured) {
     if (timer) { clearInterval(timer); timer = null; }
     status.enabled = false;
     status.sourceUrl = '';
+    // 切成 `none` 要当场回落到内置表：以前只清 enabled/sourceUrl，进程里生效的还是上一张
+    // 远程表（界面却写着"远程价格表已关闭"），要重启才真的只用内置表。
+    // 磁盘缓存留着不清 —— 那是有意的设计：重新启用时先用缓存顶上，拉到新的再覆盖。
+    status.source = 'builtin';
+    status.ok = false;
+    status.error = '';
+    status.fetchedAt = 0;
+    status.tag = '';
+    setRemotePrices({});
     return;
   }
   // 地址没变就什么都不做 —— 注意要在动定时器**之前**返回：

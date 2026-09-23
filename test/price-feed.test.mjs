@@ -71,3 +71,31 @@ test('换了地址但没拉成功：标记 sourceStale，并说明生效的仍�
   const again = await feed.refreshPriceFeed(okUrl, { fetchImpl: good });
   assert.equal(again.sourceStale, false, '拉成功了就不再是 stale');
 });
+
+test('切成 none：当场回落到内置表，不再沿用已拉到的远程表', async () => {
+  const { resolveModelPrice } = await import('../src/pricing/model-prices.js');
+  const url = 'https://none.example.com/prices.json';
+  const remote = { prices: { 'demo-model': { in: 111, out: 222 } } };
+  await feed.refreshPriceFeed(url, { fetchImpl: fakeFetch(remote, 0) });
+  feed.initPriceFeed(url);
+  const withRemote = resolveModelPrice('demo-model');
+  assert.equal(withRemote.in, 111, '先确认远程表确实生效了');
+
+  // 管理端把地址改成 none（设置页保存就会走到这里）
+  feed.initPriceFeed('none');
+  const status = feed.priceFeedStatus();
+  assert.equal(status.enabled, false);
+  assert.equal(status.source, 'builtin', '状态要说明现在用的是内置表');
+  assert.notEqual(resolveModelPrice('demo-model').in, 111, '本次进程就要失效，不能等重启');
+});
+
+test('none 之后重新启用：磁盘缓存顶上，拉到新的再覆盖', async () => {
+  const { resolveModelPrice } = await import('../src/pricing/model-prices.js');
+  const url = 'https://again.example.com/prices.json';
+  await feed.refreshPriceFeed(url, { fetchImpl: fakeFetch({ prices: { 'again-model': { in: 5, out: 6 } } }, 0) });
+  feed.initPriceFeed('none');
+  assert.notEqual(resolveModelPrice('again-model').in, 5);
+  // 缓存是有意保留的：重新启用时先用它顶上（离线也不至于没有价）
+  feed.initPriceFeed(url);
+  assert.equal(resolveModelPrice('again-model').in, 5, '缓存里的价要先顶上');
+});
