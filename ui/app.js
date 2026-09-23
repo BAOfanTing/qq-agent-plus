@@ -2225,6 +2225,7 @@ function renderChatList() {
           ${threadLabel ? `<span class="thread-pill mode-${mode}">${threadLabel}</span>` : ''}
           ${c.unread ? `<span class="unread-pill">${c.unread}</span>` : ''}
           ${showIncidentControl ? `<button type="button" class="icon-btn chat-runtime-control" data-chat-runtime="${esc(c.key)}" title="${esc(incidentControl.label)}" aria-label="${esc(incidentControl.label)}">${incidentControl.icon}</button>` : ''}
+          <button type="button" class="icon-btn" data-chat-delete="${esc(c.key)}" title="删除存档" aria-label="删除存档">🗑️</button>
         </div>
         <div class="chat-item-sub">${esc(c.lastText || '（空）')}</div>
         <div class="session-meta"><span>${c.total} 条 · 失败 ${c.failed || 0} · 待确认 ${c.held || 0}${c.thread ? ` · 线程 v${c.thread.version}` : ''}</span><span>${fmtTime(c.lastTs)}</span></div>
@@ -2244,6 +2245,24 @@ function renderChatList() {
     button.addEventListener('click', (event) => {
       event.stopPropagation();
       openChatRuntimeControl(button.dataset.chatRuntime).catch((error) => alert(error.message));
+    });
+  });
+  $$('[data-chat-delete]', box).forEach((button) => {
+    if (button.__bound) return;
+    button.__bound = true;
+    button.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const key = button.dataset.chatDelete;
+      const chat = state.chats.find((c) => c.key === key);
+      const name = chat ? (chatNameOf(key) || key) : key;
+      if (!confirm(`确认删除「${name}」的全部存档？\n包括消息记录、会话日志和记忆数据。此操作不可撤销。`)) return;
+      try {
+        await api('/api/chats/' + key.replace(':', '_'), { method: 'DELETE' });
+        if (state.currentChatKey === key) state.currentChatKey = null;
+        await loadChats();
+        if (state.tab === 'sessions') renderSessionList();
+        if (state.tab === 'memory') loadMemoryView();
+      } catch (err) { alert('删除失败：' + err.message); }
     });
   });
 }
