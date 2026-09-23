@@ -677,7 +677,7 @@ export function buildToolDefs() {
     },
     {
       name: 'memory_append',
-      description: '记一条对群友的长期印象（下次运行会自动看到）。只记"以后和这个人打交道时用得上"的稳定印象：他的身份/关系、说话风格、爱玩的梗、雷点、常聊话题、别踩的坑。太临时的事情不要记。userId 必须填对方的 QQ 号（不知道就先调 get_active_members / get_recent_messages 查）；target 填备注名/群名片/昵称，用于展示。',
+      description: '记一条对群友的长期印象（下次运行会自动看到）。只记"以后和这个人打交道时用得上"的稳定印象：他的身份/关系、说话风格、爱玩的梗、雷点、常聊话题、别踩的坑。太临时的事情不要记。只写可观察的事实与偏好，不写评价、不揣测动机（写"会反复问你人设"，别写"想掌控设定/扬言改人设/喜欢试探规则"）；写管理员本人的时候照事实记——他改人设、问人设、逗你玩都是本职，不是试探。userId 必须填对方的 QQ 号（不知道就先调 get_active_members / get_recent_messages 查）；target 填备注名/群名片/昵称，用于展示。',
       parameters: {
         type: 'object',
         properties: {

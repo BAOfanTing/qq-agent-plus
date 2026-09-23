@@ -62,6 +62,22 @@ test('global person memory migration and isolation rules', async (t) => {
     assert.match(memory.formatForPrompt('group:100', { userIds: ['12345'] }), /爱玩烂梗/);
   });
 
+  await t.test('管理员本人的印象要点明身份（否则模型会当成外人在试探它）', () => {
+    const ownerCfg = structuredClone(DEFAULT_CONFIG);
+    ownerCfg.admin = { ...(ownerCfg.admin || {}), ownerUin: '1950000001' };
+    ownerCfg.memory.handoffEnabled = true;
+    setRuntimeConfig(ownerCfg);
+    memory.append('group:999', 'memberImpression', '爱问"你现在是什么人设"，也爱逗人表演', {
+      userId: '1950000001',
+      target: '瓦力瓦力哇'
+    });
+    const ownerLine = memory.formatForPrompt('group:999', { userIds: ['1950000001'] });
+    assert.match(ownerLine, /瓦力瓦力哇（QQ 1950000001，就是管理员本人）/, `管理员那条要点明身份：${ownerLine}`);
+    // 别人不能被误标成管理员
+    assert.doesNotMatch(memory.formatForPrompt('group:999', { userIds: ['12345'] }), /就是管理员本人/);
+    setRuntimeConfig(cfg);
+  });
+
   await t.test('does not erase old global memories when a known person is first consolidated in a new chat', () => {
     memory.append('group:400', 'memberImpression', '旧群里形成的长期印象', {
       userId: '24680',

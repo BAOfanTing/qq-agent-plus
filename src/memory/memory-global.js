@@ -133,12 +133,17 @@ export class MemoryStore {
   }
   clear(chatKey) { this.people.clearSource(chatKey); this.clearHandoff(chatKey); writeJson(metaFile(chatKey), { lastConsolidatedAt: Date.now() }); }
   formatForPrompt(chatKey, { userIds = null } = {}) {
-    const notes = getConfig().memberNotes || {};
+    const cfg = getConfig();
+    const notes = cfg.memberNotes || {};
+    const ownerUin = String(cfg?.admin?.ownerUin || '').trim();
     const picked = userIds ? [...new Set([...userIds].map(String))].map((id) => this.people.get(id)).filter((m) => m.impressions.length) : this.people.members(chatKey).slice(0, 15);
     if (!picked.length) return '';
     const lines = ['【对群友的全局印象】'];
     for (const m of picked.slice(0, 20)) {
-      const who = notes[m.userId] || m.name || m.userId || '某人';
+      let who = notes[m.userId] || m.name || m.userId || '某人';
+      // 说的是管理员本人就要点明：否则模型读到"他自称管理员、要改人设"这类印象时，
+      // 不知道说的是自己的设置者，容易当成外人来试探它。
+      if (ownerUin && String(m.userId) === ownerUin) who += `（QQ ${ownerUin}，就是管理员本人）`;
       const recent = [...m.impressions].sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt)).slice(0, 3).reverse();
       for (const e of recent) lines.push(`- ${who}：${e.content}`);
     }
