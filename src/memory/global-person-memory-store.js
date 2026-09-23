@@ -382,14 +382,15 @@ export class GlobalPersonMemoryStore {
     const source = String(chatKey || '').trim(); const map = this.#ensure();
     for (const [key, member] of [...map.entries()]) {
       if (!member.sourceChatKeys.includes(source)) continue;
+      // 快照必须在**清空之前**打（backupPersonBeforeConsolidation 见到空列表直接返回 null）；
+      // 放在下面那段之后等于从来没备份过 —— 与 remove() 同一处坑，这次一起按同一写法处理。
+      const before = structuredClone(member);
       for (const entry of member.impressions) entry.sourceChatKeys = entry.sourceChatKeys.filter((x) => x !== source);
       member.impressions = member.impressions.filter((x) => x.sourceChatKeys.length);
       member.sourceChatKeys = sourceKeys(member.impressions.flatMap((x) => x.sourceChatKeys));
       member.updatedAt = Date.now();
       if (!member.impressions.length) {
-        // 快照要在删文件之前打：同文件的 removeMember / 全局删除都这么做，这里此前漏了，
-        // 于是"按群删除"是唯一不可恢复的删除路径。
-        try { backupPersonBeforeConsolidation(member, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
+        try { backupPersonBeforeConsolidation(before, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
         map.delete(key); try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
       } else this.#persist(member);
     }
@@ -401,6 +402,8 @@ export class GlobalPersonMemoryStore {
     const map = this.#ensure();
     const member = map.get(uid);
     if (!member || !source) return false;
+    // 同上：先留快照再动 member
+    const before = structuredClone(member);
     let touched = false;
     for (const entry of member.impressions) {
       if (!(entry.sourceChatKeys || []).includes(source)) continue;
@@ -411,7 +414,7 @@ export class GlobalPersonMemoryStore {
     member.sourceChatKeys = sourceKeys(member.impressions.flatMap((x) => x.sourceChatKeys));
     member.updatedAt = Date.now();
     if (!member.impressions.length) {
-      try { backupPersonBeforeConsolidation(member, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
+      try { backupPersonBeforeConsolidation(before, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
       map.delete(uid);
       try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
     } else this.#persist(member);

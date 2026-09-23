@@ -14,7 +14,7 @@ test/*.test.mjs      # node:test，一个文件管一块（清单看 ls test/*.t
 - 其中 `layout.test.mjs` 是"目录布局不变量"（ROOT 指向仓库根、相对 import 全部可解析、
   硬编码入口没被挪走）——挪文件前后它最先报警。
 
-## 2. 独立脚本（本地自查，不在 CI）
+## 2. 独立脚本（不在 test:unit 里，但 CI 会单独跑）
 
 ```
 test/test-prompt.mjs    # 提示词自检：拼装结果与各段是否齐全

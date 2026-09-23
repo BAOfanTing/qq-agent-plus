@@ -23,8 +23,8 @@ test('incident infrastructure stays active and versions chat controls', async (t
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.server = { ...cfg.server, host: '127.0.0.1', port, token: '' };
   cfg.runtime.mode = 'observe';
-  cfg.admin = { ...(cfg.admin || {}), ownerUin: '2948771712' };
-  cfg.allow.private = ['2948771712'];
+  cfg.admin = { ...(cfg.admin || {}), ownerUin: '10000003' };
+  cfg.allow.private = ['10000003'];
   cfg.allow.groups = ['1'];
   cfg.onebot.wsUrl = 'ws://127.0.0.1:1';
   cfg.onebot.httpUrl = 'http://127.0.0.1:1';
@@ -109,8 +109,8 @@ test('incident infrastructure stays active and versions chat controls', async (t
   });
   assert.equal(attemptedDisable.status, 200);
   assert.equal(attemptedDisable.body.config.incidentPilot.enabled, true);
-  assert.equal(attemptedDisable.body.config.admin.ownerUin, '2948771712');
-  assert.equal(attemptedDisable.body.config.incidentPilot.ownerUin, '2948771712');
+  assert.equal(attemptedDisable.body.config.admin.ownerUin, '10000003');
+  assert.equal(attemptedDisable.body.config.incidentPilot.ownerUin, '10000003');
 
   const stillActive = await request('/api/incidents');
   assert.equal(stillActive.status, 200);

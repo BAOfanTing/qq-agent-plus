@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR, getConfig } from '../core/config.js';
-import { effectiveRunLimits } from '../core/token-saver.js';
+import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
 import {
   addUsage,
   cachedTokensOfUsage,
@@ -91,8 +91,14 @@ function normalizedConfig(cfg = getConfig().dailyMoments || {}) {
     targetUins: (Array.isArray(cfg.targetUins) ? cfg.targetUins : [])
       .map(Number).filter(Number.isFinite).slice(0, 200),
     maxResearchCalls: Math.min(10, Math.max(0, Number(cfg.maxResearchCalls) || 0)),
-    // 省 Token 模式：日说说的工具轮数也夹上限（关闭时上限为 null，取用户设置）
-    maxRounds: Math.min(16, Math.max(2, effectiveRunLimits(getConfig()).maxRounds))
+    // 省 Token 模式：日说说的工具轮数也夹上限（关闭时上限为 null，原样取用户设置）。
+    // ⚠️ 这里必须用**日说说自己的** cfg.maxRounds，不能借聊天模型的 api.maxRounds ——
+    // 两者是不同的旋钮（日说说默认 8、聊天默认 12），换错了会让"轮次预算"多跑几轮、
+    // 白烧 token（曾把 moment-publish 的用量用例跑成 180 vs 45）。
+    maxRounds: Math.min(16, Math.max(2, cappedByTokenSaver(
+      Number(cfg.maxRounds) || 8,
+      tokenSaverCapsOf(getConfig())?.maxRounds
+    )))
   };
 }
 

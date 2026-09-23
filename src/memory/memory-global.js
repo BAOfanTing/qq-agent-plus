@@ -120,8 +120,10 @@ export class MemoryStore {
     return { memberImpression };
   }
   editMemberImpression(chatKey, { userId, name = '', note = '', impressions = [] }) {
-    // 控制台手动改的：来源标成 manual，跟模型自动记的/整理改写的区分开
-    const member = this.people.replace(chatKey, userId, name, impressions, { origin: 'manual' });
+    // 控制台手动改的：来源标成 manual，跟模型自动记的/整理改写的区分开。
+    // 走 replaceMember（子类 override 会先打快照）—— 直接调 this.people.replace 会绕过快照，
+    // 让"记忆页手工改写"成为唯一不可恢复的破坏性写入。
+    const member = this.replaceMember(chatKey, userId, name, impressions, { origin: 'manual' });
     const notes = { ...(getConfig().memberNotes || {}) }; const n = String(note ?? '').trim();
     if (n) notes[String(userId)] = n; else delete notes[String(userId)]; updateConfig({ memberNotes: notes });
     return { ...member, note: n };

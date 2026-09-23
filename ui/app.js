@@ -4577,7 +4577,7 @@ function openMemberImpressModal(chatKey, member) {
   });
   const delBtn = overlay.querySelector('#mi-del');
   if (delBtn) delBtn.addEventListener('click', async () => {
-    if (!await askForConfirmation(`确定删除 ${note || name || userId} 的全部印象？`)) return;
+    if (!await askForConfirmation(`确定删除 ${note || name || userId} 在本会话里的印象？（其它会话记得的印象不受影响；服务端会留可回滚快照）`)) return;
     try {
       await api(`/api/memory-files/${chatKey.replace(':', '_')}/members/${userId}`, { method: 'DELETE', body: '{}' });
       closeModelModal(overlay);
@@ -8733,7 +8733,19 @@ function bindSettingsEvents(c) {
       refreshStatus().then(() => {
         // 省 Token 的"实际生效值"表按 /api/status 渲染：保存完要等状态回来再重画一次，
         // 否则切了档位、表格还显示上一档的数字（要刷新页面才对得上）。
-        if (state.settingsSection === 'token-saver') renderSettings();
+        if (state.settingsSection !== 'token-saver') return;
+        const section = state.settingsSection;
+        renderSettings();
+        // 重画会把上面写好的"已保存 ✓"连同节点一起换掉 —— 这里补写一次，
+        // 否则在省 Token 页点保存看不到任何成功反馈（数字本来就低于上限时尤其明显）。
+        if (state.settingsSection !== section) return;
+        const again = $('#cfg-save-result');
+        if (again) {
+          again.textContent = '已保存 ✓';
+          again.classList.remove('saved-flash');
+          void again.offsetWidth;
+          again.classList.add('saved-flash');
+        }
       }).catch(() => {});
       startListPoller();   // 刷新间隔可能刚被改过，用新值重启轮询
     } catch (e) {

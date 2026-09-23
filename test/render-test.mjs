@@ -573,7 +573,7 @@ try {
         enabled: true,
         graduated: true,
         activeDispatchEnabled: true,
-        ownerUin: '2948771712',
+        ownerUin: '10000003',
         minMessageCount: 50,
         cooldownDays: 30,
         maxPending: 10
@@ -582,7 +582,7 @@ try {
     slangPilot: {
       enabled: true,
       graduated: false,
-      ownerUin: '2948771712',
+      ownerUin: '10000003',
       minOccurrences: 3,
       minSpeakers: 2,
       windowHours: 72,
@@ -598,7 +598,7 @@ try {
     incidentPilot: {
       enabled: true,
       graduated: true,
-      ownerUin: '2948771712',
+      ownerUin: '10000003',
       notifyWarnings: true,
       duplicateWindowMinutes: 10,
       unknownWritesBlockChat: false,
@@ -651,7 +651,7 @@ try {
     {
       enabled: true,
       activeDispatchEnabled: true,
-      ownerUin: '2948771712',
+      ownerUin: '10000003',
       minMessageCount: 80
     },
     { enabled: true, autoWhitelist: true, maxPending: 25 }
@@ -662,7 +662,7 @@ try {
     && pilotOffPatch.enabled === false
     && pilotOnPatch.friendProposal.enabled === true
     && pilotOnPatch.friendProposal.activeDispatchEnabled === true
-    && pilotOnPatch.friendProposal.ownerUin === '2948771712'
+    && pilotOnPatch.friendProposal.ownerUin === '10000003'
     && pilotOnPatch.friendProposal.minMessageCount === 80
     && pilotOnPatch.incomingFriendRequest.enabled === true
     && pilotOnPatch.incomingFriendRequest.autoWhitelist === true
@@ -680,9 +680,9 @@ try {
   const launchPatchFn =
     ctx.experimentalFeatureLaunchPatch || sandbox.experimentalFeatureLaunchPatch;
   const identityLaunchPatch = launchPatchFn(cfg, 'identity');
-  const friendLaunchPatch = launchPatchFn(cfg, 'auto-friend', '2948771712');
-  const slangLaunchPatch = launchPatchFn(cfg, 'slang', '2948771712');
-  const incidentLaunchPatch = launchPatchFn(cfg, 'incidents', '2948771712');
+  const friendLaunchPatch = launchPatchFn(cfg, 'auto-friend', '10000003');
+  const slangLaunchPatch = launchPatchFn(cfg, 'slang', '10000003');
+  const incidentLaunchPatch = launchPatchFn(cfg, 'incidents', '10000003');
   if (
     identityLaunchPatch.identityPilot.enabled === true
     && identityLaunchPatch.identityPilot.graduated === true
@@ -691,16 +691,16 @@ try {
     && friendLaunchPatch.identityPilot.friendProposal.enabled === true
     && friendLaunchPatch.identityPilot.friendProposal.graduated === true
     && friendLaunchPatch.identityPilot.friendProposal.activeDispatchEnabled === true
-    && friendLaunchPatch.identityPilot.friendProposal.ownerUin === '2948771712'
+    && friendLaunchPatch.identityPilot.friendProposal.ownerUin === '10000003'
     && friendLaunchPatch.identityPilot.incomingFriendRequest.enabled === true
     && friendLaunchPatch.identityPilot.incomingFriendRequest.autoWhitelist === true
     && Object.keys(friendLaunchPatch).length === 1
     && slangLaunchPatch.slangPilot.enabled === true
     && slangLaunchPatch.slangPilot.graduated === true
-    && slangLaunchPatch.slangPilot.ownerUin === '2948771712'
+    && slangLaunchPatch.slangPilot.ownerUin === '10000003'
     && incidentLaunchPatch.incidentPilot.enabled === true
     && incidentLaunchPatch.incidentPilot.graduated === true
-    && incidentLaunchPatch.incidentPilot.ownerUin === '2948771712'
+    && incidentLaunchPatch.incidentPilot.ownerUin === '10000003'
   ) {
     pass++;
     console.log('  OK    实验功能支持人物印象与自动好友添加一键上线');
@@ -720,7 +720,7 @@ try {
         enabled: true,
         graduated: true,
         activeDispatchEnabled: true,
-        ownerUin: '2948771712'
+        ownerUin: '10000003'
       }
     }
   };
@@ -752,7 +752,7 @@ try {
       ...cfg.incidentPilot,
       enabled: true,
       graduated: true,
-      ownerUin: '2948771712'
+      ownerUin: '10000003'
     }
   }, {
     active: true,
@@ -1024,7 +1024,7 @@ try {
     enabled: false,
     busy: false,
     status: 'failed',
-    ownerUin: '2948771712',
+    ownerUin: '10000003',
     repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
     branch: 'main',
     intervalHours: 6,
@@ -1055,7 +1055,7 @@ try {
     && controlHtml.includes('更新部署')
     && controlHtml.includes('手动更新')
     && controlHtml.includes('恢复自动更新')
-    && controlHtml.includes('2948771712')
+    && controlHtml.includes('10000003')
     && deployErrorText.includes('测试失败')
     && controlHtml.includes('QQ Agent 控制台 Token')
     && controlHtml.includes(':3080')

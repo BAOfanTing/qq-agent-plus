@@ -55,7 +55,7 @@ docker_call() {
     for want in ${succeedFor.map((s) => JSON.stringify(s)).join(' ')}; do
       [[ "$ref" == "$want" ]] && { printf 'PULLED %s\\n' "$ref"; return 0; }
     done
-    printf 'Error response from daemon: dial tcp 31.13.82.169:443: i/o timeout\\n' >&2
+    printf 'Error response from daemon: dial tcp 203.0.113.7:443: i/o timeout\\n' >&2
     return 1
   fi
   return 0

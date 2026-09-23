@@ -92,9 +92,11 @@ export function tokenSaverEffective(cfg = {}) {
     { key: 'allCount', label: '全部响应时读多少条', user: count(cfg.store?.allCount), cap: caps?.allCount },
     { key: 'maxRounds', label: '单次运行最大工具轮数', user: num(cfg.api?.maxRounds, 12), cap: caps?.maxRounds },
     { key: 'maxRunTokens', label: '单次运行累计 Token 上限', user: num(cfg.api?.maxRunTokens, 160000), cap: caps?.maxRunTokens },
-    { key: 'handoffMaxChars', label: '会话交接注入上限（字符）', user: num(cfg.memory?.handoffMaxChars, 4000), cap: caps?.handoffMaxChars },
-    { key: 'memoryBlockChars', label: '全局印象注入上限（字符）', user: 6000, cap: caps?.memoryBlockChars },
-    { key: 'promptMaxStickers', label: '提示词里的表情清单条数', user: num(cfg.sticker?.promptMaxStickers, 10), cap: caps?.promptMaxStickers }
+    { key: 'handoffMaxChars', label: '会话交接注入上限（字符，配置文件里改）', user: num(cfg.memory?.handoffMaxChars, 4000), cap: caps?.handoffMaxChars },
+    { key: 'memoryBlockChars', label: '全局印象注入上限（字符，固定值）', user: 6000, cap: caps?.memoryBlockChars },
+    { key: 'promptMaxStickers', label: '提示词里的表情清单条数', user: num(cfg.sticker?.promptMaxStickers, 10), cap: caps?.promptMaxStickers },
+    // 日说说有**自己的**轮次旋钮（dailyMoments.maxRounds，默认 8），与聊天那条 api.maxRounds 不是一回事
+    { key: 'dailyMomentsMaxRounds', label: '每日动态最大轮次（配置文件里改）', user: num(cfg.dailyMoments?.maxRounds, 8), cap: caps?.maxRounds }
   ];
   return {
     mode,

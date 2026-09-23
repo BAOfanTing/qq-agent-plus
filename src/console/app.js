@@ -343,7 +343,15 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     emit,
     log,
     notifyAvailable: () => onebot.connected === true,
-    notify: (text, ownerUin) => sendIdentityAdminText(ownerUin, text),
+    // 与异常告警同口径：连协议端都没连上 = **确定没发出去**（带 beforeWrite，保留 pending 等重连后重发）；
+    // 已经在发送中失败的（超时/业务拒绝）属于"结果未知"，只记 deliveryUnknown、不自动重发
+    // —— 否则 pending 会一直留着，30 秒一次的定时器把同一条失败通知反复发给管理员。
+    notify: async (text, ownerUin) => {
+      if (!onebot.connected) {
+        throw Object.assign(new Error('OneBot 未连接，更新失败通知等待发送'), { beforeWrite: true });
+      }
+      return sendIdentityAdminText(ownerUin, text);
+    },
     ...(autoUpdateOptions.runSystemctl
       ? { runSystemctl: autoUpdateOptions.runSystemctl }
       : {})
@@ -860,7 +868,7 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
     const selfId = onebot.selfId;
     // 拍一拍也要记下真实群名片：原先这里硬编码"（拍一拍事件）"，
     // 会覆盖同一 QQ 在普通消息里的真实昵称 —— 记忆整理时取名字会拿到这个占位符，
-    // 导致"317183522 的名字叫（拍一拍事件）"这种脏数据。
+    // 导致"<uin> 的名字叫（拍一拍事件）"这种脏数据。
     const chatKeyNow = `${isGroup ? 'group' : 'private'}:${id}`;
     let operatorName = isGroup ? ((await resolveAtName(id, operatorId)) || '') : '';
     if (!operatorName) {
@@ -2800,6 +2808,16 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         memory.clearHandoff(chatKey);
         emit('memory-update', { chatKey, phase: 'handoff-clear' });
         return json(res, 200, { ok: true });
+      }
+
+      // 按 QQ 号**全局**删除此人的人物记忆（人物库页「删除全部人物记忆」用）：
+      // 空 chatKey = 该 QQ 在所有会话的印象一起删（删前留快照，可回滚）。
+      // 旧的 /api/memory-files/<chat>/members/<uid> 语义是"只清这个来源"，两者别混用。
+      const memoryMemberGlobalMatch = /^\/api\/memory-files\/global\/members\/(\d{1,15})$/.exec(pathname);
+      if (memoryMemberGlobalMatch && method === 'DELETE') {
+        const removed = memory.removeMember('', memoryMemberGlobalMatch[1]);
+        emit('memory-update', { chatKey: '' });
+        return json(res, 200, { ok: true, removed });
       }
 
       // 手动编辑某个群友的印象（PUT 编辑：QQ号必填，备注可同步保存 / DELETE 删除成员文件）

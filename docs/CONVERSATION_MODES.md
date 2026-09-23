@@ -83,7 +83,7 @@ their existing provider response records according to session retention policy.
 
 The runtime uses three different identifiers and persistence scopes:
 
-- `chatKey` identifies the QQ conversation, such as `group:1108998242`.
+- `chatKey` identifies the QQ conversation, such as `group:10000005`.
 - `sessionId` identifies one Agent execution for one claimed message batch.
   It owns the timeout, tool rounds, usage, send audit and success/failure result.
 - `threadId` identifies the lifecycle shared by multiple Agent Sessions. It owns

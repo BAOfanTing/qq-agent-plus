@@ -533,7 +533,9 @@ export class Orchestrator {
         shouldRespond: entries.length > 0,
         tier: 4,
         // 私聊与群聊同口径：省 Token 模式下也要夹（以前这里直接取 atCount，模式对它不生效）
-        count: cappedByTokenSaver(Number(cfg.store?.atCount) || 300, caps?.atCount),
+        // 0 是合法值（= 不读历史）：不能写成 `|| 300`，否则 off 档下与升级前不一致、
+        // 界面显示"生效 0"而私聊实际读 300（审查抓出来的"表与实际不符"）。
+        count: cappedByTokenSaver(cfg.store?.atCount, caps?.atCount),
         reason: '私聊',
         conversationMode: conversation.mode
       };
@@ -553,10 +555,10 @@ export class Orchestrator {
     if (entries.some((entry) => Number(entry.attempts) > 0)) {
       return {
         tier: 8,
-        count: Math.min(
+        count: cappedByTokenSaver(Math.min(
           500,
           Math.max(1, Number(conversation.lifecycleContextCount) || result.count || 100)
-        ),
+        ), tokenSaverCapsOf(getConfig())?.allCount),
         reason: '失败批次重试',
         shouldRespond: true,
         conversationMode: conversation.mode
@@ -587,7 +589,11 @@ export class Orchestrator {
   }
 
   #continuationTier(chatKey, entries, fallback, conversation) {
-    const count = Math.min(500, Math.max(1, Number(conversation?.continuationContextCount) || 100));
+    // 与手动/主动唤醒同口径：省 Token 模式夹上限（关闭时上限为 null，原样取会话配置）
+    const count = cappedByTokenSaver(
+      Math.min(500, Math.max(1, Number(conversation?.continuationContextCount) || 100)),
+      tokenSaverCapsOf(getConfig())?.allCount
+    );
     if (this.#isReplyToSelf(entries)) {
       return {
         tier: 5, count, reason: '续接：引用机器人',
@@ -613,7 +619,11 @@ export class Orchestrator {
   }
 
   #lifecycleTier(chatKey, entries, fallback, conversation) {
-    const count = Math.min(500, Math.max(1, Number(conversation?.lifecycleContextCount) || 100));
+    // 同上：生命周期续接读多少条也吃上限
+    const count = cappedByTokenSaver(
+      Math.min(500, Math.max(1, Number(conversation?.lifecycleContextCount) || 100)),
+      tokenSaverCapsOf(getConfig())?.allCount
+    );
     const thread = this.store.getConversationThread?.(chatKey);
     if (thread?.mode === 'lifecycle') {
       if (thread.state === 'rollover_armed') {

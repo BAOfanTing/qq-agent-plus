@@ -194,16 +194,12 @@
   }
 
   async function deletePerson(person) {
-    const chatKey = sourceFor(person);
     const userId = String(person?.userId || '').trim();
-    if (!chatKey || !/^\d{1,15}$/.test(userId)) {
-      throw new Error('缺少可删除的来源会话或 QQ 号');
-    }
-    // 当前 MemoryStore.removeMember() 的语义是按 QQ 删除全局人物，不按 chatKey 局部删除；
-    // chatKey 这里只用于兼容旧 HTTP 路由形状。
-    await api(`/api/memory-files/${chatKey.replace(':', '_')}/members/${userId}`, {
-      method: 'DELETE'
-    });
+    if (!/^\d{1,15}$/.test(userId)) throw new Error('缺少可删除的 QQ 号');
+    // 按钮写的是"删除全部人物记忆"：走全局删除路由（该 QQ 在所有会话的印象一起删，服务端会先留快照）。
+    // ⚠️ 别改回 /api/memory-files/<chat>/members/<uid>：那条路由的语义是"只清这个来源"，
+    // 跨群合并过的人物会删不干净，用户以为删了其实还在。
+    await api(`/api/memory-files/global/members/${userId}`, { method: 'DELETE' });
   }
 
   function renderDetail() {
@@ -267,7 +263,7 @@
       }
     });
     box.querySelector('#gm-delete')?.addEventListener('click', async (event) => {
-      if (!window.confirm(`确定删除 ${person.name || person.userId} 的全部全局人物记忆？此操作不会删除聊天记录。`)) return;
+      if (!window.confirm(`确定删除 ${person.name || person.userId} 的全部全局人物记忆？她在所有会话里的印象都会删掉（服务端会留一份可回滚快照），聊天记录不受影响。`)) return;
       const button = event.currentTarget;
       button.disabled = true;
       if (status) status.textContent = '正在删除…';

@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// 用例自己造临时数据目录：**不许**碰仓库里的 data/（那里可能是真配置，含 Key）。
+// 注意 ESM 的静态 import 会先于文件体执行，所以 src 模块必须用动态 import 放在这之后。
+const __dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-tools-'));
+process.env.QQ_AGENT_DATA_DIR = __dir;
+process.on('exit', () => { try { fs.rmSync(__dir, { recursive: true, force: true }); } catch { /* Windows 上可能被句柄占着 */ } });
+
 const { buildToolDefs, executeTool } = await import('../src/tools/tools.js');
 
 function tool(name) {

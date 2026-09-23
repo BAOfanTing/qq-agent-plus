@@ -266,6 +266,35 @@ test('pending deployment failure disables automatic updates and notifies once', 
   assert.ok(fs.existsSync(autoUpdatePaths(f.dataDir).state));
 });
 
+test('更新失败通知：结果未知只记录不重发，确定没发出才保留 pending', async (t) => {
+  // 审查抓出来的：beforeWrite 在自动更新这条链路上没人设置 → pending 永远是 false，
+  // 于是"确定没发出去"的重试分支是死代码，同时文档承诺的"重连后继续发"也不成立。
+  // 现在控制台的 notify 包装在未连接时抛 beforeWrite，这里把两种情形都钉住。
+  for (const [caseName, errorPatch, wantPending, wantUnknown] of [
+    ['结果未知（发送超时）', {}, false, true],
+    ['确定没发出（未连接）', { beforeWrite: true }, true, false]
+  ]) {
+    const f = fixture(t);
+    f.manager.resume({ ownerUin: '900001', intervalHours: 6 });
+    f.manager.notify = async () => {
+      throw Object.assign(new Error(caseName), errorPatch);
+    };
+    writeAutoUpdateState(f.dataDir, {
+      status: 'failed',
+      mode: 'scheduled',
+      phase: 'testing',
+      targetRevision: 'a'.repeat(40),
+      error: 'unit test failed',
+      autoDisabled: true,
+      notification: { pending: true, ownerUin: '900001', sentAt: 0, error: '' }
+    });
+    await f.manager.handlePendingFailure().catch(() => {});
+    const state = readAutoUpdateState(f.dataDir);
+    assert.equal(state.notification.pending, wantPending, `${caseName}：pending 应为 ${wantPending}`);
+    assert.equal(Boolean(state.notification.deliveryUnknown), wantUnknown, `${caseName}：deliveryUnknown 应为 ${wantUnknown}`);
+  }
+});
+
 test('pending failure respects keep-enabled policy and still notifies once', async (t) => {
   const f = fixture(t);
   f.setAutoUpdate({ enabled: true, disableOnFailure: false });

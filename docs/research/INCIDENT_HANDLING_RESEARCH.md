@@ -180,7 +180,7 @@ operationState: pending | sending | sent | failed | unknown | reconciled
 {
   "incidentAlerts": {
     "enabled": true,
-    "adminUins": ["2948771712"],
+    "adminUins": ["10000003"],
     "notifyWarnings": true,
     "duplicateWindowMinutes": 10,
     "digestIntervalMinutes": 15,
@@ -214,7 +214,7 @@ operationState: pending | sending | sent | failed | unknown | reconciled
 【QQ Agent 异常】
 等级：错误
 模块：群聊发送
-会话：28届游戏策划想要工作（1044877051）
+会话：某游戏策划交流群（10000004）
 结果：OneBot 明确拒绝；会话未阻塞
 次数：1
 编号：inc_xxx
