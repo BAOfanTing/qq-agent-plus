@@ -896,19 +896,25 @@ html.boot-show .loading-overlay { opacity: 1; }
    才滚得动 —— 反馈就是"滚轮只有放滚动条旁边才能滚"。现在整片视图一起滚。 */
 #view-settings { overflow-x: hidden; overflow-y: auto; }
 .settings-menu { padding-top: 2px; }
+/* 阅读宽度限制放在容器内的"一列"上，而不是给容器加居中 padding。
+   百分比 padding 是按父容器宽度解析的，用它给窄内容居中会把内容越挤越窄
+   （1920 宽的窗口里只挤出 640px），表单网格随之从多列掉成 1 列 —— 字段全竖着排。
+   也不能用 `> * { max-width; margin-inline: auto }`：h3、分隔线这些有自己的
+   margin 简写（如 `margin: 22px 0 12px`）会把 auto 覆盖掉，于是标题停在内容盒最左边、
+   下面的框居中，标题看着比框"偏左"一大截。
+   用单列网格统一约束：所有直接子元素都落在同一列里，谁都不用管居中的事。 */
 .settings-pane {
   flex: 1; width: 100%; min-width: 0;
   max-width: none; margin: 0; overflow: visible;
   /* 盒子要跟着内容长高（不拉伸成一屏高）：否则里面的 sticky「保存设置」条
      会以为父容器只有一屏，滚过一屏就不粘了。 */
   align-self: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 860px);
+  justify-content: center;
+  align-content: start;
   padding: 22px 26px 40px;
 }
-/* 阅读宽度限制放在**内容**上，而不是给容器加居中 padding。
-   百分比 padding 是按父容器宽度解析的，用它给窄内容居中会把内容越挤越窄
-   （1920 宽的窗口里只挤出 640px），表单网格随之从 3 列掉成 1 列 —— 字段全竖着排。
-   容器盒子保持铺满整列（滚轮落在哪都能滚），每个直接子元素各自限宽居中。 */
-.settings-pane > * { max-width: 860px; margin-left: auto; margin-right: auto; }
 .settings-pane h3 { margin: 22px 0 12px; font-size: 14px; color: var(--accent); }
 .settings-pane h3:first-child { margin-top: 0; }
 .settings-divider { border: none; border-top: 1px dashed var(--border); margin: 22px 0; }
