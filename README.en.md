@@ -111,6 +111,9 @@ the deployment directory and ports, installs Docker (with sudo confirmation), do
 configures OneBot, deploys QQ Agent and generates or synchronises all service credentials.
 SnowLuma already contains OneBot; NapCat and Lagrange must not be installed on top of it.
 
+Installation and runtime must not use root: `deploy-all.sh` refuses to run as root, so use a regular
+user (the script calls `sudo` only when installing Docker or enabling linger).
+
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
@@ -189,6 +192,7 @@ installed or updated. Requirements:
 - Linux with systemd user services;
 - `curl`, `tar`, `sha256sum`, `rsync` (if no suitable Node.js is found, the script downloads and
   verifies Node 22 into `INSTALL_DIR/.runtime`);
+- a non-root user (the service is registered as that user's systemd user service);
 - a running OneBot v11 HTTP and forward WebSocket service;
 - an OpenAI Chat Completions compatible model service.
 
@@ -255,9 +259,16 @@ bash deploy.sh \
   --port 3210
 ```
 
-Updates do not reset the existing configuration or run mode. A pre-deployment code snapshot is
-created under `DATA_DIR/deploy-backups/`; if installation, configuration, systemd validation or the
-health check fails, the previous code, configuration and service are restored.
+Updates do not reset the run mode, and the rest of the configuration is preserved. `--install-dir`
+and `--data-dir` must match the existing installation: a wrong directory is not rejected, it points
+the service at a new, empty data directory. `--host` and `--port` may be omitted — the script then
+reuses the values recorded in `config.json` and prints a note; when given explicitly they must match
+the first installation (a full-stack install uses `0.0.0.0`), otherwise the console becomes
+unreachable from outside. The current listen address is on the URL line of `DATA_DIR/console-access.txt`.
+
+A pre-deployment code snapshot is created under `DATA_DIR/deploy-backups/`; if installation,
+configuration, systemd validation or the health check fails, the previous code, configuration and
+service are restored.
 
 The installer also installs a separate GitHub update service and timer. Automatic updates are
 disabled by default and can be enabled from the “控制 -> 更新部署” page after an administrator is
@@ -271,6 +282,8 @@ See [docs/AUTO_UPDATE.md](docs/AUTO_UPDATE.md).
 ## Operations
 
 ### Service management
+
+Run these from the installation directory (`--install-dir`):
 
 ```bash
 bash manage.sh status

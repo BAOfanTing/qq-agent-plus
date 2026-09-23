@@ -19,6 +19,10 @@ SERVICE_SET=false
 IMAGE="${SNOWLUMA_IMAGE:-motricseven7/snowluma:v1.14.15}"
 IMAGE_SET=false
 IMAGE_MIRROR_ARG=""
+# 这两个是用户会按机器情况调的旋钮（显存紧张时改 SNOWLUMA_SCREEN、排查时改日志级别），
+# 重跑时从 .env 回读，避免手工改动被默认值覆盖。
+SNOWLUMA_SCREEN="1920x1080x24"
+SNOWLUMA_LOG_LEVEL="info"
 ASSUME_YES=false
 CHECK_ONLY=false
 ROTATE_CREDENTIALS=false
@@ -120,6 +124,18 @@ done
 die() {
   printf 'Error: %s\n' "$*" >&2
   exit 1
+}
+
+# 全新安装中途失败时清掉本次写下的 .env / compose 与空目录：否则重跑会被
+# check_local_ownership 判成"不完整的受管安装"而拒绝 —— 而拉镜像失败的提示恰恰让操作者重跑。
+# 容器可能已经写过东西，所以目录只用 rmdir：非空会失败，正好保留现场。
+FRESH_STACK_CLEANUP=false
+cleanup_fresh_stack() {
+  [[ "$FRESH_STACK_CLEANUP" == true ]] || return 0
+  printf '安装未完成：已清理本次写入的栈文件与空目录，可以直接重跑 deploy-all.sh。\n' >&2
+  rm -f "$ENV_FILE" "$ENV_FILE.tmp" "$COMPOSE_FILE" "$COMPOSE_FILE.tmp"
+  rmdir "$SNOWLUMA_DATA_DIR/config" "$SNOWLUMA_DIR/client-config" "$SNOWLUMA_DIR/client-data" \
+    "$SNOWLUMA_DATA_DIR" "$SNOWLUMA_DIR" "$AGENT_DATA_DIR" 2>/dev/null || true
 }
 
 step() {
@@ -429,9 +445,14 @@ if [[ "$EXISTING_STACK" == true ]]; then
   if [[ "$ONEBOT_WS_PORT_SET" != true ]]; then
     ONEBOT_WS_PORT="$(env_value "$ENV_FILE" ONEBOT_WS_PORT)"; ONEBOT_WS_PORT="${ONEBOT_WS_PORT:-3001}"
   fi
+  SNOWLUMA_SCREEN="$(env_value "$ENV_FILE" SNOWLUMA_SCREEN)"; SNOWLUMA_SCREEN="${SNOWLUMA_SCREEN:-1920x1080x24}"
+  SNOWLUMA_LOG_LEVEL="$(env_value "$ENV_FILE" SNOWLUMA_LOG_LEVEL)"; SNOWLUMA_LOG_LEVEL="${SNOWLUMA_LOG_LEVEL:-info}"
 fi
 [[ "$SERVICE" =~ ^[A-Za-z0-9_-]+$ ]] || die 'Invalid service name'
 [[ "$IMAGE" =~ ^[A-Za-z0-9._/:@-]+$ ]] || die 'Invalid SnowLuma image reference'
+[[ "$SNOWLUMA_SCREEN" =~ ^[0-9]+x[0-9]+x[0-9]+$ ]] \
+  || die "Invalid SNOWLUMA_SCREEN, expected WIDTHxHEIGHTxDEPTH: $SNOWLUMA_SCREEN"
+[[ "$SNOWLUMA_LOG_LEVEL" =~ ^[A-Za-z]+$ ]] || die "Invalid SNOWLUMA_LOG_LEVEL: $SNOWLUMA_LOG_LEVEL"
 # 镜像站列表：QQ_AGENT_IMAGE_MIRROR（逗号分隔）+ --image-mirror 追加。
 # 刻意不给默认值 —— 镜像站由第三方提供，用哪家必须由用户自己决定。
 IMAGE_MIRRORS=()
@@ -563,8 +584,8 @@ SNOWLUMA_WEBUI_HOST=0.0.0.0
 SNOWLUMA_WEBUI_PORT=5099
 SNOWLUMA_WEBUI_HOST_PORT=$SNOWLUMA_PORT
 SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD=$SNOWLUMA_PASSWORD
-SNOWLUMA_LOG_LEVEL=info
-SNOWLUMA_SCREEN=1920x1080x24
+SNOWLUMA_LOG_LEVEL=$SNOWLUMA_LOG_LEVEL
+SNOWLUMA_SCREEN=$SNOWLUMA_SCREEN
 SNOWLUMA_HOOK_AUTOLOAD=1
 SNOWLUMA_ONEBOT_HOST=0.0.0.0
 SNOWLUMA_TELEMETRY=0
@@ -618,6 +639,13 @@ services:
 EOF
 mv "$COMPOSE_FILE.tmp" "$COMPOSE_FILE"
 chmod 600 "$COMPOSE_FILE"
+
+# 从这里到 Agent 部署成功之间失败的话，栈是"半成品"：check_local_ownership 会因此拒绝重跑，
+# 所以先挂上清理钩子（Agent 装好后立刻撤销）。
+if [[ "$EXISTING_STACK" != true ]]; then
+  FRESH_STACK_CLEANUP=true
+  trap cleanup_fresh_stack EXIT
+fi
 
 if ! docker_ready && ! sudo_docker_ready; then install_docker; fi
 docker_ready || sudo_docker_ready || die 'Docker installation completed but the daemon is unavailable'
@@ -711,7 +739,7 @@ if [[ -n "$MODEL_API_KEY" ]]; then
   printf '%s' "$MODEL_API_KEY" >"$MODEL_KEY_FILE"
   chmod 600 "$MODEL_KEY_FILE"
   export QQ_AGENT_MODEL_KEY_FILE="$MODEL_KEY_FILE"
-  trap 'rm -f "$MODEL_KEY_FILE"' EXIT
+  trap 'rm -f "$MODEL_KEY_FILE"; cleanup_fresh_stack' EXIT
 fi
 [[ -z "$MODEL_NAME" ]] || export QQ_AGENT_MODEL="$MODEL_NAME"
 [[ -z "$ALLOW_GROUPS" ]] || export QQ_AGENT_ALLOW_GROUPS="$ALLOW_GROUPS"
@@ -722,6 +750,8 @@ bash "$SOURCE_DIR/deploy.sh" \
   --host 0.0.0.0 \
   --port "$AGENT_PORT" \
   --service "$SERVICE"
+# Agent 已装好，栈不再是"半成品"：撤销失败清理，保留 .env / compose。
+FRESH_STACK_CLEANUP=false
 
 NODE_BIN="$(tr -d '\r\n' <"$APP_DIR/.deployment-node")"
 if [[ "$EXISTING_STACK" != true ]]; then
@@ -729,7 +759,6 @@ if [[ "$EXISTING_STACK" != true ]]; then
 fi
 "$NODE_BIN" "$SOURCE_DIR/scripts/configure-snowluma.mjs" \
   --data-dir "$SNOWLUMA_DATA_DIR" \
-  --token "$ONEBOT_TOKEN" \
   --http-port 3000 \
   --ws-port 3001
 
@@ -741,11 +770,10 @@ wait_http "http://127.0.0.1:$NOVNC_PORT/" 30 \
   || die "noVNC did not become ready; run: cd $SNOWLUMA_DIR && docker compose logs"
 if [[ "$EXISTING_STACK" == true && "$SNOWLUMA_PASSWORD" != "$(stored_value SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD)" \
   && "$SNOWLUMA_CURRENT_PASSWORD" != "$SNOWLUMA_PASSWORD" ]]; then
-  rotate_args=(
-    --url "http://127.0.0.1:$SNOWLUMA_PORT"
-    --current "$SNOWLUMA_CURRENT_PASSWORD"
-    --next "$SNOWLUMA_PASSWORD"
-  )
+  # 密码走环境变量而不是命令行参数：/proc/<pid>/cmdline 对本机所有用户可读。
+  export QQ_AGENT_SNOWLUMA_CURRENT_PASSWORD="$SNOWLUMA_CURRENT_PASSWORD"
+  export QQ_AGENT_SNOWLUMA_PASSWORD="$SNOWLUMA_PASSWORD"
+  rotate_args=(--url "http://127.0.0.1:$SNOWLUMA_PORT")
   [[ -z "$SNOWLUMA_TOTP" ]] || rotate_args+=(--totp "$SNOWLUMA_TOTP")
   if ! "$NODE_BIN" "$SOURCE_DIR/scripts/rotate-snowluma-password.mjs" "${rotate_args[@]}"; then
     cp -p "$ENV_FILE.pre-deploy" "$ENV_FILE"

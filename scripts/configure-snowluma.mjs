@@ -12,8 +12,10 @@ const { values } = parseArgs({
 });
 
 if (!values['data-dir']) throw new Error('--data-dir is required');
-if (!values.token || values.token.length < 16) {
-  throw new Error('--token must contain at least 16 characters');
+// 令牌优先走环境变量：命令行参数会出现在 /proc/<pid>/cmdline，对本机所有用户可读。
+const token = String(values.token || process.env.QQ_AGENT_ONEBOT_TOKEN || '');
+if (token.length < 16) {
+  throw new Error('--token or QQ_AGENT_ONEBOT_TOKEN must contain at least 16 characters');
 }
 
 const parsePort = (name, raw) => {
@@ -56,7 +58,7 @@ function updateServer(list, fallback) {
       host: '0.0.0.0',
       port: fallback.port,
       path: '/',
-      accessToken: values.token,
+      accessToken: token,
       messageFormat: current.messageFormat || 'array',
       reportSelfMessage: current.reportSelfMessage === true,
       ...(fallback.role ? { role: current.role || fallback.role } : {}),
@@ -79,7 +81,7 @@ function updateFile(file) {
     port: httpPort,
     path: '/',
     enableWebSocket: false,
-    accessToken: values.token,
+    accessToken: token,
     messageFormat: 'array',
     reportSelfMessage: false
   });
@@ -89,7 +91,7 @@ function updateFile(file) {
     port: wsPort,
     path: '/',
     role: 'Universal',
-    accessToken: values.token,
+    accessToken: token,
     messageFormat: 'array',
     reportSelfMessage: false
   });

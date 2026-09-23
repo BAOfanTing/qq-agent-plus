@@ -27,17 +27,24 @@ jobs:
       - name: 语法检查（src / scripts / test / ui，递归）
         run: |
           set -e
-          count=0
           # 与 ci.yml 同一步：tag push 不会触发 CI，所以这里必须自己跑一遍 ——
-          # 而 ops scan 只扫 src 下的 .js，scripts/test/ui 的语法门禁全在这一步
-          for f in $(find src scripts test ui -type f \( -name '*.js' -o -name '*.mjs' \) | sort); do
-            node --check "$f"
-            count=$((count + 1))
-          done
-          echo "语法检查通过（$count 个文件）"
+          # 而 ops scan 只扫 src 下的 .js，scripts/test/ui 的语法门禁全在这一步。
+          # mapfile + 非空断言：`for f in $(find ...)` 吃掉 find 的退出码，find 失败时
+          # 会打印"通过（0 个文件）"并成功退出，等于门禁空转。
+          mapfile -t files < <(find src scripts test ui -type f \( -name '*.js' -o -name '*.mjs' \) | sort)
+          [[ ${#files[@]} -gt 0 ]] || { echo "没有找到任何待检查文件"; exit 1; }
+          for f in "${files[@]}"; do node --check "$f"; done
+          echo "语法检查通过（${#files[@]} 个文件）"
+      - name: Shell 脚本语法检查
+        run: bash -n deploy.sh deploy-all.sh manage.sh
       - run: node src/ops.js scan --strict
       - run: npm run test:unit
       - run: npm run test:local
+      - name: 提示词 / 渲染 / 滚动回归
+        run: |
+          node test/test-prompt.mjs
+          node test/render-test.mjs
+          node test/scroll-test.mjs
 
       - name: 生成发布说明草稿
         run: |

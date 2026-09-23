@@ -99,6 +99,9 @@ OneBot WebSocket
 （需确认 sudo）、下载 SnowLuma、配置 OneBot、部署 QQ Agent，并生成和同步全部服务凭据。
 SnowLuma 已包含 OneBot，无需另行安装 NapCat 或 Lagrange。
 
+安装与运行都不使用 root：`deploy-all.sh` 会直接拒绝 root 身份，请以普通用户执行（脚本只在安装
+Docker 与开启 linger 时按需调用 `sudo`）。
+
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
@@ -164,6 +167,7 @@ bash deploy-all.sh --help
 已有可用 OneBot v11 协议端，或仅需安装、更新 Agent 时使用 `deploy.sh`。运行要求：
 
 - Linux，且可用 systemd 用户服务；
+- 以非 root 的普通用户执行（服务注册为该用户的 systemd 用户服务）；
 - `curl`、`tar`、`sha256sum`、`rsync`（缺少合格 Node.js 时自动安装已校验的 Node 22）；
 - 已运行的 OneBot v11 HTTP 与正向 WebSocket 服务；
 - 兼容 OpenAI Chat Completions 的模型服务。
@@ -229,8 +233,13 @@ bash deploy.sh \
   --port 3210
 ```
 
-更新不重置现有配置与运行模式。默认在 `DATA_DIR/deploy-backups/` 创建部署前代码快照；安装、配置、
-systemd 校验或健康检查任一环节失败时，自动恢复旧代码、配置与服务。
+更新不重置运行模式，其余配置也保持不变。`--install-dir` 与 `--data-dir` 必须与现有安装一致：传错
+目录不会报错，而是把服务指向一个新的空数据目录。`--host` 与 `--port` 可以省略——省略时脚本沿用
+`config.json` 中记录的现值并打印一行提示；显式传入时必须与首次安装相同（例如全栈安装用的是
+`0.0.0.0`），否则控制台会从外部失联。当前监听地址可从 `DATA_DIR/console-access.txt` 的 URL 行读到。
+
+默认在 `DATA_DIR/deploy-backups/` 创建部署前代码快照；安装、配置、systemd 校验或健康检查任一环节
+失败时，自动恢复旧代码、配置与服务。
 
 部署脚本同时安装独立的 GitHub 更新 service/timer。自动更新默认关闭，可在「控制 -> 更新部署」配置
 管理员后恢复。提示与部署均以**已发布的 Release** 为准（草稿、预发布与 `main` 上的日常提交不计入），
@@ -241,6 +250,8 @@ systemd 校验或健康检查任一环节失败时，自动恢复旧代码、配
 ## 运维
 
 ### 服务管理
+
+以下命令在安装目录（`--install-dir`）中执行：
 
 ```bash
 bash manage.sh status

@@ -18,6 +18,8 @@ the old instance.
 ## Requirements
 
 - Linux with systemd user services, curl, tar, sha256sum and rsync.
+- A non-root user: `deploy-all.sh` refuses to run as root, and `deploy.sh` is
+  meant to run as the service user that owns the systemd user service.
 - A mounted local filesystem for SQLite; NFS and SMB are not supported.
 - A separately managed OneBot v11 HTTP/forward WebSocket service when using
   `deploy.sh`; `deploy-all.sh` installs SnowLuma/OneBot.
@@ -27,7 +29,9 @@ the old instance.
 
 ## Full-stack Installation
 
-Run `deploy-all.sh` on a new host when SnowLuma/OneBot is not installed yet:
+Run `deploy-all.sh` on a new host when SnowLuma/OneBot is not installed yet.
+Run it as a regular user, not as root: the installer refuses root and calls
+`sudo` only for host dependencies such as Docker and linger.
 
 ```bash
 bash deploy-all.sh
@@ -63,6 +67,25 @@ Download or container startup failures stop the installation with an error.
 One shared OneBot token is written to SnowLuma's global template, every existing
 per-account config and QQ Agent's configuration. Existing installations retain
 their credentials unless `--rotate-credentials` is selected.
+
+### Container tuning knobs
+
+Two values in `snowluma/.env` are meant to be adjusted per host. Edit them and
+recreate the container (`docker compose up -d`; a plain `restart` does not re-read
+the environment). Re-running `deploy-all.sh` reads them back, so the edit
+survives later deployments:
+
+- `SNOWLUMA_SCREEN` (default `1920x1080x24`) — X screen geometry. Lower it (for
+  example `1024x768x24`) when the QQ window renders as a black or blank desktop
+  on a host with little video memory.
+- `SNOWLUMA_LOG_LEVEL` (default `info`) — container log verbosity.
+
+The rest of `.env` is rewritten on every run. The installer reads its own keys
+back, so ports, the image reference and the credentials survive a re-run, but the
+wiring keys — container name, internal WebUI/OneBot host and port, uid/gid,
+telemetry and hook flags — always come from the installer, and
+`docker-compose.yml` is regenerated entirely, including the `SNOWLUMA_QQ_FLAGS`
+that disable GPU compositing on headless hosts.
 
 ### Docker Hub is unreachable (mainland China)
 
@@ -140,7 +163,9 @@ Until activation, the Agent stays in `observe`.
 Non-interactive `--yes` installation requires `--model-base-url`,
 `--model-api-key` and `--model`. Use `--skip-model-config` only when the model
 will deliberately be configured later in the management console. An empty
-allowlist remains deny-by-default.
+allowlist remains deny-by-default. `--yes` also skips the post-login
+verification prompt: the stack stays in `observe` until someone scans the QR code
+and activates it later, so an unattended run is not a finished deployment.
 
 `deploy.sh` is used directly when a compatible OneBot service already exists or
 when only the QQ Agent process should be installed or updated:
@@ -155,6 +180,12 @@ bash deploy.sh \
 
 Create the parent directory with appropriate ownership first. Run deployment as
 the service user, not root. The installer uses sudo only for linger if required.
+`--install-dir` and `--data-dir` must match the existing installation when
+updating: a wrong directory is not rejected, it points the service at a new,
+empty data directory. `--host` and `--port` may be omitted — the script then
+reuses the address recorded in `config.json` and prints a note; when given
+explicitly they must match the first installation, otherwise the console becomes
+unreachable from outside.
 Dependencies are installed with `--omit=dev --ignore-scripts`; Linux needs no
 Electron, GUI, X11, browser, compiler or native SQLite add-on.
 If no compatible Node.js is found, the script downloads Node.js 22 into
@@ -214,6 +245,10 @@ Enter the current Token and the new Token twice. A successful rotation updates
 the HttpOnly cookie and `data/console-access.txt` atomically from the user's
 perspective; the old Token and other browser sessions stop authenticating
 immediately. The general “Save Settings” action cannot change the Token.
+
+Run these from the installation directory: `manage.sh` resolves
+`.deployment.json` and `.deployment-node` relative to itself, so running it from
+the source checkout reports the deployed Node.js runtime as unavailable.
 
 ```bash
 bash manage.sh status

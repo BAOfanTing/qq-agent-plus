@@ -24,7 +24,7 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 `proxy_buffering`，否则控制台的事件流将停止更新。
 
 **`qqagent` 用户与 root 部署**
-`deploy-all.sh:385` 直接拒绝 root，`docs/LINUX.md:121` 亦要求以服务用户身份部署。
+`deploy-all.sh:385` 直接拒绝 root，`docs/LINUX.md` 的 Requirements 亦要求以服务用户身份部署。
 更常见的运维问题是：以 root 执行 `manage.sh` 时查询的是 root 自身的 user manager，
 因而误报「服务不存在」，而服务实际运行正常。
 
@@ -46,7 +46,7 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 `manage.sh` 硬编码 `systemctl --user` / `journalctl --user`（`scripts/manage.mjs:11,31`），
 自动更新由配套的 user timer 承担。改用 PM2 会绕过以下机制：部署前代码快照与失败回滚、
 健康检查、unit 中的 `Restart=on-failure` 与 `NoNewPrivileges`，以及 Release 驱动的自动更新。
-此外，`deploy-all.sh:385` 明确拒绝 root，`docs/LINUX.md:121` 亦要求以服务用户身份部署。
+此外，`deploy-all.sh:385` 明确拒绝 root，`docs/LINUX.md` 的 Requirements 亦要求以服务用户身份部署。
 
 ## 部署差异对照
 
@@ -71,9 +71,9 @@ for c in rsync curl tar xz sha256sum; do
 done
 ```
 
-`deploy.sh:73-75` 在执行部署前即要求 `systemctl`、`systemctl --user` 与 `rsync` 三者可用。
-`sleep` 一类的命令不在检查范围内；缺失 `rsync` 时脚本直接退出，**本脚本不会安装系统包**。
-全栈安装额外需要 `realpath` 与 `ss`（iproute2）。
+`deploy.sh:77-79` 在执行部署前即要求 `systemctl`、`systemctl --user` 与 `rsync` 三者可用，
+缺少任何一项都会打印具体原因后退出；**本脚本不会安装系统包**。全栈安装额外需要 `realpath`
+与 `ss`（iproute2）。
 
 端口默认值如下：控制台 `3210`，SnowLuma WebUI `5099`，noVNC `6081`，协议端（OneBot）
 `3000`/`3001` 仅绑定 `127.0.0.1`。需确认对外开放的三个端口（3210 / 5099 / 6081）未被宝塔
@@ -94,10 +94,10 @@ loginctl enable-linger qqagent
 ```
 
 linger 是服务在开机后无需用户登录即可持续运行的前提。预先开启 linger 可避免使用 `sudo`：
-`deploy.sh:312-313` 仅在 linger 未开启时才尝试执行 `sudo loginctl enable-linger`。
+`deploy.sh:350-351` 仅在 linger 未开启时才尝试执行 `sudo loginctl enable-linger`。
 
 父目录同样需要在此创建。`deploy.sh` 会自行 `mkdir -p` 安装目录与数据目录，但 `/mnt` 属主为
-root，以 `qqagent` 身份执行时无法创建 `data` 这一级目录。`docs/LINUX.md:121` 要求「先以合适
+root，以 `qqagent` 身份执行时无法创建 `data` 这一级目录。`docs/LINUX.md` 要求「先以合适
 的属主创建父目录」，即指此处。
 
 同时将 `console-tunnel.bat` 使用的 SSH 公钥配置给 `qqagent`，写入
@@ -132,7 +132,8 @@ bash deploy.sh \
   路径不得包含空格、`%` 或引号；SQLite 必须位于本机磁盘，不能使用 NFS/SMB。不得放入
   `/www/wwwroot`，该目录为宝塔站点目录，会被网站备份与防篡改逻辑一并扫描。
 - **`--host 127.0.0.1` 保持默认**：控制台不对外开放，访问通过下一节的隧道实现。使用同机
-  nginx 反向代理时目标亦为 `127.0.0.1`，同样无需对外开放。
+  nginx 反向代理时目标亦为 `127.0.0.1`，同样无需对外开放。后续更新若不显式传入
+  `--host`/`--port`，脚本会沿用 `config.json` 中记录的现值并打印提示，不会退回默认值。
 - **Node 由脚本准备**：找不到合格的 Node 时，脚本会下载并校验 `22.23.2` 至
   `INSTALL_DIR/.runtime`。要求为 ≥22.13 且 `node:sqlite` 可用（`package.json` 的 `engines`）。
 - **首次启动模式**：首次安装以 `observe` 模式启动，机器人不会发言；确认后再执行激活。
@@ -243,7 +244,8 @@ bash manage.sh backup /path/to/backup-dir
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | `Failed to connect to bus` / 提到 `XDG_RUNTIME_DIR` | 在非登录会话（宝塔网页终端）中调用 `systemctl --user` | 改用 SSH 登录；或采用文末的 root 方案 |
-| `deploy.sh` 刚开始即退出、几乎无输出 | `deploy.sh:73-75` 的 `systemctl --user` / `rsync` 检查未通过 | 安装 `rsync`，并改用 SSH 登录会话 |
+| `deploy.sh` 刚开始即退出 | `deploy.sh:77-79` 的 `systemctl` / `systemctl --user` / `rsync` 检查未通过（脚本会打印缺哪一项） | 按提示安装 `rsync`，或改用 SSH 登录会话 |
+| `Deployed Node.js runtime is unavailable` | 在源码目录而非安装目录执行了 `manage.sh`（该目录下没有 `.deployment-node`） | 切到安装目录执行；**不要**因此重跑 `deploy.sh` |
 | `Run as the service user, not root` | `deploy-all.sh:385` | 执行 `su - qqagent` 后重新运行 |
 | 解压 Node 失败、提示 `xz` | 缺少 `xz-utils` | 执行 `apt install -y xz-utils` |
 | 控制台打开正常但数据不刷新 | 反向代理缓冲了 SSE | 在反向代理配置中加入 `proxy_buffering off;` |

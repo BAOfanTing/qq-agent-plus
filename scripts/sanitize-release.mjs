@@ -121,6 +121,17 @@ function scanFile(rel, text) {
 }
 
 function main() {
+  // --force 会对已存在的目录做递归删除：先挡住文件系统根目录、仓库本身与仓库的上级目录，
+  // 否则 `--out=. --force` 会把工作副本清空。
+  const outResolved = path.resolve(OUT);
+  const rootResolved = path.resolve(ROOT);
+  const outIsRootOrAncestor = outResolved === path.parse(outResolved).root
+    || rootResolved === outResolved
+    || rootResolved.startsWith(outResolved + path.sep);
+  if (outIsRootOrAncestor) {
+    console.error(`拒绝输出到 ${outResolved}：它是文件系统根目录、仓库本身或仓库的上级目录。`);
+    return 1;
+  }
   if (fs.existsSync(OUT)) {
     if (!FORCE) {
       console.error(`输出目录已存在：${OUT}\n（要覆盖请加 --force）`);

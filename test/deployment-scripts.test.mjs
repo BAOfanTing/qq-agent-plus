@@ -78,7 +78,7 @@ test('deploy-all 现读现用凭据，模型 Key 走 0600 文件而不是子进�
   assert.match(source, /mktemp "\$\{TMPDIR:-\/tmp\}\/qq-agent-model-key\.XXXXXX"/);
   assert.match(source, /chmod 600 "\$MODEL_KEY_FILE"/);
   assert.match(source, /export QQ_AGENT_MODEL_KEY_FILE="\$MODEL_KEY_FILE"/);
-  assert.match(source, /trap 'rm -f "\$MODEL_KEY_FILE"' EXIT/);
+  assert.match(source, /trap 'rm -f "\$MODEL_KEY_FILE"; cleanup_fresh_stack' EXIT/);
 });
 
 test('configure-linux creates observe config and preserves runtime mode on update', (t) => {

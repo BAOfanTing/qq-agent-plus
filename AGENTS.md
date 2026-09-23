@@ -25,6 +25,20 @@ In particular:
 两者行为必须保持一致：同样经 `ssh -L` 隧道转发 3210（控制台）/ 5099（SnowLuma WebUI）/
 6081（QQ 扫码登录），不要求服务器开放任何公网端口。改其一请同步改另一个。
 
+## 部署与运维（给 AI 协作者）
+
+要部署、更新或排查线上实例时，先读：`docs/LINUX.md`（部署、控制台、数据与备份、连接排查）、
+`docs/OPS.md`（`src/ops.js` 的运维入口）、`docs/BAOTA.md`（宝塔 / aaPanel 面板环境）。四条硬约束：
+
+- **不要以 root 部署**：`deploy-all.sh` 直接拒绝 root，`deploy.sh` 也要求以服务用户身份运行。
+- **不要用 PM2 或面板的 Node 项目启动**：进程由 systemd 用户服务托管，`manage.sh` 依赖
+  `systemctl --user`。
+- **`manage.sh` 必须在安装目录（含 `.deployment.json` 的那一层）里执行**；在源码 checkout 里跑会
+  报 `Deployed Node.js runtime is unavailable` —— 那是目录不对，不要因此重跑 `deploy.sh`。
+- **更新时 `--install-dir` / `--data-dir` 必须与现有安装一致**：传错不会报错，而是把服务指向一个新的
+  空数据目录。`--host` / `--port` 可省略（沿用 `config.json` 里的现值，并打印提示），显式传入时必须
+  与首次安装相同，否则控制台会从外部失联。
+
 ## 发布节奏
 
 - **影响使用的紧急问题**（部署失败、消息发不出/收不到、数据或安全问题）：修完测完即发补丁版。
