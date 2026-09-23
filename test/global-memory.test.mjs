@@ -78,6 +78,28 @@ test('global person memory migration and isolation rules', async (t) => {
     setRuntimeConfig(cfg);
   });
 
+  await t.test('整理写回：内容没变的条目沿用旧时间戳，新条目才用 now', () => {
+    const oldAt = Date.now() - 60 * 24 * 3600 * 1000;   // 六十天前
+    const peopleDir = path.join(root, 'memory', 'people');
+    fs.mkdirSync(peopleDir, { recursive: true });
+    fs.writeFileSync(path.join(peopleDir, '13579.json'), JSON.stringify({
+      version: 2,
+      userId: '13579',
+      name: 'Dave',
+      sourceChatKeys: ['group:700'],
+      impressions: [{ content: '六十天前的老印象', createdAt: oldAt, lastObservedAt: oldAt, sourceChatKeys: ['group:700'] }]
+    }), 'utf8');
+    const fresh = new MemoryStore();
+    fresh.replaceMember('group:700', '13579', 'Dave', ['六十天前的老印象', '这次新写的一条']);
+    const impressions = fresh.getMember('group:700', '13579').impressions;
+    const kept = impressions.find((e) => e.content === '六十天前的老印象');
+    const added = impressions.find((e) => e.content === '这次新写的一条');
+    // 以前这里一律赋 now：每次整理都把年龄刷成当天，日期前缀与"90 天衰减"全成自指
+    assert.equal(kept.createdAt, oldAt, '内容没变的条目要保留原 createdAt');
+    assert.equal(kept.lastObservedAt, oldAt, '也不该刷新 lastObservedAt');
+    assert.ok(added.createdAt > oldAt, '新写的条目才用 now');
+  });
+
   await t.test('每条印象带日期（模型才能判断"这是昨天还是两周前"）', () => {
     const line = memory.formatForPrompt('group:999', { userIds: ['12345'] });
     assert.match(line, /- Alice：\[\d{2}-\d{2}\] /, `印象行要带 [MM-DD]：${line.split('\n')[1]}`);

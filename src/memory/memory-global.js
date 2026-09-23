@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, getConfig, updateConfig } from '../core/config.js';
-import { formatShortTime } from '../core/util.js';
+import { todayKey } from '../core/util.js';
 import { GlobalPersonMemoryStore } from './global-person-memory-store.js';
 
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
@@ -146,13 +146,27 @@ export class MemoryStore {
       // 不知道说的是自己的设置者，容易当成外人来试探它。
       if (ownerUin && String(m.userId) === ownerUin) who += `（QQ ${ownerUin}，就是管理员本人）`;
       const recent = [...m.impressions].sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt)).slice(0, 3).reverse();
-      // 带上日期：模型才能判断"这是昨天还是两周前"，别把过期印象当现状用
+      // 带上日期：模型才能判断"这是昨天还是两周前"，别把过期印象当现状用。
+      // 今年的省掉年份（[09-20]），往年的必须带年份（[2025-12-20]）——
+      // 只有 MM-DD 时跨年无法判断，甚至会被读成"还没到的那天"。
+      const thisYear = todayKey().slice(0, 4);
       for (const e of recent) {
         const at = Number(e.lastObservedAt || e.createdAt) || 0;
-        lines.push(`- ${who}：[${at ? formatShortTime(at).slice(0, 5) : '日期未知'}] ${e.content}`);
+        const key = at ? todayKey(at) : '';
+        const stamp = !key ? '日期未知' : (key.startsWith(thisYear) ? key.slice(5) : key);
+        lines.push(`- ${who}：[${stamp}] ${e.content}`);
       }
     }
-    return lines.join('\n').slice(0, 6000);
+    // 按行截断：直接 slice 字符串会把某条印象切成半句，模型读到半句话更糟
+    const out = [];
+    let used = 0;
+    for (const line of lines) {
+      const cost = line.length + (out.length ? 1 : 0);
+      if (used + cost > 6000) break;
+      out.push(line);
+      used += cost;
+    }
+    return out.join('\n');
   }
   consolidationState(chatKey) {
     const members = this.people.members(chatKey); const meta = readJson(metaFile(chatKey), {}) || {};

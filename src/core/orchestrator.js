@@ -92,7 +92,7 @@ function proactiveWindowState(raw, now) {
 import { canRun } from './access.js';
 import { assertTimeAllowed, isTimeActive, TimeControlError, watchTimeWindow, withTimeScope } from './time-gate.js';
 import { vendorOfConfig } from '../pricing/model-prices.js';
-import { minuteOfDayInZone, randInt, sleep, createEventBus, todayKey } from './util.js';
+import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, sleep, createEventBus, todayKey } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from '../llm/prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError } from '../llm/llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool } from '../tools/tools.js';
@@ -265,12 +265,25 @@ export function shouldAutoConsolidate({
  */
 export function consolidationRejectionReason({ isNew = false, existing = [], next = [] } = {}) {
   if (isNew) return '';
+  // 结果必须是数组：`{"result":[…]}` 这类坏结构以前会被就地当成 [] 处理，
+  // 于是"模型答歪了"和"模型明说没有可保留的"长得一模一样 —— 前者会把印象全清空。
+  if (!Array.isArray(next)) return '结果不是 impressions 数组（疑似坏结构）';
+  // 非字符串条目（弱模型偶尔返回对象/数字）会把无意义的 `[object Object]` 写进记忆，
+  // 而按 String() 计数的字数护栏又看不见它（对象只算 15 个字符），直接拒绝。
+  if (next.some((item) => typeof item !== 'string')) return '结果里有非字符串条目（疑似坏结构）';
   const prev = Array.isArray(existing) ? existing : [];
-  const list = Array.isArray(next) ? next : [];
-  if (list.length <= prev.length) return '';
+  const list = next;
   const prevChars = prev.reduce((n, e) => n + String(e?.content ?? '').length, 0);
   const nextChars = list.reduce((n, e) => n + String(e ?? '').length, 0);
   const grew = nextChars - prevChars;
+  if (list.length <= prev.length) {
+    // 条数没变多，但字数翻倍地涨 = 在往里塞新内容（每条上限 120 字、最多 5 条，
+    // 正常改写不会涨这么多），也拒绝
+    if (prevChars > 0 && nextChars > prevChars * 2 + 80) {
+      return `结果字数暴涨（${prevChars}→${nextChars} 字），疑似幻觉`;
+    }
+    return '';
+  }
   if (list.length === prev.length + 1 && grew <= Math.max(40, Math.round(prevChars * 0.2))) {
     return '';
   }
@@ -2187,10 +2200,11 @@ export class Orchestrator {
       return null;
     }
 
-    const raw = Array.isArray(parsed.impressions) ? parsed.impressions : [];
+    const parsedImpressions = parsed.impressions;
+    const raw = Array.isArray(parsedImpressions) ? parsedImpressions : [];
     const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 5;
 
-    const rejection = consolidationRejectionReason({ isNew, existing, next: raw });
+    const rejection = consolidationRejectionReason({ isNew, existing, next: parsedImpressions });
     if (rejection) {
       console.warn(`[memory] 整理 ${chatKey}/${mem.userId} 放弃：${rejection}`);
       return null;
@@ -2207,12 +2221,17 @@ export class Orchestrator {
 
   /** 整理模式：合并/删减已有印象。 */
   #buildConsolidatePrompt(mem) {
-    const fmtTs = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
+    // 与"今天"同口径（上海）：原来用 UTC，凌晨产生的印象在模型眼里会算成前一天
+    const fmtTs = (t) => new Date((Number(t) || Date.now()) + ZONE_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ');
     const cfg = getConfig();
     // 整理这次调用是"另一个进程"：它看不到角色卡，也不知道谁是管理员。
     // 不点明身份的话，"他改人设、问人设"就容易被写成性格缺陷（"扬言改人设提示词"就是这么来的）。
-    const isOwner = String(cfg?.admin?.ownerUin || '').trim() === String(mem.userId || '').trim();
-    const lines = [`群友 QQ：${mem.userId}`, `当前名字：${mem.name}`];
+    const ownerUin = String(cfg?.admin?.ownerUin || '').trim();
+    // 必须挡住"两边都是空串"：没配管理员时 '' === '' 会把匿名遗留条目当成管理员本人
+    const isOwner = Boolean(ownerUin) && ownerUin === String(mem.userId || '').trim();
+    // 要算"90 天前"就得知道今天，整理这次调用看不到别的时间来源
+    const today = todayKey();
+    const lines = [`群友 QQ：${mem.userId}`, `当前名字：${mem.name}`, `今天：${today}（Asia/Shanghai）`];
     if (isOwner) lines.push('身份：这是机器人管理员本人（设置角色卡、管这台机器人的人）');
     for (const e of mem.impressions) {
       const created = fmtTs(e.createdAt);
@@ -2252,7 +2271,7 @@ export class Orchestrator {
     return {
       system: '你是聊天机器人的记忆模块，负责从聊天记录里提炼对某一位群友的长期印象。只提炼"以后跟这个人打交道用得上"的稳定特征，严格依据给定的发言，不要编造。输出必须是严格的 JSON 对象，不要 Markdown 代码块，不要任何解释文字。格式：{"impressions":["…"]}',
       user: [
-        `下面是群友（QQ ${uid}${(mem.name && `，名字 ${mem.name}`) || ''}${String(getConfig()?.admin?.ownerUin || '').trim() === uid ? '，**这是机器人管理员本人**（设置角色卡、管这台机器人的人）' : ''}）最近的部分发言，请提炼对他的长期印象：`,
+        `下面是群友（QQ ${uid}${(mem.name && `，名字 ${mem.name}`) || ''}${(uid && String(getConfig()?.admin?.ownerUin || '').trim() === uid) ? '，**这是机器人管理员本人**（设置角色卡、管这台机器人的人）' : ''}）最近的部分发言，请提炼对他的长期印象：`,
         '1. 只保留稳定特征：说话风格、爱玩的梗、常聊话题、雷点、身份关系。',
         '2. 不要记一次性事件、临时话题，也不要记录流水账。',
         `3. 最多 ${maxKeep} 条，每条不超过 120 字，用第一人称视角（"他/她…"）。`,

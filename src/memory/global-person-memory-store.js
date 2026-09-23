@@ -250,10 +250,23 @@ export class GlobalPersonMemoryStore {
       }
     } else {
       const sources = sourceKeys([...old.sourceChatKeys, ...old.impressions.flatMap((x) => x.sourceChatKeys || []), chatKey]);
+      // 内容没变的条目沿用旧时间戳 —— 整理只是"改写/合并"，不是"重新观察到"。
+      // 以前这里一律赋 now：每次整理都把全部印象的年龄刷成当天，展示端的日期前缀
+      // 变成"上次整理日期"，"90 天没再观察到就删"这类规则也永远不成立。
+      const previous = new Map((old.impressions || []).map((e) => [String(e.content), e]));
       member = {
         version: 2, userId: uid, name: finalName, sourceChatKeys: sources,
         updatedAt: now, lastConsolidatedAt: old.lastConsolidatedAt || 0,
-        impressions: incoming.map((content) => ({ content, createdAt: now, lastObservedAt: now, sourceChatKeys: [...sources] }))
+        impressions: incoming.map((content) => {
+          const prev = previous.get(String(content));
+          const createdAt = Number(prev?.createdAt) || now;
+          return {
+            content,
+            createdAt,
+            lastObservedAt: Math.max(createdAt, Number(prev?.lastObservedAt) || 0),
+            sourceChatKeys: [...sources]
+          };
+        })
       };
     }
     for (const [key, candidate] of [...map.entries()]) {

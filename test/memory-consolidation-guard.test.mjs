@@ -46,6 +46,22 @@ test('条数多出两条以上，或字数明显膨胀 → 拒绝（疑似编造
   assert.match(consolidationRejectionReason({ existing, next: bloated }), /结果变多/);
 });
 
+test('条数没变多、但字数翻倍地涨 → 也拒绝（往里塞新内容）', () => {
+  const padded = existing.map((e) => `${e.content}${'补充的新内容'.repeat(10)}`);
+  assert.match(consolidationRejectionReason({ existing, next: padded }), /字数暴涨/);
+  // 正常改写（稍微写详细一点）仍然采纳
+  const slightlyLonger = existing.map((e) => `${e.content}（细节补全）`);
+  assert.equal(consolidationRejectionReason({ existing, next: slightlyLonger }), '');
+});
+
+test('坏结构：结果不是数组、或条目不是字符串 → 拒绝（不能当"无可保留"把印象清空）', () => {
+  assert.match(consolidationRejectionReason({ existing, next: { result: ['a'] } }), /不是 impressions 数组/);
+  assert.match(consolidationRejectionReason({ existing, next: ['正常一条', { content: '长文本被我包成了对象' }] }), /非字符串条目/);
+  assert.match(consolidationRejectionReason({ existing, next: [42] }), /非字符串条目/);
+  // 明确"没有可保留的"仍然是合法的空数组
+  assert.equal(consolidationRejectionReason({ existing, next: [] }), '');
+});
+
 test('空输入不炸', () => {
   assert.equal(consolidationRejectionReason({}), '');
   assert.equal(consolidationRejectionReason({ existing: [{ content: '' }], next: ['x'] }), '');
