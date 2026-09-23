@@ -21,7 +21,19 @@ const onebotHttpToken = String(process.env.QQ_AGENT_ONEBOT_HTTP_TOKEN || onebotT
 const onebotWsUrl = String(process.env.QQ_AGENT_ONEBOT_WS_URL || '').trim();
 const onebotHttpUrl = String(process.env.QQ_AGENT_ONEBOT_HTTP_URL || '').trim();
 const modelBaseUrl = String(process.env.QQ_AGENT_MODEL_BASE_URL || '').trim();
-const modelApiKey = String(process.env.QQ_AGENT_MODEL_API_KEY || '').trim();
+// 模型凭据：环境变量优先；否则读 QQ_AGENT_MODEL_KEY_FILE。deploy-all.sh 会把 Key 写进一个
+// 0600 临时文件再传进来 —— 密钥留在子进程环境里能被 /proc/<pid>/environ 读到，文件只在本机。
+const modelApiKey = (() => {
+  const fromEnv = String(process.env.QQ_AGENT_MODEL_API_KEY || '').trim();
+  if (fromEnv) return fromEnv;
+  const keyFile = String(process.env.QQ_AGENT_MODEL_KEY_FILE || '').trim();
+  if (!keyFile) return '';
+  try {
+    return String(fs.readFileSync(path.resolve(keyFile), 'utf8') || '').replace(/\s+/g, '');
+  } catch (error) {
+    throw new Error(`读取 QQ_AGENT_MODEL_KEY_FILE 失败（${keyFile}）：${error?.message ?? error}`);
+  }
+})();
 const model = String(process.env.QQ_AGENT_MODEL || '').trim();
 const parseIds = (name) => {
   if (!(name in process.env)) return null;

@@ -64,6 +64,36 @@ One shared OneBot token is written to SnowLuma's global template, every existing
 per-account config and QQ Agent's configuration. Existing installations retain
 their credentials unless `--rotate-credentials` is selected.
 
+### Docker Hub is unreachable (mainland China)
+
+`registry-1.docker.io` is frequently blocked or DNS-poisoned from mainland
+hosts: the pull fails with `dial tcp …: i/o timeout` and the installer stops
+after printing a hint. Any of these three routes works:
+
+```bash
+# 1) Retry through a registry mirror you trust (e.g. your cloud vendor's)
+QQ_AGENT_IMAGE_MIRROR=<mirror-host> bash deploy-all.sh
+bash deploy-all.sh --image-mirror <mirror-host>            # same thing
+bash deploy-all.sh --image <mirror-host>/motricseven7/snowluma:v1.14.15
+
+# 2) Configure a global accelerator once (Docker then uses it for every pull)
+sudo tee /etc/docker/daemon.json <<'JSON'
+{ "registry-mirrors": ["https://<accelerator-host>"] }
+JSON
+sudo systemctl restart docker
+
+# 3) Pull elsewhere and carry the image over
+docker pull motricseven7/snowluma:v1.14.15
+docker save motricseven7/snowluma:v1.14.15 | gzip > snowluma.tgz
+gunzip -c snowluma.tgz | docker load      # on the target host
+```
+
+Mirrors are third-party services: the installer never picks one for you, and
+`SNOWLUMA_IMAGE` / `--image` accept any full reference. The chosen reference is
+remembered in `snowluma/.env`, so later runs reuse it. Cloud-vendor internal
+accelerators such as `mirror.ccs.tencentyun.com` only work inside that vendor's
+network.
+
 ### Existing Environment Protection
 
 Before generating credentials, writing files, downloading dependencies, or

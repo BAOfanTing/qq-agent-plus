@@ -18,6 +18,7 @@ SERVICE="qq-agent-linux"
 SERVICE_SET=false
 IMAGE="${SNOWLUMA_IMAGE:-motricseven7/snowluma:v1.14.15}"
 IMAGE_SET=false
+IMAGE_MIRROR_ARG=""
 ASSUME_YES=false
 CHECK_ONLY=false
 ROTATE_CREDENTIALS=false
@@ -50,6 +51,10 @@ Options:
   --onebot-ws-port PORT       Local-only OneBot WebSocket port (default: 3001)
   --service NAME              systemd user service (default: qq-agent-linux)
   --image IMAGE               SnowLuma image (default: tested v1.14.15)
+  --image-mirror HOST         Retry the pull through a registry mirror when Docker
+                              Hub is unreachable (mainland China), e.g.
+                              --image-mirror docker.m.daocloud.io
+                              (also: QQ_AGENT_IMAGE_MIRROR, comma-separated)
   --agent-token TOKEN         Set the QQ Agent console token
   --onebot-token TOKEN        Set the shared OneBot HTTP/WS token
   --snowluma-password VALUE   Set the initial SnowLuma WebUI password
@@ -90,6 +95,7 @@ while (($#)); do
     --onebot-ws-port) require_value "$@"; ONEBOT_WS_PORT="$2"; ONEBOT_WS_PORT_SET=true; shift 2 ;;
     --service) require_value "$@"; SERVICE="$2"; SERVICE_SET=true; shift 2 ;;
     --image) require_value "$@"; IMAGE="$2"; IMAGE_SET=true; shift 2 ;;
+    --image-mirror) require_value "$@"; IMAGE_MIRROR_ARG="$2"; shift 2 ;;
     --agent-token) require_value "$@"; AGENT_TOKEN="$2"; shift 2 ;;
     --onebot-token) require_value "$@"; ONEBOT_TOKEN="$2"; shift 2 ;;
     --snowluma-password) require_value "$@"; SNOWLUMA_PASSWORD="$2"; shift 2 ;;
@@ -426,6 +432,16 @@ if [[ "$EXISTING_STACK" == true ]]; then
 fi
 [[ "$SERVICE" =~ ^[A-Za-z0-9_-]+$ ]] || die 'Invalid service name'
 [[ "$IMAGE" =~ ^[A-Za-z0-9._/:@-]+$ ]] || die 'Invalid SnowLuma image reference'
+# 镜像站列表：QQ_AGENT_IMAGE_MIRROR（逗号分隔）+ --image-mirror 追加。
+# 刻意不给默认值 —— 镜像站由第三方提供，用哪家必须由用户自己决定。
+IMAGE_MIRRORS=()
+if [[ -n "${QQ_AGENT_IMAGE_MIRROR:-}" ]]; then
+  IFS=',' read -r -a IMAGE_MIRRORS <<<"$QQ_AGENT_IMAGE_MIRROR"
+fi
+[[ -z "$IMAGE_MIRROR_ARG" ]] || IMAGE_MIRRORS+=("$IMAGE_MIRROR_ARG")
+for mirror in "${IMAGE_MIRRORS[@]}"; do
+  [[ "$mirror" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || die "Invalid image mirror host: $mirror"
+done
 
 if [[ "$ASSUME_YES" != true ]]; then
   AGENT_PORT="$(prompt_value 'QQ Agent console port' "$AGENT_PORT")"
@@ -456,20 +472,18 @@ if [[ "$CHECK_ONLY" == true ]]; then
   exit 0
 fi
 
-OLD_AGENT_TOKEN="$(env_value "$ENV_FILE" QQ_AGENT_CONSOLE_TOKEN)"
-OLD_ONEBOT_TOKEN="$(env_value "$ENV_FILE" ONEBOT_TOKEN)"
-OLD_SNOWLUMA_PASSWORD="$(env_value "$ENV_FILE" SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD)"
-OLD_VNC_PASSWORD="$(env_value "$ENV_FILE" VNC_PASSWD)"
+# 旧值用到时现读，不把凭据长期留在变量里（少一份密钥驻留在进程环境与内存中）
+stored_value() { env_value "$ENV_FILE" "$1"; }
 if [[ "$EXISTING_STACK" == true && "$ROTATE_CREDENTIALS" != true && "$ASSUME_YES" != true ]]; then
   if confirm 'Rotate Agent, OneBot, SnowLuma and noVNC credentials?' false; then
     ROTATE_CREDENTIALS=true
   fi
 fi
 if [[ "$EXISTING_STACK" == true && "$ROTATE_CREDENTIALS" != true ]]; then
-  AGENT_TOKEN="${AGENT_TOKEN:-$OLD_AGENT_TOKEN}"
-  ONEBOT_TOKEN="${ONEBOT_TOKEN:-$OLD_ONEBOT_TOKEN}"
-  SNOWLUMA_PASSWORD="${SNOWLUMA_PASSWORD:-$OLD_SNOWLUMA_PASSWORD}"
-  VNC_PASSWORD="${VNC_PASSWORD:-$OLD_VNC_PASSWORD}"
+  AGENT_TOKEN="${AGENT_TOKEN:-$(stored_value QQ_AGENT_CONSOLE_TOKEN)}"
+  ONEBOT_TOKEN="${ONEBOT_TOKEN:-$(stored_value ONEBOT_TOKEN)}"
+  SNOWLUMA_PASSWORD="${SNOWLUMA_PASSWORD:-$(stored_value SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD)}"
+  VNC_PASSWORD="${VNC_PASSWORD:-$(stored_value VNC_PASSWD)}"
 fi
 
 AGENT_TOKEN="${AGENT_TOKEN:-$(random_hex 24)}"
@@ -486,8 +500,8 @@ if [[ "$ASSUME_YES" != true ]] && [[ "$EXISTING_STACK" != true || "$ROTATE_CREDE
   fi
 fi
 
-if [[ "$EXISTING_STACK" == true && "$SNOWLUMA_PASSWORD" != "$OLD_SNOWLUMA_PASSWORD" ]]; then
-  SNOWLUMA_CURRENT_PASSWORD="${SNOWLUMA_CURRENT_PASSWORD:-$OLD_SNOWLUMA_PASSWORD}"
+if [[ "$EXISTING_STACK" == true && "$SNOWLUMA_PASSWORD" != "$(stored_value SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD)" ]]; then
+  SNOWLUMA_CURRENT_PASSWORD="${SNOWLUMA_CURRENT_PASSWORD:-$(stored_value SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD)}"
   if [[ -z "$SNOWLUMA_CURRENT_PASSWORD" && "$ASSUME_YES" != true ]]; then
     SNOWLUMA_CURRENT_PASSWORD="$(prompt_secret 'Current SnowLuma WebUI password')"
   fi
@@ -609,12 +623,73 @@ if ! docker_ready && ! sudo_docker_ready; then install_docker; fi
 docker_ready || sudo_docker_ready || die 'Docker installation completed but the daemon is unavailable'
 docker_call compose version >/dev/null 2>&1 || die 'Docker Compose v2 is required'
 
+# 拉一个引用：每个地址最多 3 次，退避 3 / 6 秒
+pull_with_retry() {
+  local ref="$1" attempt
+  for attempt in 1 2 3; do
+    if docker_call pull "$ref"; then return 0; fi
+    ((attempt < 3)) || return 1
+    sleep $((attempt * 3))
+  done
+  return 1
+}
+
+# 换成镜像站之后同步 .env：compose 走 --env-file，里面也得是同一个引用；权限保持不变
+update_env_image() {
+  local tmp="$ENV_FILE.tmp.$$"
+  awk -v image="$IMAGE" -F= 'BEGIN { OFS="=" } $1 == "SNOWLUMA_IMAGE" { print "SNOWLUMA_IMAGE=" image; next } { print }' \
+    "$ENV_FILE" >"$tmp" || return 1
+  chmod --reference="$ENV_FILE" "$tmp" 2>/dev/null || chmod 600 "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+
+# 连不上 Docker Hub 时的落地方案（国内服务器常见；镜像站是第三方，脚本不替用户选）
+image_pull_hint() {
+  cat >&2 <<'HINT'
+
+拉取 SnowLuma 镜像失败。国内/受限网络连不上 Docker Hub（registry-1.docker.io）很常见，
+下面三种办法任选一种，然后重跑 deploy-all.sh：
+
+  1) 换镜像站重跑（<mirror> 换成你信得过的加速器地址，例如云厂商给的那个）：
+       QQ_AGENT_IMAGE_MIRROR=<mirror> bash deploy-all.sh
+     或直接给完整地址：
+       bash deploy-all.sh --image <mirror>/motricseven7/snowluma:v1.14.15
+
+  2) 给 Docker 配全局加速器（配一次，之后所有拉取都走它）：
+       sudo tee /etc/docker/daemon.json <<'JSON'
+       { "registry-mirrors": ["https://<你的加速器地址>"] }
+       JSON
+       sudo systemctl restart docker
+
+  3) 在能联网的机器上拉好再带过来：
+       docker pull motricseven7/snowluma:v1.14.15
+       docker save motricseven7/snowluma:v1.14.15 | gzip > snowluma.tgz
+       gunzip -c snowluma.tgz | docker load     # 在目标机上执行
+
+镜像站由第三方提供，脚本不会替你默认选任何一家。
+HINT
+}
+
 step "Downloading SnowLuma image $IMAGE"
-for attempt in 1 2 3; do
-  if docker_call pull "$IMAGE"; then break; fi
-  ((attempt < 3)) || die "Failed to download SnowLuma image after $attempt attempts"
-  sleep $((attempt * 3))
-done
+PULLED=false
+if pull_with_retry "$IMAGE"; then
+  PULLED=true
+else
+  for mirror in "${IMAGE_MIRRORS[@]}"; do
+    candidate="${mirror%/}/$IMAGE"
+    step "Retrying through image mirror $mirror"
+    if pull_with_retry "$candidate"; then
+      IMAGE="$candidate"
+      update_env_image || true
+      PULLED=true
+      break
+    fi
+  done
+fi
+if [[ "$PULLED" != true ]]; then
+  image_pull_hint
+  die "Failed to download SnowLuma image ($IMAGE); see the hint above"
+fi
 
 step 'Installing QQ Agent'
 export QQ_AGENT_CONSOLE_TOKEN="$AGENT_TOKEN"
@@ -624,7 +699,15 @@ export QQ_AGENT_ONEBOT_HTTP_URL="http://127.0.0.1:$ONEBOT_HTTP_PORT"
 export QQ_AGENT_ONEBOT_WS_URL="ws://127.0.0.1:$ONEBOT_WS_PORT"
 export QQ_SNOWLUMA_WEBUI_URL="http://127.0.0.1:$SNOWLUMA_PORT"
 [[ -z "$MODEL_BASE_URL" ]] || export QQ_AGENT_MODEL_BASE_URL="$MODEL_BASE_URL"
-[[ -z "$MODEL_API_KEY" ]] || export QQ_AGENT_MODEL_API_KEY="$MODEL_API_KEY"
+# 模型 Key 不走子进程环境（/proc/<pid>/environ 里读得到）：写 0600 临时文件，
+# 部署脚本按 QQ_AGENT_MODEL_KEY_FILE 读，脚本退出时删掉。
+if [[ -n "$MODEL_API_KEY" ]]; then
+  MODEL_KEY_FILE="$(mktemp "${TMPDIR:-/tmp}/qq-agent-model-key.XXXXXX")"
+  printf '%s' "$MODEL_API_KEY" >"$MODEL_KEY_FILE"
+  chmod 600 "$MODEL_KEY_FILE"
+  export QQ_AGENT_MODEL_KEY_FILE="$MODEL_KEY_FILE"
+  trap 'rm -f "$MODEL_KEY_FILE"' EXIT
+fi
 [[ -z "$MODEL_NAME" ]] || export QQ_AGENT_MODEL="$MODEL_NAME"
 [[ -z "$ALLOW_GROUPS" ]] || export QQ_AGENT_ALLOW_GROUPS="$ALLOW_GROUPS"
 [[ -z "$ALLOW_PRIVATE" ]] || export QQ_AGENT_ALLOW_PRIVATE="$ALLOW_PRIVATE"
@@ -651,7 +734,7 @@ wait_http "http://127.0.0.1:$SNOWLUMA_PORT/api/ui/public" 90 \
   || die "SnowLuma WebUI did not become ready; run: cd $SNOWLUMA_DIR && docker compose logs"
 wait_http "http://127.0.0.1:$NOVNC_PORT/" 30 \
   || die "noVNC did not become ready; run: cd $SNOWLUMA_DIR && docker compose logs"
-if [[ "$EXISTING_STACK" == true && "$SNOWLUMA_PASSWORD" != "$OLD_SNOWLUMA_PASSWORD" \
+if [[ "$EXISTING_STACK" == true && "$SNOWLUMA_PASSWORD" != "$(stored_value SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD)" \
   && "$SNOWLUMA_CURRENT_PASSWORD" != "$SNOWLUMA_PASSWORD" ]]; then
   rotate_args=(
     --url "http://127.0.0.1:$SNOWLUMA_PORT"

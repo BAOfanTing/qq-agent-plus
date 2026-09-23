@@ -120,6 +120,7 @@ node src/ops.js install-timers --confirm
 | `QQ_AGENT_MODEL_API_KEY` / `QQ_AGENT_MODEL_KEY_FILE` | 无（必填其一） | 模型凭据（文件优先级低于环境变量） |
 | `QQ_AGENT_MODEL_BASE_URL` / `QQ_AGENT_MODEL` | 无（必填） | 模型网关地址 / 模型名 |
 | `SNOWLUMA_IMAGE` | `motricseven7/snowluma:v1.14.15` | 协议端镜像（`deploy`） |
+| `QQ_AGENT_IMAGE_MIRROR` | 空 | 拉镜像失败时改走镜像站（逗号分隔多个；等价于 `deploy-all.sh --image-mirror`）。国内连不上 Docker Hub 时用，用法见 `docs/LINUX.md` |
 | `QQ_AGENT_ONEBOT_WS_PORT` | `3391` | 协议端 WebSocket 端口（`deploy`） |
 | `SSHHOST` / `QQ_AGENT_SSH` | **必填**（缺失直接报错退出） | 服务器地址；两种写法都支持：`SSHHOST=host` 或 `SSHHOST=user@host` / `QQ_AGENT_SSH=user@host` |
 | `SSHUSER` | `ubuntu` | SSH 登录用户 |
