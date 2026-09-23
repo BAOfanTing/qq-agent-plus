@@ -9917,17 +9917,24 @@ async function saveConfig({ quiet = false } = {}) {
 
   if (sec === 'persona') {
     // 模板 id 跟着正文一起存：绑着内置卡（比如"猫娘（二次元）"）时后端会按 roles/*.md
-    // 刷新正文，卡文件改了不用再来这里重选一次；手改了正文、或选的是自定义卡时这里为空，
+    // 刷新正文，卡文件改了不用再来这里重选一次；手写了正文、或选的是自定义卡时这里为空，
     // 正文就按自定义处理，不会被文件覆盖。
+    const roleTextDraft = val('#cfg-roletext', c.persona.roleText || '');
     const pickedId = currentPersonaId();
+    let templateId = pickedId.startsWith('custom_') ? '' : pickedId;
+    if (!templateId && roleTextDraft === (c.persona.roleText || '')) {
+      // 模板没匹配上但正文一个字没动（典型：模板列表还没加载成功就要保存别的字段）
+      // 就别把原有的绑定清掉——正文没变，绑定关系也不该变。
+      templateId = c.persona.templateId || '';
+    }
     patch.persona = {
       botName: val('#cfg-botname', c.persona.botName).trim() || '小鲸鱼',
       selfNickname: val('#cfg-selfnick', c.persona.selfNickname || '').trim(),
       participation: val('#cfg-participation', c.persona.participation),
       behaviorProfile: val('#cfg-behavior-profile', c.persona.behaviorProfile || 'legacy'),
-      roleText: val('#cfg-roletext', c.persona.roleText || ''),
+      roleText: roleTextDraft,
       customRules: val('#cfg-customrules', c.persona.customRules || ''),
-      templateId: pickedId.startsWith('custom_') ? '' : pickedId
+      templateId
     };
   }
 

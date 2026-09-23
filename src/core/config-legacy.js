@@ -574,11 +574,17 @@ export function updateConfig(patch) {
   //   2) patch 里给了 templateId（控制台选卡）→ 卡文件说了算，正文按 roles/*.md 刷新；
   //   3) 两者都没给（改别的字段、升级带的正文更新）→ 绑着就刷新。
   const patchPersona = patch?.persona ?? {};
-  if (patchPersona.templateId === undefined && patchPersona.roleText !== undefined) {
+  // 传了 null / 数组 / 字符串这类非对象（手写的 API 调用、坏掉的客户端）时当"没改人设"处理：
+  // 以前的写法会在这里因为 next.persona.behaviorProfile 直接抛错，把整次保存打崩。
+  if (!next.persona || typeof next.persona !== 'object' || Array.isArray(next.persona)) {
+    next.persona = structuredClone(getConfig().persona || DEFAULT_CONFIG.persona);
+  }
+  if (patchPersona && typeof patchPersona === 'object' && !Array.isArray(patchPersona)
+    && patchPersona.templateId === undefined && patchPersona.roleText !== undefined) {
     next.persona.templateId = '';
   }
   next.persona.behaviorProfile = normalizeBehaviorProfile(next.persona.behaviorProfile);
-  if (patchPersona.templateId !== undefined || patchPersona.roleText === undefined) {
+  if (patchPersona?.templateId !== undefined || patchPersona?.roleText === undefined) {
     applyPersonaTemplate(next);
   }
   next.timeControl = normalizeTimeControl(next.timeControl);

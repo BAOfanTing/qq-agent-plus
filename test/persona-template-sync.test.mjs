@@ -17,7 +17,7 @@ process.env.DEBUG_SERVER_URL = 'http://127.0.0.1:1/event';
 
 const { PERSONAS, applyPersonaTemplate, builtinPersonaTemplate, PERSONA_TEMPLATE_IDS } =
   await import('../src/personas.js');
-const { loadConfig, updateConfig, CONFIG_FILE } = await import('../src/core/config.js');
+const { loadConfig, updateConfig, getConfig, CONFIG_FILE } = await import('../src/core/config.js');
 
 const writeConfig = (persona) => {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify({ persona }, null, 2), { mode: 0o600 });
@@ -87,9 +87,35 @@ test('applyPersonaTemplate 对空配置/坏配置不抛错', () => {
   assert.equal(applyPersonaTemplate(null), null);
   assert.equal(applyPersonaTemplate({}), null);
   assert.equal(applyPersonaTemplate({ persona: {} }), null);
+  assert.equal(applyPersonaTemplate({ persona: null }), null);
+  assert.equal(applyPersonaTemplate({ persona: 'not-an-object' }), null);
   assert.equal(applyPersonaTemplate({ persona: { templateId: 'maoniang', roleText: PERSONAS.maoniang.text } }), null);
   const note = applyPersonaTemplate({ persona: { templateId: 'maoniang', roleText: 'stale' } });
   assert.deepEqual(note, { id: 'maoniang', name: '猫娘（二次元）' });
+});
+
+test('认不出的 templateId 会被清成未绑定（不留永远不生效的 id）', () => {
+  const cfg = { persona: { templateId: 'nope', roleText: '我的正文', behaviorProfile: 'legacy' } };
+  assert.equal(applyPersonaTemplate(cfg), null);
+  assert.equal(cfg.persona.templateId, '');
+  assert.equal(cfg.persona.roleText, '我的正文', '清 id 不该动正文');
+
+  writeConfig({ templateId: 'custom_0', roleText: '自定义卡正文', behaviorProfile: 'legacy' });
+  assert.equal(loadConfig().persona.templateId, '');
+});
+
+test('人设字段传了非对象（null / 字符串）时当没改，不会打崩保存', () => {
+  // 不依赖磁盘/缓存先后顺序：先把运行态设成想要的样子，再断言坏 patch 什么都没改
+  updateConfig({ persona: { templateId: 'maoniang', roleText: '旧正文', behaviorProfile: 'legacy' } });
+  const before = structuredClone(getConfig().persona);
+  assert.equal(before.roleText, PERSONAS.maoniang.text);
+
+  assert.doesNotThrow(() => updateConfig({ persona: null }));
+  assert.deepEqual(getConfig().persona, before, '坏 patch 不该改动人设');
+  assert.doesNotThrow(() => updateConfig({ persona: 'oops' }));
+  assert.doesNotThrow(() => updateConfig({ persona: [] }));
+  assert.deepEqual(getConfig().persona, before, '字符串 / 数组同理');
+  assert.ok(getConfig().persona.botName, '人设对象仍然完整');
 });
 
 process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));

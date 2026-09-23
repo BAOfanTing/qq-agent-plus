@@ -74,14 +74,24 @@ export function builtinPersonaTemplate(id) {
  * 只刷正文，不碰 behaviorProfile：档位（legacy / grounded）是实例自己的行为开关，
  * 在控制台选卡时一起设置；这里悄悄改掉会让"只改档位"的调用被卡文件顶回去。
  *
+ * 认不出的 id（老版本删掉/改过名的卡、外部手写进来的值）会被清成未绑定 ——
+ * 否则实例会一直挂着一个永远不会生效的 id，控制台里也看不出为什么正文不跟着卡走。
+ *
  * @returns {{id: string, name: string} | null} 发生刷新时返回卡信息，否则 null。
  */
 export function applyPersonaTemplate(cfg) {
   const persona = cfg?.persona;
-  const template = builtinPersonaTemplate(persona?.templateId);
-  if (!persona || !template) return null;
+  if (!persona || typeof persona !== 'object') return null;
+  const rawId = persona.templateId === undefined || persona.templateId === null
+    ? ''
+    : String(persona.templateId).trim();
+  const template = builtinPersonaTemplate(rawId);
+  if (!template) {
+    if (rawId) persona.templateId = '';
+    return null;
+  }
   const nextText = String(template.text).trim();
   if (String(persona.roleText || '').trim() === nextText) return null;
   persona.roleText = nextText;
-  return { id: String(persona.templateId).trim(), name: template.name };
+  return { id: rawId, name: template.name };
 }
