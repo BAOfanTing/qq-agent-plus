@@ -630,8 +630,10 @@ function triggerLabels(entry, ctx) {
   const nick = String(ctx.selfNickname || '').toLowerCase();
   const botName = String(persona.botName || '').toLowerCase();
   const notes = getConfig().memberNotes || {};
-  const noteName = notes[String(entry?.senderId || '')];
-  const noteLower = String(noteName || '').toLowerCase();
+  // 「提到我（备注名）」说的是"消息里提到**我**的备注名"，所以查机器人自己的备注；
+  // 查发言者的备注会变成"他说了他自己的备注名"——既漏判又误判。
+  const selfNote = notes[String(ctx.selfId || '')];
+  const selfNoteLower = String(selfNote || '').toLowerCase();
   // 点名判定以入库时按原始消息段算出的 mentionsSelf 为准：群里给机器人改过群名片时，
   // 文本里是群名片，跟 selfNickname/botName 都对不上（档位判定优先用它也是这个原因）。
   // 文本兜底留给非存档来源和 CQ 码上报的部署 —— 那种部署下 mentionsSelf 恒为 false。
@@ -648,7 +650,7 @@ function triggerLabels(entry, ctx) {
   else if (at.all) labels.push('艾特全体');
   else if (atOther) labels.push('艾特别人');
   if ((botName && lower.includes(botName)) || (nick && lower.includes(nick))) labels.push('提到我');
-  if (noteName && lower.includes(noteLower)) labels.push('提到我（备注名）');
+  if (selfNote && lower.includes(selfNoteLower)) labels.push('提到我（备注名）');
   if (/[?？]$/.test(text.trim()) || /[吗呢]/.test(text)) labels.push('提问');
   if (text.startsWith('[引用 ')) labels.push('引用');
   if (text.includes('[拍一拍]')) labels.push('拍一拍');

@@ -12,6 +12,24 @@ import { assertCanSend } from '../core/access.js';
 const DEFAULT_MAX_PER_MINUTE = DEFAULT_CONFIG.send.maxPerMinute;
 const DEFAULT_MAX_PER_HOUR = DEFAULT_CONFIG.send.maxPerHour;
 
+/**
+ * 按证据给一次发送失败定性（重试判定与 outbox 记账必须同一口径）。
+ *   definite  —— 能证明请求没被对方收到（连不上/解析不了/网络不可达），可以安全重试、按 failed 记账；
+ *   uncertain —— 可能已经投递（超时、连接被重置、socket hang up、协议端 5xx），绝不自动重试，按 unknown 记账。
+ * undici 的外层 message 恒为 "fetch failed"，真因在 cause 上，所以以 cause 为准 ——
+ * 拿外层 message 当依据会把"连接被拒"误判成"结果未知"，于是该重试的永远不重试、
+ * 还会被记成 critical 未知写入挂在"待处理"里（人工只能 resolveHeld 丢掉它）。
+ */
+export function classifyTransportFailure(error) {
+  const message = String(error?.message ?? error);
+  const causeText = String(error?.cause?.code || error?.cause?.message || '');
+  const evidence = causeText || message;
+  const definite = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH/i.test(evidence);
+  const uncertain = !definite
+    && /timeout|timed out|ETIMEDOUT|ECONNRESET|EPIPE|socket hang up|fetch failed|network|HTTP 5\d\d|Unexpected status code: 5\d\d/i.test(evidence);
+  return { evidence, definite, uncertain };
+}
+
 export class SendQueue {
   constructor({ onebot, store, onSent = null, onIncident = null }) {
     this.onebot = onebot;
@@ -67,23 +85,10 @@ export class SendQueue {
           break;
         } catch (error) {
           const message = String(error?.message ?? error);
-          // undici 的网络错误 message 恒为 "fetch failed"，真因在 cause 上（ECONNREFUSED / ENOTFOUND /
-          // socket hang up…），所以必须连 cause 一起看，否则这条判定在生产路径上永远不命中。
-          const causeText = String(error?.cause?.code || error?.cause?.message || '');
-          const all = `${message} ${causeText}`;
-          // 只有"能证明请求没被对方收到"的错误才自动重试：连不上 / 解析不了 / 网络不可达 / 5xx。
-          // 超时、连接被重置、socket hang up、"fetch failed" 都可能发生在"对方已经收下并发出去了"
-          // 之后——重发会让群里出现两条一样的消息，而 outbox 只记一条，人工核对也看不到重复。
-          // 判定必须以 cause 为准：undici 的外层 message 恒为 "fetch failed"，
-          // 拿它当依据会把"连接被拒"也误判成"结果未知"，于是该重试的永远不重试。
-          const evidence = causeText || message;
-          // "确定没送达"：连不上 / 域名解析不了 / 网络不可达 —— 这些不可能已经投递。
-          const definite = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH/i.test(evidence);
-          // 其余都算"结果未知"：超时、连接被重置、socket hang up，以及**协议端 5xx**
-          // （网关出错时请求可能已经转到 QQ 侧）。这类重发会让群里出现两条一样的话，
-          // 而 outbox 只记一条，人工核对也看不到重复。
-          const uncertain = !definite
-            && /timeout|timed out|ETIMEDOUT|ECONNRESET|EPIPE|socket hang up|fetch failed|network|HTTP 5\d\d|Unexpected status code: 5\d\d/i.test(evidence);
+          // 只有"能证明请求没被对方收到"的错误才自动重试（definite）；
+          // 超时、连接被重置、socket hang up、协议端 5xx 都可能发生在"对方已经收下并发出去了"之后——
+          // 重发会让群里出现两条一样的消息，而 outbox 只记一条，人工核对也看不到重复。
+          const { definite, uncertain } = classifyTransportFailure(error);
           if (attempt >= 2 || !definite || uncertain || options.signal?.aborted) throw error;
           console.log(`[sender] 发送失败（可确认未送达），1.5 秒后重试一次（${message.slice(0, 80)}）`);
           await sleep(1500);
@@ -92,7 +97,13 @@ export class SendQueue {
       this.store.finishSend(id, { messageId: data?.message_id });
       return data;
     } catch (error) {
-      const outcome = error?.outcome === 'failed' ? 'failed' : 'unknown';
+      // 记账口径与重试判定一致：能证明没送达的算 failed（可被"重试失败批次"捞回来），
+      // 其余算 unknown（持有待人工核对）。以前只看 error.outcome —— 那只在 OneBotActionError 上有，
+      // 裸 fetch 失败永远落进 unknown：一次"连接被拒"会被记成 critical 未知写入、回复静默丢失。
+      const { definite, uncertain } = classifyTransportFailure(error);
+      const outcome = error?.outcome === 'failed' || error?.outcome === 'unknown'
+        ? error.outcome
+        : (definite && !uncertain ? 'failed' : 'unknown');
       this.store.finishSend(id, {
         error: error?.message ?? error,
         outcome

@@ -828,6 +828,16 @@ try {
     console.log('  FAIL  服务入口、更新部署或密钥控制视图缺失');
   }
 
+  // 保存白名单不能让屏蔽名单消失：界面里没有 deny 编辑控件，唯一正确的做法是不发这个字段
+  // （服务端 config.js 会按现状补 deny.private，而 deepMerge 对数组是整体替换）。
+  if (/patch\.deny\s*=/.test(code)) {
+    fail++;
+    console.log('  FAIL  保存白名单仍会覆盖屏蔽名单（不要发 patch.deny）');
+  } else {
+    pass++;
+    console.log('  OK    保存白名单不动屏蔽名单');
+  }
+
   // 旧架构服务（DSH / Bridge）不在本仓库的部署栈里：没配置端点时显示「未部署」（灰色）而不是
   // 终年「不可达」，指向旧控制台的入口也收起；配置过（迁移期并存）才照旧探测、报不可达。
   const controlBox = document.getElementById('control-page');

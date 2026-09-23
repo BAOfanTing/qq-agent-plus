@@ -147,6 +147,11 @@ export function trimForModerationRetry(messages) {
   const list = Array.isArray(messages) ? messages : [];
   const systems = list.filter((m) => m?.role === 'system');
   const lastUser = [...list].reverse().find((m) => m?.role === 'user');
+  // 只在"这一轮还没执行过工具"时精简：一旦 send_message 等工具跑过，丢掉 tool 结果
+  // 会让模型以为没发过、重试时再发一遍 —— 群里出现两条一样的话，而 outbox 只记一条。
+  const hasToolExchange = list.some((m) => m?.role === 'tool'
+    || (Array.isArray(m?.tool_calls) && m.tool_calls.length));
+  if (hasToolExchange) return list;
   return lastUser ? [...systems, lastUser] : systems;
 }
 

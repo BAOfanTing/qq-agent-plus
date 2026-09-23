@@ -155,6 +155,10 @@ export function upsertProvider({ baseUrl, apiKey, models = [] }) {
     for (const m of entries) {
       if (!existing.models.includes(m.id)) existing.models.push(m.id);
     }
+    // 先补好显示名再落盘：updateConfig 会把数组的当前内容快照进去，
+    // 在它之后改 existing 只改了返回值 —— 配置里留下的还是首次导入的名字，UI 上显示原始 id。
+    existing.modelNames = { ...(existing.modelNames || {}) };
+    for (const m of entries) existing.modelNames[m.id] = m.name;
     if (apiKey) {
       const keys = { ...(getConfig().providerKeys || {}) };
       keys[existing.id] = String(apiKey).trim();
@@ -162,8 +166,6 @@ export function upsertProvider({ baseUrl, apiKey, models = [] }) {
     } else {
       updateConfig({ providers });
     }
-    existing.modelNames = { ...(existing.modelNames || {}) };
-    for (const m of entries) existing.modelNames[m.id] = m.name;
     return { provider: withResolvedKey(existing), created: false };
   }
   const id = `custom_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;

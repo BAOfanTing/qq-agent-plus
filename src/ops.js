@@ -1641,23 +1641,36 @@ async function cmdDeploy(args) {
     return 1;
   }
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  // 模型 Key 不进子进程环境（/proc/<pid>/environ 能读到）：写一个 0600 临时文件，
+  // 由 deploy-all.sh 按 QQ_AGENT_MODEL_KEY_FILE 读进去（它自己还会再转到 0600 文件给部署步骤）。
+  let modelKeyDir = '';
   const childEnv = {
     ...process.env,
     XDG_RUNTIME_DIR: envStr('XDG_RUNTIME_DIR', `/run/user/${uid}`),
     LANG: envStr('LANG', 'C.UTF-8'),
-    QQ_AGENT_MODEL_API_KEY: key,
     QQ_AGENT_MODEL_BASE_URL: baseUrl,
     QQ_AGENT_MODEL: model
   };
+  delete childEnv.QQ_AGENT_MODEL_API_KEY;
+  if (key) {
+    modelKeyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-agent-model-key-'));
+    const keyFile = path.join(modelKeyDir, 'model-key');
+    fs.writeFileSync(keyFile, key, { mode: 0o600 });
+    childEnv.QQ_AGENT_MODEL_KEY_FILE = keyFile;
+  }
   say();
   const child = spawn('bash', scriptArgs, { cwd: srcDir, stdio: 'inherit', env: childEnv, windowsHide: true });
-  return await new Promise((resolve) => {
+  const exitCode = await new Promise((resolve) => {
     child.on('error', (error) => {
       ngLine(`无法启动部署脚本: ${error && error.message ? error.message : error}`);
       resolve(1);
     });
     child.on('close', (code) => resolve(code ?? 1));
   });
+  if (modelKeyDir) {
+    try { fs.rmSync(modelKeyDir, { recursive: true, force: true }); } catch { /* 残留只是空目录+旧 key 文件，下次覆盖 */ }
+  }
+  return exitCode;
 }
 
 // ─────────────────────────── console 子命令（原 qq-console.bat） ───────────────────────────

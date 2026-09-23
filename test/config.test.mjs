@@ -245,3 +245,18 @@ test('分群响应概率：单独设过的群按它算，别的群与私聊跟�
   updateConfig({ store: { unifiedTier: true, groupSliderPos: { __replace__: {} } } });
   assert.equal(storeConfigForChat('group:111').randomPercent, 50);
 });
+
+test('保存白名单不会清掉屏蔽名单（界面没有 deny 控件，靠服务端保留现状）', async () => {
+  // 背景（2026-09-23 全项目审查）：ui 的「保存白名单」以前无条件发 deny={groups:[],private:[]}，
+  // 而 deepMerge 对数组是整体替换 —— --import-bridge / 手改 config.json 配的屏蔽名单被静默清空，
+  // access.js 却还按（已经空了的）deny 判人。现在 UI 不再发这个字段，这里钉住服务端行为。
+  const { updateConfig } = await import('../src/core/config.js');
+
+  updateConfig({ deny: { groups: ['999'], private: ['888'] } });
+  assert.deepEqual(updateConfig({}).deny, { groups: ['999'], private: ['888'] }, '不带 deny 的保存要原样保留');
+
+  // 界面「保存白名单」发的 patch 形状：只有 allow + allowAllWhenEmpty
+  const afterAllowSave = updateConfig({ allow: { groups: ['123'], private: [] }, allowAllWhenEmpty: false });
+  assert.deepEqual(afterAllowSave.deny, { groups: ['999'], private: ['888'] }, '保存白名单不能清掉 deny');
+  assert.deepEqual(afterAllowSave.allow.groups, ['123']);
+});

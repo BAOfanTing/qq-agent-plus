@@ -24,7 +24,7 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 `proxy_buffering`，否则控制台的事件流将停止更新。
 
 **`qqagent` 用户与 root 部署**
-`deploy-all.sh:379` 直接拒绝 root，`docs/LINUX.md:121` 亦要求以服务用户身份部署。
+`deploy-all.sh:385` 直接拒绝 root，`docs/LINUX.md:121` 亦要求以服务用户身份部署。
 更常见的运维问题是：以 root 执行 `manage.sh` 时查询的是 root 自身的 user manager，
 因而误报「服务不存在」，而服务实际运行正常。
 
@@ -46,7 +46,7 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 `manage.sh` 硬编码 `systemctl --user` / `journalctl --user`（`scripts/manage.mjs:11,31`），
 自动更新由配套的 user timer 承担。改用 PM2 会绕过以下机制：部署前代码快照与失败回滚、
 健康检查、unit 中的 `Restart=on-failure` 与 `NoNewPrivileges`，以及 Release 驱动的自动更新。
-此外，`deploy-all.sh:379` 明确拒绝 root，`docs/LINUX.md:121` 亦要求以服务用户身份部署。
+此外，`deploy-all.sh:385` 明确拒绝 root，`docs/LINUX.md:121` 亦要求以服务用户身份部署。
 
 ## 部署差异对照
 
@@ -172,7 +172,7 @@ bash /安装根目录/app/manage.sh token         # 等价
 ### 域名与 HTTPS：宝塔反向代理
 
 在「网站 → 反代」中将目标设为 `http://127.0.0.1:3210`，并关闭缓存。控制台的事件流为
-SSE（`src/console/app.js:1127`，前端 `ui/app.js:1383` 的 `EventSource`），宝塔生成的 nginx
+SSE（`src/console/app.js:1130`，前端 `ui/app.js:1513` 的 `EventSource`），宝塔生成的 nginx
 配置默认开启 `proxy_buffering`，会导致页面显示停止更新。在反向代理配置中补充以下内容：
 
 ```nginx
@@ -184,7 +184,7 @@ proxy_read_timeout 3600s;
 proxy_send_timeout 3600s;
 ```
 
-登录 cookie 包含 `HttpOnly; SameSite=Strict`，不含 `Secure` 标志（`src/console/app.js:985`），
+登录 cookie 包含 `HttpOnly; SameSite=Strict`，不含 `Secure` 标志（`src/console/app.js:991`），
 因此 HTTP 反向代理下登录正常，启用 HTTPS 亦不受影响。首次访问使用
 `https://<域名>/?token=<令牌>` 即可免登录，此后浏览器保留 30 天。反向代理一旦对公网开放，
 控制台令牌即为唯一凭据，必须仅限本人使用。
@@ -244,7 +244,7 @@ bash manage.sh backup /path/to/backup-dir
 | --- | --- | --- |
 | `Failed to connect to bus` / 提到 `XDG_RUNTIME_DIR` | 在非登录会话（宝塔网页终端）中调用 `systemctl --user` | 改用 SSH 登录；或采用文末的 root 方案 |
 | `deploy.sh` 刚开始即退出、几乎无输出 | `deploy.sh:73-75` 的 `systemctl --user` / `rsync` 检查未通过 | 安装 `rsync`，并改用 SSH 登录会话 |
-| `Run as the service user, not root` | `deploy-all.sh:379` | 执行 `su - qqagent` 后重新运行 |
+| `Run as the service user, not root` | `deploy-all.sh:385` | 执行 `su - qqagent` 后重新运行 |
 | 解压 Node 失败、提示 `xz` | 缺少 `xz-utils` | 执行 `apt install -y xz-utils` |
 | 控制台打开正常但数据不刷新 | 反向代理缓冲了 SSE | 在反向代理配置中加入 `proxy_buffering off;` |
 | 机器人不回复 | 仍处于 `observe` 模式，或白名单为空 | 执行 `manage.sh activate --confirm-exclusive`，并在控制台配置白名单 |

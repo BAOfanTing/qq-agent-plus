@@ -97,8 +97,12 @@ if (allowGroups !== null || allowPrivate !== null) {
 updateConfig(patch);
 fs.chmodSync(CONFIG_FILE, 0o600);
 const current = getConfig();
-fs.writeFileSync(path.join(path.dirname(CONFIG_FILE), 'console-access.txt'),
+// 这份文件是明文控制台令牌：writeFileSync 的 mode 只在"新建"时生效，
+// 已存在且权限更宽的旧文件要显式 chmod 收紧（与 config.json 同样处理）。
+const accessFile = path.join(path.dirname(CONFIG_FILE), 'console-access.txt');
+fs.writeFileSync(accessFile,
   `QQ Agent Linux\nURL: http://${current.server.host}:${current.server.port}\nToken: ${current.server.token}\nMode: ${current.runtime.mode}\n`,
   { mode: 0o600 });
+fs.chmodSync(accessFile, 0o600);
 console.log(JSON.stringify({ config: CONFIG_FILE, mode: getConfig().runtime.mode,
   host: getConfig().server.host, port: getConfig().server.port, imported: !exists && !!values['import-bridge'] }));

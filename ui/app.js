@@ -9931,7 +9931,10 @@ async function saveConfig({ quiet = false } = {}) {
       groups: parseList(val('#cfg-allowgroups', (c.allow?.groups || []).join(','))),
       private: parseList(val('#cfg-allowprivate', (c.allow?.private || []).join(',')))
     };
-    patch.deny = { groups: [], private: [] };
+    // 这里以前无条件发 deny = { groups: [], private: [] }：界面里没有 deny 的编辑控件，
+    // 于是"保存白名单"会把 --import-bridge / 手改 config.json 配的屏蔽名单静默清空
+    // （access.js 仍按 deny 拦人，但名单已经没了 = 被屏蔽的群/人重新可用）。
+    // 不传这个字段，服务端会原样保留现有 deny。
     // 原先这里硬编码 false：只要点过保存就把该开关永久重置，
     // 而 UI 里根本没有输入控件 —— 只能手改 JSON，改完一保存就丢。改为读取复选框。
     const allowAllBox = $('#cfg-allowallwhenempty');

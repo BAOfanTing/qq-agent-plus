@@ -113,7 +113,10 @@ export class StickerManager {
     if (this.syncing) return this.syncing;
     this.syncing = (async () => {
       try {
-        const count = Math.min(500, Math.max(1, Number(getConfig().sticker?.promptMaxStickers) * 10 || 100));
+        // 同步窗口固定按上限拉，**不能**挂在 sticker.promptMaxStickers 上 ——
+        // 那个设置只决定"系统提示里常驻几条"，改小它会让同步只拉到一小截，
+        // 而 mergeStickerLibrary 会把没出现在这次响应里的 QQ 收藏剪掉（连同备注、使用计数）。
+        const count = 500;
         const data = await this.onebot.call('fetch_custom_face_detail', { count });
         const fetched = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : null);
         if (!fetched) throw new Error('fetch_custom_face_detail 返回 data 不是数组');

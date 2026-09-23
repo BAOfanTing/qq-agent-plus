@@ -112,7 +112,13 @@ export function mergeStickerLibrary(existing, fetched) {
   }
   // 保护：这次一条都没拉到（接口失败/空列表）时不要剪枝——否则 QQ 一抖，本地库连备注一起被清空
   if (!fetchedIds.size) return out;
-  return out.filter((e) => e.source !== 'qq' || e.hidden || fetchedIds.has(e.id));
+  // 剪枝只剪"没有任何本地数据"的条目：这次没出现的 QQ 收藏可能是被删了，也可能只是
+  // 协议端没把它带回来（分页/上限/响应不全都算）。备注、标签、使用计数是模型自己攒的，
+  // 不能因为一次同步就静默丢掉 —— 那种丢失没有任何备份可恢复。
+  const hasLocalData = (e) => Boolean(String(e.localNote || e.usage || '').trim())
+    || (Array.isArray(e.tags) && e.tags.length > 0)
+    || Number(e.useCount) > 0;
+  return out.filter((e) => e.source !== 'qq' || e.hidden || fetchedIds.has(e.id) || hasLocalData(e));
 }
 
 export function findSticker(entries, ref) {
@@ -216,11 +222,14 @@ export function applyStickerNote(entries, id, patch = {}) {
   const target = findSticker(list, id);
   if (!target) return { entries: list, entry: null };
   const idx = list.findIndex((e) => e.id === target.id);
+  // 封顶与 StickerManager.update / 收藏判定的口径一致：这两个字段会原样进系统提示的
+  // 表情清单（buildStickerContext 用 desc || localNote 当标签），模型写多长就占多少 token。
+  const cap = (value, max) => String(value ?? '').trim().slice(0, max);
   const next = normalizeStickerEntry({
     ...target,
-    localNote: patch.note !== undefined ? String(patch.note ?? '').trim() : target.localNote,
-    tags: Array.isArray(patch.tags) ? patch.tags.map(String).map((s) => s.trim()).filter(Boolean).slice(0, 20) : target.tags,
-    usage: patch.usage !== undefined ? String(patch.usage ?? '').trim() : target.usage,
+    localNote: patch.note !== undefined ? cap(patch.note, 300) : target.localNote,
+    tags: Array.isArray(patch.tags) ? patch.tags.map((s) => cap(s, 40)).filter(Boolean).slice(0, 20) : target.tags,
+    usage: patch.usage !== undefined ? cap(patch.usage, 300) : target.usage,
     source: patch.source || target.source || 'ai',
     updatedAt: nowIso()
   });

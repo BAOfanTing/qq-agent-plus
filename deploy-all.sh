@@ -676,7 +676,12 @@ if pull_with_retry "$IMAGE"; then
   PULLED=true
 else
   for mirror in "${IMAGE_MIRRORS[@]}"; do
-    candidate="${mirror%/}/$IMAGE"
+    # 只在 IMAGE 还没有 registry host 时加前缀：上一次走过镜像站之后 .env 里存的就是
+    # 带前缀的完整引用，再加一次会拼成 mirror/mirror/... 这种拉不到的地址。
+    case "$IMAGE" in
+      */*/*) candidate="$IMAGE" ;;
+      *) candidate="${mirror%/}/$IMAGE" ;;
+    esac
     step "Retrying through image mirror $mirror"
     if pull_with_retry "$candidate"; then
       IMAGE="$candidate"

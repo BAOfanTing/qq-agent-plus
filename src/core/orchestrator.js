@@ -370,13 +370,19 @@ export class Orchestrator {
     this.store.recoverExpired();
     this.store.expireConversationThreads?.();
     this.retryTimer = setInterval(() => {
-      this.store.recoverExpired();
-      this.store.expireConversationThreads?.();
-      if (this.paused || this.aborted) return;
-      for (const key of this.store.listChats()) {
-        if (canRun(key) && !this.runningChats.has(key) && !this.pendingWake.has(key)
-          && this.#chatRuntimeDecision(key).allowed
-          && this.store.unreadCount(key) > 0) this.scheduleWake(key);
+      // 兜底回收不能把进程带走：SQLITE_BUSY、磁盘满、库损坏都可能在恢复期间抛出，
+      // 而 server.js 的 uncaughtException 会直接 process.exit(1)。下一个 tick 再试即可。
+      try {
+        this.store.recoverExpired();
+        this.store.expireConversationThreads?.();
+        if (this.paused || this.aborted) return;
+        for (const key of this.store.listChats()) {
+          if (canRun(key) && !this.runningChats.has(key) && !this.pendingWake.has(key)
+            && this.#chatRuntimeDecision(key).allowed
+            && this.store.unreadCount(key) > 0) this.scheduleWake(key);
+        }
+      } catch (error) {
+        console.error('[recovery] 兜底回收这一轮出错（不影响下一轮）:', error?.message ?? error);
       }
     }, 5000);
     this.retryTimer.unref?.();
@@ -1463,7 +1469,10 @@ export class Orchestrator {
         auditMessages: requestAuditMessages
       } = estimate;
       const outputReserveTokens = 2048;
-      if (session.usage.totalTokens + estimatedPromptTokens + outputReserveTokens > maxRunTokens) {
+      // 预算检查要放过第一轮：估算只是"字符数折算"的粗估，一个繁忙会话的
+      // 已读历史 + 触发批就能把估算顶到预算线以上 —— 若在 round 0 就 break，
+      // 这批消息会被 ack 掉、一次模型都没调、也不会重试（用户永远等不到回复）。
+      if (round > 0 && session.usage.totalTokens + estimatedPromptTokens + outputReserveTokens > maxRunTokens) {
         session.budgetStopped = true;
         session.budgetStopReason = 'next-call-budget';
         session.estimatedNextPromptTokens = estimatedPromptTokens;
