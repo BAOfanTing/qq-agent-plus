@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PERSONAS, normalizeBehaviorProfile } from '../personas.js';
+import { PERSONAS, normalizeBehaviorProfile, applyPersonaTemplate } from '../personas.js';
 import {
   clampProbability,
   legacySliderToProbability,
@@ -142,7 +142,11 @@ export const DEFAULT_CONFIG = {
     roleText: PERSONAS.xiaojingyu.text,     // 默认人设：原版"小鲸鱼"角色卡（适配版）
     behaviorProfile: 'legacy',             // legacy | grounded，选择模板时一起切换
     participation: 'medium',                // low | medium | high —— 参与度参考
-    customRules: ''                         // 追加自定义规则（可选）
+    customRules: '',                        // 追加自定义规则（可选）
+    // 选中的内置卡 id（roles/*.md 的登记名）。非空表示"正文跟着卡文件走"：
+    // 载入配置时若正文与文件不一致就按文件刷新，改了卡不用再去控制台重选一次。
+    // 手改正文、或用自定义卡时是空串（正文不受文件影响）。
+    templateId: 'xiaojingyu'
   },
   // 用户自定义人设库（保存在配置里，可在设置页添加/选择）
   customPersonas: [],
@@ -396,6 +400,13 @@ export const DEFAULT_CONFIG = {
 
 function migrateConfig(parsed) {
   const out = structuredClone(parsed);
+  // ── 人设模板绑定：老配置没有 persona.templateId ──
+  // 必须在这里显式补空串（deepMerge 之前）：默认值里带的是 "xiaojingyu"，
+  // 让默认值补上的话，老实例（例如选的是猫娘）载入后会被当成绑定了默认卡、正文被换掉。
+  // 空串 = 未绑定（正文按自定义处理，不改动）；在控制台重选一次卡就会自动绑上。
+  if (out.persona && typeof out.persona === 'object' && out.persona.templateId === undefined) {
+    out.persona.templateId = '';
+  }
   if (
     out.identityPilot?.friendProposal
     && out.identityPilot.friendProposal.mode == null
@@ -488,9 +499,13 @@ export function loadConfig() {
     let text = fs.readFileSync(CONFIG_FILE, 'utf8');
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     const parsed = migrateConfig(JSON.parse(text));
-    return deepMerge(DEFAULT_CONFIG, parsed);
+    const merged = deepMerge(DEFAULT_CONFIG, parsed);
+    applyPersonaTemplate(merged);   // 绑了内置卡就按 roles/*.md 刷新正文（卡文件是唯一来源）
+    return merged;
   } catch {
-    return structuredClone(DEFAULT_CONFIG);
+    const fresh = structuredClone(DEFAULT_CONFIG);
+    applyPersonaTemplate(fresh);
+    return fresh;
   }
 }
 
@@ -554,7 +569,18 @@ export function incidentPilotEnabled(cfg = getConfig()) {
 export function updateConfig(patch) {
   const next = migrateConfig(deepMerge(getConfig(), patch));
   const oldTimeControl = JSON.stringify(getConfig().timeControl);
+  // 人设绑定与正文的优先级，只在配置保存这一层定：
+  //   1) patch 里写了 roleText 但没给 templateId = 手写正文 → 自动解绑，正文按你写的来；
+  //   2) patch 里给了 templateId（控制台选卡）→ 卡文件说了算，正文按 roles/*.md 刷新；
+  //   3) 两者都没给（改别的字段、升级带的正文更新）→ 绑着就刷新。
+  const patchPersona = patch?.persona ?? {};
+  if (patchPersona.templateId === undefined && patchPersona.roleText !== undefined) {
+    next.persona.templateId = '';
+  }
   next.persona.behaviorProfile = normalizeBehaviorProfile(next.persona.behaviorProfile);
+  if (patchPersona.templateId !== undefined || patchPersona.roleText === undefined) {
+    applyPersonaTemplate(next);
+  }
   next.timeControl = normalizeTimeControl(next.timeControl);
   next.dailyMoments.scheduleWindows = normalizeMomentWindows(next.dailyMoments.scheduleWindows);
   if (!['observe', 'active'].includes(next.runtime?.mode)) throw new Error('Invalid runtime mode');

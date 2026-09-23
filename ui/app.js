@@ -9916,13 +9916,18 @@ async function saveConfig({ quiet = false } = {}) {
   }
 
   if (sec === 'persona') {
+    // 模板 id 跟着正文一起存：绑着内置卡（比如"猫娘（二次元）"）时后端会按 roles/*.md
+    // 刷新正文，卡文件改了不用再来这里重选一次；手改了正文、或选的是自定义卡时这里为空，
+    // 正文就按自定义处理，不会被文件覆盖。
+    const pickedId = currentPersonaId();
     patch.persona = {
       botName: val('#cfg-botname', c.persona.botName).trim() || '小鲸鱼',
       selfNickname: val('#cfg-selfnick', c.persona.selfNickname || '').trim(),
       participation: val('#cfg-participation', c.persona.participation),
       behaviorProfile: val('#cfg-behavior-profile', c.persona.behaviorProfile || 'legacy'),
       roleText: val('#cfg-roletext', c.persona.roleText || ''),
-      customRules: val('#cfg-customrules', c.persona.customRules || '')
+      customRules: val('#cfg-customrules', c.persona.customRules || ''),
+      templateId: pickedId.startsWith('custom_') ? '' : pickedId
     };
   }
 

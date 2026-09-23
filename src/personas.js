@@ -17,7 +17,8 @@ export function normalizeBehaviorProfile(value) {
 //   roles/duzui-sunyou.md            损友（毒舌吐槽），legacy 档：短句接梗、只损能开玩笑的事。
 //   roles/wenrou-peiliao.md          温柔陪聊（知心），grounded 档：会听、不诊断、不承诺陪伴。
 //   roles/jishu-zhai.md              技术宅（自建服务），grounded 档：先问关键信息、留出不确定。
-//   roles/maoniang.md                猫娘（二次元），legacy 档：萌点是点缀，不擦边不病娇。
+//   roles/maoniang.md                猫娘（二次元），legacy 档：喵是每轮的底线（不是点缀），
+//                                    傲娇只做调味、落点是"给了"，不擦边不病娇。
 //
 // 新增卡时的约定：正文只写在 roles/ 下，用真实工具名，别引用旧架构专属指令；
 // test/personas.test.mjs 会检查"roles/ 下的每个文件都已登记"。
@@ -52,3 +53,35 @@ export const PERSONAS = {
     text: readRole('maoniang.md')
   }
 };
+
+/** 内置卡 id 列表（控制台与校验用）。 */
+export const PERSONA_TEMPLATE_IDS = Object.keys(PERSONAS);
+
+/** 按 id 取内置卡；不是内置 id（自定义卡、空值）返回 null。 */
+export function builtinPersonaTemplate(id) {
+  const key = String(id ?? '').trim();
+  return Object.prototype.hasOwnProperty.call(PERSONAS, key) ? PERSONAS[key] : null;
+}
+
+/**
+ * 内置卡绑定：只要实例还绑着内置卡（persona.templateId），就按 roles/*.md 的正文刷新副本。
+ *
+ * 背景：实例里存的是角色正文的**副本**（persona.roleText）。卡文件改了副本不会自己更新，
+ * 以前必须在控制台重选一次卡才生效，"改完卡没生效"因此被反复当成 bug 报上来。
+ * 现在的约定：卡文件是唯一来源 —— 控制台选卡时把模板 id 一起存下来
+ * （手写正文或选自定义卡会清空 id），载入配置时发现正文与文件不一致就按文件刷新。
+ *
+ * 只刷正文，不碰 behaviorProfile：档位（legacy / grounded）是实例自己的行为开关，
+ * 在控制台选卡时一起设置；这里悄悄改掉会让"只改档位"的调用被卡文件顶回去。
+ *
+ * @returns {{id: string, name: string} | null} 发生刷新时返回卡信息，否则 null。
+ */
+export function applyPersonaTemplate(cfg) {
+  const persona = cfg?.persona;
+  const template = builtinPersonaTemplate(persona?.templateId);
+  if (!persona || !template) return null;
+  const nextText = String(template.text).trim();
+  if (String(persona.roleText || '').trim() === nextText) return null;
+  persona.roleText = nextText;
+  return { id: String(persona.templateId).trim(), name: template.name };
+}
