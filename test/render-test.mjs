@@ -201,11 +201,12 @@ try {
   }
   document.querySelector('#cfg-roletext').value += '\nEdited';
   ctx.syncPersonaButtons();
-  // 选择框留空（不错误标记为原模板），但提示行要说清"这是按自定义处理"，
+  // 匹配不上任何内置卡时：既不能错误标记成原模板，提示行也要说清"这是按自定义处理"，
   // 否则升级后（模板改过、实例存的是旧正文）看起来像人设丢了。
+  // （旧的 #cfg-persona-pick 隐藏输入框已随人设页改版删除，这里改看提示行与绑定徽章。）
   if (ctx.currentPersonaId() === ''
-      && document.querySelector('#cfg-persona-pick').value === ''
-      && document.querySelector('#persona-pick-hint').textContent.includes('与内置模板不一致')) {
+      && document.querySelector('#persona-pick-hint').textContent.includes('与内置模板不一致')
+      && document.querySelector('#persona-view-binding').textContent.includes('解绑')) {
     pass++;
     console.log('  OK    修改人设后不错误标记为原模板');
   } else {
@@ -324,10 +325,13 @@ try {
 
   const dirtyText = ctx.replacePersonaSectionBody(catText, 0, '手改过的一节');
   const dirtyView = ctx.renderPersonaCardBody(dirtyText, { fileText: catText });
-  const revertOk = dirtyView.includes('pd-sec-edit') && dirtyView.includes('pd-sec-revert')
-    && dirtyView.includes('data-sec="0"');
+  // 要能鉴别"只有被改的那一节才给恢复按钮"：数一下按钮个数，并确认它挂在这一节上
+  const revertCount = (dirtyView.match(/pd-sec-revert/g) || []).length;
+  const revertOk = dirtyView.includes('pd-sec-edit') && revertCount === 1
+    && /class="pd-sec[^"]*"[^>]*data-sec="0"[\s\S]*?pd-sec-revert/.test(dirtyView);
   revertOk ? pass++ : fail++;
-  console.log('  ' + (revertOk ? 'OK   ' : 'FAIL ') + '改过的小节出现「编辑」「恢复本节」按钮');
+  console.log('  ' + (revertOk ? 'OK   ' : 'FAIL ') + '只有被改过的那一节出现「恢复本节」'
+    + (revertOk ? '' : ` -> 按钮数=${revertCount}`));
 
   const cleanView = ctx.renderPersonaCardBody(catText, { fileText: catText });
   const cleanOk = cleanView.includes('pd-sec-edit') && !cleanView.includes('pd-sec-revert');

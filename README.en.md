@@ -386,11 +386,13 @@ but not keywords, so an old `0-10` setting also answers keywords after the conve
 
 ## Personas
 
-“设置 -> 人设 -> 选择人设” provides several built-in persona cards (the default 小鲸鱼, a
-sarcastic friend, a warm companion, a homelab enthusiast and a catgirl),
-stored one markdown file per card under [`roles/`](roles); see
-[docs/PERSONAS.md](docs/PERSONAS.md). Selecting a template only fills the
-draft; it takes effect after “保存人设修改”. The behaviour profile is either the original group-chat
+“设置 -> 人设” (the persona card library) provides several built-in persona cards (the default
+小鲸鱼, a sarcastic friend, a warm companion, a homelab enthusiast and a catgirl), stored one markdown
+file per card under [`roles/`](roles); see [docs/PERSONAS.md](docs/PERSONAS.md). Clicking a card
+fills the draft; it takes effect after clicking the always-visible “保存设置” at the bottom. The body
+is shown section by section (signature traits, AI-flavour blacklist and examples each rendered as
+tags or chat bubbles) and every section can be edited on its own, reverted on its own, or the whole
+card restored. The behaviour profile is either the original group-chat
 style or the natural-and-reliable style, and both the role text and administrator rules can be
 edited, or a custom copy created from the current draft. Editing a file under `roles/` only affects
 the built-in templates of new installations; an existing instance keeps the role text saved in its

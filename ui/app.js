@@ -4657,6 +4657,7 @@ async function loadSettings() {
   state.visionScanning = !!visionData.scanning;
   state.modelPrices = priceData || { prices: [], current: null };
   state.personaTemplates = {};
+  state.personaTemplatesVersion = (state.personaTemplatesVersion || 0) + 1;   // 卡库变了：让卡库/正文的缓存指纹失效
   state.personaTemplatesFailed = tplData.failed === true;
   for (const t of tplData.templates || []) state.personaTemplates[t.id] = {
     name: t.name, text: t.text, customRules: t.customRules || '',
@@ -5638,8 +5639,6 @@ function syncPersonaButtons() {
   const templatesKnown = Object.keys(state.personaTemplates || {}).length > 0;
   const delBtn = $('#del-persona-btn');
   if (delBtn) delBtn.classList.toggle('hidden', !String(draft.id).startsWith('custom_'));
-  const input = $('#cfg-persona-pick');
-  if (input) input.value = tpl?.name || '';
   const hint = $('#persona-pick-hint');
   // 正文与内置模板不一致时（升级改了模板而实例里存的是旧正文，或管理员手改过），
   // 选择框会是空的，容易让人以为人设丢了 —— 用提示行说明这是按自定义处理。
@@ -5653,11 +5652,17 @@ function syncPersonaButtons() {
         : '');
   }
   // 详情视图：正文、档位、绑定状态都按草稿渲染。
-  // 绑着内置卡时把卡文件正文传进去 —— 每节能显示「恢复本节」，正文被改过时头部还能「整张恢复」。
-  const boundTpl = state.personaTemplates[String(state.config?.persona?.templateId || '')];
-  const fileText = boundTpl?.builtin ? boundTpl.text : '';
+  // 「恢复本节 / 恢复整张卡」按**草稿那张卡**取文件正文（不是 config 里已保存的绑定）——
+  // 刚在卡库点了另一张卡、还没保存时，用旧绑定会把两张卡的内容拼在一起。
+  const baseTpl = state.personaTemplates[personaBaseCardId()];
+  const fileText = baseTpl?.builtin ? baseTpl.text : '';
+  // 只有内容真的变了才重画：人设页的输入事件（改名字、改附加规则、改正文）都会走到这里，
+  // 每次都重画 15KB 正文 + 5 张卡的话，打字时每敲一键都要多花约 10ms。
+  const viewKey = [draft.roleText, personaEditingSection,
+    [...personaCollapsedSections].sort((a, b) => a - b).join(','), fileText].join('\u0000');
   const detail = $('#persona-card-view');
-  if (detail) {
+  if (detail && viewKey !== personaViewKey) {
+    personaViewKey = viewKey;
     detail.innerHTML = renderPersonaCardBody(draft.roleText, {
       collapsed: personaCollapsedSections,
       editing: personaEditingSection,
@@ -5701,17 +5706,61 @@ function syncPersonaButtons() {
       bindChip.textContent = '';
     }
   }
+  const gridKey = [state.personaTemplatesVersion || 0,
+    String(state.config?.persona?.templateId || ''),
+    state.config?.persona?.roleText || '', state.config?.persona?.behaviorProfile || '',
+    state.config?.persona?.customRules || '', draft.roleText, draft.behaviorProfile, draft.customRules].join('\u0000');
   const grid = $('#persona-grid');
-  if (grid) grid.innerHTML = renderPersonaGrid(state.config || {}, draft);
+  if (grid && gridKey !== personaGridKey) {
+    personaGridKey = gridKey;
+    grid.innerHTML = renderPersonaGrid(state.config || {}, draft);
+  }
+  // 折叠按钮的文案要跟着实际状态走（折叠状态是跨分区保留的，不能只靠点击时改文字）
+  const expandBtn = $('#persona-expand-btn');
+  if (expandBtn) {
+    const total = parsePersonaCard(draft.roleText).sections.length;
+    expandBtn.textContent = total > 0 && personaCollapsedSections.size >= total ? '全部展开' : '全部收起';
+  }
 }
 
-function applyPersonaDraft(tpl) {
+function applyPersonaDraft(tpl, id = '') {
   $('#cfg-roletext').value = tpl.text;
   $('#cfg-customrules').value = tpl.customRules || '';
   $('#cfg-behavior-profile').value = tpl.behaviorProfile || 'legacy';
   personaEditingSection = -1;
   personaEditNote = '';
+  // 记下"草稿是从哪张卡来的"：没保存之前 config 里还是旧绑定，
+  // 「恢复本节 / 恢复整张卡」必须按草稿这张卡来，否则会把两张卡拼在一起。
+  personaDraftCardId = id || findPersonaTemplateId(tpl.text, tpl.behaviorProfile || 'legacy', tpl.customRules || '');
   syncPersonaButtons();
+}
+
+/**
+ * 草稿对应的内置卡 id：正文与某张内置卡完全一致就用那张；否则用用户最近点的那张
+ * （点完卡再逐节改，正文就不完全一致了，但"基准卡"还是它）。
+ */
+function personaBaseCardId() {
+  const draft = personaDraftState();
+  const exact = findPersonaTemplateId(draft.roleText, draft.behaviorProfile, draft.customRules);
+  if (exact && state.personaTemplates[exact]?.builtin) return exact;
+  const picked = String(personaDraftCardId || '');
+  return picked && state.personaTemplates[picked]?.builtin ? picked : '';
+}
+
+/**
+ * 把"正在编辑的小节"落回草稿。分节编辑框不是唯一数据源（#cfg-roletext 才是），
+ * 所以保存、折叠、恢复这些会重画视图的动作之前都得先冲一次，否则刚打的字会消失。
+ * @returns {boolean} 有改动被落回时 true
+ */
+function flushPersonaSectionEdit() {
+  if (personaEditingSection < 0) return false;
+  const roleBox = $('#cfg-roletext');
+  const box = document.querySelector(`#persona-card-view .pd-edit-text[data-sec="${personaEditingSection}"]`);
+  if (!roleBox || !box) return false;
+  const next = replacePersonaSectionBody(roleBox.value, personaEditingSection, box.value);
+  if (next === roleBox.value) return false;
+  roleBox.value = next;
+  return true;
 }
 
 // ── 角色正文的结构化渲染 ──
@@ -5731,6 +5780,10 @@ let personaCollapsedSections = new Set();
 let personaFoldKey = null;
 let personaEditingSection = -1;   // 正在按小节编辑的序号；-1 = 没在编辑
 let personaEditNote = '';         // 小节编辑后的提示（"还得点保存设置"这类）
+let personaViewKey = null;        // 上次画正文视图用的内容指纹（没变就跳过重画）
+let personaGridKey = null;        // 同上，卡库
+let personaViewTimer = null;      // 正文输入时的合并渲染定时器
+let personaDraftCardId = '';      // 草稿是从哪张卡来的（点卡时记下）
 
 /**
  * 默认折叠策略：只展开"你是谁"和"你的标志"，其余小节收起来。
@@ -5786,7 +5839,16 @@ function personaInline(text) {
  * from / to 是这一节在原始文本里的行号区间（`from` 是小节标题那一行、`to` 是下一节标题
  * 那一行或文末，左闭右开）—— 按小节编辑时要靠它把改动精确地拼回去。
  */
+/**
+ * 解析结果按"整段文本"缓存一份：人设页一次同步会解析同一段正文好几次
+ * （默认折叠、卡库简介、正文渲染、取单节正文…），3~4KB 的正文每次重解析不划算。
+ * 调用方都只读返回值，不要改它。
+ */
+let personaParseCache = { text: null, card: null };
+
 function parsePersonaCard(text) {
+  const source = String(text || '');
+  if (personaParseCache.text === source) return personaParseCache.card;
   const card = { title: '', sections: [] };
   let section = null;
   const blocks = () => (section ? section.blocks : (card.intro ||= []));
@@ -5835,6 +5897,7 @@ function parsePersonaCard(text) {
     else if (last?.type === 'p') last.text += ` ${line.trim()}`;
     else blocks().push({ type: 'p', text: line.trim() });
   }
+  personaParseCache = { text: source, card };
   return card;
 }
 
@@ -5961,6 +6024,20 @@ function renderPersonaCardBody(text, { collapsed = new Set(), showTitle = true, 
 }
 
 /** 卡库里的一张卡：草稿中的那张会高亮，真正生效且绑着卡文件的那张挂「使用中」。 */
+/** 卡库简介（取自「你是谁」第一段）按卡正文缓存 —— 卡库每次重画都要用 5 次。 */
+const personaDescCache = new Map();
+
+function personaCardDesc(tpl) {
+  const key = `${tpl.name}\u0000${tpl.text.length}\u0000${tpl.text.slice(0, 24)}`;
+  if (personaDescCache.has(key)) return personaDescCache.get(key);
+  const parsed = parsePersonaCard(tpl.text);
+  const sec = parsed.sections.find((s) => s.name.includes('你是谁'));
+  const text = sec?.blocks.find((b) => b.type === 'p')?.text || '';
+  const desc = text.length > 46 ? `${text.slice(0, 46)}…` : text;
+  personaDescCache.set(key, desc);
+  return desc;
+}
+
 function renderPersonaGrid(c, draft = {}) {
   const draftText = draft.roleText ?? c.persona?.roleText ?? '';
   const draftProfile = draft.behaviorProfile ?? c.persona?.behaviorProfile ?? 'legacy';
@@ -5980,12 +6057,7 @@ function renderPersonaGrid(c, draft = {}) {
   return templates.map(([id, tpl]) => {
     const isDraft = id === draftId;
     const isInUse = id === savedId && id === boundId;
-    const desc = (() => {
-      const parsed = parsePersonaCard(tpl.text);
-      const sec = parsed.sections.find((s) => s.name.includes('你是谁'));
-      const text = sec?.blocks.find((b) => b.type === 'p')?.text || '';
-      return text.length > 46 ? `${text.slice(0, 46)}…` : text;
-    })();
+    const desc = personaCardDesc(tpl);
     return `
       <div class="persona-card ${isDraft ? 'selected' : ''}" data-persona-id="${esc(id)}" role="button" tabindex="0">
         <div class="pc-top">
@@ -6014,7 +6086,6 @@ function renderPersonaLibrary(c) {
       </div>
       <div class="persona-grid" id="persona-grid">${renderPersonaGrid(c)}</div>
     </div>
-    <input type="text" id="cfg-persona-pick" hidden />
     <span id="persona-pick-hint" class="muted" style="font-size:12px"></span>`;
 }
 
@@ -8019,6 +8090,10 @@ async function loadQzoneInteractionStatus() {
 function renderPersonaSection(c) {
   const roleText = c.persona.roleText || '';
   refreshPersonaFold(roleText);
+  // 整个设置页会重画 DOM：正文视图与卡库都要按当前状态（折叠/编辑中）画一次，
+  // 并把指纹清空，交给随后的 syncPersonaButtons 校一遍。
+  personaViewKey = null;
+  personaGridKey = null;
   return `
     <h3>人设</h3>
     ${renderPersonaLibrary(c)}
@@ -8534,6 +8609,12 @@ function bindSettingsEvents(c) {
   // 保存当前区块设置（通用保存按钮）。只有当前区块的字段才会被读取，不会 null 报错。
   const saveCfgBtn = $('#save-cfg-btn');
   if (saveCfgBtn) saveCfgBtn.addEventListener('click', async () => {
+    // 人设页的分节编辑框不是唯一数据源：#cfg-roletext 才是。保存前先把正在编辑的
+    // 那一节落回草稿，否则"边编辑边点保存"会存下旧正文（界面还提示"已保存"）。
+    if (flushPersonaSectionEdit()) {
+      personaEditNote = '';
+      syncPersonaButtons();
+    }
     try {
       await saveConfig();
       const res = $('#cfg-save-result');
@@ -8541,6 +8622,12 @@ function bindSettingsEvents(c) {
       res.classList.remove('saved-flash');
       void res.offsetWidth;
       res.classList.add('saved-flash');
+      // 保存成功后，人设页那条"还没生效"的提示就没意义了，清掉它
+      if (state.settingsSection === 'persona') {
+        personaEditNote = '';
+        const note = $('#persona-edit-note');
+        if (note) note.textContent = '';
+      }
       refreshStatus();
       startListPoller();   // 刷新间隔可能刚被改过，用新值重启轮询
     } catch (e) {
@@ -9382,14 +9469,21 @@ function bindSettingsEvents(c) {
   applyShowVision();
 
   // ── 人设区块事件 ──
-  const personaPick = $('#cfg-persona-pick');
-  for (const selector of ['#cfg-roletext', '#cfg-customrules', '#cfg-behavior-profile']) {
+  // 附加规则/交流策略：变化很便宜（卡库有指纹、解析有缓存），即时同步
+  for (const selector of ['#cfg-customrules', '#cfg-behavior-profile']) {
     $(selector)?.addEventListener('input', syncPersonaButtons);
     $(selector)?.addEventListener('change', syncPersonaButtons);
   }
-  if (personaPick) {
-    personaPick.addEventListener('click', () => openPersonaPicker());
-  }
+  // 角色正文：整段正文每敲一键都要重画分节视图（约 10ms），打字时按 140ms 合并成一次；
+  // 失焦/提交立刻同步，不会留下过期视图。
+  $('#cfg-roletext')?.addEventListener('input', () => {
+    if (personaViewTimer) clearTimeout(personaViewTimer);
+    personaViewTimer = setTimeout(() => { personaViewTimer = null; syncPersonaButtons(); }, 140);
+  });
+  $('#cfg-roletext')?.addEventListener('change', () => {
+    if (personaViewTimer) { clearTimeout(personaViewTimer); personaViewTimer = null; }
+    syncPersonaButtons();
+  });
   // 卡库：点一张卡（或回车/空格）就把它的正文填进草稿。事件挂在容器上 ——
   // syncPersonaButtons 会重画卡库，挂在卡片上会被重画冲掉。
   const personaGrid = $('#persona-grid');
@@ -9398,7 +9492,7 @@ function bindSettingsEvents(c) {
       const card = target?.closest?.('.persona-card');
       const id = card?.dataset?.personaId;
       const tpl = id ? state.personaTemplates[id] : null;
-      if (tpl) applyPersonaDraft(tpl);
+      if (tpl) applyPersonaDraft(tpl, id);
     };
     personaGrid.addEventListener('click', (event) => pickCard(event.target));
     personaGrid.addEventListener('keydown', (event) => {
@@ -9418,12 +9512,17 @@ function bindSettingsEvents(c) {
       if (buttonIsAction && roleBox) {
         const idx = Number(button.closest('.pd-sec')?.dataset?.sec);
         if (!Number.isFinite(idx)) return;
-        const boundTpl = state.personaTemplates[String(state.config?.persona?.templateId || '')];
+        const baseTpl = state.personaTemplates[personaBaseCardId()];
         if (button.classList.contains('pd-sec-edit')) {
+          // 全文编辑框和分节编辑框只留一个：开了分节就把「编辑全文」收起来
+          const rawField = $('#persona-raw-field');
+          if (rawField) {
+            rawField.classList.add('hidden');
+            const toggle = $('#toggle-persona-edit');
+            if (toggle) toggle.textContent = '编辑全文';
+          }
           // 切到另一节继续编辑时，先把当前这节未保存的改动落回草稿，别让输入白白丢掉
-          const pending = personaView.querySelector(`.pd-edit-text[data-sec="${personaEditingSection}"]`);
-          if (pending && personaEditingSection !== idx && personaEditingSection >= 0) {
-            roleBox.value = replacePersonaSectionBody(roleBox.value, personaEditingSection, pending.value);
+          if (flushPersonaSectionEdit()) {
             personaEditNote = '上一节已更新（还没生效）：确认无误后点底部那条「保存设置」。';
           }
           personaEditingSection = personaEditingSection === idx ? -1 : idx;
@@ -9432,15 +9531,20 @@ function bindSettingsEvents(c) {
           if (box) {
             roleBox.value = replacePersonaSectionBody(roleBox.value, idx, box.value);
             personaEditingSection = -1;
+            // 刚保存的这一节保持展开：别让它立刻折回去，看起来像"没保存上"
+            personaCollapsedSections.delete(idx);
             personaEditNote = '这一节已更新（还没生效）：确认无误后点底部那条「保存设置」。';
           }
         } else if (button.classList.contains('pd-sec-cancel')) {
           personaEditingSection = -1;
         } else if (button.classList.contains('pd-sec-revert')) {
-          if (boundTpl?.builtin) {
-            roleBox.value = replacePersonaSectionBody(roleBox.value, idx, personaSectionBody(boundTpl.text, idx));
+          // 先落回正在编辑的那一节（可能是另一节），再恢复本节
+          const flushed = flushPersonaSectionEdit();
+          if (baseTpl?.builtin) {
+            roleBox.value = replacePersonaSectionBody(roleBox.value, idx, personaSectionBody(baseTpl.text, idx));
             personaEditingSection = -1;
-            personaEditNote = `这一节已恢复成卡文件「${boundTpl.name}」里的写法（还没生效）：记得点底部的「保存设置」。`;
+            personaCollapsedSections.delete(idx);
+            personaEditNote = `${flushed ? '上一节已更新；' : ''}这一节已恢复成卡文件「${baseTpl.name}」里的写法（还没生效）：记得点底部的「保存设置」。`;
           }
         }
         syncPersonaButtons();
@@ -9458,19 +9562,23 @@ function bindSettingsEvents(c) {
       syncPersonaButtons();
     });
   }
-  // 整张卡恢复成卡文件原文（手改乱了就用它撤回）
+  // 整张卡恢复成卡文件原文（手改乱了就用它撤回）—— 同样按草稿那张卡
   const restoreBtn = $('#restore-persona-btn');
   if (restoreBtn) restoreBtn.addEventListener('click', () => {
-    const boundTpl = state.personaTemplates[String(state.config?.persona?.templateId || '')];
+    flushPersonaSectionEdit();
+    const baseTpl = state.personaTemplates[personaBaseCardId()];
     const roleBox = $('#cfg-roletext');
-    if (!boundTpl?.builtin || !roleBox) return;
-    roleBox.value = boundTpl.text;
+    if (!baseTpl?.builtin || !roleBox) return;
+    roleBox.value = baseTpl.text;
     personaEditingSection = -1;
-    personaEditNote = `正文已恢复成卡文件「${boundTpl.name}」的原文（还没生效）：点底部的「保存设置」确认。`;
+    personaCollapsedSections = defaultPersonaFold(baseTpl.text);
+    personaEditNote = `正文已恢复成卡文件「${baseTpl.name}」的原文（还没生效）：点底部的「保存设置」确认。`;
     syncPersonaButtons();
   });
   const expandBtn = $('#persona-expand-btn');
   if (expandBtn) expandBtn.addEventListener('click', () => {
+    // 折叠会重画视图：先把正在编辑的那节落回草稿，否则输入框里的字会没
+    flushPersonaSectionEdit();
     const total = parsePersonaCard($('#cfg-roletext')?.value || '').sections.length;
     // 只要还有展开的就全收，全收了就全展 —— 一个按钮两种状态，省一个开关
     if (personaCollapsedSections.size < total) {
@@ -9488,8 +9596,16 @@ function bindSettingsEvents(c) {
     const field = $('#persona-raw-field');
     if (!field) return;
     const collapsed = field.classList.toggle('hidden');
-    editToggle.textContent = collapsed ? '编辑全文' : '收起全文编辑';
-    if (!collapsed) $('#cfg-roletext')?.focus();
+    if (!collapsed) {
+      // 开整段编辑前，先把分节编辑框里的内容落回草稿，并收起它（两种编辑框只留一个）
+      flushPersonaSectionEdit();
+      personaEditingSection = -1;
+      syncPersonaButtons();
+      editToggle.textContent = '收起全文编辑';
+      $('#cfg-roletext')?.focus();
+    } else {
+      editToggle.textContent = '编辑全文';
+    }
   });
   // 附加规则的示例标签：点一下追加到 textarea（已经写过就不重复加）
   const ruleChips = $('#persona-rule-chips');
@@ -9514,7 +9630,7 @@ function bindSettingsEvents(c) {
     try {
       await api(`/api/persona-templates/${id}`, { method: 'DELETE', body: '{}' });
       await loadSettings();
-      applyPersonaDraft(state.personaTemplates.xiaojingyu);
+      applyPersonaDraft(state.personaTemplates.xiaojingyu, 'xiaojingyu');
     } catch (e) {
       $('#persona-pick-hint').textContent = `删除失败：${e.message}`;
     }
@@ -9637,37 +9753,6 @@ function openToolBreakdown() {
 // ── 人设选择/添加 模态框 ──
 
 /** 选择人设：弹窗列出所有人设（含自定义），点击后填入角色设定文本框。 */
-function openPersonaPicker() {
-  const entries = Object.entries(state.personaTemplates || {});
-  if (!entries.length) {
-    $('#persona-pick-hint').textContent = '人设列表为空';
-    return;
-  }
-  const overlay = modelModalShell({
-    head: '选择人设',
-    body: `
-      <div class="model-modal-right" id="persona-list" style="flex:1">
-        ${entries.map(([id, p]) => `
-          <div class="mm-model" data-id="${esc(id)}">
-            <span class="mm-check">${id === currentPersonaId() ? '✓' : ''}</span>
-            <span>${esc(p.name)}</span>
-            <span class="muted" style="font-size:11px">${p.builtin ? '内置' : '自定义'}</span>
-          </div>`).join('')}
-      </div>`,
-    foot: `<button class="btn" id="persona-cancel">取消</button>`
-  });
-  overlay.querySelectorAll('.mm-model').forEach((el) => {
-    el.addEventListener('click', () => {
-      const id = el.dataset.id;
-      const tpl = state.personaTemplates[id];
-      if (tpl) applyPersonaDraft(tpl);
-      closeModelModal(overlay);
-      syncPersonaButtons();
-    });
-  });
-  overlay.querySelector('#persona-cancel').addEventListener('click', () => closeModelModal(overlay));
-}
-
 /** 添加人设：弹窗填写人设名称、角色设定、管理员附加规则。 */
 function openPersonaCreateModal() {
   const overlay = modelModalShell({
