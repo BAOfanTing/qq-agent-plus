@@ -78,6 +78,17 @@ test('global person memory migration and isolation rules', async (t) => {
     setRuntimeConfig(cfg);
   });
 
+  await t.test('每条印象带日期（模型才能判断"这是昨天还是两周前"）', () => {
+    const line = memory.formatForPrompt('group:999', { userIds: ['12345'] });
+    assert.match(line, /- Alice：\[\d{2}-\d{2}\] /, `印象行要带 [MM-DD]：${line.split('\n')[1]}`);
+  });
+
+  await t.test('交接里的"已作决定/下一步"只约束同一话题（写进提示词）', async () => {
+    const { buildSystemPrompt } = await import('../src/llm/prompt.js');
+    const sp = buildSystemPrompt({});
+    assert.match(sp, /只约束\*\*同一个话题\*\*|只约束同一个话题/, '缺"交接只约束同一话题"这条规则');
+  });
+
   await t.test('does not erase old global memories when a known person is first consolidated in a new chat', () => {
     memory.append('group:400', 'memberImpression', '旧群里形成的长期印象', {
       userId: '24680',

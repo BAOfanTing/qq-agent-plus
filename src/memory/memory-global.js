@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, getConfig, updateConfig } from '../core/config.js';
+import { formatShortTime } from '../core/util.js';
 import { GlobalPersonMemoryStore } from './global-person-memory-store.js';
 
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
@@ -145,7 +146,11 @@ export class MemoryStore {
       // 不知道说的是自己的设置者，容易当成外人来试探它。
       if (ownerUin && String(m.userId) === ownerUin) who += `（QQ ${ownerUin}，就是管理员本人）`;
       const recent = [...m.impressions].sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt)).slice(0, 3).reverse();
-      for (const e of recent) lines.push(`- ${who}：${e.content}`);
+      // 带上日期：模型才能判断"这是昨天还是两周前"，别把过期印象当现状用
+      for (const e of recent) {
+        const at = Number(e.lastObservedAt || e.createdAt) || 0;
+        lines.push(`- ${who}：[${at ? formatShortTime(at).slice(0, 5) : '日期未知'}] ${e.content}`);
+      }
     }
     return lines.join('\n').slice(0, 6000);
   }

@@ -250,6 +250,33 @@ export function shouldAutoConsolidate({
   return memberCounts.some((count) => Number(count) > Math.max(2, Number(maxPerMember) || 5));
 }
 
+/**
+ * 记忆整理的结果能不能采纳（纯函数，便于单测）。
+ *
+ * 规则（整理模式只在"合并/删减/按事实改写"的范围内可信）：
+ *   - 新建模式：条数不受限（本来就是从零提炼）；
+ *   - 条数减少或持平：采纳；
+ *   - 比原来多 1 条、且总字数没有明显变多：采纳 —— 这是"把一条混着两件事的印象拆开"
+ *     的正常改写。以前一律按"条数变多 = 疑似幻觉"拒绝，好改写会被旧文本顶回去
+ *     （实测：模型想把"扬言改人设"那条改干净，拆成 4 条就被拦下）；
+ *   - 条数多出 2 条以上、或总字数明显膨胀：拒绝（那才像在编内容）。
+ *
+ * @returns {string} 拒绝原因；可以采纳时返回空串。
+ */
+export function consolidationRejectionReason({ isNew = false, existing = [], next = [] } = {}) {
+  if (isNew) return '';
+  const prev = Array.isArray(existing) ? existing : [];
+  const list = Array.isArray(next) ? next : [];
+  if (list.length <= prev.length) return '';
+  const prevChars = prev.reduce((n, e) => n + String(e?.content ?? '').length, 0);
+  const nextChars = list.reduce((n, e) => n + String(e ?? '').length, 0);
+  const grew = nextChars - prevChars;
+  if (list.length === prev.length + 1 && grew <= Math.max(40, Math.round(prevChars * 0.2))) {
+    return '';
+  }
+  return `结果变多（${prev.length}→${list.length} 条、${prevChars}→${nextChars} 字），疑似幻觉`;
+}
+
 export class Orchestrator {
   constructor({
     store,
@@ -2163,9 +2190,9 @@ export class Orchestrator {
     const raw = Array.isArray(parsed.impressions) ? parsed.impressions : [];
     const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 5;
 
-    // 整理模式：条数变多 = 疑似幻觉，放弃（保留原印象）
-    if (!isNew && raw.length > existing.length) {
-      console.warn(`[memory] 整理 ${chatKey}/${mem.userId} 结果条数变多（${existing.length}→${raw.length}），疑似幻觉，放弃`);
+    const rejection = consolidationRejectionReason({ isNew, existing, next: raw });
+    if (rejection) {
+      console.warn(`[memory] 整理 ${chatKey}/${mem.userId} 放弃：${rejection}`);
       return null;
     }
 
@@ -2187,18 +2214,24 @@ export class Orchestrator {
     const isOwner = String(cfg?.admin?.ownerUin || '').trim() === String(mem.userId || '').trim();
     const lines = [`群友 QQ：${mem.userId}`, `当前名字：${mem.name}`];
     if (isOwner) lines.push('身份：这是机器人管理员本人（设置角色卡、管这台机器人的人）');
-    for (const e of mem.impressions) lines.push(`- ${e.content} (${fmtTs(e.createdAt)})`);
+    for (const e of mem.impressions) {
+      const created = fmtTs(e.createdAt);
+      const observed = Number(e.lastObservedAt || 0);
+      lines.push(`- ${e.content}（记于 ${created}${observed && observed !== Number(e.createdAt) ? `，最近观察到 ${fmtTs(observed)}` : ''}）`);
+    }
     const maxKeep = Number(cfg.memory?.maxImpressionsPerMember) || 5;
     return {
       system: '你是聊天机器人的记忆整理模块，负责整理对某一位群友的长期印象。你只做合并、改写与删除，绝不发明任何新事实。输出必须是严格的 JSON 对象，不要 Markdown 代码块，不要任何解释文字。格式：{"impressions":["…"]}',
       user: [
         '下面是机器人对一位群友的全部印象，请整理：',
-        '1. 把同义/重复的印象合并成一条，以最新的观感为准。',
+        '1. 把同义/重复的印象合并成一条。冲突时以**最近观察到的**为准；拿不准就保留较新的一条，别自己裁量。',
         '2. 明显过时、矛盾、或一次性事件（不会再次影响相处）的印象删除。',
-        `3. 最多保留 ${maxKeep} 条，每条不超过 120 字。`,
-        '4. 只写可观察的事实与偏好（爱聊什么、什么口气、玩什么梗、有哪些雷点），不写评价、不揣测动机：',
+        '3. 只有被反复观察到、或对方明确说出来的，才算稳定特征；只出现过一次的拌嘴、玩笑、临时要求，不要升级成"他是什么人"。',
+        '4. 很久没再被观察到（记于/观察到都在 90 天前）、近期也没新证据提到的，直接删掉。',
+        `5. 最多保留 ${maxKeep} 条，每条不超过 120 字。`,
+        '6. 只写可观察的事实与偏好（爱聊什么、什么口气、玩什么梗、有哪些雷点），不写评价、不揣测动机：',
         '   写"会反复问人设、爱逗人表演"，不要写"想掌控设定""扬言改人设""喜欢试探规则"这类带立场的说法。',
-        '5. 如果写的是管理员本人：他改人设、问人设、逗你玩都是本职，不是"试探"或"施压"，照事实记就行。',
+        '7. 如果写的是管理员本人：他改人设、问人设、逗你玩都是本职，不是"试探"或"施压"，照事实记就行。',
         '原则：所有信息只能来自原文，语义不变，宁少勿错；没有可保留的时输出空数组。',
         '',
         ...lines
