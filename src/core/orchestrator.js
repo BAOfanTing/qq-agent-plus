@@ -2181,9 +2181,14 @@ export class Orchestrator {
   /** 整理模式：合并/删减已有印象。 */
   #buildConsolidatePrompt(mem) {
     const fmtTs = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
+    const cfg = getConfig();
+    // 整理这次调用是"另一个进程"：它看不到角色卡，也不知道谁是管理员。
+    // 不点明身份的话，"他改人设、问人设"就容易被写成性格缺陷（"扬言改人设提示词"就是这么来的）。
+    const isOwner = String(cfg?.admin?.ownerUin || '').trim() === String(mem.userId || '').trim();
     const lines = [`群友 QQ：${mem.userId}`, `当前名字：${mem.name}`];
+    if (isOwner) lines.push('身份：这是机器人管理员本人（设置角色卡、管这台机器人的人）');
     for (const e of mem.impressions) lines.push(`- ${e.content} (${fmtTs(e.createdAt)})`);
-    const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 5;
+    const maxKeep = Number(cfg.memory?.maxImpressionsPerMember) || 5;
     return {
       system: '你是聊天机器人的记忆整理模块，负责整理对某一位群友的长期印象。你只做合并、改写与删除，绝不发明任何新事实。输出必须是严格的 JSON 对象，不要 Markdown 代码块，不要任何解释文字。格式：{"impressions":["…"]}',
       user: [
