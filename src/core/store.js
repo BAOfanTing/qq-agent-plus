@@ -330,7 +330,7 @@ export class ChatStore {
     return this.#transaction(() => {
       const changed = this.db.prepare("UPDATE messages SET state='acked',lease_id=NULL WHERE lease_id=? AND state='leased'").run(id).changes;
       this.db.prepare("UPDATE runs SET state='acked' WHERE id=? AND state='leased'").run(id);
-      this.db.prepare("DELETE FROM outbox WHERE run_id=? AND state IN ('sent','failed')").run(id);
+      this.db.prepare("DELETE FROM outbox WHERE run_id=? AND state IN ('sent','failed','reconciled_sent','reconciled_failed')").run(id);
       return changed;
     });
   }
@@ -350,10 +350,12 @@ export class ChatStore {
   failLease(id, error, { retryable = true, delayMs = 5000, maxAttempts = 3 } = {}) {
     return this.#transaction(() => {
       const held = this.hasEffects(id);
+      // held 的行把 run id 留在 lease_id 上（leased 之外的状态没有 lease 语义）：否则租约
+      // 过期产生的 held 只剩 error 文本可认，逐条核对就永远释放不掉它们。
       this.db.prepare(`UPDATE messages SET state=CASE WHEN ? THEN 'held'
         WHEN attempts>=? OR ? THEN 'failed' ELSE 'pending' END,
-        lease_id=NULL,available_at=?,error=? WHERE lease_id=? AND state='leased'`)
-        .run(held ? 1 : 0, maxAttempts, retryable ? 0 : 1, Date.now() + delayMs, String(error).slice(0, 1000), id);
+        lease_id=CASE WHEN ? THEN ? ELSE NULL END,available_at=?,error=? WHERE lease_id=? AND state='leased'`)
+        .run(held ? 1 : 0, maxAttempts, retryable ? 0 : 1, held ? 1 : 0, id, Date.now() + delayMs, String(error).slice(0, 1000), id);
       this.db.prepare("UPDATE runs SET state=?,error=? WHERE id=? AND state='leased'")
         .run(held ? 'held' : 'failed', String(error).slice(0, 1000), id);
       return held;
@@ -377,6 +379,9 @@ export class ChatStore {
       const messages = this.db.prepare("UPDATE messages SET state='acked' WHERE chat_key=? AND state='held'").run(chatKey).changes;
       const outbox = this.db.prepare(`DELETE FROM outbox
         WHERE chat_key=? AND state IN ('sending','unknown')`).run(chatKey).changes;
+      // 已核对过的终态行不在上面那条里，一并清掉（不然它们永久留在库里）。
+      this.db.prepare(`DELETE FROM outbox
+        WHERE chat_key=? AND state IN ('reconciled_sent','reconciled_failed')`).run(chatKey);
       this.db.prepare("UPDATE runs SET state='acked' WHERE chat_key=? AND state='held'").run(chatKey);
       return Math.max(messages, outbox);
     });
@@ -412,10 +417,17 @@ export class ChatStore {
       const remaining = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM outbox
         WHERE run_id=? AND state IN ('sending','unknown')`).get(row.runId).count) || 0;
       if (remaining === 0) {
+        // 按 run 释放 held：held 行的 lease_id 记的就是产生它的那个 run（见 failLease）。
+        // 此前按 error 文本匹配，而租约过期产生的 held 文本是 'Lease expired or process
+        // interrupted'，永远匹配不上 —— 于是逐条核对不会释放它，held 计数一直挂着，
+        // 开了 unknownWritesBlockChat 的群会一直卡住。
         this.db.prepare(`UPDATE messages SET state='acked', lease_id=NULL
-          WHERE chat_key=? AND state='held' AND error LIKE '%Delivery uncertain%'`).run(row.chatKey);
+          WHERE chat_key=? AND state='held' AND lease_id=?`).run(row.chatKey, row.runId);
         this.db.prepare(`UPDATE runs SET state='acked', error=? WHERE id=? AND state='held'`)
           .run('管理员已核对全部未知写入', row.runId);
+        // 这条路径不走 ackLease，已核对的终态行要在这里清掉，否则会长期累积。
+        this.db.prepare(`DELETE FROM outbox
+          WHERE run_id=? AND state IN ('reconciled_sent','reconciled_failed')`).run(row.runId);
       }
       return {
         operationId: row.id,

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR, getConfig } from '../core/config.js';
+import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
 import {
   addUsage,
   cachedTokensOfUsage,
@@ -508,11 +509,20 @@ export class QzoneInteractionManager {
 
   #prune() {
     const cutoff = this.now() - 30 * 24 * HOUR_MS;
-    const trim = (items) => items
-      .filter((item) => item.status === 'unread' || item.status === 'unknown'
-        || Number(item.updatedAt || item.discoveredAt) >= cutoff)
-      .sort((a, b) => Number(b.discoveredAt) - Number(a.discoveredAt))
-      .slice(0, MAX_STATE_ITEMS);
+    // 未处理的（unread）与待人工核对的（unknown）永远保留，只对已结束的旧项做上限截断。
+    // 此前是过滤后直接 slice：一旦超过上限，最老的 unread/unknown 会被静默丢掉——既不记日志
+    // 也不改状态，等于那批动态再也不会被处理。
+    const trim = (items) => {
+      const kept = items.filter((item) => item.status === 'unread' || item.status === 'unknown'
+        || Number(item.updatedAt || item.discoveredAt) >= cutoff);
+      const active = kept.filter((item) => item.status === 'unread' || item.status === 'unknown');
+      const settled = kept.filter((item) => item.status !== 'unread' && item.status !== 'unknown')
+        .sort((a, b) => Number(b.discoveredAt) - Number(a.discoveredAt));
+      const room = Math.max(0, MAX_STATE_ITEMS - active.length);
+      const keep = new Set([...active, ...settled.slice(0, room)]);
+      return kept.filter((item) => keep.has(item))
+        .sort((a, b) => Number(b.discoveredAt) - Number(a.discoveredAt));
+    };
     this.state.feeds = trim(this.state.feeds);
     this.state.comments = trim(this.state.comments);
     this.state.watchedPosts = this.state.watchedPosts
@@ -716,9 +726,10 @@ export class QzoneInteractionManager {
     const root = getConfig();
     const systemPrompt = buildQzoneInteractionPrompt(root.persona, { accountNickname: this.onebot?.selfNickname || '' });
     const tools = openAiTools([this.#submitToolDef([], [], cfg)]);
+    // 与主运行同口径：省 Token 模式夹住单次预算上限
     const hardLimit = Math.min(
       Math.max(16000, Number(root.api?.contextWindowTokens) || 1000000),
-      Math.max(20000, Number(root.api?.maxRunTokens) || 160000)
+      Math.max(20000, cappedByTokenSaver(Number(root.api?.maxRunTokens) || 160000, tokenSaverCapsOf(root)?.maxRunTokens))
     );
     const budget = Math.max(4000, hardLimit - 8192);
     const selected = [];
@@ -978,6 +989,15 @@ export class QzoneInteractionManager {
         });
         run.actions.push({ type: 'reply', key: item.key, status: 'done' });
       } catch (error) {
+        if (signal?.aborted) {
+          // 已经中止：请求在发出前就被 AbortSignal 拒了，不能记成"结果未知"——那样既不重试
+          // 也永远清不掉。恢复成未处理，等下次巡检重来。
+          item.status = 'unread';
+          item.error = '';
+          item.updatedAt = this.now();
+          this.#save();
+          continue;
+        }
         item.status = 'unknown';
         item.error = cleanText(error?.message ?? error, 500);
         item.updatedAt = this.now();
@@ -1012,6 +1032,13 @@ export class QzoneInteractionManager {
           this.#watchPost(item.post, { ownComment: action.content });
           run.actions.push({ type: 'comment', key: item.key, status: 'done' });
         } catch (error) {
+          if (signal?.aborted) {
+            item.commentStatus = '';
+            item.status = 'unread';
+            item.error = '';
+            this.#save();
+            continue;
+          }
           item.commentStatus = 'unknown';
           item.status = 'unknown';
           item.error = cleanText(error?.message ?? error, 500);
@@ -1031,6 +1058,13 @@ export class QzoneInteractionManager {
           item.likeStatus = 'done';
           run.actions.push({ type: 'like', key: item.key, status: 'done' });
         } catch (error) {
+          if (signal?.aborted) {
+            item.likeStatus = '';
+            item.status = 'unread';
+            item.error = '';
+            this.#save();
+            continue;
+          }
           item.likeStatus = 'unknown';
           item.status = 'unknown';
           item.error = cleanText(error?.message ?? error, 500);

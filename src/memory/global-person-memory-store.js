@@ -387,6 +387,9 @@ export class GlobalPersonMemoryStore {
       member.sourceChatKeys = sourceKeys(member.impressions.flatMap((x) => x.sourceChatKeys));
       member.updatedAt = Date.now();
       if (!member.impressions.length) {
+        // 快照要在删文件之前打：同文件的 removeMember / 全局删除都这么做，这里此前漏了，
+        // 于是"按群删除"是唯一不可恢复的删除路径。
+        try { backupPersonBeforeConsolidation(member, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
         map.delete(key); try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
       } else this.#persist(member);
     }
@@ -408,6 +411,7 @@ export class GlobalPersonMemoryStore {
     member.sourceChatKeys = sourceKeys(member.impressions.flatMap((x) => x.sourceChatKeys));
     member.updatedAt = Date.now();
     if (!member.impressions.length) {
+      try { backupPersonBeforeConsolidation(member, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
       map.delete(uid);
       try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
     } else this.#persist(member);

@@ -693,6 +693,14 @@ export function buildToolDefs() {
         if (!/^\d{1,15}$/.test(userId)) {
           return err(`userId 必须是数字 QQ 号（收到：${JSON.stringify(args.userId)}）。${memberHint(ctx)}`);
         }
+        // 只给本会话确实出现过的人记印象：模型会编出或打错号码，那会永久生成一条挂在陌生人
+        // 名下的印象（注入本群提示词、还会出现在控制台资产页），而这类错事后无法发现。
+        // send_poke / send_message 等同类工具都做这个检查，这里此前漏了。
+        if (ctx.kind === 'group' && !hasParticipant(ctx, userId)) {
+          const looksLikeMessageId = Boolean(ctx.store?.findByMid?.(ctx.chatKey, userId));
+          return err(`${userId} 不是当前群中已出现的成员 QQ 号`
+            + `${looksLikeMessageId ? '，它是消息 id；如需引用请改用 replyToMessageId' : ''}。${memberHint(ctx)}`);
+        }
         const entry = ctx.memory.append(ctx.chatKey, 'memberImpression', String(args.content ?? ''), {
           userId,
           target: String(args.target ?? '').trim()

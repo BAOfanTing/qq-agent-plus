@@ -272,7 +272,9 @@ export class SessionRegistry {
 
   /** 在会话结束时累加今日用量。 */
   #bumpTodayUsage(s) {
-    const dayKey = todayKey(s.startedAt);
+    // 按"结束时刻"归属。用 startedAt 的话，跨零点的会话会把它的数字按开始那天算，发现文件
+    // 是另一天就把新一天已累计的量重置成 0；之后当天的会话又因 dayKey 不匹配一直少算。
+    const dayKey = todayKey(Date.now());
     let data = { dayKey, promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, runs: 0, webSearchCount: 0 };
     try {
       const parsed = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'usage-today.json'), 'utf8'));

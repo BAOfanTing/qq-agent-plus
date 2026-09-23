@@ -232,7 +232,8 @@ The console is reachable at `http://HOST:PORT`; the token is obtained with
 `bash manage.sh token`. The cookie is HttpOnly and SameSite=Strict, and
 credentials are not returned by `/api/config`. On an untrusted network, TLS must
 be terminated in front of the service. Plain HTTP on the LAN is not encrypted.
-`/healthz` exposes only a liveness boolean. API endpoints accept
+`/healthz` returns liveness plus the deployed version and the OneBot connection
+state. API endpoints accept
 `x-console-token`. The `?token=` query parameter is accepted only by the auto-login shortcut (the console strips it from the URL after login); do not put the token into any other URL, and do not do it over plain HTTP to a host you do not control.
 
 The top selector changes observe/active mode. Observe stores messages but makes
