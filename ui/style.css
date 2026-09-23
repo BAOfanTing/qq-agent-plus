@@ -1025,7 +1025,6 @@ html.boot-show .loading-overlay { opacity: 1; }
 .conversation-scope-actions { display: flex; align-items: center; gap: 8px; }
 .conversation-scope-actions .hint { margin: 0; }
 .conversation-trigger-hint { margin: -6px 0 12px; }
-.persona-save-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .persona-role-text { min-height: 360px; font-size: 12.5px; line-height: 1.7; font-family: var(--mono); }
 
 /* ── 人设卡库 + 结构化正文视图 ──
@@ -1297,7 +1296,14 @@ html.boot-show .loading-overlay { opacity: 1; }
   .asset-table-wrap { max-height: none; }
   .time-control-settings .field { min-width: 0; }
 }
-.save-bar { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: center; }
+/* 保存条：渲染在内容末尾 + 贴底悬浮，长页面里从顶部就能看到、一直悬在视口底部，
+   滚到底时正好落在内容末尾。全站只有一个保存按钮（分区里不再各放一个）。 */
+.save-bar {
+  position: sticky; bottom: 0; z-index: 2;
+  background: var(--bg); padding: 12px 0; border-top: 1px solid var(--border);
+  display: flex; gap: 10px; align-items: center;
+  box-shadow: 0 -6px 16px -8px rgba(0, 0, 0, .45);
+}
 
 /* ── 动效 ── */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }

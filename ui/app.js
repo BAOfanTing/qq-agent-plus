@@ -5730,7 +5730,7 @@ const PERSONA_RULE_EXAMPLES = [
 let personaCollapsedSections = new Set();
 let personaFoldKey = null;
 let personaEditingSection = -1;   // 正在按小节编辑的序号；-1 = 没在编辑
-let personaEditNote = '';         // 小节编辑后的提示（"还得点保存人设修改"这类）
+let personaEditNote = '';         // 小节编辑后的提示（"还得点保存设置"这类）
 
 /**
  * 默认折叠策略：只展开"你是谁"和"你的标志"，其余小节收起来。
@@ -5938,7 +5938,7 @@ function renderPersonaCardBody(text, { collapsed = new Set(), showTitle = true, 
            <div class="pd-edit-row">
              <button type="button" class="btn btn-small btn-primary pd-sec-save" data-sec="${i}">保存本节</button>
              <button type="button" class="btn btn-small pd-sec-cancel">取消</button>
-             <span class="muted pd-edit-hint">保存只是改草稿；要生效还得点最下面的「保存人设修改」。</span>
+             <span class="muted pd-edit-hint">保存只是改草稿；要生效还得点底部那条「保存设置」。</span>
            </div>
          </div>`
       : body;
@@ -6016,14 +6016,6 @@ function renderPersonaLibrary(c) {
     </div>
     <input type="text" id="cfg-persona-pick" hidden />
     <span id="persona-pick-hint" class="muted" style="font-size:12px"></span>`;
-}
-
-function renderPersonaSaveBar() {
-  return `
-    <div class="persona-save-row">
-      <button class="btn btn-primary" id="save-persona-btn">保存人设修改</button>
-      <span id="persona-save-result" class="muted"></span>
-    </div>`;
 }
 
 function renderHealthCard() {
@@ -6231,12 +6223,15 @@ function renderSettingsSection(c) {
     onebot: () => renderOnebotSection(c)
   };
   const render = sections[sec] || sections.api;
+  // 保存条放在内容**末尾**并 sticky 贴底：长页面（人设页能滚好几屏）里从顶部就能看到它，
+  // 一直悬在视口底部，滚到底时正好落在内容末尾。以前它渲染在最前面，既不悬浮又容易
+  // 和分区里自己的保存按钮撞车（人设页就多过一个"保存人设修改"，其实调的是同一个保存）。
   return `
+    ${render()}
     <div class="save-bar">
       <button class="btn btn-primary" id="save-cfg-btn">保存设置</button>
       <span id="cfg-save-result" class="muted"></span>
-    </div>
-    ${render()}`;
+    </div>`;
 }
 
 function renderApiSection(c) {
@@ -8067,7 +8062,7 @@ function renderPersonaSection(c) {
       </div>
       <textarea id="cfg-customrules" class="persona-role-text" style="min-height:100px" placeholder="例如：别装傻、别反问，不接话就安静；称呼固定用「老板」；被怼只淡淡带过">${esc(c.persona.customRules || '')}</textarea>
       <div class="hint">冲突时优先级：安全规则 &gt; 这里 &gt; 角色设定 &gt; 平台默认风格。角色的口吻/称呼/脾气写在「角色设定」里就行，这里的硬要求会盖过平台默认风格。上面几个例子点一下就加进去，可以再改。</div></div>
-    ${renderPersonaSaveBar()}`;
+    <div class="hint">改完记得点页面最下面那条<strong>「保存设置」</strong>（一直悬在底部）——它保存的就是这一页的人设。</div>`;
 }
 
 function renderAllowSection(c) {
@@ -9429,7 +9424,7 @@ function bindSettingsEvents(c) {
           const pending = personaView.querySelector(`.pd-edit-text[data-sec="${personaEditingSection}"]`);
           if (pending && personaEditingSection !== idx && personaEditingSection >= 0) {
             roleBox.value = replacePersonaSectionBody(roleBox.value, personaEditingSection, pending.value);
-            personaEditNote = '上一节已更新（还没生效）：确认无误后点最下面的「保存人设修改」。';
+            personaEditNote = '上一节已更新（还没生效）：确认无误后点底部那条「保存设置」。';
           }
           personaEditingSection = personaEditingSection === idx ? -1 : idx;
         } else if (button.classList.contains('pd-sec-save')) {
@@ -9437,7 +9432,7 @@ function bindSettingsEvents(c) {
           if (box) {
             roleBox.value = replacePersonaSectionBody(roleBox.value, idx, box.value);
             personaEditingSection = -1;
-            personaEditNote = '这一节已更新（还没生效）：确认无误后点最下面的「保存人设修改」。';
+            personaEditNote = '这一节已更新（还没生效）：确认无误后点底部那条「保存设置」。';
           }
         } else if (button.classList.contains('pd-sec-cancel')) {
           personaEditingSection = -1;
@@ -9445,7 +9440,7 @@ function bindSettingsEvents(c) {
           if (boundTpl?.builtin) {
             roleBox.value = replacePersonaSectionBody(roleBox.value, idx, personaSectionBody(boundTpl.text, idx));
             personaEditingSection = -1;
-            personaEditNote = `这一节已恢复成卡文件「${boundTpl.name}」里的写法（还没生效）：记得点「保存人设修改」。`;
+            personaEditNote = `这一节已恢复成卡文件「${boundTpl.name}」里的写法（还没生效）：记得点底部的「保存设置」。`;
           }
         }
         syncPersonaButtons();
@@ -9471,7 +9466,7 @@ function bindSettingsEvents(c) {
     if (!boundTpl?.builtin || !roleBox) return;
     roleBox.value = boundTpl.text;
     personaEditingSection = -1;
-    personaEditNote = `正文已恢复成卡文件「${boundTpl.name}」的原文（还没生效）：点「保存人设修改」确认。`;
+    personaEditNote = `正文已恢复成卡文件「${boundTpl.name}」的原文（还没生效）：点底部的「保存设置」确认。`;
     syncPersonaButtons();
   });
   const expandBtn = $('#persona-expand-btn');
@@ -9522,16 +9517,6 @@ function bindSettingsEvents(c) {
       applyPersonaDraft(state.personaTemplates.xiaojingyu);
     } catch (e) {
       $('#persona-pick-hint').textContent = `删除失败：${e.message}`;
-    }
-  });
-  const savePersonaBtn = $('#save-persona-btn');
-  if (savePersonaBtn) savePersonaBtn.addEventListener('click', async () => {
-    try {
-      await saveConfig();
-      $('#persona-save-result').textContent = '人设已保存 ✓';
-      setTimeout(() => { $('#persona-save-result').textContent = ''; }, 3000);
-    } catch (e) {
-      $('#persona-save-result').textContent = `保存失败：${e.message}`;
     }
   });
   syncPersonaButtons();
@@ -9726,7 +9711,7 @@ function openPersonaCreateModal() {
       closeModelModal(overlay);
       await loadSettings();
       applyPersonaDraft({ name, text, customRules, behaviorProfile });
-      $('#persona-pick-hint').textContent = `人设「${name}」已添加。记得点「保存人设修改」使当前填写生效。`;
+      $('#persona-pick-hint').textContent = `人设「${name}」已添加。记得点底部的「保存设置」使当前填写生效。`;
     } catch (e) {
       $('#persona-pick-hint').textContent = `添加失败：${e.message}`;
     }
