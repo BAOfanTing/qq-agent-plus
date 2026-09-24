@@ -1789,6 +1789,31 @@ export class IdentityStore {
     return this.getFriendProposal(id);
   }
 
+  /**
+   * 把一条失败/结果未知的候选重置为待派发，用于协议端修复后的重试：
+   * 旧结构被服务端秒拒（Issue #10）时提案落 failed 是终态，没有这条路径
+   * 就只能等 30 天冷却后重新提名。重置会生成新的 dispatch_attempt_id，
+   * 上一次的 dispatch_error 清空但保留在返回视图外的历史里（不追字节）。
+   */
+  resetFriendProposalForRedispatch(id, { now = Date.now() } = {}) {
+    const proposal = this.getFriendProposal(id);
+    if (!proposal) throw new Error('好友候选不存在');
+    if (!['failed', 'held_unknown'].includes(proposal.status)) {
+      throw new Error(`只有失败或结果未知的候选可以重新派发：当前 ${proposal.status}`);
+    }
+    const attemptId = `fd_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
+    const result = this.db.prepare(`
+      UPDATE friend_proposals
+      SET status='dispatching', dispatch_attempt_id=?, dispatch_started_at=?,
+        dispatched_at=0, dispatch_error='', updated_at=?
+      WHERE id=? AND status IN ('failed','held_unknown')
+    `).run(attemptId, now, now, proposal.id);
+    if (result.changes !== 1) {
+      throw new Error(`好友候选状态已改变：${this.getFriendProposal(id)?.status ?? '未知'}`);
+    }
+    return this.getFriendProposal(id);
+  }
+
   markFriendAdded(userId, now = Date.now()) {
     const uin = normalizeUin(userId);
     if (!uin) return 0;

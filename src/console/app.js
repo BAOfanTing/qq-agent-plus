@@ -2390,6 +2390,27 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         }
       }
 
+      const friendProposalRedispatch = /^\/api\/identity-pilot\/friend-proposals\/(fp_[a-f0-9]{12})\/redispatch$/i.exec(pathname);
+      if (friendProposalRedispatch && method === 'POST') {
+        if (!identityPilot?.active || getConfig().identityPilot?.friendProposal?.enabled !== true) {
+          return json(res, 409, { error: '主动好友候选功能未启用' });
+        }
+        const body = await readBody(req);
+        if (body.confirm !== true) {
+          return json(res, 409, { error: '重新派发需要 confirm === true' });
+        }
+        try {
+          const result = await identityPilot.redispatchFriendProposal(
+            friendProposalRedispatch[1],
+            { decidedBy: 'console' }
+          );
+          emit('identity-pilot-update', identityPilot.status());
+          return json(res, 200, result);
+        } catch (error) {
+          return json(res, 409, { error: String(error?.message ?? error) });
+        }
+      }
+
       if (pathname === '/api/assets/overview' && method === 'GET') {
         const overview = assetObserver.overview();
         const pilotStatus = slangPilotStatus();

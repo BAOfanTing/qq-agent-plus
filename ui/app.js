@@ -7078,7 +7078,9 @@ async function loadFriendProposals(status) {
       <td>${proposal.status === 'pending'
         ? `<button type="button" class="btn btn-small proposal-decision" data-id="${esc(proposal.id)}" data-decision="approve">批准</button>
            <button type="button" class="btn btn-small proposal-decision" data-id="${esc(proposal.id)}" data-decision="reject">拒绝</button>`
-        : '-'}</td>
+        : ['failed', 'held_unknown'].includes(proposal.status) && (state.config?.identityPilot?.friendProposal?.activeDispatchEnabled === true)
+          ? `<button type="button" class="btn btn-small proposal-redispatch" data-id="${esc(proposal.id)}">重新派发</button>`
+          : '-'}</td>
     </tr>`).join('')}</tbody>
   </table>`;
   box.querySelectorAll('.proposal-decision').forEach((button) => {
@@ -7089,6 +7091,27 @@ async function loadFriendProposals(status) {
       } catch (error) {
         const node = $('#friend-feature-state');
         if (node) node.textContent = `审批失败：${error.message}`;
+        button.disabled = false;
+      }
+    });
+  });
+  box.querySelectorAll('.proposal-redispatch').forEach((button) => {
+    button.addEventListener('click', async () => {
+      if (!await askForConfirmation('重新派发这个好友候选？会生成一次新的发送尝试；失败仍会记入冷却。')) {
+        return;
+      }
+      button.disabled = true;
+      try {
+        const result = await api(`/api/identity-pilot/friend-proposals/${encodeURIComponent(button.dataset.id)}/redispatch`, {
+          method: 'POST',
+          body: JSON.stringify({ confirm: true })
+        });
+        await loadFriendFeaturePage();
+        const status = $('#friend-feature-state');
+        if (status) status.textContent = result.note;
+      } catch (error) {
+        const node = $('#friend-feature-state');
+        if (node) node.textContent = `重新派发失败：${error.message}`;
         button.disabled = false;
       }
     });

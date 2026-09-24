@@ -737,6 +737,80 @@ export class IdentityPilotManager {
     }
   }
 
+  /**
+   * 重新派发一条失败/结果未知的好友候选（协议端修复后的重试入口，
+   * 见 KNOWN-ISSUES 的 SnowLuma 好友申请能力缺口与 Issue #10）。
+   * 与批准派发同一管线：快照确认 → 已是好友则直接收口 → 重置状态机 → 发送。
+   */
+  async redispatchFriendProposal(id, { decidedBy = '', signal } = {}) {
+    const cfg = this.config();
+    if (!this.identityStore || !friendProposalEnabled(cfg)) {
+      throw new Error('主动好友候选功能当前未启用');
+    }
+    if (!friendRequestDispatchEnabled(cfg)) {
+      throw new Error('主动发送开关未开启；协议端支持确认后再重新派发。');
+    }
+    if (!await this.#ensureFriendSnapshotFresh(signal, true)) {
+      throw new Error('好友关系状态无法确认，未重新派发');
+    }
+    const current = this.identityStore.getFriendProposal(id);
+    if (current && this.identityStore.isKnownFriend(current.userId)) {
+      this.identityStore.markFriendAdded(current.userId);
+      return {
+        proposal: this.identityStore.getFriendProposal(id),
+        protocolDispatchSupported: true,
+        execution: 'accepted',
+        note: '对方已经是好友，已关闭该候选，未重复发送申请。'
+      };
+    }
+    const proposal = this.identityStore.resetFriendProposalForRedispatch(id);
+    try {
+      const result = await this.sendFriendRequest(this.onebot, {
+        selfId: this.onebot.selfId,
+        userId: proposal.userId,
+        sourceChatKey: proposal.sourceChatKey,
+        verificationMessage: proposal.verificationMessage,
+        signal
+      });
+      const sent = this.identityStore.completeFriendProposalDispatch(
+        proposal.id,
+        proposal.dispatchAttemptId,
+        'sent'
+      );
+      return {
+        proposal: sent,
+        protocolDispatchSupported: true,
+        execution: sent.status === 'accepted' ? 'accepted' : 'sent',
+        dispatch: result,
+        note: sent.status === 'accepted'
+          ? '好友申请已确认，对方已成为好友。'
+          : '好友申请 API 已明确受理；尚未成为好友，等待 friend_add 事件确认。'
+      };
+    } catch (error) {
+      const definiteFailure = error instanceof FriendRequestProtocolError
+        && error.outcome === 'failed';
+      const outcome = definiteFailure ? 'failed' : 'held_unknown';
+      const updated = this.identityStore.completeFriendProposalDispatch(
+        proposal.id,
+        proposal.dispatchAttemptId,
+        outcome,
+        { error: String(error?.message ?? error) }
+      );
+      this.log(
+        `[identity-pilot] 好友候选 ${proposal.id} 重新派发`
+        + `${definiteFailure ? '失败' : '结果未知'}：${String(error?.message ?? error)}`
+      );
+      return {
+        proposal: updated,
+        protocolDispatchSupported: true,
+        execution: definiteFailure ? 'failed' : 'held-unknown',
+        note: definiteFailure
+          ? `重新派发失败：${String(error?.message ?? error)}`
+          : '重新派发结果未知；系统已停止自动重试，请在 QQ 客户端核对。'
+      };
+    }
+  }
+
   async markFriendAdded(userId) {
     if (!this.identityStore) return 0;
     for (const [opportunityId, controller] of this.friendReviewControllers) {

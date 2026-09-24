@@ -59,3 +59,35 @@ Unix 路径与文件权限位等）；在 Linux 服务器与 CI（ubuntu-latest�
 文件里那个 40995 不起作用），所以机器上已经跑着机器人时它会以 `EADDRINUSE` 退出 ——
 只有在本机没有实例占用该端口时才能跑。它不在更新器的部署前测试集里
 （那一集只跑 `test/*.test.mjs`），因此不影响「立即更新」。
+
+## 外部依赖缺口：SnowLuma 不支持"主动发起好友申请"（2026-09-25 确认）
+
+主动好友候选的**应用层管线完全正常**（候选生成 → 审批 → 派发 → 记账已端到端验证），
+但派发环节的 `friendlist.addFriend` JCE 报文被服务端秒回笼统拒绝
+（`businessCode=1`「添加失败，请稍后再试」），对陌生人、已好友、机器人自己三种目标
+表现完全一致——请求没有到达好友逻辑。
+
+### 实验记录（详见 Issue #10）
+
+- **A/B 同连接对照**：旧结构（[5] 带手工字节长度）27ms 秒拒；移除长度字段的
+  实验结构 15 秒无响应（`retcode=100`）。
+- **self-add 实验**：连"添加自己"这类必然秒回语义化错误的请求，两种结构都未触发
+  好友逻辑——实验性结构同样无效，该候选修复已回退。
+- **开源调研**：NapCat/LLOneBot/Lagrange 均只实现入站申请处理
+  （`set_friend_add_request`），无"发起申请"的公开报文实现可对照。
+- **foxlesbiao 的内核发现**：GUI 客户端发起申请走的是 NTQQ 内核
+  `reqToAddFriends`，而 SnowLuma 的 action 目录中没有此能力。
+
+### 结论与当前状态
+
+**根因是协议端能力缺口，不是本仓库的包结构错误。** `friendlist.addFriend`
+这一旧服务在 NTQQ 会话下不可用，正确命令字 `reqToAddFriends` 需要
+SnowLuma 上游支持，或拿到内核报文对照后经 `send_packet` 直发（transport 已验证可用）。
+
+- 生产配置：`identityPilot.friendProposal.activeDispatchEnabled=false`——提案照常
+  生成与审批，批准后保留为 `approved_manual`（待手动执行），不再白烧 30 天冷却。
+- **重新派发**：`failed`/`held_unknown` 提案新增管理动作（控制台"重新派发"按钮，
+  `POST /api/identity-pilot/friend-proposals/{id}/redispatch`，需 `confirm`）——
+  协议端支持落地后可立即重试存量提案，不必等冷却重新提名。
+- 恢复条件：SnowLuma 上游加入好友申请能力（或拿到 `reqToAddFriends` 报文对照）
+  → 适配 `src/identity/friend-request-protocol.js` → 打开开关 → 用重新派发验证。
