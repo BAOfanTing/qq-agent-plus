@@ -19,6 +19,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-usage-e2e-'));
 process.env.QQ_AGENT_DATA_DIR = dataDir;
+// 隔离端口：app.start() 不接收参数（下面的 PORT 形参从未生效），实际绑定的是
+// config.server.port（默认 3210）。宿主机上跑着生产实例时（服务器上就是常态），
+// 整条 npm test 会被 EADDRINUSE 打断 —— 把隔离端口显式写进临时配置，让本测试
+// 真正自包含，不依赖"宿主机 3210 恰好空闲"。
+fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
+  server: { port: 40995, host: '127.0.0.1' }
+}));
 process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* Windows 上可能被句柄占着 */ } });
 const { createApp } = await import('../src/console/app.js');
 
