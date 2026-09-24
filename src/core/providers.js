@@ -14,7 +14,9 @@ export function setProviderKey(providerId, apiKey) {
   const keys = { ...(getConfig().providerKeys || {}) };
   if (key) keys[providerId] = key;
   else delete keys[providerId];
-  updateConfig({ providerKeys: keys });
+  // 必须走 __replace__ 整体替换：deepMerge 只遍历 override 的键，普通传对象时
+  // 被删掉的 id 会从旧配置原样复活 —— "清 Key"实际没清，明文还留在 config.json。
+  updateConfig({ providerKeys: { __replace__: keys } });
   return currentProviders().find((p) => p.id === providerId) || null;
 }
 

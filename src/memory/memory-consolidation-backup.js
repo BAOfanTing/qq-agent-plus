@@ -32,12 +32,24 @@ export function backupPersonBeforeConsolidation(person, {
   reason = 'consolidation'
 } = {}) {
   const userId = String(person?.userId || '').trim();
+  const name = String(person?.name || '').trim();
   const impressions = Array.isArray(person?.impressions) ? person.impressions : [];
-  if (!/^\d{1,15}$/.test(userId) || !impressions.length) return null;
+  if (!impressions.length) return null;
+  // 快照目录键与 global-person-memory-store.js 的 memberFileName 同源：
+  // 全数字 id（任意位数）→ 裸数字；非数字 id → u_<净化 id>（CJK 换 _，不截断）；
+  // name-only 成员 → _n_<净化名字>（保留 CJK，截 40，空则 unknown）。
+  // 原来对非数字 uid 一律返回 null，remove / clearSource / clearPersonSource 删这类成员时
+  // 拍不到快照，删了就回不来（2026-09-24 审查发现，违背"服务端会留可回滚快照"的承诺）。
+  const isNumeric = /^\d+$/.test(userId);
+  const key = isNumeric
+    ? userId
+    : userId
+      ? `u_${userId.replace(/[^a-z0-9_]/gi, '_')}`
+      : `_n_${String(name).replace(/[^a-z0-9_\u4e00-\u9fa5]/gi, '_').slice(0, 40) || 'unknown'}`;
 
   const when = Number(at) || Date.now();
   const snapshot = structuredClone(person);
-  const dir = path.join(BACKUP_ROOT, userId);
+  const dir = path.join(BACKUP_ROOT, key);
   const file = path.join(dir, `${when}-${crypto.randomUUID()}.json`);
   writeJsonAtomic(file, {
     version: 1,
@@ -49,7 +61,7 @@ export function backupPersonBeforeConsolidation(person, {
 
   const chatDir = chatDirName(sourceChatKey);
   if (/^(group|private)_\d+$/.test(chatDir)) {
-    writeJsonAtomic(path.join(MEMORY_BACKUP_ROOT, chatDir, `${userId}.json`), snapshot);
+    writeJsonAtomic(path.join(MEMORY_BACKUP_ROOT, chatDir, `${key}.json`), snapshot);
   }
   // 只增不删会一直占盘：每人只保留最近 KEEP_PER_PERSON 份（文件名前缀是时间戳）
   try {

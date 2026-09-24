@@ -32,9 +32,12 @@ function readJson(file, fallback = null) {
   } catch { return fallback; }
 }
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // 人物印象是隐私正文：目录 0700 / 文件 0600（与 consolidation-backup、identity 库同一口径）。
+  // 原来不带 mode，按 umask 022 落成 0644，多用户主机上任意本地用户可读。
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 1), 'utf8');
+  try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 1), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 function sourceKeys(value, fallback = '') {

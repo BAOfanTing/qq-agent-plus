@@ -25,7 +25,7 @@ import {
   QZONE_INTERACTION_PROMPT_VERSION
 } from '../llm/qzone-interaction-prompt.js';
 import { resolveToolCalls } from '../tools/inline-tools.js';
-import { minuteOfDayInZone } from '../core/util.js';
+import { minuteOfDayInZone, sanitizeUserText } from '../core/util.js';
 
 const STATE_FILE = path.join(DATA_DIR, 'qzone-interactions.json');
 const HOUR_MS = 60 * 60 * 1000;
@@ -37,7 +37,9 @@ const FEED_RETRY_DELAY_MS = 45000;
 const FAILURE_NOTIFY_STREAK = 3;
 
 function cleanText(value, max = 1000) {
-  return String(value ?? '').replace(/\0/g, '').replace(/[ \t]+/g, ' ').trim().slice(0, max);
+  // 双保险：数据源头（qzone-feed.js 的 compact）已过 sanitizeUserText，
+  // 拼进互动决策提示词前再过一次 —— 昵称等字段可能绕过 compact 直达这里。
+  return sanitizeUserText(String(value ?? '').replace(/\0/g, '').replace(/[ \t]+/g, ' ').trim()).slice(0, max);
 }
 
 function readJson(file, fallback) {
@@ -232,14 +234,14 @@ function sanitizePlan(raw, batch, cfg) {
 
 function publicPost(post) {
   return {
-    author: post.nickname || '好友',
+    author: sanitizeUserText(post.nickname) || '好友',
     time: post.time,
     content: cleanText(post.content, 1200),
     imageCount: post.images?.length || 0,
     commentCount: post.comments?.length || 0,
     alreadyLiked: post.isLiked === true,
     recentComments: (post.comments || []).slice(-8).map((comment) => ({
-      author: comment.nickname || '好友',
+      author: sanitizeUserText(comment.nickname) || '好友',
       content: cleanText(comment.content, 300)
     }))
   };
@@ -247,15 +249,15 @@ function publicPost(post) {
 
 function publicReply(item) {
   return {
-    author: item.comment.nickname || '好友',
+    author: sanitizeUserText(item.comment.nickname) || '好友',
     time: item.comment.time || item.discoveredAt,
     content: cleanText(item.comment.content, 500),
     post: {
-      author: item.post.nickname || '好友',
+      author: sanitizeUserText(item.post.nickname) || '好友',
       content: cleanText(item.post.content, 800)
     },
     thread: (item.context || []).slice(-10).map((comment) => ({
-      author: comment.nickname || '好友',
+      author: sanitizeUserText(comment.nickname) || '好友',
       content: cleanText(comment.content, 300),
       self: comment.self === true
     }))
@@ -1043,13 +1045,17 @@ export class QzoneInteractionManager {
         run.actions.push({ type: 'reply', key: item.key, status: 'done' });
       } catch (error) {
         if (signal?.aborted) {
-          // 已经中止：请求在发出前就被 AbortSignal 拒了，不能记成"结果未知"——那样既不重试
-          // 也永远清不掉。恢复成未处理，等下次巡检重来。
-          item.status = 'unread';
-          item.error = '';
+          // 中止无法区分"发出前被拒"与"在途中止"（请求可能已写到协议端）：按模块自身不变量
+          // （docs/QZONE_INTERACTIONS.md「写入发起后中断 → unknown，永不自动重试」）记 unknown
+          // 等人工核对。原来恢复成 unread 会把可能已发出的回复在下一轮再发一遍。
+          // break 而不是 continue：signal 已中止，后面未尝试的条目确定没发出去，
+          // 保持 unread 留给下一个活跃窗口重试，不该陪着记成 unknown。
+          item.status = 'unknown';
+          item.error = 'aborted';
           item.updatedAt = this.now();
+          run.actions.push({ type: 'reply', key: item.key, status: 'unknown', error: 'aborted' });
           this.#save();
-          continue;
+          break;
         }
         item.status = 'unknown';
         item.error = cleanText(error?.message ?? error, 500);
@@ -1086,11 +1092,15 @@ export class QzoneInteractionManager {
           run.actions.push({ type: 'comment', key: item.key, status: 'done' });
         } catch (error) {
           if (signal?.aborted) {
-            item.commentStatus = '';
-            item.status = 'unread';
-            item.error = '';
+            // 同上：在途中止按 unknown 处理，绝不回到 unread 重来 —— 否则已发出的评论会被
+            // 下一轮重新决策、重复发布（like_comment 里评论已 done 后点赞被中止的场景尤其如此）。
+            // break：signal 已中止，后面未尝试的条目保持 unread 留待重试。
+            item.commentStatus = 'unknown';
+            item.status = 'unknown';
+            item.error = 'aborted';
+            run.actions.push({ type: 'comment', key: item.key, status: 'unknown', error: 'aborted' });
             this.#save();
-            continue;
+            break;
           }
           item.commentStatus = 'unknown';
           item.status = 'unknown';
@@ -1112,11 +1122,14 @@ export class QzoneInteractionManager {
           run.actions.push({ type: 'like', key: item.key, status: 'done' });
         } catch (error) {
           if (signal?.aborted) {
-            item.likeStatus = '';
-            item.status = 'unread';
-            item.error = '';
+            // 同上：点赞在途中止记 unknown；commentStatus 保持原值 —— 评论可能已经成功，
+            // 不能因为点赞中止就被抹掉或跟着重做。break：未尝试的条目保持 unread 留待重试。
+            item.likeStatus = 'unknown';
+            item.status = 'unknown';
+            item.error = 'aborted';
+            run.actions.push({ type: 'like', key: item.key, status: 'unknown', error: 'aborted' });
             this.#save();
-            continue;
+            break;
           }
           item.likeStatus = 'unknown';
           item.status = 'unknown';

@@ -67,7 +67,7 @@ async function stickerLookupHint(ctx, key) {
   }
 }
 
-import { normalizeMessageList, unquoteJsonString } from '../core/util.js';
+import { normalizeMessageList, sanitizeUserText, unquoteJsonString } from '../core/util.js';
 import { formatStickerList } from '../onebot/stickers.js';
 import { validateImageUrl, safeFetchBinary } from '../llm/safe-fetch.js';
 import { webSearch, webFetch } from '../llm/web-search.js';
@@ -190,7 +190,8 @@ function midHint(ctx) {
 function memberHint(ctx) {
   const members = ctx.store.activeMembers(ctx.chatKey, 8);
   if (!members.length) return '当前没有可用的成员列表，请先等有群友发言后再试';
-  const lines = members.map((m) => `- ${m.name}：${m.userId}`).join('\n');
+  // 昵称入库时未清洗（ingest 只清洗 text），工具结果会回传给模型 —— 过同一道清洗。
+  const lines = members.map((m) => `- ${sanitizeUserText(m.name)}：${m.userId}`).join('\n');
   return `请从当前会话成员里选一个 QQ 号填进去：\n${lines}`;
 }
 
@@ -554,7 +555,7 @@ export function buildToolDefs() {
           messages: messages.map((m) => ({
             messageId: m.mid ?? undefined,
             time: new Date(m.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-            sender: m.self ? '我' : m.senderName,
+            sender: m.self ? '我' : sanitizeUserText(m.senderName),
             text: m.text
           }))
         });
@@ -601,7 +602,7 @@ export function buildToolDefs() {
         return ok({
           members: members.map((m) => ({
             userId: m.userId,
-            name: m.name,
+            name: sanitizeUserText(m.name),
             lastSeen: new Date(m.lastTs).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
             recentCount: m.count
           }))
@@ -622,7 +623,7 @@ export function buildToolDefs() {
         return ok({
           messageId: entry.mid,
           time: new Date(entry.ts).toLocaleString('zh-CN', { hour12: false }),
-          sender: entry.self ? '我' : entry.senderName,
+          sender: entry.self ? '我' : sanitizeUserText(entry.senderName),
           senderId: entry.senderId,
           text: entry.text,
           reply: entry.reply

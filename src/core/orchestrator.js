@@ -1079,6 +1079,11 @@ export class Orchestrator {
         });
       }
       if (lease) {
+        // 时间窗口关闭打断在途批次：无效果（模型没说话、无发送）时直接归档（ack）——
+        // 这是文档化的刻意设计（README："非活跃期消息仅归档，不积压自动补回复"，
+        // test/time-control-integration.test.mjs "prevents retry" 钉住了该语义），
+        // 管理员可见性由上面的 info 级 incident 记录兜底。有发送效果时走 failLease
+        // 进 held/failed 人工核对，不自动重试。
         if (timeClosed && !this.store.hasEffects(lease.id)) this.store.ackLease(lease.id);
         else this.store.failLease(lease.id, session.error, {
           retryable: !timeClosed && (isRetryableError(error) || controller.signal.aborted)

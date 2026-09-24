@@ -77,6 +77,37 @@ function sameSecret(a, b) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
+// /api/login 的按源失败退避：控制台 token 是唯一凭据（绑定 0.0.0.0 时尤其是），
+// 原来对猜测试毫无成本、比较还是普通 !==。连续失败 5 次后指数退避（30s 起、封顶 15 分钟），
+// 成功即清零。map 超过 4096 个源时整体清空（极端情况下最坏回到无退避，但内存有界）。
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_BACKOFF_BASE_MS = 30_000;
+const LOGIN_BACKOFF_MAX_MS = 15 * 60_000;
+const loginThrottle = new Map();
+function loginGate(req) {
+  const key = String(req.socket?.remoteAddress || 'unknown');
+  if (loginThrottle.size > 4096) loginThrottle.clear();
+  const entry = loginThrottle.get(key);
+  if (entry && entry.blockedUntil > Date.now()) {
+    return { ok: false, retryAfterSec: Math.ceil((entry.blockedUntil - Date.now()) / 1000) };
+  }
+  return {
+    ok: true,
+    fail() {
+      const e = loginThrottle.get(key) || { failures: 0, blockedUntil: 0 };
+      e.failures += 1;
+      if (e.failures >= LOGIN_MAX_FAILURES) {
+        e.blockedUntil = Date.now() + Math.min(
+          LOGIN_BACKOFF_BASE_MS * 2 ** (e.failures - LOGIN_MAX_FAILURES),
+          LOGIN_BACKOFF_MAX_MS
+        );
+      }
+      loginThrottle.set(key, e);
+    },
+    clear() { loginThrottle.delete(key); }
+  };
+}
+
 function decodeImageDataUrl(value) {
   const match = /^data:image\/(?:png|jpeg|gif|webp);base64,([A-Za-z0-9+/=\r\n]+)$/i
     .exec(String(value || ''));
@@ -1147,9 +1178,16 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) {
         return json(res, 403, { error: 'Invalid origin' });
       }
-      const body = await readBody(req);
+      const gate = loginGate(req);
+      if (!gate.ok) return json(res, 429, { error: `尝试过于频繁，请 ${gate.retryAfterSec} 秒后再试` });
+      const body = await readBody(req).catch(() => ({}));
       const token = getConfig().server.token;
-      if (!token || body.token !== token) return json(res, 401, { error: 'Token 不正确' });
+      // timing-safe 比较：全项目统一 sameSecret 口径（这里原来是唯一的普通 !==，修复遗漏）。
+      if (!token || !sameSecret(String(body?.token ?? ''), token)) {
+        gate.fail();
+        return json(res, 401, { error: 'Token 不正确' });
+      }
+      gate.clear();
       setConsoleCookie(res, token);
       return json(res, 200, { ok: true });
     }
@@ -2815,6 +2853,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
       // 旧的 /api/memory-files/<chat>/members/<uid> 语义是"只清这个来源"，两者别混用。
       const memoryMemberGlobalMatch = /^\/api\/memory-files\/global\/members\/(\d{1,15})$/.exec(pathname);
       if (memoryMemberGlobalMatch && method === 'DELETE') {
+        // 破坏性操作统一 confirm 门槛（与全站口径一致）：global 版跨所有会话删除。
+        const body = await readBody(req).catch(() => ({}));
+        if (body?.confirm !== true) return json(res, 409, { ok: false, error: '删除全部人物记忆需要 body.confirm === true' });
         const removed = memory.removeMember('', memoryMemberGlobalMatch[1]);
         emit('memory-update', { chatKey: '' });
         return json(res, 200, { ok: true, removed });
@@ -2839,6 +2880,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         }
       }
       if (memoryMemberMatch && method === 'DELETE') {
+        // 同上：删除成员印象也要 confirm（该路径的快照对 name-only 成员缺位，误删更难恢复）。
+        const body = await readBody(req).catch(() => ({}));
+        if (body?.confirm !== true) return json(res, 409, { ok: false, error: '删除成员印象需要 body.confirm === true' });
         const chatKey = `${memoryMemberMatch[1]}:${memoryMemberMatch[2]}`;
         memory.removeMember(chatKey, memoryMemberMatch[3]);
         emit('memory-update', { chatKey });

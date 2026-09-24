@@ -199,7 +199,7 @@
     // 按钮写的是"删除全部人物记忆"：走全局删除路由（该 QQ 在所有会话的印象一起删，服务端会先留快照）。
     // ⚠️ 别改回 /api/memory-files/<chat>/members/<uid>：那条路由的语义是"只清这个来源"，
     // 跨群合并过的人物会删不干净，用户以为删了其实还在。
-    await api(`/api/memory-files/global/members/${userId}`, { method: 'DELETE' });
+    await api(`/api/memory-files/global/members/${userId}`, { method: 'DELETE', body: JSON.stringify({ confirm: true }) });
   }
 
   function renderDetail() {

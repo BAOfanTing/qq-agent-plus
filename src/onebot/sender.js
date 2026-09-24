@@ -206,6 +206,9 @@ export class SendQueue {
     const [kind, id] = String(chatKey).split(':');
     const chain = this.#chain(chatKey);
     return chain(async () => {
+      // 与 sendTextBatch 同一道防线：上一次发送结果 unknown（超时/5xx）时停止后续发送，
+      // 避免"不知道发没发出去"的消息与表情/拍一拍叠加出多笔 unknown 记账。
+      if (options.runId && this.store.hasUncertainEffects(options.runId)) throw new Error('Previous send delivery is uncertain');
       this.#checkRate(chatKey);
       await sleep(randInt(600, 1500)); // 发表情前真人式的短暂停顿
       const data = await this.#deliver(chatKey, options, { type: 'sticker', id: sticker.id }, () => this.onebot.sendSticker(kind, id, sticker.url, {
@@ -237,6 +240,8 @@ export class SendQueue {
     const [kind, id] = String(chatKey).split(':');
     const chain = this.#chain(chatKey);
     return chain(async () => {
+      // 与 sendTextBatch 同一道防线：上次发送结果 unknown 时停止后续发送。
+      if (options.runId && this.store.hasUncertainEffects(options.runId)) throw new Error('Previous send delivery is uncertain');
       this.#checkRate(chatKey);
       await sleep(randInt(300, 900));
       const data = await this.#deliver(chatKey, options, { type: 'poke', targetUserId },
@@ -260,6 +265,8 @@ export class SendQueue {
     const [kind, id] = String(chatKey).split(':');
     const chain = this.#chain(chatKey);
     return chain(async () => {
+      // 与 sendTextBatch 同一道防线：上次发送结果 unknown 时停止后续发送。
+      if (options.runId && this.store.hasUncertainEffects(options.runId)) throw new Error('Previous send delivery is uncertain');
       this.#checkRate(chatKey);
       await sleep(randInt(300, 900));
       const data = await this.#deliver(chatKey, options,

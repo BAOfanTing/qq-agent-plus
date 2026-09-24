@@ -70,6 +70,50 @@ test('real replaceMember path snapshots same-source destructive writes', () => {
   assert.deepEqual(after.impressions.map((entry) => entry.content), ['整理后的摘要']);
 });
 
+test('name-only / 非数字 id 成员同样拿到可回滚快照（2026-09-24 审查补的盲区）', () => {
+  // 原来 backupPersonBeforeConsolidation 对非数字 uid 一律返回 null：
+  // remove/clearSource/clearPersonSource 删这类成员时拍不到快照，删了就回不来。
+  const nameOnly = {
+    version: 2,
+    userId: '',
+    name: '只有名字的群友',
+    impressions: [
+      { content: 'name-only 印象', createdAt: 100, lastObservedAt: 100, sourceChatKeys: ['group:456'] }
+    ],
+    sourceChatKeys: ['group:456'],
+    updatedAt: 100,
+    lastConsolidatedAt: 0
+  };
+  const file = backupPersonBeforeConsolidation(nameOnly, { sourceChatKey: 'group:456', at: 3000 });
+  assert.ok(file, 'name-only 成员的删除必须能拿到快照');
+  // 快照目录键与成员文件名同源：_n_<净化名字>
+  assert.match(file, /[\\/]_n_只有名字的群友[\\/]/);
+  assert.ok(
+    fs.existsSync(path.join(dataDir, 'memory', 'backups', 'group_456', '_n_只有名字的群友.json')),
+    'legacy 路径同样保留 name-only 快照'
+  );
+
+  const oddId = {
+    version: 2,
+    userId: 'abc-123',
+    name: '非常规 ID',
+    impressions: [
+      { content: 'u_ 印象', createdAt: 100, lastObservedAt: 100, sourceChatKeys: ['group:456'] }
+    ],
+    sourceChatKeys: ['group:456'],
+    updatedAt: 100,
+    lastConsolidatedAt: 0
+  };
+  const file2 = backupPersonBeforeConsolidation(oddId, { sourceChatKey: 'group:456', at: 4000 });
+  assert.ok(file2, '非数字 id 的成员同样要有快照');
+  assert.match(file2, /[\\/]u_abc_123[\\/]/);
+
+  // 没有印象的对象照旧不落盘（返回 null）
+  assert.equal(backupPersonBeforeConsolidation({
+    version: 2, userId: '', name: '空印象', impressions: [], sourceChatKeys: [], updatedAt: 0, lastConsolidatedAt: 0
+  }, { sourceChatKey: 'group:456', at: 5000 }), null);
+});
+
 test('first appearance in a new chat merges without creating a destructive-write backup', () => {
   const memory = new MemoryStore();
   memory.append('private:23333', 'memberImpression', '跨会话已有印象', {

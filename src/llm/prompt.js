@@ -659,7 +659,9 @@ function formatThreadCheckpoint(checkpoint) {
     ['上次实际发言', state.lastReply]
   ];
   for (const [label, value] of scalar) {
-    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    // 检查点由 finish 工具的模型参数写入，模型可能原样搬运群友伪造的段头文本 ——
+    // 与会话交接注入（formatHandoffForPrompt）同一道防线，渲染前过清洗。
+    const text = sanitizeUserText(String(value || '').replace(/\s+/g, ' ').trim());
     if (text) lines.push(`- ${label}：${text}`);
   }
   const lists = [
@@ -671,7 +673,9 @@ function formatThreadCheckpoint(checkpoint) {
     ['未解决问题', state.openQuestions]
   ];
   for (const [label, values] of lists) {
-    const list = Array.isArray(values) ? values.map((v) => String(v || '').trim()).filter(Boolean) : [];
+    const list = Array.isArray(values)
+      ? values.map((v) => sanitizeUserText(String(v || '').trim())).filter(Boolean)
+      : [];
     if (list.length) lines.push(`- ${label}：${list.join('；')}`);
   }
   return lines.join('\n').slice(0, 4000);
@@ -769,7 +773,7 @@ export function buildUserPrompt(ctx) {
       lines.push(`- 状态：${remaining > 0 ? `续接窗口内（剩余约 ${remaining} 秒）` : '已离开续接窗口'}`);
     }
     lines.push(
-      ctx.thread?.topic ? `- 话题：${ctx.thread.topic}` : '',
+      ctx.thread?.topic ? `- 话题：${sanitizeUserText(ctx.thread.topic)}` : '',
       ctx.tierInfo?.reason?.includes('续接') || ctx.tierInfo?.reason?.startsWith('生命周期')
         ? `- 本次触发：${ctx.tierInfo.reason}`
         : ''

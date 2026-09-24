@@ -44,7 +44,7 @@ export class SessionRegistry {
     this.keepFiles = Math.max(0, Number.isFinite(Number(keepFiles)) ? Math.round(Number(keepFiles)) : 0);
     this.index = [];   // [{ id, chatKey, startedAt, endedAt, status, outcome, usage, trigger, model, promptChars }]
     this.current = new Map(); // id -> session object（运行中的在内存里）
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
     this.#loadIndex();
   }
 
@@ -287,7 +287,8 @@ export class SessionRegistry {
     data.runs += 1;
     data.webSearchCount = (data.webSearchCount || 0) + (Number(s.webSearchCount) || 0);
     const tmp = path.join(DATA_DIR, 'usage-today.json.tmp');
-    fs.writeFileSync(tmp, JSON.stringify(data), 'utf8');
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
+    fs.writeFileSync(tmp, JSON.stringify(data), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, path.join(DATA_DIR, 'usage-today.json'));
   }
 
@@ -312,9 +313,12 @@ export class SessionRegistry {
 
   #persist(s) {
     try {
-      fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+      // 会话 JSON 含完整聊天记录、系统提示词与逐轮模型输入输出：目录 0700 / 文件 0600，
+      // 与 config.json 的口径一致（原来不带 mode，权限正确性全靠 data/ 恰好是 0700）。
+      fs.mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
       const tmp = `${sessionFile(s.id)}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(s, null, 1), 'utf8');
+      try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
+      fs.writeFileSync(tmp, JSON.stringify(s, null, 1), { encoding: 'utf8', mode: 0o600 });
       fs.renameSync(tmp, sessionFile(s.id));
       if (s.status !== 'running' && s.status !== 'waiting') this.#bumpTodayUsage(s);
     } catch (error) {

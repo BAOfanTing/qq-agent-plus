@@ -253,7 +253,10 @@ test('installed manage launcher uses the exact deployed Node runtime', (t) => {
     'utf8'
   );
   assert.match(updateUnit, /scripts\/auto-update\.mjs/);
-  assert.match(updateUnit, /TimeoutStartSec=30min/);
+  // 更新器自身预算最坏 >50min（npm ci 10 + 单测 20 + deploy 20）：unit 超时必须大于它，
+  // 否则 systemd 会在回滚进行中 SIGKILL 整个 cgroup，留下半新半旧的安装目录。
+  assert.match(updateUnit, /TimeoutStartSec=75min/);
+  assert.match(updateUnit, /TimeoutStopSec=10min/);
   assert.match(updateTimer, /OnUnitInactiveSec=1h/);
   assert.match(updateTimer, /RandomizedDelaySec=10min/);
   const deployment = JSON.parse(fs.readFileSync(path.join(root, '.deployment.json'), 'utf8'));

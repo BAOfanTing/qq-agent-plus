@@ -4579,7 +4579,7 @@ function openMemberImpressModal(chatKey, member) {
   if (delBtn) delBtn.addEventListener('click', async () => {
     if (!await askForConfirmation(`确定删除 ${note || name || userId} 在本会话里的印象？（其它会话记得的印象不受影响；服务端会留可回滚快照）`)) return;
     try {
-      await api(`/api/memory-files/${chatKey.replace(':', '_')}/members/${userId}`, { method: 'DELETE', body: '{}' });
+      await api(`/api/memory-files/${chatKey.replace(':', '_')}/members/${userId}`, { method: 'DELETE', body: JSON.stringify({ confirm: true }) });
       closeModelModal(overlay);
       loadMemoryDetail(chatKey);
     } catch (e) {

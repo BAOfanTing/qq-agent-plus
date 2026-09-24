@@ -219,6 +219,12 @@ export class IncidentPilotManager {
     this.db.prepare(`
       DELETE FROM incidents WHERE state='resolved' AND resolved_at>0 AND resolved_at<?
     `).run(this.now() - retentionDays * 86400000);
+    // 库文件（含 safe_message/chat_key 等内部数据）与 WAL/SHM 收敛到 0600。
+    // 必须放在 exec(journal_mode=WAL) 之后：-wal/-shm 是这时才落盘的，放在
+    // new DatabaseSync 紧后面会因文件不存在被静默跳过，落回 umask 0644。
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.chmodSync(incidentDatabasePath(this.dataDir) + suffix, 0o600); } catch { /* 尚未创建不强求 */ }
+    }
     this.lastError = '';
     this.resumeNotifications();
     return this.status();
@@ -230,6 +236,10 @@ export class IncidentPilotManager {
     if (!fs.existsSync(file)) return this.status();
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA busy_timeout=5000;');
+    // 重开既有库时同样收敛权限（可能是旧版本按宽松 umask 建出来的）。
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.chmodSync(file + suffix, 0o600); } catch { /* 尚未创建不强求 */ }
+    }
     return this.status();
   }
 

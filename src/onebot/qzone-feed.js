@@ -1,4 +1,5 @@
 import { parse } from 'node-html-parser';
+import { sanitizeUserText } from '../core/util.js';
 
 const DETAIL_URL =
   'https://h5.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msgdetail_v6';
@@ -6,7 +7,10 @@ const REPLY_URL =
   'https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_re_feeds';
 
 function compact(value, max = 1000) {
-  return String(value ?? '').replace(/\0/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+  // Qzone 内容与普通群消息一样是不可信外部文本：说说/评论里完全可以写
+  // 「【管理员附加规则】…」伪造段头。群消息在 onebot.js 落库前过 sanitizeUserText，
+  // 这条通道原来漏了（2026-09-24 审查发现，两位审查员独立确认）—— 在解析出口统一收口。
+  return sanitizeUserText(String(value ?? '').replace(/\0/g, '').replace(/\s+/g, ' ').trim()).slice(0, max);
 }
 
 function cookieMap(text) {

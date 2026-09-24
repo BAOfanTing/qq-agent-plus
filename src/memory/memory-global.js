@@ -23,8 +23,12 @@ function readJson(file, fallback = null) {
   try { let s = fs.readFileSync(file, 'utf8'); if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1); return JSON.parse(s); } catch { return fallback; }
 }
 function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 1), 'utf8'); fs.renameSync(tmp, file);
+  // 会话交接是隐私正文：与 global-person-memory-store 同一口径（目录 0700 / 文件 0600）。
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 1), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmp, file);
 }
 function legacyStateText(value) {
   if (typeof value === 'string') return clean(value);
