@@ -99,10 +99,8 @@ test('friend request dispatch reports success only for business code zero', asyn
     FRIEND_REQUEST_PROTOCOL.sendRequestCommand
   ]);
   const request = decodeRequest(calls[1].data);
-  // Issue #10：移除了 [5] 的手工字节长度字段（JCE 字符串自带长度前缀），
-  // 其后字段整体前移一位——sourceId 落在 [9]、friendSource 落在 [13]。
-  assert.equal(request[9], FRIEND_REQUEST_PROTOCOL.groupSourceId);
-  assert.deepEqual(Buffer.from(request[13]), Buffer.from([0x08, 0xC8, 0x03]));
+  assert.equal(request[10], FRIEND_REQUEST_PROTOCOL.groupSourceId);
+  assert.deepEqual(Buffer.from(request[14]), Buffer.from([0x08, 0xC8, 0x03]));
 });
 
 test('friend request dispatch keeps explicit QQ rejection distinct from unknown outcome', async () => {

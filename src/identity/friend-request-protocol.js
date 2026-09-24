@@ -191,33 +191,27 @@ export async function sendFriendRequestViaSnowLuma(onebot, {
 
   const comment = String(verificationMessage || '').trim().slice(0, 50);
   const { sourceId, friendSource } = sourceForChat(sourceChatKey);
-  // ⚠️ 候选修复（Issue #10）：这里原本在 [5] 单独编码了一个 Buffer.byteLength(comment)
-  // 字节长度、[6] 才是消息本体——JCE 字符串自带长度前缀，额外长度字段会让服务端从
-  // [5] 起整体错位，实测对"已是好友"的目标也返回与陌生人完全相同的笼统错误
-  // （result=1「添加失败，请稍后再试」），说明请求在好友逻辑之前就被拒了。
-  // 现按 JCE 惯例移除手工长度，消息本体落在 [5]、后续字段整体前移一位。
-  // 验证方式（无害）：向"已经是好友"的号发申请——结构修对了应得到语义化错误
-  // （如"已是好友"）而不是笼统 result=1。
   const request = encodeWrapper({
     AF: encodeStruct([
-      selfUin,                     // [0]
-      targetUin,                   // [1]
-      setting ? 1 : 0,             // [2]
-      1,                           // [3]
-      0,                           // [4]
-      comment,                     // [5]
-      0,                           // [6]
-      1,                           // [7]
-      null,                        // [8]
-      sourceId,                    // [9]
-      11,                          // [10]
-      null,                        // [11]
-      null,                        // [12]
-      friendSource,                // [13]
-      0,                           // [14]
-      null,                        // [15]
-      null,                        // [16]
-      0                            // [17]
+      selfUin,
+      targetUin,
+      setting ? 1 : 0,
+      1,
+      0,
+      Buffer.byteLength(comment),
+      comment,
+      0,
+      1,
+      null,
+      sourceId,
+      11,
+      null,
+      null,
+      friendSource,
+      0,
+      null,
+      null,
+      0
     ])
   }, 'AddFriendReq');
   const response = await sendPacket(onebot, SEND_REQUEST_COMMAND, request, {
