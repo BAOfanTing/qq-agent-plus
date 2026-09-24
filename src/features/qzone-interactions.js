@@ -1183,7 +1183,9 @@ export class QzoneInteractionManager {
           // 好友动态这一路不再让整轮失败：腾讯侧偶发繁忙很常见，照 get_qzone_msg_list 的既有做法
           // 记下来继续跑——本轮仍然检查评论回复、处理已积压的未读。失败计数、退避和
           // "连续 3 次才上报"由 #tick 统一处理，这里只留一条不出通知的日志。
-          run.feedError = cleanText(error?.message ?? error, 500);
+          // 原因必须非空：下一轮要不要退避是看 feedError 真假的，空字符串会被当成"这轮没失败"，
+          // 下次只隔 1 秒就又来一次——正是 2026-09-17 那次打密的形态。
+          run.feedError = cleanText(error?.message ?? error, 500) || '好友动态接口调用失败（无错误信息）';
           console.log('[qzone-interactions] 好友动态本轮未取到，继续检查评论与积压:', run.feedError);
         }
       }

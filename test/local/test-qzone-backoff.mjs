@@ -44,11 +44,13 @@ globalThis.clearTimeout = (handle) => {
 let feedAttempts = 0;
 let replyAttempts = 0;
 let feedsHealthy = false;
+let emptyMessage = false;
 const onebot = {
   selfId: '10000001',
   async call(action) {
     if (action === 'get_qzone_feeds') {
       feedAttempts += 1;
+      if (emptyMessage) throw new Error('');
       if (!feedsHealthy) {
         throw new Error('OneBot get_qzone_feeds 失败: retcode=100 qzone feeds failed: code=-10001 network busy');
       }
@@ -150,6 +152,60 @@ try {
   check('下一轮恢复正常状态（idle，无降级标记）',
     readState().runs[0].status === 'idle' && !readState().runs[0].feedError,
     `status=${readState().runs[0].status} feedError=${readState().runs[0].feedError || '无'}`);
+
+  // ⑥ 最坏情况压测：接口长期失败时绝不打密。
+  //    2026-09-17 那次事故是"失败后每秒重试"→ 3 分钟打了 191 次 → QQ 直接限流。
+  //    这里用假时钟连续跑 24 小时（全程失败），逐轮统计外部请求数与轮次间隔：
+  //    每轮最多 3 次（动态重试 2 次 + 评论列表 1 次）、两轮之间不少于 2 分钟（退避下限）。
+  mgr.stop();
+  feedsHealthy = false;
+  fakeNow += 300000;
+  timers.length = 0;
+  mgr.start();
+  const stormStart = fakeNow;
+  const feedBeforeStorm = feedAttempts;
+  const replyBeforeStorm = replyAttempts;
+  const notificationsBeforeStorm = notifications().length;
+  let rounds = 0;
+  let busiestRound = 0;
+  let minDelay = Infinity;
+  while (fakeNow - stormStart < 24 * 3600000 && rounds < 500) {
+    const before = feedAttempts + replyAttempts;
+    const schedule = await fire();
+    const used = feedAttempts + replyAttempts - before;
+    busiestRound = Math.max(busiestRound, used);
+    if (schedule > 0) minDelay = Math.min(minDelay, schedule);
+    rounds += 1;
+    if (!(schedule > 0)) break;
+    fakeNow += schedule;
+  }
+  const stormRequests = feedAttempts + replyAttempts - feedBeforeStorm - replyBeforeStorm;
+  console.log(`  （24 小时持续失败：${rounds} 轮、共 ${stormRequests} 次请求、最少间隔 ${Math.round(minDelay / 1000)} 秒`
+    + '；回复检查本身按配置的 5 分钟一轮，失败时还被退避拖慢）');
+  check('持续失败时一轮最多 3 次外部请求（动态重试 2 次 + 评论列表 1 次）',
+    busiestRound <= 3, `实测最多 ${busiestRound} 次/轮`);
+  check('持续失败时任意两轮间隔不少于 2 分钟（事故时是 1.4 秒一轮）',
+    minDelay >= 120000, `实测最小间隔 ${Math.round(minDelay / 1000)} 秒`);
+  check('24 小时持续失败的总请求数在两百次以内（事故时 3 分钟 191 次）',
+    stormRequests <= 200, `24 小时共 ${stormRequests} 次（${rounds} 轮）`);
+  check('连续失败期间只在第 3 次上报一条，之后不再补报',
+    notifications().length - notificationsBeforeStorm === 1,
+    `本轮失败新增 ${notifications().length - notificationsBeforeStorm} 条`);
+
+  // ⑦ 边界：错误对象没有 message（空字符串）时也必须算失败。
+  //    否则 feedError 为空串会被当成"这轮没失败"，下一轮只隔 1 秒 —— 就是打密的形态。
+  feedsHealthy = true;
+  emptyMessage = true;
+  mgr.stop();
+  fakeNow += 60000;
+  timers.length = 0;
+  mgr.start();
+  const afterEmptyMessage = await fire();
+  check('空错误信息也按失败处理：下一轮仍按退避排（分钟级，不是 1 秒）',
+    afterEmptyMessage >= 120000, `实际 ${Math.round(afterEmptyMessage / 1000)} 秒`);
+  check('运行记录里的失败原因不为空',
+    Boolean(readState().runs[0].feedError), `feedError=${JSON.stringify(readState().runs[0].feedError || '')}`);
+  emptyMessage = false;
 } catch (error) {
   results.push(false);
   console.log('FAIL 用例异常终止:', error?.message ?? error);

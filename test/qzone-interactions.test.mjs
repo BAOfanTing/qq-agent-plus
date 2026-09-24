@@ -519,6 +519,21 @@ test('friend-feed failure is retried once and a successful retry finishes the ro
   assert.deepEqual(f.writes.map((item) => item.action), ['like_qzone']);
 });
 
+test('a feed error without a message is still recorded as a failure', async () => {
+  let feedCalls = 0;
+  const f = fixture({
+    feedCall: async () => {
+      feedCalls += 1;
+      throw new Error('');
+    }
+  });
+  const result = await f.manager.runNow('feed');
+  assert.equal(feedCalls, 2);
+  assert.equal(result.run.status, 'partial-feed-error');
+  // 不能是空串：调度器按 feedError 的真假决定要不要退避，空串会被当成"这轮没失败"
+  assert.ok(result.run.feedError);
+});
+
 test('stop and time-window aborts are not counted as interface failures', () => {
   assert.equal(isNonFailureRunError(new Error('Qzone interaction task stopped')), true);
   assert.equal(isNonFailureRunError(
