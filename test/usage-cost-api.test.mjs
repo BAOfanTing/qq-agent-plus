@@ -47,30 +47,42 @@ async function freePort() {
 }
 
 async function bootApp(extraApi = {}) {
-  const port = await freePort();
-  const cfg = structuredClone(DEFAULT_CONFIG);
-  cfg.server = { ...cfg.server, host: '127.0.0.1', port, token: '' };
-  cfg.runtime.mode = 'observe';
-  cfg.allow = { ...(cfg.allow || {}), groups: ['1'], private: [] };
-  cfg.onebot = { ...(cfg.onebot || {}), wsUrl: 'ws://127.0.0.1:1', httpUrl: 'http://127.0.0.1:1', accessToken: '' };
-  // 不要在这条用例里碰网络：远程价格表关掉、Base URL 留空（否则会触发自动探测）
-  cfg.api = {
-    ...(cfg.api || {}),
-    baseUrl: '',
-    apiKey: '',
-    model: 'deepseek-flash',
-    useOfficialPrice: true,
-    priceRemoteUrl: 'none',
-    ...extraApi
-  };
-  updateConfig(cfg);
-  const app = createApp({ log: () => {} });
-  await app.start();
-  const get = async (route) => {
-    const res = await fetch(`http://127.0.0.1:${port}${route}`);
-    return { status: res.status, body: await res.json().catch(() => ({})) };
-  };
-  return { app, get };
+  // freePort 是"先绑后关再复用"：并发测试文件同时在抢端口 + 生产实例的出站连接
+  // 也在消耗临时端口，偶发 EADDRINUSE（服务器自动更新就栽在这里）。换端口重试。
+  let lastError = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const port = await freePort();
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.server = { ...cfg.server, host: '127.0.0.1', port, token: '' };
+    cfg.runtime.mode = 'observe';
+    cfg.allow = { ...(cfg.allow || {}), groups: ['1'], private: [] };
+    cfg.onebot = { ...(cfg.onebot || {}), wsUrl: 'ws://127.0.0.1:1', httpUrl: 'http://127.0.0.1:1', accessToken: '' };
+    // 不要在这条用例里碰网络：远程价格表关掉、Base URL 留空（否则会触发自动探测）
+    cfg.api = {
+      ...(cfg.api || {}),
+      baseUrl: '',
+      apiKey: '',
+      model: 'deepseek-flash',
+      useOfficialPrice: true,
+      priceRemoteUrl: 'none',
+      ...extraApi
+    };
+    updateConfig(cfg);
+    const app = createApp({ log: () => {} });
+    try {
+      const bound = await app.start();
+      const get = async (route) => {
+        const res = await fetch(`http://127.0.0.1:${bound}${route}`);
+        return { status: res.status, body: await res.json().catch(() => ({})) };
+      };
+      return { app, get };
+    } catch (error) {
+      lastError = error;
+      if (!/EADDRINUSE/.test(String(error?.message ?? ''))) throw error;
+      await app.stop().catch(() => {});
+    }
+  }
+  throw lastError;
 }
 
 test('账户级包月：多个模型也只有一个固定支出，不会按模型数翻倍', async (t) => {

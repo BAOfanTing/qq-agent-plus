@@ -94,6 +94,9 @@ test('webSearch() 路由：provider=doubao 走豆包', async () => {
 
 test('/api/config 不泄露 webSearch.doubao.apiKey 明文（脱敏走通用 SECRET_KEY_PATTERN）', async () => {
   withKey();
+  // 前面几个用例的 updateConfig 会把整个 DEFAULT_CONFIG 克隆写回配置，把隔离端口
+  // 覆盖回 3210——启动前再钉一次（否则宿主机跑着生产实例时这里必然 EADDRINUSE）。
+  updateConfig({ server: { port: 40996, host: '127.0.0.1' } });
   const { createApp } = await import('../src/console/app.js');
   const app = createApp({ log: () => {} });
   const port = await app.start();
