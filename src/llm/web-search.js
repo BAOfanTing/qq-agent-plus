@@ -57,6 +57,10 @@ export async function bingSearch(query) {
     if (urlStr && title) results.push({ title, url: urlStr, snippet });
     if (results.length >= maxResults) break;
   }
+  // 与其他 provider 口径一致：空结果 = 搜索失败而不是"搜到了 0 条"。
+  // Bing 是 HTML 抓取，命中验证页/同意页/改版 DOM 时这里会是空数组——
+  // 不抛错的话模型只看到一个空列表，容易转而编造内容（Issue #9）。
+  if (!results.length) throw new Error('Bing 搜索没有返回可解析的结果（可能命中验证页或页面结构变化，可换个搜索提供方）');
   return { query, results };
 }
 
@@ -317,6 +321,15 @@ export async function doubaoSearch(query) {
     throw new Error(`豆包搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
   const data = await res.json().catch(() => { throw new Error('豆包搜索返回了无法解析的 JSON'); });
+  // 火山这套接口失败时也返回 HTTP 200，错误信息在 ResponseMetadata.Error 里、
+  // Result 为 null（Issue #8）：invalid_api_key / 10403 服务未开通 / 10406 10412
+  // 额度用尽 / 700429 QPS 超限——处置方式完全不同，必须把真实错误抛出来。
+  const apiError = data?.ResponseMetadata?.Error;
+  if (apiError) {
+    const code = String(apiError.Code ?? apiError.CodeN ?? '未知错误码');
+    const message = String(apiError.Message ?? '').trim() || '无错误信息';
+    throw new Error(`豆包搜索失败（${code}）：${message}`);
+  }
   const arr = Array.isArray(data?.Result?.WebResults) ? data.Result.WebResults : [];
   const results = arr
     .filter((r) => r?.Url || r?.url)

@@ -79,6 +79,19 @@ test('doubaoSearch：HTTP 错误带状态码与响应片段', async () => {
   await assert.rejects(() => doubaoSearch('x'), /豆包搜索 HTTP 401：invalid key/);
 });
 
+test('doubaoSearch：HTTP 200 + ResponseMetadata.Error 时抛出真实错误码与信息（Issue #8）', async () => {
+  withKey();
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ ResponseMetadata: { Error: { CodeN: 700901, Code: 'invalid_api_key', Message: 'invalid api key' } }, Result: null })
+  });
+  const { doubaoSearch } = await import('../src/llm/web-search.js');
+  await assert.rejects(() => doubaoSearch('x'), /豆包搜索失败（invalid_api_key）：invalid api key/);
+  // CodeN 缺失时回退 Code，两者都缺时给"未知错误码"
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ ResponseMetadata: { Error: { Message: 'boom' } } }) });
+  await assert.rejects(() => doubaoSearch('x'), /豆包搜索失败（未知错误码）：boom/);
+});
+
 test('doubaoSearch：空结果报额度/权限提示', async () => {
   withKey();
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ Result: { WebResults: [] } }) });
