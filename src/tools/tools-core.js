@@ -68,6 +68,7 @@ async function stickerLookupHint(ctx, key) {
 }
 
 import { normalizeMessageList, sanitizeUserText, unquoteJsonString } from '../core/util.js';
+import { repairUnescapedStringQuotes } from '../core/json-repair.js';
 import { formatStickerList } from '../onebot/stickers.js';
 import { validateImageUrl, safeFetchBinary } from '../llm/safe-fetch.js';
 import { webSearch, webFetch } from '../llm/web-search.js';
@@ -121,49 +122,8 @@ function err(message, metadata = {}) {
 
 const REPAIRABLE_ARGUMENT_TOOLS = new Set(['finish']);
 
-function repairUnescapedStringQuotes(value) {
-  const text = String(value ?? '');
-  let output = '';
-  let inString = false;
-  let escaped = false;
-  let changed = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (!inString) {
-      output += char;
-      if (char === '"') inString = true;
-      continue;
-    }
-    if (escaped) {
-      output += char;
-      escaped = false;
-      continue;
-    }
-    if (char === '\\') {
-      output += char;
-      escaped = true;
-      continue;
-    }
-    if (char !== '"') {
-      output += char;
-      continue;
-    }
-
-    let nextIndex = index + 1;
-    while (nextIndex < text.length && /\s/.test(text[nextIndex])) nextIndex += 1;
-    const next = text[nextIndex];
-    if (next === undefined || [',', ':', '}', ']'].includes(next)) {
-      output += char;
-      inString = false;
-    } else {
-      output += '\\"';
-      changed = true;
-    }
-  }
-
-  return changed && !inString ? output : null;
-}
+// 修复逻辑已抽到 core/json-repair.js 与 relationship-pilot（影子评估）共用，
+// 这里只保留"哪些工具允许修复"的策略门槛。
 
 function parseToolArguments(name, raw) {
   if (typeof raw !== 'string') return { args: raw, repaired: false };

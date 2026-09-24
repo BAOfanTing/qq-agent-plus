@@ -14,6 +14,7 @@ import {
   RELATIONSHIP_EVENT_TYPES
 } from '../llm/relationship-pilot-prompt.js';
 import { resolveToolCalls } from '../tools/inline-tools.js';
+import { repairJsonObject } from '../core/json-repair.js';
 
 const EVENT_TYPES = new Set(RELATIONSHIP_EVENT_TYPES);
 const clean = (value, max = 240) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -96,10 +97,15 @@ function parseRelationshipResponse(response, evidence) {
     throw new Error('关系评估模型未提交唯一的 submit_relationship_events 结果');
   }
   let value;
+  const rawArgs = String(calls[0].function.arguments || '{}');
   try {
-    value = JSON.parse(String(calls[0].function.arguments || '{}'));
+    value = JSON.parse(rawArgs);
   } catch {
-    throw new Error('关系评估工具参数不是有效 JSON');
+    // 评估模型吐的"准 JSON"带常见瑕疵（代码围栏、前后缀文本、尾随逗号、
+    // 单引号、字符串内未转义引号——长输出里 note 引用原话时高发，Issue #6）：
+    // 先走共享修复链（core/json-repair.js，与 inline-tools 兜底同一套），仍失败才抛。
+    value = repairJsonObject(rawArgs);
+    if (!value) throw new Error('关系评估工具参数不是有效 JSON');
   }
   if (!Array.isArray(value?.events)) throw new Error('关系评估 events 必须是数组');
   if (value.events.length > 4) throw new Error('单次关系评估最多提交 4 个事件');
