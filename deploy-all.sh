@@ -121,6 +121,14 @@ while (($#)); do
   esac
 done
 
+# 凭据的环境变量回退：命令行参数会出现在 /proc/<pid>/cmdline（对本机所有用户
+# 可读），无人值守/CI 场景请优先用环境变量传凭据。命令行显式传值时优先于环境变量。
+AGENT_TOKEN="${AGENT_TOKEN:-${QQ_AGENT_AGENT_TOKEN:-}}"
+ONEBOT_TOKEN="${ONEBOT_TOKEN:-${QQ_AGENT_ONEBOT_TOKEN:-}}"
+SNOWLUMA_PASSWORD="${SNOWLUMA_PASSWORD:-${QQ_AGENT_SNOWLUMA_PASSWORD:-}}"
+SNOWLUMA_TOTP="${SNOWLUMA_TOTP:-${QQ_AGENT_SNOWLUMA_TOTP:-}}"
+VNC_PASSWORD="${VNC_PASSWORD:-${QQ_AGENT_VNC_PASSWORD:-}}"
+
 die() {
   printf 'Error: %s\n' "$*" >&2
   exit 1
@@ -262,8 +270,10 @@ wait_http() {
 }
 
 onebot_ready() {
-  curl -fsS --max-time 3 \
-    -H "authorization: Bearer $ONEBOT_TOKEN" \
+  # Token 经 stdin 喂给 curl（-H @-），不出现在 /proc/<pid>/cmdline——
+  # 对本机所有用户可读（凭据退出命令行参数原则）。
+  printf 'authorization: Bearer %s\n' "$ONEBOT_TOKEN" | \
+  curl -fsS --max-time 3 -H @- \
     -H 'content-type: application/json' \
     -d '{}' "http://127.0.0.1:$ONEBOT_HTTP_PORT/get_login_info" \
     | grep -Eq '"retcode"[[:space:]]*:[[:space:]]*0'

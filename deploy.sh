@@ -204,6 +204,19 @@ if [[ "$BACKUP_ENABLED" == true && -f "$INSTALL_DIR/package.json" ]]; then
   mkdir -p "$ROLLBACK_DIR/app"
   rsync -a "${RSYNC_PRESERVE[@]}" "$INSTALL_DIR/" "$ROLLBACK_DIR/app/"
   printf 'Created rollback snapshot: %s\n' "$ROLLBACK_DIR"
+  # 快照上限 3 份在"创建时"就维护，而不是部署成功之后：连续失败的更新每次都会
+  # 留一份完整快照（含 node_modules），不在创建时轮转会把数据盘慢慢占满
+  # （自动更新无人值守场景）。刚创建的这份最新，必然保留。
+  kept=0
+  pruned=0
+  while IFS= read -r stale; do
+    kept=$((kept + 1))
+    if ((kept > 3)); then
+      rm -rf -- "$stale"
+      pruned=$((pruned + 1))
+    fi
+  done < <(ls -1dt "$BACKUP_ROOT"/*/ 2>/dev/null)
+  ((pruned == 0)) || printf 'Pruned %s old snapshot(s), keeping the 3 newest\n' "$pruned"
 fi
 
 UNIT_FILE="$HOME/.config/systemd/user/$SERVICE.service"
@@ -359,30 +372,21 @@ case "$HOST" in
   *) HEALTH_HOST="$HOST" ;;
 esac
 HEALTHY=false
-for _ in {1..50}; do
+# 90 秒窗口：慢机器冷启动（大库迁移、慢磁盘）可能超过旧版 50×0.2s≈10-20 秒，
+# 被误判失败会触发回滚，形成"每次更新都回滚"的怪圈；deploy-all 对同服务给的是
+# 30-90 秒，这里对齐同一量级。
+for _ in {1..90}; do
   if "$NODE_BIN" -e 'fetch(process.argv[1]).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))' \
       "http://$HEALTH_HOST:$PORT/healthz"; then
     HEALTHY=true
     break
   fi
-  sleep 0.2
+  sleep 1
 done
 [[ "$HEALTHY" == true ]] || { printf 'Service health check failed\n' >&2; rollback_deployment; exit 1; }
 trap - ERR INT TERM
 # 每份快照是整个安装目录（含 node_modules），而自动更新会无人值守地反复部署：
 # 不清理会把数据盘慢慢填满。保留最近的 3 份。
-if [[ -n "${BACKUP_ROOT:-}" && -d "$BACKUP_ROOT" ]]; then
-  kept=0
-  pruned=0
-  while IFS= read -r stale; do
-    kept=$((kept + 1))
-    if ((kept > 3)); then
-      rm -rf -- "$stale"
-      pruned=$((pruned + 1))
-    fi
-  done < <(ls -1dt "$BACKUP_ROOT"/*/ 2>/dev/null)
-  ((pruned == 0)) || printf 'Pruned %s old snapshot(s), keeping the 3 newest\n' "$pruned"
-fi
 if [[ "${QQ_AGENT_SOURCE_REVISION:-}" =~ ^[0-9a-f]{40}$ ]]; then
   REVISION="$QQ_AGENT_SOURCE_REVISION"
 elif command -v git >/dev/null && git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
