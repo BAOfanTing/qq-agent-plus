@@ -23,9 +23,13 @@ async function probeFfmpegOnce() {
     return { error: true };
   }
   return new Promise((resolve) => {
-    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } }, 5000);
+    const timer = setTimeout(() => {
+      // 超时主动兜底 resolve：kill 后若进程成僵尸不触发 exit，不能永久挂住调用方
+      try { child.kill(); } catch { /* 已退出 */ }
+      resolve({ error: true });
+    }, 5000);
     timer.unref?.();
-    child.on('error', (error) => resolve({ error }));
+    child.on('error', (error) => { clearTimeout(timer); resolve({ error }); });
     child.on('exit', (code) => { clearTimeout(timer); resolve({ code }); });
   });
 }
@@ -65,16 +69,18 @@ async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
     let stderr = '';
     let settled = false;
     let timer = null;
+    const onAbort = () => settle(reject, new Error('已中止'));
     const settle = (fn, value) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       try { child.kill(); } catch { /* 已退出 */ }
       fn(value);
     };
     timer = setTimeout(() => settle(reject, new Error('ffmpeg 降采样超时（30 秒）')), 30000);
     timer.unref?.();
-    signal?.addEventListener('abort', () => settle(reject, new Error('已中止')), { once: true });
+    signal?.addEventListener('abort', onAbort, { once: true });
     child.stdout.on('data', (chunk) => chunks.push(chunk));
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
