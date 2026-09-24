@@ -1014,6 +1014,9 @@ export class QzoneInteractionManager {
     const replyMap = new Map(batch.replies.map((item) => [item.id, item.state]));
     let writes = 0;
     for (const action of plan.replyActions) {
+      // 窗口关闭/手动停止后不再发起新的写入：未尝试的条目保持 unread，
+      // 留给下一个活跃窗口重试；catch 里的 unknown 只覆盖"在途中止"。
+      if (signal?.aborted) break;
       const item = replyMap.get(action.id);
       item.decision = action.action;
       item.reason = action.reason;
@@ -1045,11 +1048,11 @@ export class QzoneInteractionManager {
         run.actions.push({ type: 'reply', key: item.key, status: 'done' });
       } catch (error) {
         if (signal?.aborted) {
-          // 中止无法区分"发出前被拒"与"在途中止"（请求可能已写到协议端）：按模块自身不变量
-          // （docs/QZONE_INTERACTIONS.md「写入发起后中断 → unknown，永不自动重试」）记 unknown
-          // 等人工核对。原来恢复成 unread 会把可能已发出的回复在下一轮再发一遍。
-          // break 而不是 continue：signal 已中止，后面未尝试的条目确定没发出去，
-          // 保持 unread 留给下一个活跃窗口重试，不该陪着记成 unknown。
+          // 走到这里说明中止发生在请求**在途**时（发出前的中止已被循环头拦截）：
+          // 无法确认服务端是否已写入，按模块自身不变量（docs/QZONE_INTERACTIONS.md
+          // 「写入发起后中断 → unknown，永不自动重试」）记 unknown 等人工核对。
+          // 原来恢复成 unread 会把可能已发出的回复在下一轮再发一遍（5aaa134 引入的回归）。
+          // break 是兜底：正常情况下循环头已经拦住了后续条目。
           item.status = 'unknown';
           item.error = 'aborted';
           item.updatedAt = this.now();
@@ -1065,6 +1068,8 @@ export class QzoneInteractionManager {
       this.#save();
     }
     for (const action of plan.feedActions) {
+      // 同 reply 循环：中止后不再发起新写入，未尝试条目保持 unread 可重试。
+      if (signal?.aborted) break;
       const item = feedMap.get(action.id);
       item.decision = action.action;
       item.reason = action.reason;
