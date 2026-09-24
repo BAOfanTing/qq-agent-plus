@@ -1,7 +1,10 @@
-// 本地回归：空间互动接口异常时不再每秒重试（指数退避到分钟级）。
+// 本地回归：空间互动接口异常时不再每秒重试（指数退避到分钟级），也不再"第一次失败就上报"。
 //
 // 这是 2026-09-17 那次"失败后 1.4 秒重试一次、6 分钟刷了两百次"事故的回归用例。
-// 用假时钟 + 可控定时器，毫秒级验证：首轮失败只尝试一次，之后退避 2 分钟 → 4 分钟翻倍。
+// 用假时钟 + 可控定时器，毫秒级验证：
+//   ① 好友动态抓取失败先重试一次（每轮最多 2 次请求，绝不刷屏）；
+//   ② 失败只记账不当故障：前两次安静退避（2 分钟 → 4 分钟），第 3 次才上报一条异常通知；
+//   ③ 失败期间不算建立动态基线（免得把上线前的旧动态当新内容），接口恢复后计数清零、回到正常节奏。
 //
 // 用法：T=$(mktemp -d); QQ_AGENT_DATA_DIR=$T node test/local/test-qzone-backoff.mjs
 //
@@ -38,12 +41,24 @@ globalThis.clearTimeout = (handle) => {
   if (handle && typeof handle === 'object') handle.canceled = true;
 };
 
-let attempts = 0;
+let feedAttempts = 0;
+let replyAttempts = 0;
+let feedsHealthy = false;
 const onebot = {
   selfId: '10000001',
-  async call() {
-    attempts += 1;
-    throw new Error('OneBot get_qzone_msg_list 失败: retcode=100 Unexpected status code: 501');
+  async call(action) {
+    if (action === 'get_qzone_feeds') {
+      feedAttempts += 1;
+      if (!feedsHealthy) {
+        throw new Error('OneBot get_qzone_feeds 失败: retcode=100 qzone feeds failed: code=-10001 network busy');
+      }
+      return { feeds: [] };
+    }
+    if (action === 'get_qzone_msg_list') {
+      replyAttempts += 1;
+      return { msglist: [] };
+    }
+    throw new Error(`用例未覆盖的接口: ${action}`);
   }
 };
 const logs = [];
@@ -53,6 +68,10 @@ const mgr = new QzoneInteractionManager({
   sleep: () => Promise.resolve(),
   log: (...args) => logs.push(args.join(' '))
 });
+
+const statePath = path.join(dataDir, 'qzone-interactions.json');
+const readState = () => JSON.parse(fs.readFileSync(statePath, 'utf8'));
+const notifications = () => logs.filter((line) => line.includes('run failed'));
 
 const peek = () => {
   const live = timers.filter((timer) => !timer.canceled);
@@ -82,18 +101,55 @@ try {
   const first = peek();
   check('启动后先等 15 秒再巡检', first?.ms === 15000, `排了 ${first?.ms}ms`);
 
+  // ① 首轮失败：抓取重试一次（共 2 次请求），整轮其余照跑，退避 2 分钟
   const afterFirst = await fire();
-  check('首轮失败只尝试一次（修复前约每秒一次）', attempts === 1, `attempts=${attempts}`);
+  check('首轮失败会重试一次（共 2 次请求，不是刷屏）', feedAttempts === 2, `feedAttempts=${feedAttempts}`);
+  check('失败轮仍然检查了评论回复', replyAttempts === 1, `replyAttempts=${replyAttempts}`);
   check('失败后退避到 2 分钟', afterFirst === 120000, `实际 ${Math.round(afterFirst / 1000)}s`);
-  check('一轮连续故障只报一条日志', logs.length === 1, `logs=${logs.length}`);
+  check('第 1 次失败不发异常通知', notifications().length === 0, `notifications=${notifications().length}`);
+  check('failStreak 记为 1', readState().failStreak === 1, `failStreak=${readState().failStreak}`);
+  check('没读到动态就不算建立基线（免得旧动态被当新内容）',
+    !readState().feedInitializedAt, `feedInitializedAt=${readState().feedInitializedAt}`);
 
+  // ② 第二次失败：仍安静，退避翻倍到 4 分钟
   fakeNow += 120000;
   const afterSecond = await fire();
-  check('退避到期重试仍失败，且同样只尝试一次', attempts === 2, `attempts=${attempts}`);
+  check('第二轮仍只尝试 2 次', feedAttempts === 4, `feedAttempts=${feedAttempts}`);
   check('连续失败退避翻倍到 4 分钟', afterSecond === 240000, `实际 ${Math.round(afterSecond / 60000)} 分钟`);
+  check('第 2 次失败仍不发异常通知', notifications().length === 0, `notifications=${notifications().length}`);
 
-  const state = JSON.parse(fs.readFileSync(path.join(dataDir, 'qzone-interactions.json'), 'utf8'));
-  check('failStreak 记为 2', state.failStreak === 2, `failStreak=${state.failStreak}`);
+  // ③ 第三次失败：这才上报一条异常通知，退避 8 分钟
+  fakeNow += 240000;
+  const afterThird = await fire();
+  check('第三轮仍只尝试 2 次', feedAttempts === 6, `feedAttempts=${feedAttempts}`);
+  check('第 3 次连续失败应该上报一条异常通知', notifications().length === 1, `notifications=${notifications().length}`);
+  check('上报文案带上了原因', /network busy/.test(notifications()[0] || ''), notifications()[0] || '无');
+  check('连续失败退避到 8 分钟', afterThird === 480000, `实际 ${Math.round(afterThird / 60000)} 分钟`);
+  check('failStreak 记为 3', readState().failStreak === 3, `failStreak=${readState().failStreak}`);
+  const failingRun = readState().runs[0];
+  check('运行记录标明本轮动态没取到', failingRun.status === 'partial-feed-error' && Boolean(failingRun.feedError),
+    `status=${failingRun.status} feedError=${failingRun.feedError || '无'}`);
+
+  // ④ 第四次失败：只报过一次就不再补报（不能变成每轮都顶一条），退避继续翻倍到 16 分钟
+  fakeNow += 480000;
+  const afterFourth = await fire();
+  check('第 4 次失败不重复上报', notifications().length === 1, `notifications=${notifications().length}`);
+  check('退避继续翻倍到 16 分钟', afterFourth === 960000, `实际 ${Math.round(afterFourth / 60000)} 分钟`);
+
+  // ⑤ 接口恢复：失败计数清零、建立基线、回到正常节奏
+  feedsHealthy = true;
+  fakeNow += 960000;
+  const afterRecovery = await fire();
+  const state = readState();
+  check('恢复后 failStreak 清零', !state.failStreak, `failStreak=${state.failStreak}`);
+  check('恢复后这一轮建立了动态基线', Boolean(state.feedInitializedAt), `feedInitializedAt=${state.feedInitializedAt}`);
+  check('恢复后按正常回复间隔排期（5 分钟）', afterRecovery === 300000, `实际 ${Math.round(afterRecovery / 60000)} 分钟`);
+
+  fakeNow += 300000;
+  await fire();
+  check('下一轮恢复正常状态（idle，无降级标记）',
+    readState().runs[0].status === 'idle' && !readState().runs[0].feedError,
+    `status=${readState().runs[0].status} feedError=${readState().runs[0].feedError || '无'}`);
 } catch (error) {
   results.push(false);
   console.log('FAIL 用例异常终止:', error?.message ?? error);

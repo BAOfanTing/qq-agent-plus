@@ -8035,6 +8035,7 @@ const QZONE_RUN_LABELS = {
   idle: '没有新内容',
   done: '已完成',
   'partial-unknown': '部分结果待核对',
+  'partial-feed-error': '好友动态未取到',
   failed: '执行失败',
   interrupted: '执行中断',
   deferred: '等待活跃时间'
@@ -8119,6 +8120,8 @@ async function loadQzoneInteractionStatus() {
     const status = await api('/api/qzone-interactions/status');
     const records = Array.isArray(status.records) ? status.records : [];
     const latest = records[0];
+    // 好友动态抓取失败不再让整轮失败：原因记在 feedError 上，这里照样把它显示出来
+    const runAlert = latest?.error || (latest?.feedError ? `好友动态未取到：${latest.feedError}` : '');
     for (const button of $$('#qzi-run-feed-btn,#qzi-run-reply-btn')) {
       button.disabled = status.running;
     }
@@ -8134,7 +8137,7 @@ async function loadQzoneInteractionStatus() {
         <div class="field"><label>上次好友动态检查</label><div>${status.lastFeedPollAt ? esc(fmtTime(status.lastFeedPollAt)) : '-'}</div></div>
         <div class="field"><label>上次评论检查</label><div>${status.lastReplyPollAt ? esc(fmtTime(status.lastReplyPollAt)) : '-'}</div></div>
       </div>
-      ${latest?.error ? `<div class="moment-error" role="alert">${esc(latest.error)}</div>` : ''}
+      ${runAlert ? `<div class="moment-error" role="alert">${esc(runAlert)}</div>` : ''}
       ${records.length ? `<div class="table-wrap"><table class="usage-table">
         <thead><tr><th>时间</th><th>类型</th><th>状态</th><th>动态</th><th>回复</th><th>写操作</th><th>延后</th></tr></thead>
         <tbody>${records.slice(0, 10).map((record) => `

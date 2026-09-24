@@ -15,7 +15,7 @@ const {
   parseQzoneRawComments,
   QzoneWebClient
 } = await import('../src/onebot/qzone-feed.js');
-const { QzoneInteractionManager } = await import('../src/features/qzone-interactions.js');
+const { QzoneInteractionManager, isNonFailureRunError } = await import('../src/features/qzone-interactions.js');
 const { buildQzoneInteractionPrompt } = await import('../src/llm/qzone-interaction-prompt.js');
 
 after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -82,11 +82,12 @@ function fixture(patch = {}) {
   const writes = [];
   const feed = patch.feed || [];
   const own = patch.own || [];
+  const feedCall = patch.feedCall || (async () => ({ feeds: feed, has_more: false }));
   const onebot = {
     selfId: '888',
     selfNickname: 'Bot',
     call: async (action, params) => {
-      if (action === 'get_qzone_feeds') return { feeds: feed, has_more: false };
+      if (action === 'get_qzone_feeds') return feedCall(params);
       if (action === 'get_qzone_msg_list') return { msglist: own };
       writes.push({ action, params });
       if (action === 'comment_qzone') return { comment_id: 'own-comment' };
@@ -102,16 +103,23 @@ function fixture(patch = {}) {
     ...patch.qzoneWeb
   };
   const suppression = [];
+  const stateFile = path.join(dir, 'state.json');
+  if (patch.state) fs.writeFileSync(stateFile, JSON.stringify(patch.state));
+  const sleeps = [];
   const manager = new QzoneInteractionManager({
     onebot,
     qzoneWeb,
-    stateFile: path.join(dir, 'state.json'),
+    stateFile,
     complete: patch.complete || (async () => response({ feedActions: [], replyActions: [] })),
     setProactiveSuppressed: (value) => suppression.push(value),
-    sleep: async () => {},
-    now: patch.now || (() => nowMs)
+    sleep: (ms) => {
+      sleeps.push(ms);
+      return patch.sleep ? patch.sleep(ms) : Promise.resolve();
+    },
+    now: patch.now || (() => nowMs),
+    log: patch.log || (() => {})
   });
-  return { cfg, manager, onebot, qzoneWeb, writes, suppression };
+  return { cfg, manager, onebot, qzoneWeb, writes, suppression, sleeps, stateFile };
 }
 
 test('parses structured friend feed text, images, likes, roots, and nested replies', () => {
@@ -473,4 +481,146 @@ test('friend reply under the bot comment triggers one model-decided native reply
   const again = await f.manager.runNow('reply');
   assert.equal(again.run.status, 'idle');
   assert.equal(f.writes.length, 2);
+});
+
+test('friend-feed failure is retried once and a successful retry finishes the round', async () => {
+  let feedCalls = 0;
+  const f = fixture({
+    feedCall: async () => {
+      feedCalls += 1;
+      if (feedCalls === 1) {
+        throw new Error('OneBot get_qzone_feeds 失败: retcode=100 qzone feeds failed: code=-10001 network busy');
+      }
+      return {
+        feeds: [{
+          uin: 111,
+          nickname: 'Friend',
+          time: nowSec,
+          appid: 311,
+          key: 'retry-ok',
+          html: htmlPost('重试后拿到的动态')
+        }],
+        has_more: false
+      };
+    },
+    complete: async ({ messages }) => response({
+      feedActions: idsFromMessages(messages, 'feed').map((id) => ({
+        id, action: 'like', content: '', reason: '内容可以'
+      })),
+      replyActions: []
+    })
+  });
+  const result = await f.manager.runNow('feed');
+  assert.equal(feedCalls, 2);
+  assert.deepEqual(f.sleeps, [45000]);
+  assert.equal(result.run.status, 'done');
+  assert.equal(result.run.feedError, undefined);
+  assert.equal(result.run.selectedFeeds, 1);
+  assert.deepEqual(f.writes.map((item) => item.action), ['like_qzone']);
+});
+
+test('stop and time-window aborts are not counted as interface failures', () => {
+  assert.equal(isNonFailureRunError(new Error('Qzone interaction task stopped')), true);
+  assert.equal(isNonFailureRunError(
+    Object.assign(new Error('当前不在活跃时间'), { code: 'TIME_CONTROL_INACTIVE' })
+  ), true);
+  assert.equal(isNonFailureRunError(
+    new Error('OneBot get_qzone_feeds 失败: retcode=100 qzone feeds failed: code=-10001 network busy')
+  ), false);
+  assert.equal(isNonFailureRunError(undefined), false);
+});
+
+test('aborting during the retry wait skips the retry and is not recorded as a feed failure', async () => {
+  let feedCalls = 0;
+  const f = fixture({
+    feedCall: async () => {
+      feedCalls += 1;
+      throw new Error('OneBot get_qzone_feeds 失败: retcode=100 qzone feeds failed: code=-10001 network busy');
+    },
+    // 重试前的等待挂住不返回：只有中止能让它结束（真实场景是停止/离开活跃时段）
+    sleep: () => new Promise(() => {})
+  });
+  const pending = f.manager.runNow('feed');
+  for (let i = 0; i < 200 && !f.sleeps.length; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.deepEqual(f.sleeps, [45000]);
+  await f.manager.abort();
+  await assert.rejects(pending, /Qzone interaction task stopped/);
+  assert.equal(feedCalls, 1);
+  const run = f.manager.status().records[0];
+  assert.equal(run.status, 'failed');
+  assert.equal(run.feedError, undefined);
+});
+
+test('repeated friend-feed failure still runs replies and the unread backlog', async () => {
+  const post = {
+    uin: '111',
+    tid: 'pending',
+    nickname: 'Old Friend',
+    content: '积压的动态正文',
+    time: nowSec - 3600,
+    appid: 311,
+    images: [],
+    comments: [],
+    isLiked: false
+  };
+  const comment = {
+    commentId: '1',
+    tid: '1',
+    parentTid: '',
+    uin: '222',
+    nickname: 'Commenter',
+    content: '积压的评论',
+    targetUin: '',
+    time: nowSec - 1700
+  };
+  let feedCalls = 0;
+  const f = fixture({
+    feedCall: async () => {
+      feedCalls += 1;
+      throw new Error('OneBot get_qzone_feeds 失败: retcode=100 qzone feeds failed: code=-10001 network busy');
+    },
+    state: {
+      version: 1,
+      feeds: [{
+        key: '111:pending', status: 'unread', discoveredAt: nowMs - 3600000, updatedAt: nowMs - 3600000, post
+      }],
+      comments: [{
+        key: '111:pending:root:1:2',
+        status: 'unread',
+        discoveredAt: nowMs - 1800000,
+        updatedAt: nowMs - 1800000,
+        post: { uin: post.uin, tid: post.tid, nickname: post.nickname, content: post.content, time: post.time },
+        comment,
+        rootComment: comment,
+        context: [{ ...comment, self: false }]
+      }],
+      watchedPosts: [],
+      runs: []
+    },
+    complete: async ({ messages }) => response({
+      feedActions: idsFromMessages(messages, 'feed').map((id) => ({
+        id, action: 'skip', content: '', reason: '本轮不互动'
+      })),
+      replyActions: idsFromMessages(messages, 'reply').map((id) => ({
+        id, action: 'skip', content: '', reason: '只是看一下'
+      }))
+    })
+  });
+  const inner = f.onebot.call;
+  let replyChecks = 0;
+  f.onebot.call = async (action, params) => {
+    if (action === 'get_qzone_msg_list') replyChecks += 1;
+    return inner(action, params);
+  };
+  const result = await f.manager.runNow('all');
+  assert.equal(feedCalls, 2);
+  assert.equal(replyChecks, 1);
+  assert.equal(result.run.status, 'partial-feed-error');
+  assert.match(result.run.feedError, /network busy/);
+  assert.equal(result.run.selectedFeeds, 1);
+  assert.equal(result.run.selectedReplies, 1);
+  assert.equal(f.manager.status().unreadFeeds, 0);
+  assert.equal(f.manager.status().unreadReplies, 0);
 });

@@ -2,9 +2,21 @@
 // 目的：像"B 未定义"这类错误，node --check（语法检查）根本查不出来，
 // 只有真正跑一遍渲染才会暴露。
 import fs from 'node:fs';
+import os from 'node:os';
 import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// 必须指到临时数据目录：这个用例会 import src/console/app.js，控制台启动时会把身份与
+// 异常两个试点的 SQLite 建在 DATA_DIR 下。不重定向就会动到开发机（甚至部署机）自己的
+// data/*.sqlite —— 和之前"跑测试覆盖掉 data/config.json"是同一类问题。
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-render-'));
+process.env.QQ_AGENT_DATA_DIR = TEST_DATA_DIR;
+process.on('exit', () => {
+  try {
+    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  } catch { /* 清理失败不影响用例结论 */ }
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');

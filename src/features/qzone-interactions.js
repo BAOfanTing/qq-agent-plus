@@ -30,6 +30,11 @@ import { minuteOfDayInZone } from '../core/util.js';
 const STATE_FILE = path.join(DATA_DIR, 'qzone-interactions.json');
 const HOUR_MS = 60 * 60 * 1000;
 const MAX_STATE_ITEMS = 2000;
+// 腾讯侧 feeds3_html_more 偶发繁忙（network busy / 使用人数过多）通常几十秒内恢复：
+// 抓取失败先等一会儿重试一次，仍失败才记账走退避。
+const FEED_RETRY_DELAY_MS = 45000;
+// 连续失败到第 3 次才上报异常通知：一次限流不值得顶一条"错误"给管理员。
+const FAILURE_NOTIFY_STREAK = 3;
 
 function cleanText(value, max = 1000) {
   return String(value ?? '').replace(/\0/g, '').replace(/[ \t]+/g, ' ').trim().slice(0, max);
@@ -53,6 +58,15 @@ function writeJson(file, value) {
 
 function interactionError(code, message, httpStatus = 409) {
   return Object.assign(new Error(message), { code, httpStatus });
+}
+
+/**
+ * 哪些错误不算"这一轮失败了"：主动停止/重启（手动停用、换配置），以及全局时间控制把运行
+ * 中止在非活跃时段。这两类都是正常结束，不该累计失败计数、更不该顶一条异常通知出来。
+ */
+export function isNonFailureRunError(error) {
+  if (error?.code === 'TIME_CONTROL_INACTIVE') return true;
+  return /Qzone interaction task stopped/i.test(String(error?.message ?? error));
 }
 
 // ── 活跃时段（本功能专用）：窗口外不阅览动态，也不影响聊天回复 ──
@@ -468,26 +482,22 @@ export class QzoneInteractionManager {
       || now - this.state.lastReplyPollAt >= cfg.replyIntervalMinutes * 60000;
     if (feedDue || replyDue) {
       try {
-        await this.#exclusive('scheduled', () => this.#run({
+        const result = await this.#exclusive('scheduled', () => this.#run({
           kind: feedDue && replyDue ? 'all' : (feedDue ? 'feed' : 'reply'),
           source: 'scheduled',
           includeExisting: cfg.startupCatchup
         }));
-        if (Number(this.state.failStreak)) {
+        // 好友动态抓取失败（重试后仍没拿到）算这一轮降级：评论检查与未读积压已经照跑，
+        // 但失败计数和退避照旧，保持"接口出问题就慢下来"的保护。
+        const feedError = result?.run?.feedError;
+        if (feedError) this.#recordFailure(`好友动态抓取失败（已重试一次）: ${feedError}`);
+        else if (Number(this.state.failStreak)) {
           this.state.failStreak = 0;
           this.#save();
         }
       } catch (error) {
-        const message = String(error?.message ?? error);
-        // 主动停止/重启触发的 abort 不是故障：不上报、不退避
-        if (!/Qzone interaction task stopped/i.test(message)) {
-          const streak = Math.min(6, (Number(this.state.failStreak) || 0) + 1);
-          this.state.failStreak = streak;
-          this.#save();
-          // 一轮连续故障只上报一次，之后安静退避重试（避免刷屏 + 避免被 QQ 限流）
-          if (streak === 1) this.log('[qzone-interactions] run failed:', message);
-          else console.log(`[qzone-interactions] run failed（连续 ${streak} 次，退避重试中）:`, message);
-        }
+        // 主动停止/重启、或全局时间控制判定离开活跃时段：不是故障，不上报也不退避
+        if (!isNonFailureRunError(error)) this.#recordFailure(String(error?.message ?? error));
       }
     }
     if (!this.stopped) {
@@ -499,6 +509,18 @@ export class QzoneInteractionManager {
       const backoff = streak ? Math.min(30, 2 ** streak) * 60000 : 0;
       this.#schedule(Math.max(dueDelay, backoff));
     }
+  }
+
+  /**
+   * 记一次失败：累加连续失败计数（供退避使用），并决定要不要上报异常通知。
+   * 腾讯侧偶发繁忙很常见，前两次只写日志；连到第 3 次仍失败才当故障通知，之后安静退避重试。
+   */
+  #recordFailure(message) {
+    const streak = Math.min(6, (Number(this.state.failStreak) || 0) + 1);
+    this.state.failStreak = streak;
+    this.#save();
+    if (streak === FAILURE_NOTIFY_STREAK) this.log('[qzone-interactions] run failed:', message);
+    else console.log(`[qzone-interactions] run failed（连续 ${streak} 次，退避重试中）:`, message);
   }
 
   #save() {
@@ -589,7 +611,8 @@ export class QzoneInteractionManager {
     }
   }
 
-  async #discoverFeeds(cfg, signal) {
+  /** 取一页好友动态；接口失败与返回结构异常都算失败，由 #discoverFeeds 决定是否重试。 */
+  async #fetchFeeds(cfg, signal) {
     const data = await this.onebot.call(
       'get_qzone_feeds',
       { page_num: 1, count: cfg.feedFetchCount },
@@ -597,6 +620,36 @@ export class QzoneInteractionManager {
       signal
     );
     if (!Array.isArray(data?.feeds)) throw new Error('好友动态接口返回格式无效');
+    return data;
+  }
+
+  /** 重试前的等待；这期间被中止就立刻结束等待，由调用方 throwIfAborted 收尾。 */
+  async #waitBeforeFeedRetry(signal) {
+    if (!signal) {
+      await this.sleep(FEED_RETRY_DELAY_MS);
+      return;
+    }
+    if (signal.aborted) return;
+    await Promise.race([
+      this.sleep(FEED_RETRY_DELAY_MS),
+      new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
+    ]);
+  }
+
+  async #discoverFeeds(cfg, signal) {
+    let data;
+    try {
+      data = await this.#fetchFeeds(cfg, signal);
+    } catch (error) {
+      signal?.throwIfAborted();
+      console.log(
+        `[qzone-interactions] 好友动态抓取失败，${Math.round(FEED_RETRY_DELAY_MS / 1000)} 秒后重试一次:`,
+        cleanText(error?.message ?? error, 200)
+      );
+      await this.#waitBeforeFeedRetry(signal);
+      signal?.throwIfAborted();
+      data = await this.#fetchFeeds(cfg, signal);
+    }
     const cutoff = Math.floor((this.now() - cfg.maxAgeHours * HOUR_MS) / 1000);
     let discovered = 0;
     for (const raw of data.feeds) {
@@ -1119,13 +1172,26 @@ export class QzoneInteractionManager {
     const release = watchTimeWindow((error) => this.controller?.abort(error), '');
     let session = null;
     try {
+      let feedOk = false;
       if (kind === 'all' || kind === 'feed') {
-        run.discoveredFeeds = await this.#discoverFeeds(cfg, this.controller.signal);
+        try {
+          run.discoveredFeeds = await this.#discoverFeeds(cfg, this.controller.signal);
+          feedOk = true;
+        } catch (error) {
+          // 中止（手动停止/重启/离开活跃时段）照旧结束整轮，不算接口失败
+          this.controller?.signal?.throwIfAborted();
+          // 好友动态这一路不再让整轮失败：腾讯侧偶发繁忙很常见，照 get_qzone_msg_list 的既有做法
+          // 记下来继续跑——本轮仍然检查评论回复、处理已积压的未读。失败计数、退避和
+          // "连续 3 次才上报"由 #tick 统一处理，这里只留一条不出通知的日志。
+          run.feedError = cleanText(error?.message ?? error, 500);
+          console.log('[qzone-interactions] 好友动态本轮未取到，继续检查评论与积压:', run.feedError);
+        }
       }
       if (kind === 'all' || kind === 'reply') {
         run.discoveredReplies = await this.#discoverReplies(cfg, this.controller.signal);
       }
-      const baselineFeed = !this.state.feedInitializedAt && (kind === 'all' || kind === 'feed');
+      // 基线只在本轮真的读到动态时才立：读失败就立基线，会把"上线前已存在的动态"错当成新内容
+      const baselineFeed = feedOk && !this.state.feedInitializedAt && (kind === 'all' || kind === 'feed');
       const baselineReply = !this.state.replyInitializedAt && (kind === 'all' || kind === 'reply');
       if (baselineFeed) this.state.feedInitializedAt = this.now();
       if (baselineReply) this.state.replyInitializedAt = this.now();
@@ -1149,7 +1215,7 @@ export class QzoneInteractionManager {
       run.estimatedInputTokens = batch.estimatedTokens;
       run.inputBudgetTokens = batch.budget;
       if (!batch.feeds.length && !batch.replies.length) {
-        run.status = 'idle';
+        run.status = run.feedError ? 'partial-feed-error' : 'idle';
         run.endedAt = this.now();
         this.#save();
         return { ok: true, run };
@@ -1178,7 +1244,7 @@ export class QzoneInteractionManager {
       await this.#executePlan(decided.plan, batch, cfg, this.controller.signal, run);
       run.status = run.actions.some((action) => action.status === 'unknown')
         ? 'partial-unknown'
-        : 'done';
+        : (run.feedError ? 'partial-feed-error' : 'done');
       run.endedAt = this.now();
       this.#save();
       this.#finishSession(session, run);

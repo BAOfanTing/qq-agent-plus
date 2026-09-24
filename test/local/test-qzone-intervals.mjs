@@ -4,7 +4,7 @@
 //   1) 首轮之后下一次排在 120 分钟（两个间隔取近的那个）
 //   2) 只到回复的间隔时，只跑回复那一半，不碰好友动态接口
 //   3) 好友动态满 24 小时才跑；那一刻回复还没到点，就单独跑好友动态
-//   4) 接口失败只尝试一次并退避到分钟级（1→2 分钟、2→4 分钟），不会每秒重试
+//   4) 接口失败先重试一次，再退避到分钟级（2→4→8 分钟），连续第 3 次才上报，不会每秒重试
 //   5) 到点在活跃时段之外时不调用接口，排到下一个时段开始
 //   6) 没有新内容的一轮不调模型（0 token）
 //
@@ -186,21 +186,31 @@ try {
   check('该轮回复未到点，不重复跑回复', calls.reply === replyBefore, `reply+${calls.reply - replyBefore}`);
   check('没有新内容时一轮不调模型（0 token）', modelCalls === 0 && logs.length === 0, `modelCalls=${modelCalls} logs=${logs.length}`);
 
-  // ⑤ 接口连续失败：只尝试一次，退避 2 分钟 → 4 分钟，绝不是每秒重试
-  //    （好友动态接口的失败会让整轮失败；回复列表接口的失败自 2026-09 起是软兜底，
-  //      由 test-qzone-reply-fallback.mjs 单独覆盖）
+  // ⑤ 接口连续失败：抓取先重试一次（每轮最多 2 次请求），再按 2 分钟 → 4 分钟 → 8 分钟退避，
+  //    绝不是每秒重试；整轮不再因此失败，连续第 3 次才上报一条异常通知。
+  //    （回复列表接口的失败是软兜底，由 test-qzone-reply-fallback.mjs 单独覆盖）
   failFeeds = true;
   jump(FEED_MINUTES + 1);
   const feedBeforeFail = calls.feed;
   const afterFail1 = await fire('失败轮 1');
-  check('失败轮只尝试一次（不刷屏重试）', calls.feed === feedBeforeFail + 1, `本轮尝试 ${calls.feed - feedBeforeFail} 次`);
+  check('失败轮先重试一次（共 2 次请求，不刷屏）', calls.feed === feedBeforeFail + 2, `本轮尝试 ${calls.feed - feedBeforeFail} 次`);
   check('失败后退避到 2 分钟', minutes(afterFail1) === 2, `实际 ${minutes(afterFail1)} 分钟`);
   check('failStreak 记为 1', readState().failStreak === 1, `failStreak=${readState().failStreak}`);
+  check('这一轮不是"执行失败"，而是标明动态没取到',
+    readState().runs[0].status === 'partial-feed-error' && Boolean(readState().runs[0].feedError),
+    `status=${readState().runs[0].status}`);
+  check('前两次失败都不上报异常通知', logs.length === 0, `logs=${logs.length}`);
 
   jump(2);
   const afterFail2 = await fire('失败轮 2');
   check('再次失败退避翻倍到 4 分钟', minutes(afterFail2) === 4, `实际 ${minutes(afterFail2)} 分钟`);
-  check('连续失败也只报一条日志（第一条）', logs.length === 1, `logs=${logs.length}`);
+  check('第 2 次失败仍不上报', logs.length === 0, `logs=${logs.length}`);
+
+  jump(4);
+  const afterFail3 = await fire('失败轮 3');
+  check('第 3 次连续失败才上报一条异常通知', logs.length === 1 && /network busy|使用人数过多/.test(logs[0] || ''),
+    `logs=${logs.length}`);
+  check('连续失败退避到 8 分钟', minutes(afterFail3) === 8, `实际 ${minutes(afterFail3)} 分钟`);
   failFeeds = false;
 
   // ⑥ 到点在活跃时段之外：不调用接口，排到下一个时段开始（07:00）
