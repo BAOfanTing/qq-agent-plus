@@ -73,6 +73,7 @@ import { validateImageUrl, safeFetchBinary } from '../llm/safe-fetch.js';
 import { webSearch, webFetch } from '../llm/web-search.js';
 import { expandForwardNodes, extractMediaFromSegments } from '../onebot/onebot.js';
 import { readForwardMessages } from '../onebot/forward-reader.js';
+import { fetchOversizedImageAsJpeg } from './image-downsample.js';
 
 
 async function downloadImageAsDataUrl(url, signal) {
@@ -87,7 +88,15 @@ async function downloadImageAsDataUrl(url, signal) {
     return `data:${mime};base64,${buffer.toString('base64')}`;
   }
   const safeUrl = await validateImageUrl(url);
-  const { buffer, contentType } = await safeFetchBinary(safeUrl, 12 * 1024 * 1024, signal);
+  let buffer;
+  let contentType;
+  try {
+    ({ buffer, contentType } = await safeFetchBinary(safeUrl, 12 * 1024 * 1024, signal));
+  } catch (error) {
+    // 超过常规上限 → 放宽到 96MiB 重拉 + ffmpeg 降采样（Issue #6：群友发 >12MiB 大图）。
+    // 非超限错误原样抛出；ffmpeg 缺失/失败时抛带指引的错误，常规 ≤12MiB 路径不受影响。
+    ({ buffer, contentType } = await fetchOversizedImageAsJpeg(safeUrl, error, signal));
+  }
   if (!buffer || !buffer.length) throw new Error('图片内容为空');
   const mime = detectMime(buffer) || String(contentType || 'image/jpeg').split(';')[0];
   return `data:${mime};base64,${buffer.toString('base64')}`;
