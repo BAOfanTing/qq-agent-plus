@@ -10756,12 +10756,14 @@ async function saveConfig({ quiet = false } = {}) {
         const pos = sl ? Number(sl.value) : (c.store?.contextSliderPos ?? 100);
         return sliderToTierUI(pos).randomPercent;
       })(),
-      atCount: clampInt(val('#cfg-atcount', c.store?.atCount), 1, 500, 20),
-      keywordCount: clampInt(val('#cfg-kwcount', c.store?.keywordCount), 1, 500, 15),
+      // 下界是 0 不是 1：四个输入框都写着 min="0"，后端也把 0 当合法值（= 不读历史），
+      // 夹到 1 会让"填 0"静默变成"读 1 条"，与界面和文档都对不上。
+      atCount: clampInt(val('#cfg-atcount', c.store?.atCount), 0, 500, 20),
+      keywordCount: clampInt(val('#cfg-kwcount', c.store?.keywordCount), 0, 500, 15),
       keywords: String($('#cfg-keywords')?.value || '')
         .split('\n').map((x) => x.trim()).filter(Boolean),
-      randomCount: clampInt(val('#cfg-randcount', c.store?.randomCount), 1, 500, 8),
-      allCount: clampInt(val('#cfg-allcount', c.store?.allCount), 1, 500, 80),
+      randomCount: clampInt(val('#cfg-randcount', c.store?.randomCount), 0, 500, 8),
+      allCount: clampInt(val('#cfg-allcount', c.store?.allCount), 0, 500, 80),
       // 统一开关 + 分群滑条表（__replace__：删掉的群设置要真删，深合并做不到）
       unifiedTier: chk('#cfg-unifiedtier', c.store?.unifiedTier !== false),
       // 明确声明语义：滑条上的数字就是概率（后端据此跳过老配置迁移）

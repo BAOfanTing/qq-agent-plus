@@ -1693,7 +1693,8 @@ async function main() {
   // ── 场景 29：响应档位（是否响应 + 各档条数独立）──
   {
     const { resolveContextTier, isAtMe, hitKeyword } = await import('../src/llm/prompt.js');
-    const OPT = { selfNickname: '小鲸鱼', botName: '小鲸鱼', selfId: '3113678561' };
+    // 占位号：别改回任何真实 QQ 号（这里是上游导入时带过来的取值，发布前统一换成保留样号）
+    const OPT = { selfNickname: '小鲸鱼', botName: '小鲸鱼', selfId: '3000000002' };
     // 各条数刻意设成不同值，便于验证"触发原因决定读多少条"
     // （2026-09-22 起滑条值就是概率：判定只看 randomPercent，tier 仅用于展示与选条数）
     const CFG = {
@@ -1703,7 +1704,7 @@ async function main() {
 
     // 艾特检测：@昵称 / CQ 码
     assert.ok(isAtMe('@小鲸鱼 在吗', OPT), '@昵称应识别为艾特');
-    assert.ok(isAtMe('[CQ:at,qq=3113678561] x', OPT), 'CQ 码艾特自己应识别');
+    assert.ok(isAtMe('[CQ:at,qq=3000000002] x', OPT), 'CQ 码艾特自己应识别');
     assert.ok(!isAtMe('[CQ:at,qq=999] x', OPT), '艾特别人不应识别');
     assert.ok(!isAtMe('天气不错', OPT), '普通消息不应识别');
 
@@ -1712,7 +1713,7 @@ async function main() {
     assert.ok(hitKeyword('BOT x', ['bot']), '关键词应不区分大小写');
     assert.ok(!hitKeyword('x', []), '空关键词表不命中');
 
-    const at = [{ text: '[CQ:at,qq=3113678561] 在吗' }];   // 纯艾特，不含关键词
+    const at = [{ text: '[CQ:at,qq=3000000002] 在吗' }];   // 纯艾特，不含关键词
     const kw = [{ text: '大肥鱼 帮我' }];
     const plain = [{ text: '今天天气不错' }];
 

@@ -1,15 +1,26 @@
 // 真实端到端：起真服务，**不 mock 任何接口**，
 // 用 vm 加载 ui/app.js，走完整的 switchTab('usage') → loadUsageView 流程，
 // 验证页面真的有内容。这是最接近用户实际操作的验证。
+//
+// ⚠️ 必须先把数据目录重定向到临时目录，再加载 src：这个用例会 createApp() + start()，
+//    默认打开的是仓库里的 data/（真实聊天库、含 Key 的真实 config.json，
+//    而且任意一次 getConfig() 的防抖保存都可能按稳定策略把它重写掉）。
+//    环境变量必须在 src 模块求值**之前**生效：DATA_DIR 是模块级常量
+//    （src/core/config-legacy.js:20），而 ESM 的静态 import 会先于文件体执行，
+//    所以 createApp 只能用动态 import 放在设置之后。
 import fs from 'node:fs';
 import vm from 'node:vm';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
-import { createApp } from '../src/console/app.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-usage-e2e-'));
+process.env.QQ_AGENT_DATA_DIR = dataDir;
+process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* Windows 上可能被句柄占着 */ } });
+const { createApp } = await import('../src/console/app.js');
 
 let pass = 0, fail = 0;
 const check = (n, c, e = '') => { if (c) { pass++; console.log('  OK   ' + n); } else { fail++; console.log('  FAIL ' + n + (e ? ' -> ' + e : '')); } };

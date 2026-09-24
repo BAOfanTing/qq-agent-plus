@@ -565,7 +565,10 @@ export class AutoUpdateManager {
           pending: false,
           ownerUin,
           sentAt: Date.now(),
-          error: ''
+          error: '',
+          // 这一条已经确认发出去了，之前那条"结果未知"的标记不能留着 ——
+          // 否则 data/auto-update.json 会一直显示"需人工确认"，与 docs/AUTO_UPDATE.md 的语义对不上。
+          deliveryUnknown: false
         }
       });
       this.emit('auto-update', this.status());

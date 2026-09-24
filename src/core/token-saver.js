@@ -94,19 +94,33 @@ export function tokenSaverEffective(cfg = {}) {
     { key: 'maxRunTokens', label: '单次运行累计 Token 上限', user: num(cfg.api?.maxRunTokens, 160000), cap: caps?.maxRunTokens },
     { key: 'handoffMaxChars', label: '会话交接注入上限（字符，配置文件里改）', user: num(cfg.memory?.handoffMaxChars, 4000), cap: caps?.handoffMaxChars },
     { key: 'memoryBlockChars', label: '全局印象注入上限（字符，固定值）', user: 6000, cap: caps?.memoryBlockChars },
-    { key: 'promptMaxStickers', label: '提示词里的表情清单条数', user: num(cfg.sticker?.promptMaxStickers, 10), cap: caps?.promptMaxStickers },
+    // 表情清单的运行时读法是"非正数/坏值按默认 10"（prompt.js 里 `want > 0 ? want : 10`），
+    // 所以手改成 -5 时这一行要说 10 —— 说 -5 或 0 都是运行时不会发生的事。
+    { key: 'promptMaxStickers', label: '提示词里的表情清单条数', user: (Number(cfg.sticker?.promptMaxStickers) > 0 ? Number(cfg.sticker.promptMaxStickers) : 10), cap: caps?.promptMaxStickers },
     // 日说说有**自己的**轮次旋钮（dailyMoments.maxRounds，默认 8），与聊天那条 api.maxRounds 不是一回事
     { key: 'dailyMomentsMaxRounds', label: '每日动态最大轮次（配置文件里改）', user: num(cfg.dailyMoments?.maxRounds, 8), cap: caps?.maxRounds }
   ];
+  // 这几项除了"被省 Token 夹上限"，运行时还有自带的上下限（升级前就有的老兜底）：
+  // maxRunTokens 20000..1000000（effectiveRunLimits）、handoffMaxChars 500..12000（formatHandoffForPrompt）、
+  // dailyMomentsMaxRounds 2..16（normalizeDailyMoments）、maxRounds 至少 1。
+  // 对照表按运行时的真实读法算，否则会报出一个根本不生效的数字
+  // （例如手改 maxRunTokens=5000，实际仍会花到 20000，界面不能显示 5000）。
+  const bounds = {
+    maxRounds: [1, null], maxRunTokens: [20000, 1000000],
+    handoffMaxChars: [500, 12000], dailyMomentsMaxRounds: [2, 16]
+  };
   return {
     mode,
     label: TOKEN_SAVER_LABELS[mode] || TOKEN_SAVER_LABELS.off,
     active: mode !== 'off',
     capsByMode: tokenSaverCapTable(),
-    rows: rows.map((row) => ({
-      ...row,
-      effective: cappedByTokenSaver(row.user, row.cap),
-      clamped: row.cap !== null && row.cap !== undefined && row.user > row.cap
-    }))
+    rows: rows.map((row) => {
+      const [floor, ceiling] = bounds[row.key] || [0, null];
+      return {
+        ...row,
+        effective: Math.min(ceiling ?? Infinity, Math.max(floor, cappedByTokenSaver(row.user, row.cap))),
+        clamped: row.cap !== null && row.cap !== undefined && row.user > row.cap
+      };
+    })
   };
 }

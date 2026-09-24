@@ -12,14 +12,16 @@ process.env.QQ_AGENT_DATA_DIR = __dir;
 process.on('exit', () => { try { fs.rmSync(__dir, { recursive: true, force: true }); } catch { /* Windows 上可能被句柄占着 */ } });
 
 const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
-import {
-  executeTool as coreExecuteTool,
-  toOpenAiTools as coreToOpenAiTools
-} from '../src/tools/tools-core.js';
-import {
-  executeTool as wrappedExecuteTool,
-  toOpenAiTools as wrappedToOpenAiTools
-} from '../src/tools/tools.js';
+// tools-core / tools 会（直接或间接）加载 core/config.js，而 DATA_DIR 是模块级常量；
+// 用静态 import 的话上面那个环境变量还没生效，隔离就是假的。
+const {
+  executeTool: coreExecuteTool,
+  toOpenAiTools: coreToOpenAiTools
+} = await import('../src/tools/tools-core.js');
+const {
+  executeTool: wrappedExecuteTool,
+  toOpenAiTools: wrappedToOpenAiTools
+} = await import('../src/tools/tools.js');
 
 function cfg(enabled, maxParallelReads = 4) {
   const value = structuredClone(DEFAULT_CONFIG);

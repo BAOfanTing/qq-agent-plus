@@ -370,8 +370,11 @@ export class GlobalPersonMemoryStore {
           x.content !== content || (scope && !sourceKeys(x.sourceChatKeys).includes(scope)));
         removed ||= member.impressions.length !== n;
       } else { member.impressions = []; removed = true; }
+      // 只要真删掉了东西就留快照，不限于"整条被删空"：这个人还有别的来源时，
+      // 被摘掉的那几条同样再也回不来 —— 而控制台文案承诺的是"服务端会留可回滚快照"。
+      // before 是动手前的克隆；它本来就是空列表时，备份函数自己会返回 null 不落盘。
+      if (removed) { try { backupPersonBeforeConsolidation(before, { sourceChatKey: scope, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ } }
       if (!member.impressions.length) {
-        try { backupPersonBeforeConsolidation(before, { sourceChatKey: '', at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
         map.delete(key); try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
       } else { member.updatedAt = Date.now(); this.#persist(member); }
       if (uid || name) break;
@@ -385,12 +388,18 @@ export class GlobalPersonMemoryStore {
       // 快照必须在**清空之前**打（backupPersonBeforeConsolidation 见到空列表直接返回 null）；
       // 放在下面那段之后等于从来没备份过 —— 与 remove() 同一处坑，这次一起按同一写法处理。
       const before = structuredClone(member);
-      for (const entry of member.impressions) entry.sourceChatKeys = entry.sourceChatKeys.filter((x) => x !== source);
+      let touched = false;
+      for (const entry of member.impressions) {
+        if (!(entry.sourceChatKeys || []).includes(source)) continue;
+        entry.sourceChatKeys = entry.sourceChatKeys.filter((x) => x !== source);
+        touched = true;
+      }
       member.impressions = member.impressions.filter((x) => x.sourceChatKeys.length);
       member.sourceChatKeys = sourceKeys(member.impressions.flatMap((x) => x.sourceChatKeys));
       member.updatedAt = Date.now();
+      // 同上：这个人还有别的来源时也要留快照 —— 被摘掉的那几条一样回不来
+      if (touched) { try { backupPersonBeforeConsolidation(before, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ } }
       if (!member.impressions.length) {
-        try { backupPersonBeforeConsolidation(before, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
         map.delete(key); try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
       } else this.#persist(member);
     }
@@ -413,8 +422,9 @@ export class GlobalPersonMemoryStore {
     member.impressions = member.impressions.filter((x) => (x.sourceChatKeys || []).length);
     member.sourceChatKeys = sourceKeys(member.impressions.flatMap((x) => x.sourceChatKeys));
     member.updatedAt = Date.now();
+    // 有东西被摘掉就留快照（不只是整条删空）：这个人还有别的来源时，删掉的同样回不来
+    if (touched) { try { backupPersonBeforeConsolidation(before, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ } }
     if (!member.impressions.length) {
-      try { backupPersonBeforeConsolidation(before, { sourceChatKey: source, at: Date.now(), reason: 'manual-delete' }); } catch { /* 备份失败不阻断 */ }
       map.delete(uid);
       try { fs.rmSync(globalMemberFile(member.userId, member.name), { force: true }); } catch {}
     } else this.#persist(member);

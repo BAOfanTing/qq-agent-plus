@@ -35,13 +35,16 @@ function decodeRequest(hex) {
   return jce.decode(Buffer.from(nested))[0];
 }
 
+// 用例里的 selfId 用保留样号（上游导入时带的是真实号，发布前统一换掉）：
+// scripts/sanitize-release.mjs 只按 data/sanitize-patterns.json 里的清单匹配，
+// 认不出任意一个 10 位 QQ 号，所以这类值只能靠人工换。
 test('friend request setting uses the verified SnowLuma raw packet action', async () => {
   const calls = [];
   const onebot = {
     call: async (...args) => {
       calls.push(args);
       return responseHex('GetUserAddFriendSettingReq', [
-        3772194964,
+        3000000001,
         0,
         1,
         [],
@@ -54,7 +57,7 @@ test('friend request setting uses the verified SnowLuma raw packet action', asyn
     }
   };
   assert.equal(await getFriendRequestSetting(onebot, {
-    selfId: '3772194964',
+    selfId: '3000000001',
     userId: '123456789'
   }), 1);
   assert.equal(calls.length, 1);
@@ -70,17 +73,17 @@ test('friend request dispatch reports success only for business code zero', asyn
       calls.push(params);
       if (params.cmd === FRIEND_REQUEST_PROTOCOL.getSettingCommand) {
         return responseHex('GetUserAddFriendSettingReq', [
-          3772194964, 0, 0, [], 1, 0, Buffer.alloc(0), 0, Buffer.alloc(0)
+          3000000001, 0, 0, [], 1, 0, Buffer.alloc(0), 0, Buffer.alloc(0)
         ]);
       }
       return responseHex('AddFriendReq', [
-        3772194964, 0, 0, 0, 0, null, 0, 0, '', Buffer.alloc(0),
+        3000000001, 0, 0, 0, 0, null, 0, 0, '', Buffer.alloc(0),
         Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0)
       ]);
     }
   };
   const result = await sendFriendRequestViaSnowLuma(onebot, {
-    selfId: '3772194964',
+    selfId: '3000000001',
     userId: '123456789',
     sourceChatKey: 'group:456',
     verificationMessage: '继续聊'
@@ -105,18 +108,18 @@ test('friend request dispatch keeps explicit QQ rejection distinct from unknown 
     call: async (_action, params) => {
       if (params.cmd === FRIEND_REQUEST_PROTOCOL.getSettingCommand) {
         return responseHex('GetUserAddFriendSettingReq', [
-          3772194964, 0, 0, [], 1, 0, Buffer.alloc(0), 0, Buffer.alloc(0)
+          3000000001, 0, 0, [], 1, 0, Buffer.alloc(0), 0, Buffer.alloc(0)
         ]);
       }
       return responseHex('AddFriendReq', [
-        3772194964, 0, 0, 0, 0, null, 1, 0, '添加失败',
+        3000000001, 0, 0, 0, 0, null, 1, 0, '添加失败',
         Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0)
       ]);
     }
   };
   await assert.rejects(
     sendFriendRequestViaSnowLuma(onebot, {
-      selfId: '3772194964',
+      selfId: '3000000001',
       userId: '123456789'
     }),
     (error) => error instanceof FriendRequestProtocolError
@@ -133,7 +136,7 @@ test('friend request dispatch marks a lost write response as unknown', async () 
       calls += 1;
       if (calls === 1) {
         return responseHex('GetUserAddFriendSettingReq', [
-          3772194964, 0, 0, [], 1, 0, Buffer.alloc(0), 0, Buffer.alloc(0)
+          3000000001, 0, 0, [], 1, 0, Buffer.alloc(0), 0, Buffer.alloc(0)
         ]);
       }
       throw new Error('socket closed');
@@ -141,7 +144,7 @@ test('friend request dispatch marks a lost write response as unknown', async () 
   };
   await assert.rejects(
     sendFriendRequestViaSnowLuma(onebot, {
-      selfId: '3772194964',
+      selfId: '3000000001',
       userId: '123456789'
     }),
     (error) => error instanceof FriendRequestProtocolError
@@ -156,13 +159,13 @@ test('unsupported verification setting fails before the write request', async ()
     call: async () => {
       calls += 1;
       return responseHex('GetUserAddFriendSettingReq', [
-        3772194964, 0, 3, [], 1, 0, Buffer.alloc(0), 0, Buffer.alloc(0)
+        3000000001, 0, 3, [], 1, 0, Buffer.alloc(0), 0, Buffer.alloc(0)
       ]);
     }
   };
   await assert.rejects(
     sendFriendRequestViaSnowLuma(onebot, {
-      selfId: '3772194964',
+      selfId: '3000000001',
       userId: '123456789'
     }),
     (error) => error instanceof FriendRequestProtocolError
