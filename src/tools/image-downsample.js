@@ -125,7 +125,11 @@ export async function fetchOversizedImageAsJpeg(safeUrl, originalError, signal, 
     throw originalError; // 二次拉取失败：原始超限错误更贴近真相
   }
   if (!buffer?.length || !/^image\//i.test(String(contentType || ''))) throw originalError;
-  const jpeg = await runFfmpeg(ffmpegPath, buffer, "scale='min(2048,iw)':-2", signal);
+  // 动图走帧条（与常规 GIF 路径同一口径，别只给模型一帧）；其他图按尺寸降采样
+  const vf = /^image\/gif/i.test(String(contentType || ''))
+    ? 'fps=2,scale=512:-2,tile=2x2'
+    : "scale='min(2048,iw)':-2";
+  const jpeg = await runFfmpeg(ffmpegPath, buffer, vf, signal);
   return { buffer: jpeg, contentType: 'image/jpeg' };
 }
 
