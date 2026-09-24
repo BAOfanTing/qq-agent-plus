@@ -1440,8 +1440,15 @@ function cmdGuard(args) {
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, count]) => `${name}:${count}`).join(' ');
   say(`=== ${new Date().toLocaleString('zh-CN', { hour12: false })} 触发：${target} 进程数 ${procs.length} ===`);
   noteLine(`各程序计数: ${top}`);
+  // 只按"同类进程数超阈值"判定失控（bash 200 个 = 真 fork 炸弹）。
+  // 旧逻辑在进程总数超限时把目标用户的全部 bash/sh/grep/tr/sleep 一网打尽——
+  // 包括管理员自己的 SSH 会话和正在跑的部署脚本（真实误杀形态，勿回退）。
+  // 总数超限但没有同类失控组时，只告警不杀。
   const runaway = procs.filter((proc) => ['bash', 'grep', 'tr', 'sh', 'sleep'].includes(proc.comm)
-    && ((counts.get(proc.comm) || 0) > 200 || procs.length > 3000));
+    && (counts.get(proc.comm) || 0) > 200);
+  if (procs.length > 3000 && runaway.length === 0) {
+    say(`  进程总数 ${procs.length} 超过 3000，但没有单类进程超过 200：不做查杀（避免误杀正常会话与部署脚本）`);
+  }
   if (dryRun) {
     say(`  （预演）将清理 ${runaway.length} 个失控进程，不写日志、不杀进程`);
     for (const proc of runaway.slice(0, 20)) noteLine(`  pid=${proc.pid} ${proc.comm} ${proc.cmdline.slice(0, 100)}`);
