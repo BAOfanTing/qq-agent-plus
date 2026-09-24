@@ -95,7 +95,13 @@ test('base64:// 路径的 GIF 同样转 JPEG', async () => {
 });
 
 test('ffmpeg 缺失时回退原始 GIF data URL（行为不劣化）', async () => {
-  if (hasFfmpeg) return; // 仅在无 ffmpeg 环境验证回退
-  const dataUrl = await downloadImageAsDataUrl(`http://127.0.0.1:${port}/img`);
-  assert.match(dataUrl, /^data:image\/gif;base64,/);
+  if (hasFfmpeg) return; // 仅在无 ffmpeg 环境验证回退（CI 的 ubuntu runner 无 ffmpeg，正好覆盖）
+  // 无 ffmpeg 造不出动图——用内置的 1x1 GIF89a 常量验证"有 GIF、无 ffmpeg"的回退路径
+  servedGif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  try {
+    const dataUrl = await downloadImageAsDataUrl(`http://127.0.0.1:${port}/img`);
+    assert.match(dataUrl, /^data:image\/gif;base64,/);
+  } finally {
+    servedGif = null;
+  }
 });
