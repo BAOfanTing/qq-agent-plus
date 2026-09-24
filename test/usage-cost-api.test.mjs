@@ -78,8 +78,10 @@ async function bootApp(extraApi = {}) {
       return { app, get };
     } catch (error) {
       lastError = error;
-      if (!/EADDRINUSE/.test(String(error?.message ?? ''))) throw error;
+      // 无论哪种失败都先停掉可能已半启动的实例（listen 成功但后续步骤抛错时，
+      // 不停服会挂住测试进程句柄）；EADDRINUSE 换端口重试，其他错误上抛。
       await app.stop().catch(() => {});
+      if (!/EADDRINUSE/.test(String(error?.message ?? '')) && error?.code !== 'EADDRINUSE') throw error;
     }
   }
   throw lastError;

@@ -57,6 +57,7 @@ export async function resolveFfmpeg() {
 }
 
 async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
+  signal?.throwIfAborted(); // 入口即中止：别让 ffmpeg 白跑 30 秒才被超时杀掉
   // 输入必须走临时文件：部分 Linux 发行版的 ffmpeg（如 Ubuntu 22.04 的 4.4.2）
   // 解 GIF 需要可 seek 的输入，从管道直读报 "pipe:0: Input/output error"
   // （Windows 的 ffmpeg 无此问题——这正是测试全绿、服务器翻车的根因）。
@@ -64,9 +65,10 @@ async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-ffmpeg-'));
   const inputPath = path.join(workDir, 'input');
   const cleanup = () => { try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* 尽力清理 */ } };
-  fs.writeFileSync(inputPath, buffer);
-  return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegPath, [
+  let child;
+  try {
+    fs.writeFileSync(inputPath, buffer);
+    child = spawn(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
       '-i', inputPath,
       '-vf', vf,
@@ -75,7 +77,14 @@ async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
       '-f', 'image2pipe',
       '-vcodec', 'mjpeg',
       'pipe:1'
-    ], { windowsHide: true });
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    // 写入失败（磁盘满/权限）或 spawn 同步抛出（EINVAL 类）：清理后原样传播，
+    // 错误信息不含"启动失败"，不会被 runFfmpeg 误判成 EBUSY 重试。
+    cleanup();
+    throw error;
+  }
+  return new Promise((resolve, reject) => {
     const chunks = [];
     let stderr = '';
     let settled = false;

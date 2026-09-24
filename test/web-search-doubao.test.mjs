@@ -12,8 +12,10 @@ delete process.env.DOUBAO_SEARCH_API_KEY;
 // 隔离端口：app.start() 不接收参数，实际绑定 config.server.port（默认 3210）。
 // 与 usage-e2e.mjs 同一修复——宿主机跑着生产实例时（服务器部署形态的常态），
 // 不写隔离端口整条 npm test 会在本文件被 EADDRINUSE 打断。
+// 端口选 22496：在 Linux（32768-60999）与 Windows（49152-65535）的临时端口
+// 范围之外，避免生产实例的出站连接恰好占用同端口导致 EADDRINUSE。
 fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
-  server: { port: 40996, host: '127.0.0.1' }
+  server: { port: 22496, host: '127.0.0.1' }
 }));
 process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* 句柄占用就算了 */ } });
 
@@ -96,7 +98,7 @@ test('/api/config 不泄露 webSearch.doubao.apiKey 明文（脱敏走通用 SEC
   withKey();
   // 前面几个用例的 updateConfig 会把整个 DEFAULT_CONFIG 克隆写回配置，把隔离端口
   // 覆盖回 3210——启动前再钉一次（否则宿主机跑着生产实例时这里必然 EADDRINUSE）。
-  updateConfig({ server: { port: 40996, host: '127.0.0.1' } });
+  updateConfig({ server: { port: 22496, host: '127.0.0.1' } });
   const { createApp } = await import('../src/console/app.js');
   const app = createApp({ log: () => {} });
   const port = await app.start();
