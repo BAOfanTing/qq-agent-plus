@@ -74,10 +74,25 @@ import { validateImageUrl, safeFetchBinary } from '../llm/safe-fetch.js';
 import { webSearch, webFetch } from '../llm/web-search.js';
 import { expandForwardNodes, extractMediaFromSegments } from '../onebot/onebot.js';
 import { readForwardMessages } from '../onebot/forward-reader.js';
-import { fetchOversizedImageAsJpeg } from './image-downsample.js';
+import { convertGifToStillStrip, fetchOversizedImageAsJpeg } from './image-downsample.js';
 
 
-async function downloadImageAsDataUrl(url, signal) {
+/**
+ * 视觉模型用的 data URL 收口。GIF 特殊处理：主流视觉网关不接受 image/gif，
+ * 且动图的情绪信息在动作里——用 ffmpeg 抽帧拼成 2x2 帧条转成 JPEG；
+ * ffmpeg 缺失或转换失败时回退原始 GIF data URL（保持既有行为，不劣化）。
+ */
+async function toVisionDataUrl(buffer, mime, signal) {
+  if (mime === 'image/gif') {
+    try {
+      const strip = await convertGifToStillStrip(buffer, signal);
+      if (strip?.length) return `data:image/jpeg;base64,${strip.toString('base64')}`;
+    } catch { /* 回退原始 GIF */ }
+  }
+  return `data:${mime};base64,${buffer.toString('base64')}`;
+}
+
+export async function downloadImageAsDataUrl(url, signal) {
   signal?.throwIfAborted();
   if (String(url || '').startsWith('base64://')) {
     const buffer = Buffer.from(String(url).slice('base64://'.length), 'base64');
@@ -86,7 +101,7 @@ async function downloadImageAsDataUrl(url, signal) {
     }
     const mime = detectMime(buffer);
     if (!mime) throw new Error('本地表情图片格式无效');
-    return `data:${mime};base64,${buffer.toString('base64')}`;
+    return toVisionDataUrl(buffer, mime, signal);
   }
   const safeUrl = await validateImageUrl(url);
   let buffer;
@@ -100,7 +115,7 @@ async function downloadImageAsDataUrl(url, signal) {
   }
   if (!buffer || !buffer.length) throw new Error('图片内容为空');
   const mime = detectMime(buffer) || String(contentType || 'image/jpeg').split(';')[0];
-  return `data:${mime};base64,${buffer.toString('base64')}`;
+  return toVisionDataUrl(buffer, mime, signal);
 }
 
 function detectMime(buf) {

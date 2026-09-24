@@ -12,34 +12,49 @@ export const OVERSIZE_LIMIT_RE = /响应体超过\s*\d+\s*字节限制/;
 const PROBE_TTL_MS = 10 * 60 * 1000;
 let probeCache = { at: 0, path: null };
 
-/** 探测系统 ffmpeg（进程内缓存，含失败结果；失败 10 分钟后允许重探一次）。 */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 单次探测：启动 ffmpeg -version，按退出结果返回 {code} 或 {error}。 */
+async function probeFfmpegOnce() {
+  let child;
+  try {
+    child = spawn('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
+  } catch {
+    return { error: true };
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } }, 5000);
+    timer.unref?.();
+    child.on('error', (error) => resolve({ error }));
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ code }); });
+  });
+}
+
+/** 探测系统 ffmpeg（进程内缓存，含失败结果；失败 10 分钟后允许重探一次）。
+ * Windows 上 spawn 偶发 EBUSY（AV 扫描/资源占用）：瞬态，重试一次再下结论。 */
 export async function resolveFfmpeg() {
   const cached = probeCache.path;
   if (cached && Date.now() - probeCache.at < PROBE_TTL_MS) return cached;
   if (!cached && Date.now() - probeCache.at < PROBE_TTL_MS) return null;
   probeCache.at = Date.now();
-  probeCache.path = await new Promise((resolve) => {
-    let child;
-    try {
-      child = spawn('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
-    } catch {
-      resolve(null);
-      return;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const outcome = await probeFfmpegOnce();
+    if (!outcome.error) {
+      probeCache.path = outcome.code === 0 ? 'ffmpeg' : null;
+      return probeCache.path;
     }
-    const timer = setTimeout(() => { try { child.kill(); } catch { /* 已退出 */ } }, 5000);
-    timer.unref?.();
-    child.on('error', () => resolve(null));
-    child.on('exit', (code) => { clearTimeout(timer); resolve(code === 0 ? 'ffmpeg' : null); });
-  });
+    if (attempt === 0) await sleep(250);
+  }
+  probeCache.path = null;
   return probeCache.path;
 }
 
-function runFfmpeg(ffmpegPath, buffer, signal) {
+async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
       '-i', 'pipe:0',
-      '-vf', "scale='min(2048,iw)':-2",
+      '-vf', vf,
       '-frames:v', '1',
       '-q:v', '5',
       '-f', 'image2pipe',
@@ -76,6 +91,17 @@ function runFfmpeg(ffmpegPath, buffer, signal) {
   });
 }
 
+/** runFfmpegOnce 的重试壳：Windows 瞬态 EBUSY 重试一次，其他错误直接抛。 */
+async function runFfmpeg(ffmpegPath, buffer, vf, signal) {
+  try {
+    return await runFfmpegOnce(ffmpegPath, buffer, vf, signal);
+  } catch (error) {
+    if (!/启动失败/.test(String(error?.message ?? ''))) throw error;
+    await sleep(250);
+    return runFfmpegOnce(ffmpegPath, buffer, vf, signal);
+  }
+}
+
 /**
  * 常规上限拉取抛出"超限"时调用：放宽到 largeCap 重拉一次，确认拿到的确实是
  * 图片（content-type image/*）后交给 ffmpeg 降采样成 JPEG。
@@ -99,6 +125,25 @@ export async function fetchOversizedImageAsJpeg(safeUrl, originalError, signal, 
     throw originalError; // 二次拉取失败：原始超限错误更贴近真相
   }
   if (!buffer?.length || !/^image\//i.test(String(contentType || ''))) throw originalError;
-  const jpeg = await runFfmpeg(ffmpegPath, buffer, signal);
+  const jpeg = await runFfmpeg(ffmpegPath, buffer, "scale='min(2048,iw)':-2", signal);
   return { buffer: jpeg, contentType: 'image/jpeg' };
+}
+
+/**
+ * GIF → JPEG 帧条（Issue 反馈：模型读不了 GIF——主流视觉网关不接受
+ * image/gif，且动图的情绪信息在动作里，单帧会丢）。
+ * 做法：按每秒 2 帧采样最多 4 帧，拼成 2x2 帧条输出单张 JPEG，视觉模型
+ * 一次就能看到动作走向；透明背景按 ffmpeg 默认合成（黑底）。
+ * 返回 JPEG Buffer；ffmpeg 缺失或转换失败返回 null，由调用方回退原始 GIF。
+ */
+export async function convertGifToStillStrip(buffer, signal) {
+  const ffmpegPath = await resolveFfmpeg();
+  if (!ffmpegPath) return null;
+  try {
+    const jpeg = await runFfmpeg(ffmpegPath, buffer, 'fps=2,scale=512:-2,tile=2x2', signal);
+    if (!jpeg?.length) return null;
+    return jpeg;
+  } catch {
+    return null;
+  }
 }
