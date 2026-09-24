@@ -3,6 +3,9 @@
 // 2048px JPEG 交给视觉模型（实测 48MB PNG → 3.6MB JPEG）。
 // ffmpeg 是可选能力：缺失或失败时抛出带指引的错误，绝不影响常规 ≤12MiB 路径。
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { safeFetchBinary } from '../llm/safe-fetch.js';
 
 // safe-fetch.js readBounded 的超限报错形态（"响应体超过 N 字节限制"）。
@@ -54,10 +57,18 @@ export async function resolveFfmpeg() {
 }
 
 async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
+  // 输入必须走临时文件：部分 Linux 发行版的 ffmpeg（如 Ubuntu 22.04 的 4.4.2）
+  // 解 GIF 需要可 seek 的输入，从管道直读报 "pipe:0: Input/output error"
+  // （Windows 的 ffmpeg 无此问题——这正是测试全绿、服务器翻车的根因）。
+  // 输出保持 pipe:1（JPEG 顺序写，无需 seek）。
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-ffmpeg-'));
+  const inputPath = path.join(workDir, 'input');
+  const cleanup = () => { try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* 尽力清理 */ } };
+  fs.writeFileSync(inputPath, buffer);
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
-      '-i', 'pipe:0',
+      '-i', inputPath,
       '-vf', vf,
       '-frames:v', '1',
       '-q:v', '5',
@@ -76,6 +87,7 @@ async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
       try { child.kill(); } catch { /* 已退出 */ }
+      cleanup();
       fn(value);
     };
     timer = setTimeout(() => settle(reject, new Error('ffmpeg 降采样超时（30 秒）')), 30000);
@@ -86,14 +98,12 @@ async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
       stderr += chunk;
       if (stderr.length > 4000) stderr = stderr.slice(0, 4000);
     });
-    child.stdin.on('error', () => { /* EPIPE 时以 close/error 为准 */ });
     child.on('error', (error) => settle(reject, new Error(`ffmpeg 启动失败：${error.message}`)));
     child.on('close', (code) => {
       const out = Buffer.concat(chunks);
       if (code === 0 && out.length) settle(resolve, out);
       else settle(reject, new Error(`ffmpeg 降采样失败（exit ${code}）：${stderr.trim().split('\n').pop() || '无错误输出'}`));
     });
-    child.stdin.end(buffer);
   });
 }
 
