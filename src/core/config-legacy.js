@@ -76,7 +76,7 @@ export const DEFAULT_CONFIG = {
     enabled: true,
     searchUrl: 'https://cn.bing.com/search',
     maxResults: 6,
-    // 可选：'bing' | 'deepseek' | 'zhipu' | 'bocha' | 'baidu' | 'metaso'
+    // 可选：'bing' | 'deepseek' | 'zhipu' | 'bocha' | 'baidu' | 'metaso' | 'doubao'
     provider: 'bing',
     deepseek: {
       apiKey: '',                     // 留空时回退环境变量 DEEPSEEK_API_KEY
@@ -106,6 +106,12 @@ export const DEFAULT_CONFIG = {
     metaso: {
       apiKey: '',                     // 留空时回退环境变量 METASO_API_KEY（无 key 也尝试官方免费额度）
       baseUrl: 'https://metaso.cn/api/open/v1/search',
+      count: 6,
+      timeoutMs: 20000
+    },
+    doubao: {
+      apiKey: '',                     // 火山 Agent Plan 搜索服务 Key；留空时回退环境变量 DOUBAO_SEARCH_API_KEY
+      baseUrl: 'https://open.feedcoopapi.com/search_api/web_search',
       count: 6,
       timeoutMs: 20000
     },

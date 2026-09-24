@@ -6507,6 +6507,7 @@ function renderSearchSection(c) {
         <option value="bocha" ${prov === 'bocha' ? 'selected' : ''}>博查 AI Search</option>
         <option value="baidu" ${prov === 'baidu' ? 'selected' : ''}>百度千帆 AI Search</option>
         <option value="metaso" ${prov === 'metaso' ? 'selected' : ''}>秘塔 AI 搜索</option>
+        <option value="doubao" ${prov === 'doubao' ? 'selected' : ''}>豆包搜索（火山 Agent Plan）</option>
         ${customProvs.map((p) => `<option value="custom:${esc(p.id)}" ${prov === `custom:${p.id}` ? 'selected' : ''}>${esc(p.name || p.baseUrl)}（自定义 · ${p.type === 'bing' ? '网页解析' : 'JSON 接口'}）</option>`).join('')}
       </select></div>
     <div class="field" id="custom-provider-manage" style="${prov.startsWith('custom:') ? '' : 'display:none'}">
@@ -6556,6 +6557,12 @@ function renderSearchSection(c) {
       <div style="display:flex;gap:8px">
         <input type="password" id="cfg-metaso-key" value="${esc(c.webSearch?.metaso?.hasApiKey ? '******' : '')}" placeholder="输入新 Key 可替换；留空保持不变" autocomplete="new-password" style="flex:1" />
         <button class="btn btn-small" id="cfg-metaso-key-toggle" type="button">显示</button>
+      </div></div>
+    <div class="field" id="doubao-search-fields" style="${prov === 'doubao' ? '' : 'display:none'}">
+      <label>豆包搜索 API Key（火山 Agent Plan 搜索服务 Key / 环境变量 DOUBAO_SEARCH_API_KEY）</label>
+      <div style="display:flex;gap:8px">
+        <input type="password" id="cfg-doubao-key" value="${esc(c.webSearch?.doubao?.hasApiKey ? '******' : '')}" placeholder="输入新 Key 可替换；留空保持不变" autocomplete="new-password" style="flex:1" />
+        <button class="btn btn-small" id="cfg-doubao-key-toggle" type="button">显示</button>
       </div></div>
 
     <h3>添加自定义搜索服务</h3>
@@ -8953,7 +8960,8 @@ function bindSettingsEvents(c) {
       zhipu: '#zhipu-search-fields',
       bocha: '#bocha-search-fields',
       baidu: '#baidu-search-fields',
-      metaso: '#metaso-search-fields'
+      metaso: '#metaso-search-fields',
+      doubao: '#doubao-search-fields'
     };
     for (const [provider, sel] of Object.entries(fields)) {
       const el = $(sel);
@@ -9342,7 +9350,8 @@ function bindSettingsEvents(c) {
     ['cfg-zhipu-key-toggle', 'cfg-zhipu-key'],
     ['cfg-bocha-key-toggle', 'cfg-bocha-key'],
     ['cfg-baidu-key-toggle', 'cfg-baidu-key'],
-    ['cfg-metaso-key-toggle', 'cfg-metaso-key']
+    ['cfg-metaso-key-toggle', 'cfg-metaso-key'],
+    ['cfg-doubao-key-toggle', 'cfg-doubao-key']
   ];
   for (const [btnId, inputId] of pwdToggles) {
     const btn = $(`#${btnId}`);
@@ -9382,7 +9391,8 @@ function bindSettingsEvents(c) {
     'cfg-zhipu-key': 'zhipu',
     'cfg-bocha-key': 'bocha',
     'cfg-baidu-key': 'baidu',
-    'cfg-metaso-key': 'metaso'
+    'cfg-metaso-key': 'metaso',
+    'cfg-doubao-key': 'doubao'
   };
 
   // 前端点“显示”时向后端要真实 Key。
@@ -10572,6 +10582,7 @@ async function saveConfig({ quiet = false } = {}) {
     const enteredBochaKey = val('#cfg-bocha-key', '').trim();
     const enteredBaiduKey = val('#cfg-baidu-key', '').trim();
     const enteredMetasoKey = val('#cfg-metaso-key', '').trim();
+    const enteredDoubaoKey = val('#cfg-doubao-key', '').trim();
     patch.webSearch = {
       ...c.webSearch,
       enabled: chk('#cfg-websearch', c.webSearch?.enabled !== false),
@@ -10598,6 +10609,10 @@ async function saveConfig({ quiet = false } = {}) {
       metaso: {
         ...(c.webSearch?.metaso || {}),
         ...(enteredMetasoKey && enteredMetasoKey !== '******' ? { apiKey: enteredMetasoKey } : {})
+      },
+      doubao: {
+        ...(c.webSearch?.doubao || {}),
+        ...(enteredDoubaoKey && enteredDoubaoKey !== '******' ? { apiKey: enteredDoubaoKey } : {})
       },
       // 自定义搜索服务走 webSearch.providers 数组（由「添加自定义搜索服务」按钮维护），
       // 不在这里随表单提交 —— 避免每次保存都把动态列表覆盖掉。

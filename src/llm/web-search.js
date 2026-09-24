@@ -72,6 +72,7 @@ export async function webSearch(query) {
   if (provider === 'bocha') return bochaSearch(clean);
   if (provider === 'baidu') return baiduSearch(clean);
   if (provider === 'metaso') return metasoSearch(clean);
+  if (provider === 'doubao') return doubaoSearch(clean);
   // 自定义：'custom'（旧单槽位）或 'custom:<id>'（设置页添加的多个之一）
   if (provider === 'custom' || provider.startsWith('custom:')) {
     return customSearch(clean, provider);
@@ -282,6 +283,50 @@ export async function metasoSearch(query) {
     }))
     .slice(0, Math.max(1, Number(getConfig().webSearch?.maxResults) || 6));
   if (!results.length) throw new Error('秘塔搜索没有返回有效结果（可能已用完免费额度或接口地址需要更新）');
+  return { query, results };
+}
+
+/**
+ * 豆包搜索（火山引擎 Agent Plan 订阅自带的联网搜索服务，2026-06 起替代原联网
+ * 搜索 Beta；每月免费额度，无需单独付费 API Key）。Key 可直接复用 Agent Plan 的，
+ * 也可用环境变量 DOUBAO_SEARCH_API_KEY。
+ * 接口特点：请求体字段 PascalCase（Query / SearchType / Count / NeedContent），
+ * 响应解析 Result.WebResults[]（Title / Url / Summary）。
+ */
+export async function doubaoSearch(query) {
+  const cfg = getConfig().webSearch?.doubao ?? {};
+  const apiKey = String(cfg.apiKey || process.env.DOUBAO_SEARCH_API_KEY || '').trim();
+  if (!apiKey) throw new Error('豆包搜索未配置 API Key（火山 Agent Plan 搜索服务 Key，或环境变量 DOUBAO_SEARCH_API_KEY）');
+  const endpoint = String(cfg.baseUrl || 'https://open.feedcoopapi.com/search_api/web_search').replace(/\/+$/, '');
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      Query: query,
+      SearchType: 'web',
+      Count: Math.min(10, Math.max(1, Number(cfg.count) || 6)),
+      NeedContent: true
+    }),
+    signal: AbortSignal.timeout(Math.max(10000, Number(cfg.timeoutMs) || 20000))
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`豆包搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
+  }
+  const data = await res.json().catch(() => { throw new Error('豆包搜索返回了无法解析的 JSON'); });
+  const arr = Array.isArray(data?.Result?.WebResults) ? data.Result.WebResults : [];
+  const results = arr
+    .filter((r) => r?.Url || r?.url)
+    .map((r) => ({
+      title: String(r.Title ?? r.title ?? '').trim() || '（无标题）',
+      url: String(r.Url ?? r.url ?? ''),
+      snippet: String(r.Summary ?? r.summary ?? r.Content ?? r.content ?? '').trim()
+    }))
+    .slice(0, Math.max(1, Number(getConfig().webSearch?.maxResults) || 6));
+  if (!results.length) throw new Error('豆包搜索没有返回有效结果（可能搜索额度已用完或 Key 无搜索权限）');
   return { query, results };
 }
 
