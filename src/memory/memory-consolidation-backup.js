@@ -17,11 +17,11 @@ function writeJsonAtomic(file, value) {
 /**
  * 在人物长期记忆被 consolidation 覆写前保存完整全局快照。
  *
- * 新路径按人物保存不可覆盖的历史：
- *   memory/backups/consolidation/<QQ>/<timestamp>-<uuid>.json
+ * 新路径按人物保存不可覆盖的历史（目录键与成员文件名同源）：
+ *   memory/backups/consolidation/<QQ | u_<id> | _n_<名字>>/<timestamp>-<uuid>.json
  *
  * 同时保留旧的“当前会话最近一次整理前快照”路径：
- *   memory/backups/<group_...|private_...>/<QQ>.json
+ *   memory/backups/<group_...|private_...>/<同上键>.json
  * 这份兼容副本允许旧管理工具继续读取，但真正的历史审计以新路径为准。
  */
 const KEEP_PER_PERSON = 20;

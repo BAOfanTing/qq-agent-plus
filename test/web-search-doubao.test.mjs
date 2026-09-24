@@ -9,6 +9,12 @@ import { after, test } from 'node:test';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-doubao-search-'));
 process.env.QQ_AGENT_DATA_DIR = dataDir;
 delete process.env.DOUBAO_SEARCH_API_KEY;
+// 隔离端口：app.start() 不接收参数，实际绑定 config.server.port（默认 3210）。
+// 与 usage-e2e.mjs 同一修复——宿主机跑着生产实例时（服务器部署形态的常态），
+// 不写隔离端口整条 npm test 会在本文件被 EADDRINUSE 打断。
+fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
+  server: { port: 40996, host: '127.0.0.1' }
+}));
 process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* 句柄占用就算了 */ } });
 
 const { DEFAULT_CONFIG, updateConfig } = await import('../src/core/config.js');
@@ -90,7 +96,7 @@ test('/api/config 不泄露 webSearch.doubao.apiKey 明文（脱敏走通用 SEC
   withKey();
   const { createApp } = await import('../src/console/app.js');
   const app = createApp({ log: () => {} });
-  const port = await app.start(40996);
+  const port = await app.start();
   try {
     const body = await new Promise((resolve, reject) => {
       http.get({ host: '127.0.0.1', port, path: '/api/config' }, (res) => {
