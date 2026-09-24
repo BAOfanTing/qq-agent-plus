@@ -290,6 +290,7 @@ export class SessionRegistry {
     try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
     fs.writeFileSync(tmp, JSON.stringify(data), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, path.join(DATA_DIR, 'usage-today.json'));
+    fs.chmodSync(path.join(DATA_DIR, 'usage-today.json'), 0o600); // btrfs 兜底（Issue #11）
   }
 
   /**
@@ -315,11 +316,13 @@ export class SessionRegistry {
     try {
       // 会话 JSON 含完整聊天记录、系统提示词与逐轮模型输入输出：目录 0700 / 文件 0600，
       // 与 config.json 的口径一致（原来不带 mode，权限正确性全靠 data/ 恰好是 0700）。
+      // rename 后显式 chmod：btrfs 上 writeFileSync 的 mode 会丢失（Issue #11）。
       fs.mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
       const tmp = `${sessionFile(s.id)}.${process.pid}.tmp`;
       try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
       fs.writeFileSync(tmp, JSON.stringify(s, null, 1), { encoding: 'utf8', mode: 0o600 });
       fs.renameSync(tmp, sessionFile(s.id));
+      fs.chmodSync(sessionFile(s.id), 0o600);
       if (s.status !== 'running' && s.status !== 'waiting') this.#bumpTodayUsage(s);
     } catch (error) {
       console.error('[sessions] 持久化失败:', error?.message ?? error);

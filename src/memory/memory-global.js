@@ -24,11 +24,13 @@ function readJson(file, fallback = null) {
 }
 function writeJson(file, value) {
   // 会话交接是隐私正文：与 global-person-memory-store 同一口径（目录 0700 / 文件 0600）。
+  // rename 后显式 chmod：btrfs 上 writeFileSync 的 mode 会丢失（Issue #11）。
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
   try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
   fs.writeFileSync(tmp, JSON.stringify(value, null, 1), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, file);
+  fs.chmodSync(file, 0o600);
 }
 function legacyStateText(value) {
   if (typeof value === 'string') return clean(value);

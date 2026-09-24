@@ -65,11 +65,13 @@ export function loadStickerStore(file = STICKER_FILE, { strict = false } = {}) {
 
 export function saveStickerStore(entries, file = STICKER_FILE) {
   // stickers.json 含模型按群友暗示写入的 desc/localNote/tags：与隐私数据同口径（0700/0600）。
+  // rename 后显式 chmod：btrfs 上 writeFileSync 的 mode 会丢失（Issue #11）。
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.tmp`;
   try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
   fs.writeFileSync(tmp, JSON.stringify(entries, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, file);
+  fs.chmodSync(file, 0o600);
 }
 
 export function mergeStickerLibrary(existing, fetched) {

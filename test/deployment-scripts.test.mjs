@@ -97,7 +97,9 @@ test('configure-linux creates observe config and preserves runtime mode on updat
   assert.equal(initial.server.host, '127.0.0.1');
   assert.equal(initial.server.port, 43210);
   assert.ok(initial.server.token.length >= 32);
-  assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
+  // 安全意图：不得泄露给 group/other。不能精确断言 0600——btrfs（部分 NAS）
+  // 上 writeFileSync/chmod 的 mode 会落成 0700（owner-only 但带 x 位，Issue #11）。
+  assert.equal(fs.statSync(configFile).mode & 0o077, 0);
 
   initial.runtime.mode = 'active';
   fs.writeFileSync(configFile, JSON.stringify(initial), { mode: 0o600 });
@@ -241,7 +243,8 @@ test('installed manage launcher uses the exact deployed Node runtime', (t) => {
   });
   assert.equal(install.status, 0, install.stderr);
   assert.equal(fs.readFileSync(path.join(root, '.deployment-node'), 'utf8'), `${fakeNode}\n`);
-  assert.equal(fs.statSync(path.join(root, '.deployment-node')).mode & 0o777, 0o600);
+  // 同上：btrfs 上可能落成 0700，只断言不泄露给 group/other
+  assert.equal(fs.statSync(path.join(root, '.deployment-node')).mode & 0o077, 0);
   const unit = fs.readFileSync(path.join(home, '.config/systemd/user/qq-agent-test.service'), 'utf8');
   assert.match(unit, /Environment="SNOWLUMA_WEBUI_URL=http:\/\/127\.0\.0\.1:15099"/);
   const updateUnit = fs.readFileSync(

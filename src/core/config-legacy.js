@@ -983,6 +983,9 @@ export function updateConfig(patch) {
   const tmp = `${CONFIG_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(currentConfig, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, CONFIG_FILE);
+  // btrfs（部分 NAS 系统）上 writeFileSync 的 mode 参数会丢失（0600→0700）：
+  // 显式 chmod 兜底，不依赖"创建时 mode"在所有文件系统上都生效（Issue #11）。
+  fs.chmodSync(CONFIG_FILE, 0o600);
   if (oldTimeControl !== JSON.stringify(next.timeControl)) notifyTimeControlChange();
   return currentConfig;
 }
@@ -1037,6 +1040,7 @@ export function scheduleConfigSave() {
       // 否则 rename 会把 updateConfig 落好的 0600 打回 umask 默认（0664）
       fs.writeFileSync(tmp, JSON.stringify(getConfig(), null, 2), { mode: 0o600 });
       fs.renameSync(tmp, CONFIG_FILE);
+      fs.chmodSync(CONFIG_FILE, 0o600); // btrfs 兜底（Issue #11：mode 参数在该文件系统上会丢失）
     } catch (error) {
       console.error('[config] 保存失败:', error);
     }
