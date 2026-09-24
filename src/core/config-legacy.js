@@ -983,9 +983,11 @@ export function updateConfig(patch) {
   const tmp = `${CONFIG_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(currentConfig, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, CONFIG_FILE);
-  // btrfs（部分 NAS 系统）上 writeFileSync 的 mode 参数会丢失（0600→0700）：
+  // btrfs（部分 NAS）上 writeFileSync 的 mode 参数会丢失（0600→0700）：
   // 显式 chmod 兜底，不依赖"创建时 mode"在所有文件系统上都生效（Issue #11）。
-  fs.chmodSync(CONFIG_FILE, 0o600);
+  // chmod 失败不向上抛：写入本身已成功，别让一次已成功的 updateConfig 因
+  // 极窄文件系统场景（FUSE/NFS 关闭 mode 支持等）变成全仓调用方的失败。
+  try { fs.chmodSync(CONFIG_FILE, 0o600); } catch { /* 保留已成功写入 */ }
   if (oldTimeControl !== JSON.stringify(next.timeControl)) notifyTimeControlChange();
   return currentConfig;
 }

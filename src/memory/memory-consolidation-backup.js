@@ -12,6 +12,8 @@ function writeJsonAtomic(file, value) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 1), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, file);
+  // rename 后显式 chmod：btrfs（部分 NAS）上 writeFileSync 的 mode 会丢失（Issue #11）
+  fs.chmodSync(file, 0o600);
 }
 
 /**
