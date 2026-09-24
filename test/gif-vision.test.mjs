@@ -23,6 +23,9 @@ const downloadImageAsDataUrl = toolsCore.downloadImageAsDataUrl;
 
 const hasFfmpeg = await resolveFfmpeg() !== null;
 
+// 1x1 GIF89a 常量：无 ffmpeg 或生成失败时兜底，保证服务端总有合法 GIF 可回
+const TINY_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+
 /** 用 ffmpeg 现场生成一段 2 秒的动画 GIF（testsrc 自带动感内容）。
  * 用异步 spawn 而非 spawnSync：Windows 上 spawnSync('ffmpeg') 会偶发 EBUSY（AV 扫描），
  * 异步 spawn 不受影响；连续失败重试 3 次。 */
@@ -57,7 +60,9 @@ let port = 0;
 let servedGif = null;
 
 before(async () => {
-  servedGif = hasFfmpeg ? await makeAnimatedGif() : null;
+  servedGif = hasFfmpeg ? await makeAnimatedGif() : TINY_GIF;
+  // 有 ffmpeg 但 testsrc 生成失败（罕见瞬态）时也用常量小 GIF 兜底，
+  // 让测试 2/3 断言的是"转换链路"而不是"生成环节"——失败信息更可读。
   server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'image/gif' });
     res.end(servedGif ?? Buffer.alloc(0));
@@ -96,8 +101,7 @@ test('base64:// 路径的 GIF 同样转 JPEG', async () => {
 
 test('ffmpeg 缺失时回退原始 GIF data URL（行为不劣化）', async () => {
   if (hasFfmpeg) return; // 仅在无 ffmpeg 环境验证回退（CI 的 ubuntu runner 无 ffmpeg，正好覆盖）
-  // 无 ffmpeg 造不出动图——用内置的 1x1 GIF89a 常量验证"有 GIF、无 ffmpeg"的回退路径
-  servedGif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  servedGif = TINY_GIF;
   try {
     const dataUrl = await downloadImageAsDataUrl(`http://127.0.0.1:${port}/img`);
     assert.match(dataUrl, /^data:image\/gif;base64,/);

@@ -10,6 +10,7 @@ import {
   emptyUsage
 } from '../llm/llm.js';
 import { safeFetchBinary, validateImageUrl } from '../llm/safe-fetch.js';
+import { convertGifToStillStrip } from '../tools/image-downsample.js';
 import { webFetch, webSearch } from '../llm/web-search.js';
 import { buildMomentSystemPrompt, momentPersonaHash, MOMENT_PROMPT_VERSION } from '../llm/moment-prompt.js';
 import { assertTimeAllowed, isTimeActive, watchTimeWindow, withTimeScope } from '../core/time-gate.js';
@@ -1369,9 +1370,19 @@ export class DailyMomentsManager {
     );
     if (!buffer?.length) throw new Error(`候选图片 ${imageId} 内容为空`);
     const mime = imageMime(buffer, contentType);
+    // GIF 与消息图片同一收口：主流视觉网关不收 image/gif，且动图情绪在动作里——
+    // 抽帧条转 JPEG 给模型判读；空间上传（uploadSource）仍用原始 GIF 保留动画。
+    let visionBuffer = buffer;
+    let visionMime = mime;
+    if (mime === 'image/gif') {
+      try {
+        const strip = await convertGifToStillStrip(buffer, signal);
+        if (strip?.length) { visionBuffer = strip; visionMime = 'image/jpeg'; }
+      } catch { /* 转换失败回退原始 GIF */ }
+    }
     const encoded = buffer.toString('base64');
     candidate.prepared = {
-      dataUrl: `data:${mime};base64,${encoded}`,
+      dataUrl: `data:${visionMime};base64,${visionBuffer.toString('base64')}`,
       uploadSource: `base64://${encoded}`
     };
     return candidate.prepared;

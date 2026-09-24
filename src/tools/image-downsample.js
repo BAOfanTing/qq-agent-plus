@@ -105,7 +105,8 @@ async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
     child.stdout.on('data', (chunk) => chunks.push(chunk));
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
-      if (stderr.length > 4000) stderr = stderr.slice(0, 4000);
+      // 保留尾部：ffmpeg 的真实报错在 stderr 的最后一行，头部只有 banner 噪音
+      if (stderr.length > 4000) stderr = stderr.slice(-4000);
     });
     child.on('error', (error) => settle(reject, new Error(`ffmpeg 启动失败：${error.message}`)));
     child.on('close', (code) => {
@@ -146,8 +147,10 @@ export async function fetchOversizedImageAsJpeg(safeUrl, originalError, signal, 
   let contentType;
   try {
     ({ buffer, contentType } = await safeFetchBinary(safeUrl, largeCap, signal));
-  } catch {
-    throw originalError; // 二次拉取失败：原始超限错误更贴近真相
+  } catch (error) {
+    // 二次拉取被中止（时间窗关闭/手动停止）时如实抛中止，别伪装成超限错误
+    if (signal?.aborted || error?.name === 'AbortError') throw error;
+    throw originalError; // 其他二次拉取失败：原始超限错误更贴近真相
   }
   if (!buffer?.length || !/^image\//i.test(String(contentType || ''))) throw originalError;
   // 动图走帧条（与常规 GIF 路径同一口径，别只给模型一帧）；其他图按尺寸降采样
