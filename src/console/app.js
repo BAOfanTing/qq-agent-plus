@@ -1122,9 +1122,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
 
     const origin = String(req.headers.origin ?? '');
     const referer = String(req.headers.referer ?? '');
-    // [::1] 与上面 x-console-token 分支同一口径：config 校验允许 host='::1'，
-    // 漏了它，IPv6 回环部署会在这里一直 403（而 authorize 是认 [::1] 的，两处不一致）。
-    const isLoopbackHost = /^127\.0\.0\.1:\d+$/.test(host) || /^localhost:\d+$/.test(host) || /^\[::1\]:\d+$/.test(host);
+    // 与上面 x-console-token 分支、authorize 同一口径（端口可选）：config 校验允许 host='::1'，
+    // 漏了 [::1] 时 IPv6 回环部署在这里会一直 403；80 端口部署的 Host 也不带端口。
+    const isLoopbackHost = /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host);
     if (!isLoopbackHost) return false;
     if (origin) return origin === `http://${host}`;
     if (referer) return referer.startsWith(`http://${host}/`);

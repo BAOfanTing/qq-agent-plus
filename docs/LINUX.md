@@ -326,7 +326,9 @@ Invalid submission JSON is returned to the model for correction; an exhausted
 correction budget is a failure, not an implicit skip.
 
 The console can publish an existing preview by record ID without another model
-call, or reconcile an uncertain send using the Qzone list. Publishing requires
+call, reconcile an uncertain send using the Qzone list, or manually resolve an
+uncertain send as confirmed-missed (which unblocks the schedule) or
+confirmed-sent. Publishing requires
 the current persona fingerprint, source-chat permissions, runtime and active-hours
 checks to pass. Details and the persona-oriented prompt design are documented in
 [DAILY_MOMENTS.md](DAILY_MOMENTS.md).
