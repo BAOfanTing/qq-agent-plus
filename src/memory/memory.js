@@ -80,18 +80,12 @@ export class MemoryStore extends BaseMemoryStore {
   }
 
   /**
-   * 兼容批量 replaceConsolidated 调用：同样保证每个人在破坏性写入前有快照。
-   * 这里调用 super，避免再次经过 replaceMember 兜底而重复保存同一轮快照。
+   * 兼容批量 replaceConsolidated 调用。破坏前快照**不要**在这里拍：
+   * 中间层的 replaceConsolidated 最终走 this.replaceMember（回到本类覆写），
+   * 对"真的会被覆盖"的人自带快照；在这里再拍一遍会让每人每次整理落两份一样的
+   * 快照，KEEP_PER_PERSON=20 的实际深度只剩约 10 轮（2026-09-25 复核定案）。
    */
   replaceConsolidated(chatKey, next) {
-    const userIds = [...new Set((Array.isArray(next?.memberImpression) ? next.memberImpression : [])
-      .map((item) => String(item?.userId || '').trim())
-      .filter((userId) => /^\d{1,15}$/.test(userId)))];
-    const at = Date.now();
-    for (const userId of userIds) {
-      const person = this.getMember('', userId);
-      backupPersonBeforeConsolidation(person, { sourceChatKey: chatKey, at });
-    }
     return super.replaceConsolidated(chatKey, next);
   }
 }

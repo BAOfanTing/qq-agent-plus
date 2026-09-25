@@ -334,6 +334,10 @@ export class GlobalPersonMemoryStore {
         member.impressions.push({ ...entry, sourceChatKeys: sourceKeys(entry?.sourceChatKeys) });
       }
       member.sourceChatKeys = sourceKeys([...member.sourceChatKeys, ...candidate.sourceChatKeys]);
+      // 先把合并结果落盘、删旧文件前再拍一份快照：原来 rm 在前、#persist 在循环外，
+      // 落盘一旦失败（磁盘满/权限），已删掉的旧印象就静默消失且无快照可回滚。
+      this.#persist(member);
+      try { backupPersonBeforeConsolidation(candidate, { sourceChatKey: '', at: Date.now(), reason: 'merge-absorb' }); } catch { /* 备份失败不阻断 */ }
       try { fs.rmSync(globalMemberFile(candidate.userId, candidate.name), { force: true }); } catch {}
       map.delete(key);
     }

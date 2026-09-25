@@ -558,6 +558,13 @@ export class AutoUpdateManager {
       '处理入口：控制台 → 控制 → 更新部署'
     ].join('\n');
     try {
+      // 发送前先把状态落成"结果未知"：这条链路没有 outbox 那样的 sending 落盘，原来
+      // 发送途中崩溃/重启的话 pending 还是 true，重启 resumeNotifications 会把同一条
+      // 失败通知再发一遍。先落 unknown（pending=false）；确定没发出去的情况由下面的
+      // catch 恢复成 pending 等重试，其余失败保持 unknown 等人工确认。
+      writeAutoUpdateState(this.dataDir, {
+        notification: { ...state.notification, pending: false, deliveryUnknown: true, ownerUin, error: '' }
+      });
       await this.notify(text, ownerUin);
       const updated = writeAutoUpdateState(this.dataDir, {
         notification: {
@@ -584,7 +591,9 @@ export class AutoUpdateManager {
           pending: definitelyNotSent,
           ownerUin,
           error: cleanText(error?.message ?? error, 500),
-          ...(definitelyNotSent ? {} : { deliveryUnknown: true })
+          // 发送前已经把 deliveryUnknown 落成 true：确定没发出去时要显式归位 false，
+          // 否则"未连接"这种可重试的失败也会被标成结果未知
+          deliveryUnknown: !definitelyNotSent
         }
       });
       throw error;

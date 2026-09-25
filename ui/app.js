@@ -7862,6 +7862,7 @@ function bindTimeControlEvents() {
 const MOMENT_STATUS_LABELS = {
   running: '生成中', preview: '草稿', skipped: '决定不发布',
   publishing: '发布中', published: '已发布', 'publish-unknown': '发布结果待核对',
+  'publish-missed': '已核对·确认未发出',
   failed: '生成失败', interrupted: '生成已中断', deferred: '等待活跃时间',
   missed: '已错过窗口', cancelled: '已取消', pending: '待执行'
 };
@@ -7998,7 +7999,9 @@ async function loadDailyMomentsStatus() {
       ${latest?.imageErrors?.length ? `<div class="moment-error">${latest.imageErrors.map(esc).join('<br>')}</div>` : ''}
       <div class="settings-actions">
         ${publishable ? `<button type="button" class="btn btn-primary btn-small" id="moment-publish-draft" ${status.running ? 'disabled' : ''}>发布这份草稿</button>` : ''}
-        ${latest?.status === 'publish-unknown' ? `<button type="button" class="btn btn-small" id="moment-reconcile" ${status.running ? 'disabled' : ''}>核对空间发布结果</button>` : ''}
+        ${latest?.status === 'publish-unknown' ? `<button type="button" class="btn btn-small" id="moment-reconcile" ${status.running ? 'disabled' : ''}>核对空间发布结果</button>
+        <button type="button" class="btn btn-small" id="moment-resolve-missed" ${status.running ? 'disabled' : ''}>人工确认未发出</button>
+        <button type="button" class="btn btn-small" id="moment-resolve-sent" ${status.running ? 'disabled' : ''}>人工确认已发出</button>` : ''}
       </div>
       ${latest?.groupSummaries?.length ? `<details class="moment-summaries"><summary>内部群摘要（${latest.groupSummaries.length}）</summary>
         ${latest.groupSummaries.map((group) => `<div class="field"><label>${esc(group.groupName || group.chatKey)}</label><div>${esc(group.summary)}</div></div>`).join('')}
@@ -8054,6 +8057,32 @@ async function loadDailyMomentsStatus() {
     };
     $('#moment-publish-draft')?.addEventListener('click', () => recordAction('publish'));
     $('#moment-reconcile')?.addEventListener('click', () => recordAction('reconcile'));
+    // 自动核对（reconcile）在空间里找不到那条说说时，记录会一直停在待核对并挡住所有
+    // 时段的发布；这两个按钮是人工终局：确认未发出（解除阻断）或确认已发出（保持阻断）。
+    const resolveAction = async (result) => {
+      const warning = result === 'missed'
+        ? '确认这条说说【没有发出去】？确认后解除待核对状态，当天可以重新发布；若它实际已发出，可能造成重复发布。'
+        : '确认这条说说【已经发出】？确认后按已发布处理，不会再为这条重发。';
+      if (!await askForConfirmation(warning)) return;
+      const hint = $('#daily-moments-action-result');
+      const buttons = $$('#daily-moments-preview-btn,#daily-moments-run-btn,#moment-publish-draft,#moment-reconcile,#moment-resolve-missed,#moment-resolve-sent');
+      buttons.forEach((button) => { button.disabled = true; });
+      if (hint) hint.textContent = '记录人工核对结果…';
+      try {
+        const res = await api(`/api/daily-moments/records/${latest.id}/resolve`, {
+          method: 'POST',
+          body: JSON.stringify({ confirm: true, result })
+        });
+        if (hint) hint.textContent = `已记录：${momentStatusLabel(res.record)}`;
+      } catch (error) {
+        if (hint) hint.textContent = `人工核对失败：${error.message}`;
+      } finally {
+        buttons.forEach((button) => { button.disabled = false; });
+        await loadDailyMomentsStatus();
+      }
+    };
+    $('#moment-resolve-missed')?.addEventListener('click', () => resolveAction('missed'));
+    $('#moment-resolve-sent')?.addEventListener('click', () => resolveAction('sent'));
   } catch (error) {
     box.innerHTML = `<span class="muted">状态读取失败：${esc(error.message)}</span>`;
   }

@@ -679,11 +679,12 @@ export function buildToolDefs() {
           return err(`userId 必须是数字 QQ 号（收到：${JSON.stringify(args.userId)}）。${memberHint(ctx)}`);
         }
         // 只给本会话确实出现过的人记印象：模型会编出或打错号码，那会永久生成一条挂在陌生人
-        // 名下的印象（注入本群提示词、还会出现在控制台资产页），而这类错事后无法发现。
-        // send_poke / send_message 等同类工具都做这个检查，这里此前漏了。
-        if (ctx.kind === 'group' && !hasParticipant(ctx, userId)) {
+        // 名下的印象（注入提示词、还会出现在控制台资产页），而这类错事后无法发现。
+        // 私聊同样要查：私聊的"出现过"就是聊天对端本人（send_poke 私聊也只认对端）。
+        // 要记对话里提到的第三方，写进 finish 的交接里，别挂在一个没有出处的号码名下。
+        if (!hasParticipant(ctx, userId)) {
           const looksLikeMessageId = Boolean(ctx.store?.findByMid?.(ctx.chatKey, userId));
-          return err(`${userId} 不是当前群中已出现的成员 QQ 号`
+          return err(`${userId} 不是当前会话中出现过的成员 QQ 号`
             + `${looksLikeMessageId ? '，它是消息 id；如需引用请改用 replyToMessageId' : ''}。${memberHint(ctx)}`);
         }
         const entry = ctx.memory.append(ctx.chatKey, 'memberImpression', String(args.content ?? ''), {
@@ -858,7 +859,16 @@ export function buildToolDefs() {
           if (!result.results.length) {
             return ok({ query: result.query, results: [], note: '没有搜到结果，试试换关键词或更具体的说法。' });
           }
-          return ok(result);
+          // 标题/摘要来自任意外部页面，与 web_fetch 同一口径过段头弱化：
+          // 否则页面里伪造的【管理员附加规则】这类段头会原样直达模型。
+          return ok({
+            ...result,
+            results: result.results.map((item) => ({
+              ...item,
+              title: sanitizeUserText(String(item?.title ?? '')),
+              snippet: sanitizeUserText(String(item?.snippet ?? ''))
+            }))
+          });
         } catch (error) {
           return err(`搜索失败：${error?.message ?? error}`);
         }
@@ -880,7 +890,9 @@ export function buildToolDefs() {
             url: result.url,
             statusCode: result.statusCode,
             truncated: result.truncated || body.length > 20000,
-            content: body.slice(0, 20000)
+            // 正文整体进提示词：过段头弱化，别让网页里伪造的管理员/系统段头直达模型
+            // （群消息/昵称/记忆/交接都过清洗，这是外部文本的最后一条漏网通道）
+            content: sanitizeUserText(body.slice(0, 20000))
           });
         } catch (error) {
           return err(`抓取失败：${error?.message ?? error}`);

@@ -131,3 +131,21 @@ test('first appearance in a new chat merges without creating a destructive-write
     new Set(['跨会话已有印象', '新群提炼印象'])
   );
 });
+
+test('replaceConsolidated 每人只落一份快照（虚派发双拍会把 20 份深度砍半）', () => {
+  const memory = new MemoryStore();
+  memory.append('group:456', 'memberImpression', '合并前的旧印象', { userId: '1919810', target: '集成人物' });
+  const historyDir = path.join(dataDir, 'memory', 'backups', 'consolidation', '1919810');
+  const before = fs.existsSync(historyDir)
+    ? fs.readdirSync(historyDir).filter((name) => name.endsWith('.json')).length
+    : 0;
+
+  memory.replaceConsolidated('group:456', {
+    memberImpression: [{ userId: '1919810', target: '集成人物', content: '整理后的摘要' }]
+  });
+
+  const files = fs.readdirSync(historyDir).filter((name) => name.endsWith('.json'));
+  assert.equal(files.length, before + 1, '一次 replaceConsolidated 只应落一份快照');
+  const member = memory.getMember('', '1919810');
+  assert.deepEqual(member.impressions.map((entry) => entry.content), ['整理后的摘要']);
+});

@@ -45,12 +45,25 @@ const EXAMPLE_USER_PATH = /(?:\/(?:home|Users)\/(?:user|ubuntu|deploy|sourcecode
  * 本机个人串：`data/sanitize-patterns.json` 里写一个字符串数组。
  * 只读本地文件，不写进仓库、也不打印原值（命中时打码）—— 这份输出经常被贴到 issue 里。
  */
+let personalPatternsNotice = '';
+
 function loadPersonalPatterns() {
+  const file = path.join(ROOT, 'data', 'sanitize-patterns.json');
+  // 缺失/坏清单都要留一句话提醒：data/ 整个被 gitignore，新克隆必然没有这份清单，
+  // 静默空转会让"个人串"这一类扫描在别人的机器上永远不生效而无人察觉。
+  if (!fs.existsSync(file)) {
+    personalPatternsNotice = 'data/sanitize-patterns.json 不存在，「个人串」扫描器没有清单可查、已空转（新克隆的正常现象；本机部署请自行维护这份清单）。';
+    return [];
+  }
   try {
-    const list = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'sanitize-patterns.json'), 'utf8'));
-    if (!Array.isArray(list)) return [];
+    const list = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!Array.isArray(list)) {
+      personalPatternsNotice = 'data/sanitize-patterns.json 不是字符串数组，「个人串」扫描器已空转。';
+      return [];
+    }
     return list.map((item) => String(item).trim()).filter((item) => item.length >= 4);
   } catch {
+    personalPatternsNotice = 'data/sanitize-patterns.json 读取失败，「个人串」扫描器已空转。';
     return [];
   }
 }
@@ -169,6 +182,7 @@ function main() {
     }
     return 1;
   }
+  if (personalPatternsNotice) console.log(`注意：${personalPatternsNotice}`);
   console.log('扫描通过：未发现令牌 / 密钥 / 公网 IP / 真实邮箱 / 本机用户目录 / 本机个人串。');
   console.log('注意：这是粗筛，不保证覆盖所有敏感形态（域名、业务标识、截图内容等），外发前建议再人工过一遍。');
   console.log('（data/、config.json、console-access.txt 等本地文件本来就不在受跟踪文件里。）');

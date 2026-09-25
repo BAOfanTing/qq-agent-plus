@@ -1122,7 +1122,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
 
     const origin = String(req.headers.origin ?? '');
     const referer = String(req.headers.referer ?? '');
-    const isLoopbackHost = /^127\.0\.0\.1:\d+$/.test(host) || /^localhost:\d+$/.test(host);
+    // [::1] 与上面 x-console-token 分支同一口径：config 校验允许 host='::1'，
+    // 漏了它，IPv6 回环部署会在这里一直 403（而 authorize 是认 [::1] 的，两处不一致）。
+    const isLoopbackHost = /^127\.0\.0\.1:\d+$/.test(host) || /^localhost:\d+$/.test(host) || /^\[::1\]:\d+$/.test(host);
     if (!isLoopbackHost) return false;
     if (origin) return origin === `http://${host}`;
     if (referer) return referer.startsWith(`http://${host}/`);
@@ -2714,11 +2716,14 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         }
       }
 
-      const momentAction = /^\/api\/daily-moments\/records\/([\w-]+)\/(publish|reconcile)$/.exec(pathname);
+      const momentAction = /^\/api\/daily-moments\/records\/([\w-]+)\/(publish|reconcile|resolve)$/.exec(pathname);
       if (momentAction && method === 'POST') {
         const body = await readBody(req);
         if (momentAction[2] === 'publish' && body.confirm !== true) {
           return json(res, 409, { error: '发布草稿需要显式确认' });
+        }
+        if (momentAction[2] === 'resolve' && body.confirm !== true) {
+          return json(res, 409, { error: '人工核对结果需要显式确认' });
         }
         try {
           const result = momentAction[2] === 'publish'
@@ -2726,7 +2731,9 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
                 force: body.force === true,
                 confirmDuplicateRisk: body.confirmDuplicateRisk === true
               })
-            : await dailyMoments.reconcile(momentAction[1]);
+            : momentAction[2] === 'resolve'
+              ? await dailyMoments.resolveRecord(momentAction[1], { result: body.result })
+              : await dailyMoments.reconcile(momentAction[1]);
           return json(res, 200, result);
         } catch (error) {
           return json(res, error.httpStatus || (error.code === 'TIME_CONTROL_INACTIVE' ? 409 : 500), {

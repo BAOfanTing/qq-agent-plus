@@ -138,7 +138,9 @@ test('提示词里的每个段头都能被弱化（清洗白名单不许落后�
     'src/pilots/incident-pilot.js',
     'src/console/asset-observer.js',
     'src/features/daily-moments.js',
-    'src/pilots/experimental-tool-scheduler.js'
+    'src/pilots/experimental-tool-scheduler.js',
+    // 工具描述也进模型上下文：send_sticker 的说明里就有【可用表情包】
+    'src/tools/tools-core.js'
   ];
   // 只豁免"我们自己生成、且不授予任何权限"的普通标记
   const ALLOW = new Set(['【拍一拍】', '【图片】', '【合并转发聊天记录】']);

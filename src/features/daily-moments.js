@@ -863,6 +863,40 @@ export class DailyMomentsManager {
     });
   }
 
+  /**
+   * 人工终局：reconcile 只能靠"到空间里找到那条说说"来收敛，找不到时记录会一直停在
+   * publish-unknown，#tickWindows 的 unresolved 检查会把**所有**时段的发布全部挡住，
+   * 且记录没有保留期清理——等于功能无限期停摆。这里给管理员一个明确出口：
+   *   missed → publish-missed（确认没发出去：解除阻断，同天允许重新发布）
+   *   sent   → published（确认已发出：保持"这条已发布"的阻断语义，不会重发）
+   * 只处理 publish-unknown / publishing 两种未决状态；必须由控制台带 confirm 调用。
+   */
+  async resolveRecord(id, { result = '' } = {}) {
+    return this.#exclusive('resolve-record', async () => {
+      const record = this.state.records.find((item) => item.id === id);
+      if (!record) throw momentError('MOMENT_NOT_FOUND', '记录不存在', 404);
+      if (!['publishing', 'publish-unknown'].includes(record.status)) {
+        throw momentError('MOMENT_NOT_UNCERTAIN', '该记录无需人工核对', 409);
+      }
+      if (result === 'missed') {
+        Object.assign(record, { status: 'publish-missed', error: '', resolvedAt: this.now() });
+      } else if (result === 'sent') {
+        Object.assign(record, { status: 'published', error: '', resolvedAt: this.now() });
+      } else {
+        throw momentError('MOMENT_RESOLVE_RESULT', 'result 必须是 missed（确认没发出去）或 sent（确认已发出）', 400);
+      }
+      const slot = this.state.scheduleSlots.find((item) => item.id === record.scheduleSlotId);
+      if (slot) {
+        Object.assign(slot, {
+          status: record.status, recordId: record.id,
+          reason: result === 'missed' ? '人工确认未发出，已解除待核对' : '人工确认已发出'
+        });
+      }
+      this.#saveRecord(record);
+      return { ok: true, record };
+    });
+  }
+
   #finishSession(session, record, error = null) {
     if (!session || !this.sessions?.current?.has(session.id)) return;
     session.usage = { ...record.usage };

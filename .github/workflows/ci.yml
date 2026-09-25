@@ -46,8 +46,9 @@ jobs:
       - name: 本地回归测试
         run: npm run test:local
 
-      - name: 提示词 / 渲染 / 滚动回归
+      - name: 提示词 / 渲染 / 滚动 / 用量端到端回归
         run: |
           node test/test-prompt.mjs
           node test/render-test.mjs
           node test/scroll-test.mjs
+          node test/usage-e2e.mjs

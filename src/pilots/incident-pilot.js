@@ -164,6 +164,8 @@ export class IncidentPilotManager {
     if (this.db) return this.status();
     fs.mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(incidentDatabasePath(this.dataDir));
+    // 与 relationship-pilot-store 同一口径：库里是 safe_message/chat_key 这类隐私，收紧到 0600
+    try { fs.chmodSync(incidentDatabasePath(this.dataDir), 0o600); } catch { /* 尽力而为，不阻断启动 */ }
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA synchronous=FULL;

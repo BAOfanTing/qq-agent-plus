@@ -320,3 +320,26 @@ test('pending failure respects keep-enabled policy and still notifies once', asy
   assert.match(f.notifications[0].text, /保持启用/);
   assert.equal(readAutoUpdateState(f.dataDir).notification.pending, false);
 });
+
+test('失败通知发送前先落"结果未知"：发送途中崩溃重启不会把同一条再发一遍', async (t) => {
+  const f = fixture(t);
+  f.manager.resume({ ownerUin: '900001', intervalHours: 6 });
+  let midSend = null;
+  f.manager.notify = async () => {
+    // 发送途中"崩溃"前，落盘状态必须已经是"结果未知"——否则重启 resume 会重发同一条
+    midSend = readAutoUpdateState(f.dataDir).notification;
+    throw new Error('connection reset');
+  };
+  writeAutoUpdateState(f.dataDir, {
+    status: 'failed', mode: 'scheduled', phase: 'testing', targetRevision: 'b'.repeat(40),
+    error: 'unit test failed', autoDisabled: true,
+    notification: { pending: true, ownerUin: '900001', sentAt: 0, error: '' }
+  });
+  await f.manager.handlePendingFailure().catch(() => {});
+  assert.ok(midSend, 'notify 应当被调用');
+  assert.equal(midSend.pending, false, '发送开始前就该把 pending 落成 false');
+  assert.equal(Boolean(midSend.deliveryUnknown), true, '发送开始前就该落"结果未知"');
+  const state = readAutoUpdateState(f.dataDir);
+  assert.equal(state.notification.pending, false, '结果未知的失败不保留 pending（否则 30 秒定时器会重发）');
+  assert.equal(Boolean(state.notification.deliveryUnknown), true);
+});
