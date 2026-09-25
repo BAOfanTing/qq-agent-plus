@@ -64,13 +64,13 @@ const {
   updateConfig
 } = await import('../src/core/config.js');
 
-test('promoted capabilities share one admin and retired slang config is purged', async (t) => {
+test('promoted capabilities share one admin; slang purged; friend proposal retired', async (t) => {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   assert.equal(DEFAULT_CONFIG.identityPilot.enabled, true);
   assert.equal(DEFAULT_CONFIG.identityPilot.incomingFriendRequest.enabled, true);
-  assert.equal(DEFAULT_CONFIG.identityPilot.friendProposal.enabled, true);
-  assert.equal(DEFAULT_CONFIG.identityPilot.friendProposal.activeDispatchEnabled, true);
+  assert.equal(DEFAULT_CONFIG.identityPilot.friendProposal.enabled, false);
+  assert.equal(DEFAULT_CONFIG.identityPilot.friendProposal.activeDispatchEnabled, false);
   assert.equal(DEFAULT_CONFIG.incidentPilot.enabled, true);
   assert.deepEqual(DEFAULT_CONFIG.slangPilot, { enabled: false, graduated: false });
   assert.equal(DEFAULT_CONFIG.admin.ownerUin, '');
@@ -91,9 +91,9 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.equal(cfg.identityPilot.enabled, true);
   assert.equal(cfg.identityPilot.graduated, true);
   assert.equal(cfg.identityPilot.incomingFriendRequest.enabled, true);
-  assert.equal(cfg.identityPilot.friendProposal.enabled, true);
-  assert.equal(cfg.identityPilot.friendProposal.graduated, true);
-  assert.equal(cfg.identityPilot.friendProposal.activeDispatchEnabled, true);
+  assert.equal(cfg.identityPilot.friendProposal.enabled, false);
+  assert.equal(cfg.identityPilot.friendProposal.graduated, false);
+  assert.equal(cfg.identityPilot.friendProposal.activeDispatchEnabled, false);
   assert.equal(cfg.identityPilot.incomingFriendRequest.autoWhitelist, false);
   assert.equal(cfg.identityPilot.incomingFriendRequest.maxPending, 25);
   assert.equal(cfg.identityPilot.friendProposal.mode, 'prompt');
@@ -104,8 +104,8 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.equal(cfg.incidentPilot.retentionDays, 123);
 
   assert.equal(identityPilotEnabled({ identityPilot: { enabled: false } }), true);
-  assert.equal(friendProposalEnabled({}), true);
-  assert.equal(friendRequestDispatchEnabled({}), true);
+  assert.equal(friendProposalEnabled({}), false);
+  assert.equal(friendRequestDispatchEnabled({}), false);
   assert.equal(incomingFriendRequestEnabled({}), true);
   assert.equal(incidentPilotEnabled({ incidentPilot: { enabled: false } }), true);
   assert.equal(slangPilotEnabled({ slangPilot: { enabled: true } }), false);
@@ -145,8 +145,8 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.deepEqual(stale.slangPilot, { enabled: false, graduated: false });
   assert.equal(stale.identityPilot.enabled, true);
   assert.equal(stale.identityPilot.incomingFriendRequest.enabled, true);
-  assert.equal(stale.identityPilot.friendProposal.enabled, true);
-  assert.equal(stale.identityPilot.friendProposal.activeDispatchEnabled, true);
+  assert.equal(stale.identityPilot.friendProposal.enabled, false);
+  assert.equal(stale.identityPilot.friendProposal.activeDispatchEnabled, false);
   assert.equal(stale.incidentPilot.enabled, true);
 
   // The global setting is the only supported write path. It fans out to the
@@ -174,8 +174,8 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.equal(saved.autoUpdate.ownerUin, '23456789');
   assert.equal(saved.identityPilot.enabled, true);
   assert.equal(saved.identityPilot.incomingFriendRequest.enabled, true);
-  assert.equal(saved.identityPilot.friendProposal.enabled, true);
-  assert.equal(saved.identityPilot.friendProposal.activeDispatchEnabled, true);
+  assert.equal(saved.identityPilot.friendProposal.enabled, false);
+  assert.equal(saved.identityPilot.friendProposal.activeDispatchEnabled, false);
   assert.equal(saved.incidentPilot.enabled, true);
   assert.deepEqual(saved.slangPilot, { enabled: false, graduated: false });
 });
