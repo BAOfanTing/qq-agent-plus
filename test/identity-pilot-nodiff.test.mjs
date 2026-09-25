@@ -13,7 +13,7 @@ const { ChatStore } = await import('../src/core/store.js');
 const { IdentityPilotManager } = await import('../src/identity/identity-pilot.js');
 const { IncidentPilotManager } = await import('../src/pilots/incident-pilot.js');
 
-test('identity, automatic friends and incident infrastructure start without an approval owner', async (t) => {
+test('identity and incident infrastructure start without an approval owner; friend proposal stays retired', async (t) => {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
@@ -41,8 +41,8 @@ test('identity, automatic friends and incident infrastructure start without an a
   const identityStatus = await identity.start();
   assert.equal(identityStatus.enabled, true);
   assert.equal(identityStatus.active, true);
-  assert.equal(identityStatus.friendProposal.enabled, true);
-  assert.equal(identityStatus.friendProposal.activeDispatchEnabled, true);
+  assert.equal(identityStatus.friendProposal.enabled, false);
+  assert.equal(identityStatus.friendProposal.activeDispatchEnabled, false);
   assert.equal(identityStatus.friendProposal.ownerConfigured, false);
   assert.equal(identityStatus.incomingFriendRequest.enabled, true);
   assert.equal(identityStatus.incomingFriendRequest.ownerConfigured, false);

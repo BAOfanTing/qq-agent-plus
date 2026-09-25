@@ -180,10 +180,7 @@ test('legacy memory scanner ignores name-only identities and leaves source bytes
 test('friend proposals require eligibility, deduplicate, cool down, and close on friend_add', async (t) => {
   const dir = fs.mkdtempSync(path.join(root, 'friend-proposals-'));
   const store = new ChatStore(0, { dataDir: dir });
-  t.after(() => {
-    store.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
+  t.after(() => store.close());
   const cfg = {
     identityPilot: {
       enabled: true,
@@ -242,7 +239,10 @@ test('friend proposals require eligibility, deduplicate, cool down, and close on
     },
     log: () => {}
   });
-  t.after(() => manager.stop());
+  t.after(() => {
+    manager.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
   await manager.start();
 
   const created = await manager.proposeFriend({
@@ -268,19 +268,28 @@ test('friend proposals require eligibility, deduplicate, cool down, and close on
   assert.equal(duplicate.created, false);
   assert.equal(manager.listFriendProposals().length, 1);
 
-  const approved = await manager.decideFriendProposal(
+  // 主动好友候选已退役（Issue #10 + QQ 账号风控）：manager 层的批准派发不可达，
+  // 这里用 store 层状态机直接模拟"已派发并受理"，验证 close on friend_add 链路。
+  await assert.rejects(
+    () => manager.decideFriendProposal(
+      created.proposal.id,
+      'approve',
+      { decidedBy: '900001' }
+    ),
+    /主动好友候选功能当前未启用/
+  );
+  const dispatching = manager.identityStore.decideFriendProposal(
     created.proposal.id,
     'approve',
-    { decidedBy: '900001' }
+    { decidedBy: '900001', dispatch: true }
   );
-  assert.equal(approved.proposal.status, 'sent');
-  assert.equal(approved.execution, 'sent');
-  assert.match(approved.note, /好友申请 API 已明确受理/);
-  assert.equal(sentRequests.length, 1);
-  assert.equal(sentRequests[0].userId, '123456');
-  assert.equal(sentRequests[0].selfId, '900001');
-  assert.equal(sentRequests[0].sourceChatKey, 'group:100');
-  assert.deepEqual(onebotActions, ['get_friend_list', 'get_friend_list']);
+  assert.equal(dispatching.status, 'dispatching');
+  const sent = manager.identityStore.completeFriendProposalDispatch(
+    created.proposal.id,
+    dispatching.dispatchAttemptId,
+    'sent'
+  );
+  assert.equal(sent.status, 'sent');
 
   assert.equal(await manager.markFriendAdded('123456'), 1);
   assert.equal(manager.listFriendProposals()[0].status, 'accepted');
@@ -303,7 +312,7 @@ test('friend proposals require eligibility, deduplicate, cool down, and close on
     reasonCode: 'banter',
     reason: '想以后继续互怼'
   });
-  await manager.decideFriendProposal(
+  manager.identityStore.decideFriendProposal(
     rejected.proposal.id,
     'reject',
     { decidedBy: '900001' }
@@ -447,10 +456,7 @@ test('friend proposal is retired: approval is rejected even with legacy enabled 
 test('unknown friend request result is held and a crashed dispatch is recovered as unknown', async (t) => {
   const dir = fs.mkdtempSync(path.join(root, 'friend-dispatch-unknown-'));
   const store = new ChatStore(0, { dataDir: dir });
-  t.after(() => {
-    store.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
+  t.after(() => store.close());
   const cfg = {
     identityPilot: {
       enabled: true,
@@ -493,6 +499,7 @@ test('unknown friend request result is held and a crashed dispatch is recovered 
     },
     log: () => {}
   });
+  t.after(() => manager.stop());
   await manager.start();
   const first = await manager.proposeFriend({
     userId: '123456',
@@ -500,21 +507,33 @@ test('unknown friend request result is held and a crashed dispatch is recovered 
     reasonCode: 'frequent',
     reason: '经常聊天'
   });
-  const unknown = await manager.decideFriendProposal(
+  // 主动好友候选已退役：manager 派发不可达（功能门硬拦截），发包层绝不可达。
+  await assert.rejects(
+    () => manager.decideFriendProposal(
+      first.proposal.id,
+      'approve',
+      { decidedBy: '900001' }
+    ),
+    /主动好友候选功能当前未启用/
+  );
+  assert.equal(attempts, 0);
+
+  // 崩溃恢复路径改用 store 层状态机验证：派发后写入 held_unknown（结果未知），
+  // 且绝不自动重试。
+  const dispatching = manager.identityStore.decideFriendProposal(
     first.proposal.id,
     'approve',
-    { decidedBy: '900001' }
+    { decidedBy: '900001', dispatch: true }
   );
-  assert.equal(unknown.execution, 'held-unknown');
-  assert.equal(unknown.proposal.status, 'held_unknown');
-  assert.match(unknown.proposal.dispatchError, /socket closed/);
-  await assert.rejects(
-    manager.decideFriendProposal(first.proposal.id, 'approve', {
-      decidedBy: '900001'
-    }),
-    /已处理：held_unknown/
+  assert.equal(dispatching.status, 'dispatching');
+  const held = manager.identityStore.completeFriendProposalDispatch(
+    first.proposal.id,
+    dispatching.dispatchAttemptId,
+    'held_unknown',
+    { error: 'socket closed after write (模拟派发时崩溃)' }
   );
-  assert.equal(attempts, 1, 'unknown result must never be retried automatically');
+  assert.equal(held.status, 'held_unknown');
+  assert.match(held.dispatchError, /socket closed/);
 
   const second = await manager.proposeFriend({
     userId: '654321',
@@ -535,6 +554,7 @@ test('unknown friend request result is held and a crashed dispatch is recovered 
     reopened.getFriendProposal(second.proposal.id).dispatchError,
     /结果确认前重启/
   );
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 });
 
 test('incoming friend requests notify once, require approval, and add the private whitelist', async (t) => {
