@@ -465,10 +465,8 @@ Data is stored in the `data` directory passed to the deploy scripts:
 - `messages.sqlite` — messages, leases and outbound state;
 - `sessions/` — one record per Agent run;
 - `memory/` — long-term impressions and cross-session handoff state;
-- `identity-pilot.sqlite` — experimental unified QQ identity index, created only after the
-  experimental switch is enabled;
-- `slang-pilot.sqlite` — slang discovery, research tasks and two-level approval audit, created only
-  after it is enabled;
+- `identity-pilot.sqlite` — unified QQ identity index and friend-request approval ledger;
+- `slang-pilot.sqlite` — the slang pilot is retired and will never be created;
 - `daily-moments.json` — daily summaries, post decisions and publication results;
 - `qzone-interactions.json` — unread Qzone feed queue, comment replies and external write state;
 - `console-access.txt` — console address and token, mode `0600`.
@@ -487,8 +485,8 @@ npm audit --omit=dev
 bash -n deploy.sh manage.sh
 ```
 
-CI (GitHub Actions) runs the syntax check, the strict undefined-call scan, unit tests and the local
-regression on every push and pull request. Two small confirmed issues are open on this baseline,
+CI (GitHub Actions) runs the syntax check, the strict undefined-call scan, unit tests, the local
+regression, and the prompt / render / scroll / usage end-to-end suites on every push and pull request. Two small confirmed issues are open on this baseline,
 neither on the main path; see [KNOWN-ISSUES](docs/KNOWN-ISSUES.md) for the current list and the
 history. The [Chinese README](README.md) carries the complete option lists and the per-page
 description of the console; the [documentation index](docs/README.md) lists all documents.

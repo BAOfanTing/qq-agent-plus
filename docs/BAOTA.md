@@ -15,7 +15,7 @@
 
 **在宝塔中创建 Node 项目并启动**
 不推荐。项目注册的是 systemd 用户服务，`manage.sh` 与自动更新均依赖该服务
-（`scripts/manage.mjs:11,31`）。使用 PM2 会绕过部署前代码快照与失败回滚、健康检查、
+（`scripts/manage.mjs` 里的 `systemctl --user` / `journalctl --user` 调用）。使用 PM2 会绕过部署前代码快照与失败回滚、健康检查、
 unit 的自动重启，以及 Release 驱动的自动更新。
 
 **宝塔「安全」页面的端口放行**
@@ -24,7 +24,7 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 `proxy_buffering`，否则控制台的事件流将停止更新。
 
 **`qqagent` 用户与 root 部署**
-`deploy-all.sh:385` 直接拒绝 root，`docs/LINUX.md` 的 Requirements 亦要求以服务用户身份部署。
+`deploy-all.sh` 开头直接拒绝 root（`((EUID == 0))` 即退出），`docs/LINUX.md` 的 Requirements 亦要求以服务用户身份部署。
 更常见的运维问题是：以 root 执行 `manage.sh` 时查询的是 root 自身的 user manager，
 因而误报「服务不存在」，而服务实际运行正常。
 
@@ -43,10 +43,10 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 
 原因在于项目注册的是 **systemd 用户服务**：`scripts/install-service.mjs` 写入
 `~/.config/systemd/user/qq-agent-linux.service`，`WantedBy=default.target`；运维入口
-`manage.sh` 硬编码 `systemctl --user` / `journalctl --user`（`scripts/manage.mjs:11,31`），
+`manage.sh` 硬编码 `systemctl --user` / `journalctl --user`（`scripts/manage.mjs`），
 自动更新由配套的 user timer 承担。改用 PM2 会绕过以下机制：部署前代码快照与失败回滚、
 健康检查、unit 中的 `Restart=on-failure` 与 `NoNewPrivileges`，以及 Release 驱动的自动更新。
-此外，`deploy-all.sh:385` 明确拒绝 root，`docs/LINUX.md` 的 Requirements 亦要求以服务用户身份部署。
+此外，`deploy-all.sh` 开头明确拒绝 root（`((EUID == 0))` 即退出），`docs/LINUX.md` 的 Requirements 亦要求以服务用户身份部署。
 
 ## 部署差异对照
 
@@ -94,7 +94,7 @@ loginctl enable-linger qqagent
 ```
 
 linger 是服务在开机后无需用户登录即可持续运行的前提。预先开启 linger 可避免使用 `sudo`：
-`deploy.sh:350-351` 仅在 linger 未开启时才尝试执行 `sudo loginctl enable-linger`。
+`deploy.sh` 仅在 linger 未开启时才尝试执行 `sudo loginctl enable-linger`（安装收尾处）。
 
 父目录同样需要在此创建。`deploy.sh` 会自行 `mkdir -p` 安装目录与数据目录，但 `/mnt` 属主为
 root，以 `qqagent` 身份执行时无法创建 `data` 这一级目录。`docs/LINUX.md` 要求「先以合适
@@ -173,7 +173,7 @@ bash /安装根目录/app/manage.sh token         # 等价
 ### 域名与 HTTPS：宝塔反向代理
 
 在「网站 → 反代」中将目标设为 `http://127.0.0.1:3210`，并关闭缓存。控制台的事件流为
-SSE（`src/console/app.js:1130`，前端 `ui/app.js:1513` 的 `EventSource`），宝塔生成的 nginx
+SSE（`src/console/app.js` 的 `/api/events` 路由，前端 `ui/app.js` 的 `EventSource`），宝塔生成的 nginx
 配置默认开启 `proxy_buffering`，会导致页面显示停止更新。在反向代理配置中补充以下内容：
 
 ```nginx
@@ -185,7 +185,7 @@ proxy_read_timeout 3600s;
 proxy_send_timeout 3600s;
 ```
 
-登录 cookie 包含 `HttpOnly; SameSite=Strict`，不含 `Secure` 标志（`src/console/app.js:991`），
+登录 cookie 包含 `HttpOnly; SameSite=Strict`，不含 `Secure` 标志（`src/console/app.js` 的 `setConsoleCookie`），
 因此 HTTP 反向代理下登录正常，启用 HTTPS 亦不受影响。首次访问使用
 `https://<域名>/?token=<令牌>` 即可免登录，此后浏览器保留 30 天。反向代理一旦对公网开放，
 控制台令牌即为唯一凭据，必须仅限本人使用。
@@ -231,7 +231,7 @@ bash manage.sh status        # 或 logs / health / token / restart / observe
 bash manage.sh backup /path/to/backup-dir
 ```
 
-以上命令均通过 `systemctl --user` 执行（`scripts/manage.mjs:11,31`），**必须在 `qqagent`
+以上命令均通过 `systemctl --user` 执行（`scripts/manage.mjs`），**必须在 `qqagent`
 的登录会话中执行**。以 root 身份直接执行时，查询的是 root 自身的 user manager，会报
 「服务不存在」，而服务实际运行正常，容易造成误判。
 

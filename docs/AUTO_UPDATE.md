@@ -177,6 +177,8 @@ POST /api/auto-update/run
 POST /api/auto-update/pause
 POST /api/auto-update/resume
 POST /api/auto-update/notify-pending
+GET  /api/auto-update/check
+POST /api/auto-update/ignore
 ```
 
 高级网络配置由控制页通过通用 `/api/config` 持久化；连通性测试使用一次性的 `probe` 请求，不引入额外常驻服务。

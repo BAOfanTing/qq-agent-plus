@@ -531,12 +531,15 @@ describe('Orchestrator', () => {
       message.toolCall?.name === 'person_memory_lookup'));
   });
 
-  it('exposes friend proposals only when the nested pilot switch is enabled', async (t) => {
+  it('friend proposal retirement keeps tool and prompt section out of every mode', async (t) => {
     const { cfg, runner, append } = fixture(t);
+    // 存量配置里最"想复活"的形态：enabled:true + mode:'prompt'。整体退役后两个开关都不再生效，
+    // 提案工具与提示词里的好友候选段都不允许出现（docs/KNOWN-ISSUES.md 2026-09-25）。
     cfg.identityPilot = {
       enabled: true,
       friendProposal: {
         enabled: true,
+        mode: 'prompt',
         ownerUin: '900001',
         minMessageCount: 1,
         cooldownDays: 30,
@@ -559,61 +562,21 @@ describe('Orchestrator', () => {
     globalThis.fetch = async (_url, options) => {
       const body = JSON.parse(options.body);
       requests.push(body);
-      if (requests.length === 1) {
-        assert.ok(body.tools.some((tool) =>
-          tool.function.name === 'friend_request_propose'));
-        assert.match(body.messages[0].content, /好友候选/);
-        assert.match(body.messages[0].content, /自行判断/);
-        assert.match(
-          body.tools.find((tool) =>
-            tool.function.name === 'friend_request_propose').function.description,
-          /不需要等用户或管理员要求/
-        );
-        return Response.json({
-          choices: [{
-            message: {
-              tool_calls: [{
-                id: 'friend-proposal-1',
-                type: 'function',
-                function: {
-                  name: 'friend_request_propose',
-                  arguments: JSON.stringify({
-                    userId: '42',
-                    reasonCode: 'interest',
-                    reason: '长期聊下来确实感兴趣',
-                    verificationMessage: '以后继续聊'
-                  })
-                }
-              }]
-            }
-          }],
-          usage: { prompt_tokens: 100, total_tokens: 110 }
-        });
-      }
-      const toolResult = body.messages.find((message) =>
-        message.role === 'tool' && message.name === 'friend_request_propose');
-      assert.match(String(toolResult?.content || ''), /fp_123456789abc/);
-      assert.match(String(toolResult?.content || ''), /不要向对方声称/);
+      assert.ok(!body.tools.some((tool) =>
+        tool.function.name === 'friend_request_propose'),
+        '退役后 friend_request_propose 不应再注入');
+      assert.doesNotMatch(body.messages[0].content, /好友候选/);
       return Response.json({
         choices: [{ message: { content: 'done' } }],
-        usage: { prompt_tokens: 120, total_tokens: 130 }
+        usage: { prompt_tokens: 100, total_tokens: 110 }
       });
     };
 
     append(1, '以后还能继续聊吗', '42');
     await runner.wake('group:1');
 
-    assert.equal(requests.length, 2);
-    assert.equal(proposals.length, 1);
-    const [{ signal, ...proposal }] = proposals;
-    assert.ok(signal instanceof AbortSignal);
-    assert.deepEqual(proposal, {
-      userId: '42',
-      chatKey: 'group:1',
-      reasonCode: 'interest',
-      reason: '长期聊下来确实感兴趣',
-      verificationMessage: '以后继续聊'
-    });
+    assert.equal(requests.length, 1);
+    assert.equal(proposals.length, 0, '退役后模型没有任何路径能创建提案');
   });
 
   it('removes friend proposal prompt and tool from ordinary triggered-mode chat', async (t) => {

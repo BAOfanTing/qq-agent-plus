@@ -14,6 +14,7 @@ import path from 'node:path';
 import {
   DATA_DIR,
   conversationConfigForChat,
+  friendProposalEnabled,
   getConfig,
   identityPilotEnabled,
   promptFriendProposalEnabled,
@@ -1053,7 +1054,10 @@ export class Orchestrator {
       this.sessions.finish(session.id, status);
       this.emit('session-end', { sessionId: session.id, chatKey, status,
         sent: session.sent.length, finishReason: session.finishReason, usage: session.usage });
-      if (!manual && !proactive && triggerEntries.length > 0) {
+      // 主动好友候选已整体退役（Issue #10，见 docs/KNOWN-ISSUES.md）：
+      // 不再把成功回合喂给身份试点的提案管线，否则每个回合都会白烧一次模型评估、
+      // 建出永远不会被派发的提案、还给管理员发一条"回复同意好友"的死信。
+      if (!manual && !proactive && triggerEntries.length > 0 && friendProposalEnabled()) {
         const identityPilot = this.getIdentityPilot();
         identityPilot?.handleSuccessfulTurn?.({
           chatKey,
@@ -1339,7 +1343,7 @@ export class Orchestrator {
     const searchEnabled = cfg.webSearch?.enabled !== false;
     const identityPilot = this.getIdentityPilot();
     const identityAvailable = identityPilotEnabled(cfg) && identityPilot?.active === true;
-    const friendProposalAvailable = identityAvailable && promptFriendProposalEnabled(cfg);
+    const friendProposalAvailable = identityAvailable && friendProposalEnabled() && promptFriendProposalEnabled(cfg);
     const toolDefs = this.toolDefs.filter((d) => {
       if (!visionEnabled && (d.name === 'get_message_images' || d.name === 'get_sticker_image')) return false;
       if (!searchEnabled && (d.name === 'web_search' || d.name === 'web_fetch')) return false;

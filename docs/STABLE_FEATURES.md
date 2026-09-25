@@ -5,7 +5,7 @@
 以下能力已经退出实验 feature flag 生命周期，随 QQ Agent 服务恒定启动：
 
 - 人物统一印象（`IdentityPilotManager` / `IdentityStore`，类名暂保留以避免一次性重命名扩散）
-- 好友管理（主动候选、入站好友请求、管理员审批、批准后发送）
+- 好友管理（入站好友请求与管理员审批；**主动候选已于 2026-09-25 整体退役**，见 docs/KNOWN-ISSUES.md）
 - 异常处理基础设施（`IncidentPilotManager`，类名暂保留用于存储/API 兼容）
 
 自动“黑话研究”流水线已退休。手工维护的黑话资产（`data/slang.json` / `AssetObserver`）与研究流水线不是同一能力，继续保留。
@@ -18,8 +18,7 @@
 
 - `identityPilot.enabled = true`
 - `identityPilot.incomingFriendRequest.enabled = true`
-- `identityPilot.friendProposal.enabled = true`
-- `identityPilot.friendProposal.activeDispatchEnabled = true`
+- `identityPilot.friendProposal.* = false`（2026-09-25 整体退役：生成、审批、派发全部关闭，且不随配置恢复）
 - `incidentPilot.enabled = true`
 - `slangPilot.enabled = false`
 
@@ -92,7 +91,7 @@
 - 实验设置 HTML 在进入 DOM 前移除人物、好友、黑话研究、Incident 的旧实验行；
 - 好友/异常页面渲染后移除模块级管理员输入，并保留必要的隐藏兼容值；
 - 设置页只展示一个“全局管理员 QQ”入口；
-- 好友批准后的发送开关不再展示，因为该能力已固化。
+- 好友批准后的发送开关不再展示：主动好友候选已整体退役，派发永久关闭。
 
 这里不再使用常驻 `MutationObserver` 监听整个页面。消息、状态或列表刷新不会因为“先渲染旧控件、再观察到并删除”而反复改 DOM。
 

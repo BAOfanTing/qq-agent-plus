@@ -154,17 +154,11 @@ async function fixture(t, {
   return { cfg, store, incoming, manager, notices };
 }
 
-test('triggered friend review creates a proposal through one isolated model request', async (t) => {
+test('friend proposal retired: successful turns never draw, review or notify', async (t) => {
   let calls = 0;
   const f = await fixture(t, {
-    complete: async (args, retries) => {
+    complete: async () => {
       calls += 1;
-      assert.equal(retries, 0);
-      assert.deepEqual(
-        args.tools.map((tool) => tool.function.name),
-        ['submit_friend_review']
-      );
-      assert.doesNotMatch(args.messages[0].content, /send_message|memory_append/);
       return toolResponse();
     }
   });
@@ -175,13 +169,11 @@ test('triggered friend review creates a proposal through one isolated model requ
     triggerReason: '私聊',
     repliedThisRun: true
   });
-  assert.equal(result.triggered, true);
-  await waitFor(() =>
-    f.manager.listFriendOpportunities()[0]?.status === 'proposed');
-  assert.equal(calls, 1);
-  assert.equal(f.manager.listFriendProposals().length, 1);
-  assert.equal(f.manager.listFriendProposals()[0].opportunityId, result.opportunity.id);
-  assert.equal(f.notices.length, 1);
+  assert.deepEqual(result, { triggered: false, reason: 'disabled' });
+  assert.equal(calls, 0, '退役后不应再发起一次性的模型评审调用');
+  assert.deepEqual(f.manager.listFriendOpportunities(), []);
+  assert.deepEqual(f.manager.listFriendProposals(), []);
+  assert.equal(f.notices.length, 0, '退役后不应再给管理员发提案私信');
 });
 
 test('an existing friend never creates a draw or model review', async (t) => {
@@ -205,36 +197,21 @@ test('an existing friend never creates a draw or model review', async (t) => {
   assert.deepEqual(f.manager.listFriendProposals(), []);
 });
 
-test('zero probability persists a miss without calling the model', async (t) => {
-  let calls = 0;
-  const f = await fixture(t, {
-    probability: 0,
-    complete: async () => {
-      calls += 1;
-      return toolResponse();
-    }
-  });
-  const result = await f.manager.handleSuccessfulTurn({
-    chatKey: 'private:123456',
-    triggerEntries: [f.incoming],
-    parentSessionId: 'parent-session',
-    triggerReason: '私聊'
-  });
-  assert.equal(result.triggered, true);
-  assert.equal(result.reason, 'lottery-miss');
-  assert.equal(calls, 0);
-  assert.equal(f.manager.listFriendOpportunities()[0].status, 'lottery_miss');
-});
-
 test('friend proposal retired: approval is rejected even for an existing pending proposal', async (t) => {
   const f = await fixture(t, {});
-  await f.manager.handleSuccessfulTurn({
-    chatKey: 'private:123456',
-    triggerEntries: [f.incoming],
-    parentSessionId: 'parent-session',
-    triggerReason: '私聊'
+  // 生成管线已随退役关闭，直接在 store 层造一条历史 pending 提案（与 identity-store.test.mjs 同款）
+  const created = f.manager.identityStore.createFriendProposal({
+    userId: '123456',
+    sourceChatKey: 'private:123456',
+    reasonCode: 'frequent',
+    reason: '已经连续聊了很多次',
+    verificationMessage: '以后继续聊',
+    minMessageCount: 1,
+    cooldownDays: 30,
+    maxPending: 10
   });
-  const proposal = await waitFor(() => f.manager.listFriendProposals()[0]);
+  assert.equal(created.created, true);
+  const proposal = created.proposal;
 
   // 主动好友候选已退役（Issue #10 + QQ 账号风控）：已存在的 pending 提案
   // 也不能再被批准派发，功能门硬性拦截。

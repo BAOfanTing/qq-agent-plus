@@ -363,6 +363,7 @@ export class IdentityPilotManager {
     const settings = cfg.identityPilot?.friendProposal?.triggered || {};
     if (
       !this.identityStore
+      || !friendProposalEnabled()
       || !triggeredFriendProposalEnabled(cfg)
       || cfg.runtime?.mode !== 'active'
     ) return { triggered: false, reason: 'disabled' };
