@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { installExperimentalMultimodalContextPilot } from '../src/experimental-multimodal-context.js';
+import { installExperimentalMultimodalContextPilot } from '../src/pilots/experimental-multimodal-context.js';
 
 test('installer is idempotent and disabled multimodal path forwards exact options object', () => {
   class FakeStore {

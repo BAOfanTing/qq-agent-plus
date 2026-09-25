@@ -5,8 +5,17 @@ import { spawnSync } from 'node:child_process';
 import { backup, DatabaseSync } from 'node:sqlite';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const deploy = JSON.parse(fs.readFileSync(path.join(root, '.deployment.json'), 'utf8'));
-const cfg = JSON.parse(fs.readFileSync(path.join(deploy.data, 'config.json'), 'utf8'));
+function readJson(file, hint) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    throw new Error(`${hint} (${file}): ${error?.message ?? error}`);
+  }
+}
+const deploy = readJson(path.join(root, '.deployment.json'),
+  'Cannot read the deployment record — run manage.sh from the installation directory (the one holding .deployment.json)');
+const cfg = readJson(path.join(deploy.data, 'config.json'),
+  'Cannot read the deployed configuration');
 const command = process.argv[2] || 'status';
 const systemctl = (action) => {
   const r = spawnSync('systemctl', ['--user', action, `${deploy.service}.service`, '--no-pager'], { stdio: 'inherit' });
@@ -70,9 +79,17 @@ if (['start', 'stop', 'restart', 'status'].includes(command)) {
   fs.mkdirSync(target, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(path.join(deploy.data, 'messages.sqlite'), { readOnly: true });
   try { await backup(db, path.join(target, 'messages.sqlite')); } finally { db.close(); }
-  for (const name of ['config.json', 'memory', 'sessions', 'stickers.json']) {
-    const source = path.join(deploy.data, name);
-    if (fs.existsSync(source)) fs.cpSync(source, path.join(target, name), { recursive: true });
+  // 复制数据目录下的全部条目，只跳过可重建的临时物。写死清单会随功能增加而漏掉东西
+  // （身份/关系/事故台账、daily-moments、群动态与主动发言状态都曾经在清单之外）。
+  const skip = new Set(['deploy-backups', 'update-work', 'update-repository.git']);
+  for (const entry of fs.readdirSync(deploy.data, { withFileTypes: true })) {
+    const { name } = entry;
+    if (skip.has(name) || name.startsWith('.')) continue;
+    // messages.sqlite 已用 SQLite backup API 取了一致快照；WAL/SHM 跟过去反而会
+    // 让恢复时的库和旧日志对不上。
+    if (name === 'messages.sqlite' || name.startsWith('messages.sqlite-')) continue;
+    if (name.endsWith('.lock')) continue;
+    fs.cpSync(path.join(deploy.data, name), path.join(target, name), { recursive: true });
   }
   console.log(`Backup saved to ${target}`);
 } else {

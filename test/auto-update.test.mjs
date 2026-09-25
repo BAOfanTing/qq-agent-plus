@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   AutoUpdateManager,
   autoUpdatePaths,
+  autoUpdatePending,
   consumeAutoUpdateRequest,
   readAutoUpdateState,
   writeAutoUpdateState
@@ -136,6 +137,65 @@ test('manual update queues the independent systemd updater', (t) => {
     args.includes('qq-agent-test-update.service') && args.includes('--no-block')));
 });
 
+test('已提交未跑完的更新要能被认出来（控制台据此不再重复弹提示）', (t) => {
+  const f = fixture(t);
+  const stateFile = autoUpdatePaths(f.dataDir).state;
+  const writeRaw = (patch) => fs.writeFileSync(stateFile, JSON.stringify({
+    ...readAutoUpdateState(f.dataDir),
+    ...patch
+  }));
+
+  // 点过「立即更新」→ queued：要认出来（不然部署完成前每次刷新都会再弹一次"发现新版本"）
+  // 版本号也要记下来：更新器跑到 testing 阶段才会自己写 targetVersion，在那之前
+  // 靠版本号比对会一直弹，所以控制台点更新时就把版本一起提交上来。
+  f.manager.requestManual({ version: 'v9.9.9' });
+  const pending = autoUpdatePending(f.dataDir);
+  assert.equal(pending.status, 'queued');
+  assert.equal(pending.mode, 'manual');
+  assert.equal(pending.version, 'v9.9.9');
+
+  // 不带版本地再提交一次（控制页那条路径）：上一次的版本必须被清掉，
+  // 否则前端会拿旧版本跟新提示比对，照样弹
+  writeRaw({ status: 'succeeded', targetVersion: 'v0.0.1' });
+  f.manager.requestManual();
+  assert.equal(autoUpdatePending(f.dataDir).version, '', '没带版本时不能留上一次的');
+
+  // 跑完 / 失败：都不再抑制，失败时得让用户能再点一次
+  writeRaw({ status: 'succeeded' });
+  assert.equal(autoUpdatePending(f.dataDir), null);
+  writeRaw({ status: 'failed' });
+  assert.equal(autoUpdatePending(f.dataDir), null);
+
+  // 卡住超过 30 分钟：当成没在跑，别把提示永久压住。
+  // 基准是 progressAt（更新器每个阶段写一次，正常更新会一直续期）——
+  // 既不能用 updatedAt（"检查新版本"存提示会刷新它），也不能只看 startedAt
+  // （慢机器上一轮正常更新就可能超过 30 分钟）。
+  writeRaw({
+    status: 'deploying',
+    targetVersion: 'v9.9.9',
+    progressAt: 0,
+    startedAt: Date.now() - 31 * 60 * 1000,
+    updatedAt: Date.now()
+  });
+  assert.equal(autoUpdatePending(f.dataDir), null, '最近一次进度超时就该放开');
+
+  // 反过来：跑了 40 分钟但阶段刚推进过（progressAt 新鲜）→ 仍然算"在跑"，别误放开
+  writeRaw({
+    status: 'deploying',
+    targetVersion: 'v9.9.9',
+    progressAt: Date.now() - 60 * 1000,
+    startedAt: Date.now() - 40 * 60 * 1000
+  });
+  assert.notEqual(autoUpdatePending(f.dataDir), null, '阶段推进过就不该判成卡住');
+
+  // 还在跑：带上目标版本，前端拿它跟提示里的版本比对
+  writeRaw({ status: 'testing', mode: 'scheduled', targetVersion: 'v9.9.9', startedAt: Date.now() });
+  assert.deepEqual(
+    { status: autoUpdatePending(f.dataDir).status, version: autoUpdatePending(f.dataDir).version },
+    { status: 'testing', version: 'v9.9.9' }
+  );
+});
+
 test('connectivity probe is one-shot, does not require an administrator and never changes enable state', (t) => {
   const f = fixture(t);
   f.setAdmin('');
@@ -206,6 +266,35 @@ test('pending deployment failure disables automatic updates and notifies once', 
   assert.ok(fs.existsSync(autoUpdatePaths(f.dataDir).state));
 });
 
+test('更新失败通知：结果未知只记录不重发，确定没发出才保留 pending', async (t) => {
+  // 审查抓出来的：beforeWrite 在自动更新这条链路上没人设置 → pending 永远是 false，
+  // 于是"确定没发出去"的重试分支是死代码，同时文档承诺的"重连后继续发"也不成立。
+  // 现在控制台的 notify 包装在未连接时抛 beforeWrite，这里把两种情形都钉住。
+  for (const [caseName, errorPatch, wantPending, wantUnknown] of [
+    ['结果未知（发送超时）', {}, false, true],
+    ['确定没发出（未连接）', { beforeWrite: true }, true, false]
+  ]) {
+    const f = fixture(t);
+    f.manager.resume({ ownerUin: '900001', intervalHours: 6 });
+    f.manager.notify = async () => {
+      throw Object.assign(new Error(caseName), errorPatch);
+    };
+    writeAutoUpdateState(f.dataDir, {
+      status: 'failed',
+      mode: 'scheduled',
+      phase: 'testing',
+      targetRevision: 'a'.repeat(40),
+      error: 'unit test failed',
+      autoDisabled: true,
+      notification: { pending: true, ownerUin: '900001', sentAt: 0, error: '' }
+    });
+    await f.manager.handlePendingFailure().catch(() => {});
+    const state = readAutoUpdateState(f.dataDir);
+    assert.equal(state.notification.pending, wantPending, `${caseName}：pending 应为 ${wantPending}`);
+    assert.equal(Boolean(state.notification.deliveryUnknown), wantUnknown, `${caseName}：deliveryUnknown 应为 ${wantUnknown}`);
+  }
+});
+
 test('pending failure respects keep-enabled policy and still notifies once', async (t) => {
   const f = fixture(t);
   f.setAutoUpdate({ enabled: true, disableOnFailure: false });
@@ -230,4 +319,27 @@ test('pending failure respects keep-enabled policy and still notifies once', asy
   assert.equal(f.notifications.length, 1);
   assert.match(f.notifications[0].text, /保持启用/);
   assert.equal(readAutoUpdateState(f.dataDir).notification.pending, false);
+});
+
+test('失败通知发送前先落"结果未知"：发送途中崩溃重启不会把同一条再发一遍', async (t) => {
+  const f = fixture(t);
+  f.manager.resume({ ownerUin: '900001', intervalHours: 6 });
+  let midSend = null;
+  f.manager.notify = async () => {
+    // 发送途中"崩溃"前，落盘状态必须已经是"结果未知"——否则重启 resume 会重发同一条
+    midSend = readAutoUpdateState(f.dataDir).notification;
+    throw new Error('connection reset');
+  };
+  writeAutoUpdateState(f.dataDir, {
+    status: 'failed', mode: 'scheduled', phase: 'testing', targetRevision: 'b'.repeat(40),
+    error: 'unit test failed', autoDisabled: true,
+    notification: { pending: true, ownerUin: '900001', sentAt: 0, error: '' }
+  });
+  await f.manager.handlePendingFailure().catch(() => {});
+  assert.ok(midSend, 'notify 应当被调用');
+  assert.equal(midSend.pending, false, '发送开始前就该把 pending 落成 false');
+  assert.equal(Boolean(midSend.deliveryUnknown), true, '发送开始前就该落"结果未知"');
+  const state = readAutoUpdateState(f.dataDir);
+  assert.equal(state.notification.pending, false, '结果未知的失败不保留 pending（否则 30 秒定时器会重发）');
+  assert.equal(Boolean(state.notification.deliveryUnknown), true);
 });

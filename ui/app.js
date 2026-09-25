@@ -53,7 +53,8 @@ const state = {
 function graduatedFeatureState(c = state.config || {}) {
   return {
     identity: c.identityPilot?.graduated === true,
-    'auto-friend': c.identityPilot?.friendProposal?.graduated === true,
+    // 「好友管理」页承载入站好友申请的审批（该功能不受退役影响），导航入口
+    // 不随 friendProposal 的退役隐藏——只隐藏会把入站审批一起藏掉。
     slang: c.slangPilot?.graduated === true,
     incidents: c.incidentPilot?.graduated === true
   };
@@ -525,8 +526,11 @@ async function pollUntilReady() {
   const startedAt = Date.now();
   try {
     const status = await api('/api/status');
-    if (!status.onebot?.connected) setLoadingStatus('正在连接外部 OneBot 服务…');
-    else setLoadingStatus(`OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}，即将进入控制台…`);
+    if (!status.onebot?.connected) {
+      // 首屏就卡在这儿的多半是协议端没起来，把原因直接写出来，别让人对着"正在连接"干等
+      const why = onebotIssueText(status.onebot, { withRaw: false });
+      setLoadingStatus(why ? `OneBot 还没连上：${why}` : '正在连接外部 OneBot 服务…');
+    } else setLoadingStatus(`OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}，即将进入控制台…`);
     // 服务已可达，无需等到 OneBot 完全连上即可进入控制台（体检卡会继续提示）
     return true;
   } catch (e) {
@@ -622,6 +626,38 @@ function setStatusLabel(selector, text) {
   el.title = text;
 }
 
+// ── OneBot 连接失败的人话解释 ──
+// 后端在 /api/status 的 onebot.error 里记着最近一次连接失败的原因（例如
+// "connect ECONNREFUSED 127.0.0.1:3001"），但界面上以前只写"未连接"，用户只能猜。
+// 这里把常见错误翻成能照着做的短句；原文附在括号里，方便直接复制去求助。
+function onebotIssueText(ob, { withRaw = true } = {}) {
+  if (!ob || ob.connected) return '';
+  const raw = String(ob.error || '').trim();
+  if (!raw) return ob.everConnected ? '连接已断开，正在自动重连' : '还没连上协议端，正在重试';
+  let hint = '连接失败';
+  if (/ECONNREFUSED/i.test(raw)) hint = '协议端没在这个端口监听（服务没启动或端口不对）';
+  else if (/ENOTFOUND|EAI_AGAIN/i.test(raw)) hint = '这个地址解析不了（WS 地址可能写错了）';
+  else if (/ETIMEDOUT|EHOSTUNREACH|ENETUNREACH/i.test(raw)) hint = '连不到那台机器（地址或防火墙）';
+  else if (/\b(401|403)\b|unauthorized|forbidden/i.test(raw)) hint = '对方拒绝了连接，多半是令牌不一致（协议端 onebot.json 的 accessToken 要和控制台里的 WS 令牌一致）';
+  else if (/\b404\b|Unexpected server response/i.test(raw)) hint = '对方不是 WebSocket 协议端（地址或端口填错了）';
+  return withRaw ? `${hint}（${raw}）` : hint;
+}
+
+// 设置页「OneBot」那一块的状态行：那一页就是来修"连不上"的地方，
+// 所以当前状态和失败原因直接摊开写，不用去别处找。
+function onebotStatusLineHtml() {
+  const ob = state.status?.onebot;
+  return ob?.connected
+    ? `<div class="hint success">当前状态：已连接${ob.self ? `（${esc(ob.self.nickname)}）` : '（但没取到登录信息，确认协议端的 QQ 已登录）'}</div>`
+    : `<div class="hint error">当前状态：未连接 —— ${esc(onebotIssueText(ob) || '正在等待首次连接')}</div>`;
+}
+
+// 状态刷新时只换这一行的文字，不重渲染整段表单（否则会清掉用户正在填的内容）
+function updateOnebotStatusLine() {
+  const el = $('#onebot-status-line');
+  if (el) el.innerHTML = onebotStatusLineHtml();
+}
+
 // ── 就绪度体检（傻瓜式引导的核心） ──
 function assessReadiness(cfg, status) {
   const checks = [];
@@ -643,7 +679,14 @@ function assessReadiness(cfg, status) {
   const allowOk = (cfg.allow?.groups?.length || cfg.allow?.private?.length || cfg.allowAllWhenEmpty);
   checks.push({ ok: !!allowOk, label: allowOk ? `白名单：${(cfg.allow.groups || []).length} 个群 / ${(cfg.allow.private || []).length} 个好友` : '还没有配置白名单（必填）', fix: allowOk ? null : 'settings-allow' });
   const obOk = status?.onebot?.connected;
-  checks.push({ ok: !!obOk, label: obOk ? `OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}` : 'OneBot 未连接 —— 请检查设置中的 WS/HTTP 地址与令牌', fix: obOk ? null : 'settings-onebot' });
+  const obIssue = onebotIssueText(status?.onebot);
+  checks.push({
+    ok: !!obOk,
+    label: obOk
+      ? `OneBot 已连接${status.onebot.self ? `（${status.onebot.self.nickname}）` : ''}`
+      : `OneBot 未连接 —— ${obIssue || '请检查设置中的 WS/HTTP 地址与令牌'}`,
+    fix: obOk ? null : 'settings-onebot'
+  });
   return { ready: urlOk && modelOk && allowOk && obOk, checks };
 }
 
@@ -658,7 +701,8 @@ function renderBanner() {
     html = '⏸ 机器人已暂停，不会处理任何消息。';
   } else if (s && !s.onebot.connected && !s.onebot.everConnected) {
     show = true;
-    html = '🔌 OneBot 还没连上：请确认外部协议服务已启动，且 WS/HTTP 地址正确。';
+    const why = onebotIssueText(s.onebot);
+    html = `🔌 OneBot 还没连上：${why ? `${esc(why)}。` : ''}请确认外部协议服务已启动，且 WS/HTTP 地址正确。`;
   }
   banner.classList.toggle('hidden', !show);
   if (show) {
@@ -721,6 +765,148 @@ function serviceUrl(port, path = '/') {
   return `${protocol}//${hostname}:${port}${path}`;
 }
 
+// 服务卡片的状态：旧架构（DSH / Bridge）没配置端点时是「未部署」，不是故障 ——
+// 本仓库的部署栈不含它们（见 docs/LINUX.md），部署脚本也不会起。
+// 配置过（后端给了 optional+configured）却连不上，才照旧报「不可达」。
+function serviceTileState(id, status) {
+  const online = id === 'agent' || status?.online === true;
+  if (online) return { text: '在线', cls: 'online' };
+  if (!status) return { text: '检测中', cls: 'offline' };
+  if (status.optional === true && status.configured === false) return { text: '未部署', cls: 'idle' };
+  return { text: '不可达', cls: 'offline' };
+}
+
+/** 旧架构服务是否落在本部署里（没配置 = 不显示指向它的入口）。 */
+function legacyServiceDeployed(statuses, id) {
+  const status = statuses.get(id);
+  return !(status?.optional === true && status?.configured === false);
+}
+
+// 「更新部署」里的上次更新检查说明：口径是「已发布的 Release」，
+// 让"连不上 GitHub / 没有新 Release / 当前部署领先"这些情况都能看见，而不是完全无声。
+function renderUpdateCheckNote(update = {}) {
+  const short = (value) => (value ? String(value).slice(0, 12) : '-');
+  const check = update.updateNotice && typeof update.updateNotice === 'object' ? update.updateNotice : null;
+  if (!check || (!check.checkedAt && !check.error)) {
+    return '更新检查尚未运行：打开控制台时会自动检查一次。';
+  }
+  const when = check.checkedAt ? `（${esc(fmtTime(check.checkedAt))}）` : '';
+  if (check.available) {
+    return `上次更新检查${when}：发现新版本${check.version ? ` ${esc(check.version)}` : ''}`
+      + `（当前 ${esc(short(check.deployed))} → 最新 ${esc(short(check.revision))}`
+      + `${Number(check.commitCount) > 0 ? `，${Number(check.commitCount)} 个新提交` : ''}）。`;
+  }
+  if (check.reason === 'unconfigured') {
+    return '未配置自动更新仓库，无法检查新版本。';
+  }
+  if (check.reason === 'no-release') {
+    return `上次更新检查${when}：仓库尚未发布新的 Release，不提示更新`
+      + '（只有发布 Release 才算新版本，branch 上的日常提交不会提示）。';
+  }
+  if (check.reason === 'ahead-of-release') {
+    return `上次更新检查${when}：当前部署已包含最新 Release`
+      + `${check.version ? ` ${esc(check.version)}` : ''}（${esc(short(check.deployed))}），无需更新。`;
+  }
+  if (check.reason === 'unknown-deployed') {
+    return `上次更新检查${when}：当前部署不是 git 提交（可能是压缩包安装），无法比较版本`
+      + `${check.version ? `；最新 Release 为 ${esc(check.version)}，可用「立即更新」安装该版本` : ''}。`;
+  }
+  if (check.reason === 'compare-failed') {
+    const detail = String(check.error || '').trim().slice(0, 140);
+    return `上次更新检查${when}：无法比较当前版本与该 Release${detail ? ` —— ${esc(detail)}` : ''}。`
+      + '为避免装错版本，本次不提示也不更新；打开控制台会自动重试。';
+  }
+  if (check.reason === 'unreachable' || (!check.available && check.error)) {
+    const detail = String(check.error || '').replace(/^Command failed:.*?:\s*/, '').trim().slice(0, 140);
+    return `上次更新检查${when}：连不上 GitHub${detail ? ` —— ${esc(detail)}` : ''}。`
+      + '打开控制台会自动重试；若持续失败请检查服务器出网，可用下方「测试 GitHub 连通性」定位。';
+  }
+  const latest = check.version ? `Release ${esc(check.version)} · ` : '';
+  return `上次更新检查${when}：已是最新（${latest}当前 ${esc(short(check.deployed))}）。`;
+}
+
+// ── 更新进度：更新器把当前阶段写进状态文件（phase），排队阶段只有 status。
+//    这里只做展示，不推断阶段；阶段起点用 progressAt（每次阶段推进都续期）。───────
+const UPDATE_PHASE_LABELS = {
+  startup: '启动更新器',
+  connectivity: '检查网络连通性',
+  checking: '检查最新版本',
+  testing: '跑部署前测试',
+  deploying: '部署（服务会短暂重启）',
+  complete: '收尾'
+};
+const UPDATE_STATUS_LABELS = {
+  queued: '等待更新器接手',
+  checking: '检查最新版本',
+  testing: '跑部署前测试',
+  deploying: '部署（服务会短暂重启）'
+};
+// 「这轮更新在跑」的口径要与更新器一致（src/auto-update.js 的 ACTIVE_STATES）：
+// status() 的 busy 只说明更新器进程在（跳过间隔、被禁用这类情形也留个进程），
+// 那种时刻状态文件还停在上一轮的终态，单看 busy 会闪出一条"正在更新…收尾"的假进度行。
+const UPDATE_ACTIVE_STATUSES = new Set(['queued', 'checking', 'testing', 'deploying']);
+
+function formatElapsed(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} 分 ${String(total % 60).padStart(2, '0')} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${String(minutes % 60).padStart(2, '0')} 分`;
+}
+
+function updateProgressStage(update = {}) {
+  const status = String(update.status || '');
+  if (update.busy !== true || !UPDATE_ACTIVE_STATUSES.has(status)) return '';
+  const phase = String(update.phase || '');
+  // 排队时 phase 还是上一轮的残留值，先看 status
+  const label = status === 'queued'
+    ? UPDATE_STATUS_LABELS.queued
+    : (UPDATE_PHASE_LABELS[phase] || UPDATE_STATUS_LABELS[status] || '更新进行中');
+  // targetVersion 只有"手动更新提交时"和"更新器解析出 Release 后"才有；
+  // 不能拿 state.version 兜底 —— 那是状态文件的 schema 版本（恒为 1）。
+  const version = String(update.targetVersion || '').trim();
+  // 连通性测试（probe）只探通道、不部署，文案别说成"正在更新"
+  const probe = String(update.mode || '') === 'probe';
+  return probe ? `正在探测更新通道：${label}` : `正在更新${version ? `到 ${version}` : ''}：${label}`;
+}
+
+function updateProgressElapsed(update = {}) {
+  if (update.busy !== true) return '';
+  const now = Date.now();
+  const started = Number(update.startedAt || 0) || Number(update.updatedAt || 0);
+  const stageAt = Number(update.progressAt || 0) || started;
+  const parts = [];
+  if (stageAt) parts.push(`本阶段 ${formatElapsed((now - stageAt) / 1000)}`);
+  if (started && stageAt && started !== stageAt) parts.push(`总计 ${formatElapsed((now - started) / 1000)}`);
+  return parts.join(' · ');
+}
+
+function updateProgressText(update = {}) {
+  const stage = updateProgressStage(update);
+  if (!stage) return '';
+  const elapsed = updateProgressElapsed(update);
+  return elapsed ? `${stage} · ${elapsed}` : stage;
+}
+
+// 进度里的耗时每秒刷新；只在控制页且更新仍在跑时工作，跑完或切页后自动停。
+// 注意：这里直接写 textContent —— setText 是 updateControlHubFields 里的局部函数，
+// 模块作用域拿不到（曾经在这里调它，导致更新期间每秒抛一次 ReferenceError）。
+let updateProgressTicker = null;
+function startUpdateProgressTicker() {
+  if (updateProgressTicker) return;
+  updateProgressTicker = setInterval(() => {
+    const box = document.getElementById('hub-deploy-progress');
+    if (state.tab !== 'control' || state.autoUpdateStatus?.busy !== true || !box) {
+      clearInterval(updateProgressTicker);
+      updateProgressTicker = null;
+      return;
+    }
+    const el = document.getElementById('hub-deploy-progress-elapsed');
+    const next = updateProgressElapsed(state.autoUpdateStatus || {});
+    if (el && el.textContent !== next) el.textContent = next;
+  }, 1000);
+}
+
 function renderControlHub(data = {}) {
   const box = $('#control-page');
   if (!box) return;
@@ -743,6 +929,9 @@ function renderControlHub(data = {}) {
       ? (updateLabels[update.status] || '等待检查')
       : '已暂停';
   const revision = (value) => value ? String(value).slice(0, 12) : '-';
+  // 更新进度行：结构只建一次，这里的初值 + updateControlHubFields 里的实时同步
+  // 一起保证"点完立即更新马上能看到阶段与耗时"。没有在跑时留空并隐藏。
+  const progressLine = updateProgressText(update);
   const __html = `
     <div class="control-head">
       <div><h2>服务与访问控制</h2><span class="muted">统一入口</span></div>
@@ -750,12 +939,11 @@ function renderControlHub(data = {}) {
     </div>
     <div class="control-service-grid">
       ${CORE_SERVICE_LINKS.map((service) => {
-        const status = statuses.get(service.id);
-        const online = service.id === 'agent' || status?.online === true;
+        const tile = serviceTileState(service.id, statuses.get(service.id));
         return `<a class="control-service" data-hub-service="${esc(service.id)}" href="${esc(serviceUrl(service.port))}" target="_blank" rel="noreferrer">
           <span class="control-service-mark">${esc(service.mark)}</span>
           <span class="control-service-copy"><strong>${esc(service.name)}</strong><small>${esc(service.detail)} · :${service.port}</small></span>
-          <span class="control-service-state ${online ? 'online' : 'offline'}">${online ? '在线' : status ? '不可达' : '检测中'}</span>
+          <span class="control-service-state ${tile.cls}">${tile.text}</span>
         </a>`;
       }).join('')}
     </div>
@@ -766,9 +954,15 @@ function renderControlHub(data = {}) {
       </div>
       <div class="update-deploy-summary">
         <div><span>当前版本</span><strong data-hub-deploy="current">${esc(revision(update.currentRevision))}</strong></div>
-        <div><span>目标版本</span><strong data-hub-deploy="target">${esc(revision(update.targetRevision))}</strong></div>
+        <div><span>目标版本</span><strong data-hub-deploy="target">${esc(revision(update.targetRevision))}${update.targetVersion ? ` · ${esc(update.targetVersion)}` : ''}</strong></div>
         <div><span>上次检查</span><strong data-hub-deploy="lastCheck">${update.lastCheckAt ? esc(fmtTime(update.lastCheckAt)) : '-'}</strong></div>
         <div><span>下次检查</span><strong data-hub-deploy="nextCheck">${update.nextCheckAt ? esc(fmtTime(update.nextCheckAt)) : '-'}</strong></div>
+      </div>
+      <div class="muted" data-hub-update-check style="margin-top:6px;font-size:12px;line-height:1.5">${renderUpdateCheckNote(update)}</div>
+      <div class="update-deploy-progress${progressLine ? '' : ' hidden'}" id="hub-deploy-progress">
+        <span class="loading-spinner" aria-hidden="true"></span>
+        <span class="update-deploy-progress-text" id="hub-deploy-progress-text" role="status" aria-live="polite">${esc(updateProgressStage(update))}</span>
+        <span class="update-deploy-progress-elapsed" id="hub-deploy-progress-elapsed" aria-hidden="true">${esc(updateProgressElapsed(update))}</span>
       </div>
       <div class="update-deploy-settings">
         <label><span>告警管理员 QQ</span><input type="text" id="auto-update-owner" inputmode="numeric" value="${esc(update.ownerUin || '')}" /></label>
@@ -798,7 +992,7 @@ function renderControlHub(data = {}) {
         <button type="button" class="control-key-row" data-open-settings="desktop">
           <span><strong>QQ Agent 控制台 Token</strong><small>系统</small></span><b>管理</b>
         </button>
-        <a class="control-key-row" href="${esc(serviceUrl(3100))}" target="_blank" rel="noreferrer">
+        <a class="control-key-row${legacyServiceDeployed(statuses, 'bridge') ? '' : ' hidden'}" data-hub-legacy-entry="bridge" href="${esc(serviceUrl(3100))}" target="_blank" rel="noreferrer">
           <span><strong>Bridge 控制台 Token</strong><small>旧架构控制台</small></span><b>打开</b>
         </a>
       </div>
@@ -809,6 +1003,9 @@ function renderControlHub(data = {}) {
         <a class="btn btn-small" href="${esc(serviceUrl(5099, '/settings?tab=account'))}" target="_blank" rel="noreferrer">打开账号安全</a>
       </div>
       <form id="snowluma-password-form" class="control-password-form" autocomplete="off">
+        <!-- 浏览器要求密码表单带用户名框（可隐藏），否则 F12 里会有一条 DOM 提示。
+             这里是给 SnowLuma 改密钥、不是登录，放个隐藏占位即可。 -->
+        <input type="text" id="snowluma-account" name="username" value="snowluma" autocomplete="username" hidden aria-hidden="true" tabindex="-1" />
         <label><span>当前密钥</span><input type="password" id="snowluma-current-password" autocomplete="current-password" required /></label>
         <label><span>新密钥</span><input type="password" id="snowluma-new-password" autocomplete="new-password" placeholder="至少 10 位，含大小写与符号" required /></label>
         <label><span>确认新密钥</span><input type="password" id="snowluma-confirm-password" autocomplete="new-password" required /></label>
@@ -864,12 +1061,15 @@ function updateControlHubFields(box, statuses, update) {
   for (const [id, status] of statuses) {
     const el = box.querySelector('[data-hub-service="' + id + '"] .control-service-state');
     if (!el) continue;
-    const online = id === 'agent' || status?.online === true;
-    const text = online ? '在线' : status ? '不可达' : '检测中';
-    setText(el, text);
-    const cls = 'control-service-state ' + (online ? 'online' : 'offline');
+    const tile = serviceTileState(id, status);
+    setText(el, tile.text);
+    const cls = 'control-service-state ' + tile.cls;
     if (el.className !== cls) el.className = cls;
   }
+  // 旧架构入口每次同步都跟着状态走：结构只在首次建，光在模板里判断的话，
+  // 部署重启期间 integrations 拉取失败重建页面后，入口可能一直留在页面上（与"未部署"的卡片自相矛盾）。
+  const legacyEntry = box.querySelector('[data-hub-legacy-entry="bridge"]');
+  if (legacyEntry) legacyEntry.classList.toggle('hidden', !legacyServiceDeployed(statuses, 'bridge'));
 
   // 部署状态徽标
   const badge = box.querySelector('[data-hub-deploy-state]');
@@ -907,6 +1107,17 @@ function updateControlHubFields(box, statuses, update) {
     errorBox.classList.toggle('hidden', !update.error);
   }
 
+  // 更新进度：排队 / 检查 / 测试 / 部署 各阶段显示一行带耗时，跑完自动隐藏
+  const progressBox = document.getElementById('hub-deploy-progress');
+  if (progressBox) {
+    const line = updateProgressText(update);
+    // 阶段走 aria-live（变化时播报），耗时放 aria-hidden —— 否则读屏每秒念一次
+    setText(document.getElementById('hub-deploy-progress-text'), updateProgressStage(update));
+    setText(document.getElementById('hub-deploy-progress-elapsed'), updateProgressElapsed(update));
+    progressBox.classList.toggle('hidden', !line);
+    if (line) startUpdateProgressTicker();
+  }
+
   // 按钮可用性 / 暂停与恢复的显隐
   const runBtn = document.getElementById('auto-update-run');
   if (runBtn) runBtn.disabled = !update.installed || update.busy === true;
@@ -940,6 +1151,11 @@ async function loadControlHub({ force = false } = {}) {
     state.autoUpdateStatus = update;
     if (state.tab === 'control') renderControlHub(state.integrationStatus);
   } catch (error) {
+    // 读取失败（部署重启期间很常见）会把结构换成错误提示，此时必须把 __hubBuilt 归零：
+    // 否则下一次成功刷新只跑 updateControlHubFields，元素已不在 DOM，页面永远停在
+    // 这句错误提示上（按钮也失效）——进度行同样会被吞掉。
+    box.__hubBuilt = false;
+    box.__renderedHtml = null;
     box.innerHTML = `<div class="empty-hint">服务状态读取失败：${esc(error.message)}</div>`;
   }
 }
@@ -1025,6 +1241,96 @@ async function runManualUpdate() {
   }
 }
 
+// ── 发现新版本提示（只在控制台打开时检查一次；失败静默）───────────────────────
+async function checkUpdateNotice() {
+  let payload = null;
+  try {
+    payload = await api('/api/auto-update/check');
+  } catch {
+    return;
+  }
+  const notice = payload?.notice || {};
+  if (!notice.available) return;
+  const version = String(notice.version || '');
+  // 「忽略」只屏蔽这一个版本；出现新的 tag 时照常提示
+  if (version && version === String(payload.ignoredVersion || '')) return;
+  // 已经有一次部署在队列里/正在跑：别再弹。
+  // 部署完成前 deployed-revision 还是旧的，光比版本会一直认为"有新版本没装"，
+  // 于是每次刷新都弹一遍，看着像"点了更新没反应"（2026-09-21 反馈）。
+  // 版本号可能还没解析出来（更新器跑到 testing 阶段才写），所以"排队中且不知道版本"
+  // 也要压住；但 probe（只探连通性、不部署）不算。
+  const pending = payload?.pending || null;
+  if (pending && pending.mode !== 'probe'
+    && (!pending.version || String(pending.version) === version)) return;
+  openUpdateNoticeDialog(notice);
+}
+
+// Release 说明是 markdown；先整体转义，再把标题/加粗/列表替换成最小样式，
+// 避免把 --- 之类的分隔线与标题混在一起时出现乱码感。
+function formatReleaseNotes(body) {
+  return esc(String(body || '').trim())
+    .replace(/^#{1,6}\s*(.+)$/gm, '<strong>$1</strong>')
+    .replace(/^[*-]\s+/gm, '• ')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+}
+
+function openUpdateNoticeDialog(notice) {
+  const dialog = $('#update-notice');
+  if (!dialog) return;
+  const short = (value) => String(value || '').slice(0, 7);
+  state.updateNoticeVersion = String(notice.version || '');
+  $('#update-notice-title').textContent = notice.version ? `发现新版本 ${notice.version}` : '发现新版本';
+  $('#update-notice-sub').textContent = [
+    String(notice.name || '').trim(),
+    `当前 ${short(notice.deployed) || '未知'} → 最新 ${short(notice.revision) || '未知'}`,
+    Number(notice.commitCount) > 0 ? `${Number(notice.commitCount)} 个新提交` : ''
+  ].filter(Boolean).join(' · ');
+  $('#update-notice-notes').innerHTML = String(notice.body || '').trim()
+    ? formatReleaseNotes(notice.body)
+    : '本次更新还没有发布说明，可以先到仓库看提交记录。';
+  const result = $('#update-notice-result');
+  if (result) { result.textContent = ''; result.className = 'control-result muted'; }
+  const runBtn = $('#update-notice-run');
+  if (runBtn) runBtn.disabled = false;
+  const ignoreBtn = $('#update-notice-ignore');
+  if (ignoreBtn) ignoreBtn.hidden = !notice.version; // 没有 tag 时没法精确忽略
+  if (!dialog.open) dialog.showModal();
+}
+
+async function runUpdateFromNotice() {
+  const result = $('#update-notice-result');
+  const runBtn = $('#update-notice-run');
+  if (runBtn) runBtn.disabled = true;
+  if (result) { result.textContent = '正在提交更新任务…'; result.className = 'control-result muted'; }
+  try {
+    const response = await api('/api/auto-update/run', {
+      method: 'POST',
+      // 带上当前提示的版本：写进状态里，"别再弹同一个版本"才能立刻生效
+      body: JSON.stringify({ confirm: true, version: state.updateNoticeVersion || '' })
+    });
+    state.autoUpdateStatus = response.status;
+    // 提交成功就关掉提示框，切到「控制 → 更新部署」：进度（阶段 + 已耗时）显示在那一块，
+    // 由状态派生、整页重绘也不会丢。以前这里留着框只把按钮点灰，用户看不到任何进展
+    // （2026-09-22 反馈）。
+    $('#update-notice')?.close();
+    switchTab('control');
+  } catch (error) {
+    // 提交失败：框留着，错误直接显示在框里
+    if (runBtn) runBtn.disabled = false;
+    if (result) { result.textContent = `启动失败：${error.message}`; result.className = 'control-result error'; }
+  }
+}
+
+async function ignoreUpdateVersion() {
+  const version = String(state.updateNoticeVersion || '');
+  if (!version) return;
+  try {
+    await api('/api/auto-update/ignore', { method: 'POST', body: JSON.stringify({ version }) });
+  } catch { /* 忽略失败就当作稍后处理，下次打开仍会提示 */ }
+  $('#update-notice')?.close();
+}
+
 async function changeSnowLumaPassword(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -1077,17 +1383,27 @@ async function refreshStatus() {
     const dot = $('#onebot-dot');
     const label = $('#onebot-label');
     dot.className = 'dot ' + (s.onebot.connected ? 'dot-on' : (s.onebot.everConnected ? 'dot-wait' : 'dot-off'));
+    // 状态条本身截断显示（顶栏高度锁死），失败原因放 title，鼠标悬停就能看到
+    const obIssue = onebotIssueText(s.onebot);
+    dot.title = obIssue ? `OneBot：${obIssue}` : 'OneBot 连接状态';
+    label.title = obIssue;
     label.textContent = s.onebot.connected
       ? `OneBot 已连接${s.onebot.self ? `（${s.onebot.self.nickname}）` : ''}`
       : 'OneBot 未连接';
     setStatusLabel('#model-label', `模型：${s.orchestrator.model || '未设置'}`);
     const u = s.usage;
-    // 成本：官方价匹配得上就显示；匹配不上（中转站常见）只显示 token，不显示误导性的 ¥0
+    // 成本：查得到价就显示；查不到（未定价，转站/新模型常见）就不显示金额，
+    // 只提示"含未定价调用"，避免让 ¥0 被读成"免费"。
     const c = s.cost;
     const costTxt = c && c.cost > 0 ? ` · ¥${c.cost.toFixed(3)}` : '';
+    // 按账户口径换个说法：倍率=你的渠道价、按月付=包月（不按 token 算）
+    const modeTxt = c?.costMode === 'subscription'
+      ? (Number(c.costMonthlyFee) > 0 ? ` · 包月 ¥${Number(c.costMonthlyFee)}/月` : ' · 按月付')
+      : (c?.costMode === 'multiplier' ? `（官方价 ×${mulOf(c.costMultiplier)}）` : '');
+    const unpricedTxt = c && c.unpriced ? ' · 含未定价调用' : '';
     const rate = s.cacheHitRate;
     const rateTxt = rate > 0 ? ` · 缓存 ${Math.round(rate * 100)}%` : '';
-    setStatusLabel('#usage-label', `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}`);
+    setStatusLabel('#usage-label', `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}${modeTxt}${unpricedTxt}`);
     setStatusLabel('#search-count-label', `搜索：${s.webSearchCount ?? u.webSearchCount ?? 0} 次`);
     state.paused = s.paused;
     state.pauseReason = s.pauseReason;
@@ -1097,6 +1413,7 @@ async function refreshStatus() {
       setStatusLabel('#model-label', $('#model-label').textContent + (s.timeControl.active ? ' · 活跃时段' : ' · 非活跃时段'));
     }
     if (state.tab === 'settings' && state.settingsSection === 'time-control') loadTimeControlStatus();
+    if (state.tab === 'settings' && state.settingsSection === 'onebot') updateOnebotStatusLine();
     if (state.tab === 'settings' && state.settingsSection === 'moments') loadDailyMomentsStatus();
     if (state.tab === 'settings' && state.settingsSection === 'qzone-interactions') {
       loadQzoneInteractionStatus();
@@ -1595,6 +1912,7 @@ function renderSessionList() {
         <div class="session-meta">
           <span class="status-badge status-${s.status}">${esc(sessionStatusText(s))}</span>
           <span class="mode-chip mode-${mode}">${esc(conversationStatusText(s))}</span>
+          ${s.persona ? `<span class="persona-chip" title="这次运行用的角色卡">人设 ${esc(s.persona)}</span>` : ''}
           ${lifecycleRemain}
           ${waitHtml}
           ${activityHtml}
@@ -1859,7 +2177,15 @@ function renderSessionContextInspector(s) {
         <div><span>总缓存 Token</span><strong>${fmtTok(metrics.cachedTokens)}</strong><small>token</small></div>
         <div><span>总工具次数</span><strong>${fmtTok(metrics.toolCalls)}</strong><small>次</small></div>
         <div><span>总联网次数</span><strong>${fmtTok(metrics.webSearchCount)}</strong><small>次</small></div>
-        <div><span>预估成本</span><strong>${fmtYuan(metrics.estimatedCost)}</strong><small>与用量页同口径</small></div>
+        <div><span>预估成本</span><strong>${fmtYuan(metrics.estimatedCost)}</strong><small>${(() => {
+          // 这个数字只含按 token 计价的部分：包月/本地/未定价必须点出来，
+          // 否则 ¥0.00 会被读成"这次没花钱"。
+          const notes = [];
+          if (Number(metrics.unpricedCalls) > 0) notes.push(`含 ${Number(metrics.unpricedCalls)} 次未定价调用`);
+          if (Number(metrics.flatCalls) > 0) notes.push(`${Number(metrics.flatCalls)} 次按包月计（不计入）`);
+          if (Number(metrics.localCalls) > 0) notes.push(`${Number(metrics.localCalls)} 次本地模型（不计费）`);
+          return notes.length ? notes.join('；') : '与用量页同口径';
+        })()}</small></div>
       </div>
       <div class="context-request-summary">
         当前展示第 ${Number(s.inputRound) || Math.max(1, calls.length)} 轮请求快照
@@ -1920,6 +2246,7 @@ function renderSessionDetail(s, {
       </h2>
       <div class="sub">
         <span>触发方式：${esc(triggerKindLabel(s))}${s.triggerReason ? ` · ${esc(s.triggerReason)}` : ''}</span>
+        <span>人设：${esc(s.persona || '（这次运行没记录到角色卡）')}</span>
         <span>触发消息：${esc(s.triggerSummary || (s.trigger === 'proactive' ? '主动机会' : '-'))}</span>
         <span>开始 ${fmtClock(s.startedAt)}${s.endedAt ? ` · ${s.conversationMode === 'lifecycle' ? '本轮结束' : '结束'} ${fmtClock(s.endedAt)}` : ' · 进行中'}</span>
         <span>模型 ${esc(s.model || '-')}</span>
@@ -2560,7 +2887,7 @@ function renderUsagePage(stats, st, prices) {
            五张卡固定一行（曾经第一张跨两列、整体占两行，已按需求改单行）。 -->
       <div class="usage-cards">
         <div class="usage-card accent">
-          <div class="uc-label">估算成本</div>
+          <div class="uc-label" data-field="cost-label">估算成本</div>
           <div class="uc-value" data-field="cost">-</div>
           <div class="uc-sub" data-field="cost-sub">-</div>
         </div>
@@ -2585,6 +2912,36 @@ function renderUsagePage(stats, st, prices) {
           <div class="usage-bar"><div class="usage-bar-fill ok" data-field="rate-bar" style="width:0%"></div></div>
           <div class="uc-sub" data-field="rate-sub">-</div>
         </div>
+      </div>
+
+      <!-- 首次引导：成本口径一次性三选一（选过或点过"以后再说"就不再出现） -->
+      <div class="usage-guide hidden" data-block="cost-guide">
+        <div class="ug-title">成本数字想更准？选一个就行（30 秒，之后不再问）</div>
+        <div class="ug-options">
+          <label class="radio-row"><input type="radio" name="guide-mode" value="official" checked />
+            <span>按模型官方价估就行（默认；数字是估算，不是账单）</span></label>
+          <label class="radio-row"><input type="radio" name="guide-mode" value="multiplier" />
+            <span>我按渠道价：官方价 × <input type="number" id="guide-multiplier" step="0.01" min="0.01" value="1" style="width:72px" />（例如 0.5 = 打五折）</span></label>
+          <label class="radio-row"><input type="radio" name="guide-mode" value="subscription" />
+            <span>我按月付 ¥ <input type="number" id="guide-monthly" step="1" min="0" value="0" style="width:84px" /> /月（订阅套餐、本地自建）</span></label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+          <button class="btn btn-primary btn-small" id="cost-guide-save">就用这个</button>
+          <button class="btn btn-small" id="cost-guide-later">以后再说</button>
+          <span class="hint" id="cost-guide-result"></span>
+        </div>
+      </div>
+
+      <!-- 未定价提示条：有调用查不到单价时出现。这些调用不算钱，
+           但不提示的话用户会以为成本是准的（或者以为模型免费）。 -->
+      <div class="usage-unpriced hidden" data-block="unpriced">
+        <div class="uu-head">
+          <span class="uu-icon">!</span>
+          <span class="uu-title" data-field="unpriced-title">-</span>
+        </div>
+        <div class="uu-list" data-field="unpriced-list"></div>
+        <div class="uu-hint">这些调用在价格表里查不到单价，成本没有计入（不等于免费）。
+          指定价格后本页会自动重算：<b>设置 → 模型价格</b>（开关关掉后可按模型/渠道手填，或配远程价格表）。</div>
       </div>
 
       <div data-block="days">
@@ -2640,6 +2997,56 @@ function renderUsagePage(stats, st, prices) {
     if (tr) openUsageBreakdown('model', tr.dataset.key);
   });
 
+  // 未定价提示条：每个模型一个按钮，点开就是定价弹窗（填完立即重算）
+  box.querySelector('[data-field="unpriced-list"]')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-price-model]');
+    if (!btn) return;
+    e.stopPropagation();
+    openPriceDialog({
+      model: btn.dataset.priceModel || '',
+      vendor: btn.dataset.priceVendor || ''
+    });
+  });
+
+  // 首次引导卡：三选一保存 / 以后再说（保存后不再出现）
+  const guide = box.querySelector('[data-block="cost-guide"]');
+  if (guide) {
+    const syncGuide = () => {
+      const picked = guide.querySelector('input[name="guide-mode"]:checked')?.value || 'official';
+      const mult = guide.querySelector('#guide-multiplier');
+      const monthly = guide.querySelector('#guide-monthly');
+      if (mult) mult.disabled = picked !== 'multiplier';
+      if (monthly) monthly.disabled = picked !== 'subscription';
+    };
+    guide.querySelectorAll('input[name="guide-mode"]').forEach((el) => el.addEventListener('change', syncGuide));
+    syncGuide();
+    const writeMode = async (patch, doneTxt) => {
+      const result = guide.querySelector('#cost-guide-result');
+      try {
+        const res = await api('/api/config', { method: 'POST', body: JSON.stringify({ api: patch }) });
+        if (res?.config) state.config = res.config;
+        else {
+          state.config = state.config || {};
+          state.config.api = { ...(state.config.api || {}), ...patch };
+        }
+        if (result) { result.textContent = doneTxt; result.className = 'hint success'; }
+        loadUsageView({ force: true });
+      } catch (error) {
+        if (result) { result.textContent = `保存失败：${error.message}`; result.className = 'hint error'; }
+      }
+    };
+    guide.querySelector('#cost-guide-save')?.addEventListener('click', () => {
+      const picked = guide.querySelector('input[name="guide-mode"]:checked')?.value || 'official';
+      const patch = { costMode: picked, costGuideDismissed: true };
+      if (picked === 'multiplier') patch.costMultiplier = mulOf(guide.querySelector('#guide-multiplier')?.value);
+      if (picked === 'subscription') patch.costMonthlyFee = Number(guide.querySelector('#guide-monthly')?.value) || 0;
+      writeMode(patch, '已按这个口径计算');
+    });
+    guide.querySelector('#cost-guide-later')?.addEventListener('click', () => {
+      writeMode({ costGuideDismissed: true }, '好的，以后不再问');
+    });
+  }
+
   updateUsagePage(stats, st, prices);
 }
 
@@ -2677,7 +3084,72 @@ function updateUsagePage(stats, st, prices) {
   set('rate', `${((t.cacheHitRate || 0) * 100).toFixed(1)}%`);
   set('rate-sub', `命中 ${fmtTok(t.cachedTokens)} / 输入 ${fmtTok(t.promptTokens)}`);
   set('cost', fmtYuan(t.cost));
-  set('cost-sub', stats?.rangeLabel || '');
+  // 口径：实付（用户自己填的渠道价/自定义价）vs 估算（官方表、兜底）。
+  // 只显示"估算成本"会让人以为数字是账单；只显示"实付"又会漏掉估算那部分。
+  const actual = Number(t.actualCost) || 0;
+  const estimate = Number(t.estimateCost) || 0;
+  const hasActual = actual > 1e-9;
+  const hasEstimate = estimate > 1e-9;
+  // 包月/本地：不按 token 计价，作为固定支出单列，不计入上面的按量成本
+  const billingInfo = stats?.billing || {};
+  const flatItems = billingInfo.flatItems || [];
+  const flatMonthly = flatItems.reduce((sum, item) => (item.period === 'month' ? sum + (Number(item.amount) || 0) : sum), 0);
+  const flatDaily = flatItems.reduce((sum, item) => (item.period === 'day' ? sum + (Number(item.amount) || 0) : sum), 0);
+  const hasFlat = flatItems.length > 0;
+  const variable = hasActual || hasEstimate;
+  set('cost-label', !variable && hasFlat
+    ? '固定支出'
+    : (hasActual && hasEstimate ? '成本（含估算）' : (hasActual ? '实付成本' : '估算成本')));
+  const split = [];
+  if (hasActual) split.push(`实付 ${fmtYuan(actual)}`);
+  if (hasEstimate) split.push(`估算 ${fmtYuan(estimate)}`);
+  const flatTxt = [
+    flatMonthly > 0 ? `包月 ¥${flatMonthly}/月` : '',
+    flatDaily > 0 ? `按天 ¥${flatDaily}/天` : ''
+  ].filter(Boolean).join(' + ');
+  if (flatTxt) split.push(`另有${flatTxt}`);
+  if (Number(billingInfo.localCalls) > 0) split.push(`本地模型 ${Number(billingInfo.localCalls)} 次不计费`);
+  // 账户口径 + 兜底估算的说明（人话，不用用户理解"口径"两个字）
+  const costMode = String((state.config?.api?.costMode) || 'official');
+  const multiplier = mulOf(state.config?.api?.costMultiplier);
+  if (!flatTxt && hasEstimate && costMode !== 'multiplier') split.push('按官方价估算，不是账单');
+  if (!flatTxt && hasActual && costMode === 'multiplier') split.push(`官方价 ×${multiplier}（你的渠道价）`);
+  if (Number(t.fallbackCalls) > 0) split.push(`${Number(t.fallbackCalls)} 次按当前模型估算`);
+  set('cost-sub', [stats?.rangeLabel || '', ...split].filter(Boolean).join(' · '));
+
+  // 首次引导卡：口径还是默认、且没处理过时出现
+  const guide = box.querySelector('[data-block="cost-guide"]');
+  if (guide) {
+    const dismissed = state.config?.api?.costGuideDismissed === true;
+    const showGuide = !dismissed && costMode === 'official';
+    guide.classList.toggle('hidden', !showGuide);
+  }
+
+  // 未定价提示条：多少调用没算钱、分别是哪些模型
+  const un = stats?.unpriced || {};
+  const unBlock = box.querySelector('[data-block="unpriced"]');
+  if (unBlock) {
+    const unpricedModels = un.models || [];
+    if (Number(un.calls) > 0) {
+      unBlock.classList.remove('hidden');
+      set('unpriced-title',
+        `${Number(un.calls)} 次调用没有价格（${fmtTokens(Number(un.tokens) || 0)} 未计入成本）`);
+      const listEl = box.querySelector('[data-field="unpriced-list"]');
+      if (listEl) {
+        const chips = unpricedModels.map((x) => {
+          const label = x.vendor ? `${x.vendor}：${x.model}` : (x.model || x.key || '');
+          return `<button type="button" class="uu-chip" title="给这个模型定价（${esc(label)}）"`
+            + ` data-price-model="${esc(x.model || x.key || '')}" data-price-vendor="${esc(x.vendor || '')}">`
+            + `${esc(label)}<b>${Number(x.calls) || 0} 次</b><i>定价</i></button>`;
+        });
+        if (Number(un.more) > 0) chips.push(`<span class="uu-chip muted">等 ${Number(un.more)} 个</span>`);
+        const html = chips.join('');
+        if (listEl.dataset.sig !== html) { listEl.innerHTML = html; listEl.dataset.sig = html; }
+      }
+    } else {
+      unBlock.classList.add('hidden');
+    }
+  }
   const bar = box.querySelector('[data-field="rate-bar"]');
   if (bar) bar.style.width = `${Math.max(0, Math.min(100, (t.cacheHitRate || 0) * 100)).toFixed(1)}%`;
 
@@ -2713,7 +3185,9 @@ function updateUsagePage(stats, st, prices) {
     }
     if (!wanted.length) {
       if (tbody.dataset.empty !== '1') {
-        tbody.innerHTML = '<tr><td colspan="7" class="muted">无</td></tr>';
+        // 列数按表头算：按日期是 7 列、按会话/按模型是 6 列，写死会让空表多出一列
+        const cols = tbody.closest('table')?.querySelectorAll('thead th').length || 6;
+        tbody.innerHTML = `<tr><td colspan="${cols}" class="muted">无</td></tr>`;
         tbody.dataset.empty = '1';
       }
       return;
@@ -2721,6 +3195,71 @@ function updateUsagePage(stats, st, prices) {
     tbody.dataset.empty = '0';
     const html = shown.map(build).join('');
     if (tbody.dataset.sig !== html) { tbody.innerHTML = html; tbody.dataset.sig = html; }
+  };
+
+  // 成本单元格：整行都没有价格时不能显示成 ¥0.00（会被读成"免费"）
+  const costCell = (row) => {
+    const calls = Number(row.runs) || 0;
+    const unpriced = Number(row.unpricedCalls) || 0;
+    const flat = Number(row.flatCalls) || 0;
+    const local = Number(row.localCalls) || 0;
+    // 包月/本地不按 token 计价：金额没有意义，显示"—"+ 计费方式徽标
+    if (calls > 0 && flat + local >= calls) {
+      return `<span class="muted">—</span>${billingChip(row)}`;
+    }
+    if (unpriced <= 0) return fmtYuan(row.cost) + billingChip(row);
+    const title = `其中有 ${unpriced} 次调用在价格表里查不到单价，未计入成本`;
+    if (calls > 0 && unpriced >= calls) {
+      return `<span class="uc-chip warn" title="${esc(title)}">未定价</span>`;
+    }
+    return `${fmtYuan(row.cost)}<span class="uc-chip warn" title="${esc(title)}">未定价 ${unpriced}</span>`;
+  };
+
+  // 计费方式徽标：包月（固定支出）/ 本地（不计费）
+  const billingChip = (row) => {
+    const items = Array.isArray(row.flatItems) ? row.flatItems : [];
+    const monthly = items.reduce((sum, item) => (item.period === 'month' ? sum + (Number(item.amount) || 0) : sum), 0);
+    const daily = items.reduce((sum, item) => (item.period === 'day' ? sum + (Number(item.amount) || 0) : sum), 0);
+    const parts = [];
+    if (Number(row.flatCalls) > 0) {
+      const amountTxt = [monthly > 0 ? `¥${monthly}/月` : '', daily > 0 ? `¥${daily}/天` : ''].filter(Boolean).join(' + ');
+      parts.push(`<span class="uc-chip" title="包月/订阅：按固定支出计，不按 token 计价">包月${amountTxt ? ` ${amountTxt}` : ''}</span>`);
+    }
+    if (Number(row.localCalls) > 0) {
+      parts.push('<span class="uc-chip" title="本地/自建模型：只统计 token，不计费">本地</span>');
+    }
+    return parts.join('');
+  };
+
+  // 实付标记：这一行的价全部来自用户自己填的价（渠道价 / 自定义价），不是官方价估算
+  const actualChip = (row) => {
+    const calls = Number(row.runs) || 0;
+    const actual = Number(row.actualCalls) || 0;
+    if (calls > 0 && actual >= calls) {
+      return '<span class="uc-chip ok" title="这一行的价是你自己填的（渠道价 / 自定义价），属于实付口径">实付</span>';
+    }
+    return '';
+  };
+
+  // 官方价匹配的提示：别名映射 / 近似匹配都标出来（用户自己定过价的不标）
+  const matchNote = (m) => {
+    const model = String(m.model || '');
+    if (!model) return '';
+    const api = (state.config || {}).api || {};
+    const custom = api.modelPrices || {};
+    if (custom[model] || custom[`${m.vendor}：${model}`]) return '';
+    // 用页面本次拿到的价格表（prices 参数），别依赖 state 里那份可能还没加载
+    const table = prices?.prices || state.modelPrices?.prices || [];
+    const aliases = prices?.aliases || state.modelPrices?.aliases || null;
+    const hit = matchPriceTable(model, table, aliases);
+    if (!hit) return '';
+    if (hit.confidence === 'alias') {
+      return `<span class="uc-chip" title="${esc(`按别名映射计价：${hit.via}`)}">别名</span>`;
+    }
+    if (hit.confidence === 'fuzzy') {
+      return `<span class="uc-chip" title="${esc(`近似匹配到 ${hit.matched}（${hit.via}）`)}">近似</span>`;
+    }
+    return '';
   };
 
   fill('days', stats?.days, (d) => `
@@ -2731,7 +3270,7 @@ function updateUsagePage(stats, st, prices) {
       <td class="r">${fmtTok(d.completionTokens)}</td>
       <td class="r">${fmtTok(d.cachedTokens)}</td>
       <td class="r">${((d.cacheHitRate || 0) * 100).toFixed(0)}%</td>
-      <td class="r">${fmtYuan(d.cost)}</td>
+      <td class="r">${costCell(d)}</td>
     </tr>`);
 
   fill('chats', stats?.chats, (c) => `
@@ -2741,19 +3280,19 @@ function updateUsagePage(stats, st, prices) {
       <td class="r">${fmtTok(c.promptTokens)}</td>
       <td class="r">${fmtTok(c.completionTokens)}</td>
       <td class="r">${((c.cacheHitRate || 0) * 100).toFixed(0)}%</td>
-      <td class="r">${fmtYuan(c.cost)}</td>
+      <td class="r">${costCell(c)}</td>
     </tr>`);
 
   // 模型与供应商分两列显示：同一个 id 走不同渠道是不同的"商品"，
   // 价格可能差很多（中转站加价、:free 版本等），必须能区分开。
   fill('models', stats?.models, (m) => `
     <tr data-key="${esc(m.key)}">
-      <td>${esc(m.vendor ? `${m.vendor}：${m.model}` : (m.model ?? m.key))}</td>
+      <td>${esc(m.vendor ? `${m.vendor}：${m.model}` : (m.model ?? m.key))}${actualChip(m)}${matchNote(m)}</td>
       <td class="r">${m.runs}</td>
       <td class="r">${fmtTok(m.promptTokens)}</td>
       <td class="r">${fmtTok(m.completionTokens)}</td>
       <td class="r">${((m.cacheHitRate || 0) * 100).toFixed(0)}%</td>
-      <td class="r">${fmtYuan(m.cost)}</td>
+      <td class="r">${costCell(m)}</td>
     </tr>`, { collapsible: true, expandBtn: '#models-expand' });
 }
 
@@ -2817,11 +3356,18 @@ async function loadUsageView({ force = false } = {}) {
   }
 
   try {
-    const [stats, st] = await Promise.all([
+    const [stats, st, priceData, cfgData] = await Promise.all([
       api(`/api/usage/stats?range=${range}`),
-      api('/api/status')
+      api('/api/status'),
+      // 价格表：模型行的「别名 / 近似」标记要用它。设置页只在打开时才加载，
+      // 所以这里自己拉一份（并行，不额外增加等待）。
+      api('/api/model-prices').catch(() => null),
+      // 配置：成本口径（官方价 / 渠道倍率 / 按月付）与引导卡状态要用
+      api('/api/config').catch(() => null)
     ]);
-    const prices = state.modelPrices || {};   // 启动时已加载，无需再请求
+    if (priceData) state.modelPrices = priceData;
+    if (cfgData) state.config = cfgData;
+    const prices = state.modelPrices || {};
     // 竞态：期间用户切走了页签、或又点了别的时间范围 → 这次结果作废
     if (token !== usageLoadToken) return;
     if (state.tab !== 'usage' || usageRange !== range) return;
@@ -2913,6 +3459,22 @@ function openUsageBreakdown(dim, key) {
       const r = await api(`/api/usage/breakdown?range=${encodeURIComponent(usageRange)}&dim=${dim}&key=${encodeURIComponent(key)}&by=${activeBy}`);
       peakEl.innerHTML = peakSplitHtml(r.totals);
       colEl.textContent = { model: '模型', chat: '会话', day: '日期' }[activeBy] || '项目';
+      // 成本列：包月/本地/未定价不能只显示 ¥0.00（会被读成免费）
+      const costCell = (x) => {
+        const items = Array.isArray(x.flatItems) ? x.flatItems : [];
+        const monthly = items.reduce((s2, it) => (it.period === 'month' ? s2 + (Number(it.amount) || 0) : s2), 0);
+        const daily = items.reduce((s2, it) => (it.period === 'day' ? s2 + (Number(it.amount) || 0) : s2), 0);
+        const chips = [];
+        if (Number(x.flatCalls) > 0) {
+          const amount = [monthly > 0 ? `¥${monthly}/月` : '', daily > 0 ? `¥${daily}/天` : ''].filter(Boolean).join(' + ');
+          chips.push(`<span class="uc-chip" title="包月/订阅：按固定支出计，不按 token 计价">包月${amount ? ` ${amount}` : ''}</span>`);
+        }
+        if (Number(x.localCalls) > 0) chips.push('<span class="uc-chip" title="本地/自建模型：只统计 token，不计费">本地</span>');
+        if (Number(x.unpricedCalls) > 0) chips.push(`<span class="uc-chip warn" title="没有价格：这些调用没算进成本，不是免费">未定价 ${Number(x.unpricedCalls)}</span>`);
+        const money = Number(x.cost) || 0;
+        const head = (money > 0 || !chips.length) ? fmtYuan(money) : '—';
+        return [head, ...chips].join(' ');
+      };
       bodyEl.innerHTML = (r.rows || []).length
         ? r.rows.map((x) => `
             <tr>
@@ -2923,7 +3485,7 @@ function openUsageBreakdown(dim, key) {
               <td class="r">${fmtTok(x.promptTokens)}</td>
               <td class="r">${fmtTok(x.completionTokens)}</td>
               <td class="r">${((x.cacheHitRate || 0) * 100).toFixed(0)}%</td>
-              <td class="r">${fmtYuan(x.cost)}</td>
+              <td class="r">${costCell(x)}</td>
             </tr>`).join('')
         : '<tr><td colspan="6" class="muted">无数据</td></tr>';
     } catch (e) {
@@ -3754,6 +4316,24 @@ function renderMemoryList() {
   });
 }
 
+/** 记忆页每条印象前面的标记：「[09-20 · 模型记的] 」——多老 + 谁写的，一眼分得开。
+ *  时间戳以前会被每次整理刷成当天（已修），所以这个日期现在真能当"年龄"看。
+ *  今年的只显示月-日；往年的要带年份，否则 1 月看到 [12-20] 会像是"还没到的那天"。 */
+function impressionMetaLabel(entry) {
+  const raw = Number(entry?.lastObservedAt || entry?.createdAt) || 0;
+  // 坏数据（负数/纳秒级/超范围）会让 toISOString 抛 RangeError，整页记忆一起挂 —— 回退成 ??
+  const at = Number.isFinite(raw) && raw > 0 && raw <= 8.64e15 ? raw : 0;
+  const shanghai = (ts) => new Date(ts + 8 * 60 * 60 * 1000).toISOString();
+  const thisYear = shanghai(Date.now()).slice(0, 4);
+  let when = '??-??';
+  if (at > 0) {
+    const key = shanghai(at);
+    when = key.startsWith(thisYear) ? key.slice(5, 10) : key.slice(0, 10);
+  }
+  const origin = { model: '模型记的', consolidated: '整理改写', manual: '手动编辑' }[entry?.origin] || '早先的';
+  return `[${when} · ${origin}] `;
+}
+
 async function loadMemoryDetail(chatKey) {
   const detail = $('#memory-detail');
   detail.innerHTML = '<div class="empty-hint">加载中…</div>';
@@ -3809,7 +4389,7 @@ async function loadMemoryDetail(chatKey) {
     const rows = members.map((m) => {
       const who = notes[String(m.userId)] || m.name || m.userId || '某人';
       const qq = m.userId ? ` <span class="muted">(QQ ${esc(m.userId)})</span>` : '';
-      const imps = m.impressions.map((e) => `- ${e.content}`).join('\n');
+      const imps = m.impressions.map((e) => `- ${impressionMetaLabel(e)}${e.content}`).join('\n');
       return `<div class="collapsible" open>
         <summary>${esc(who)}${qq}（${m.impressions.length} 条）
           <button class="btn btn-small mem-edit-imp" data-qq="${esc(m.userId)}" data-name="${esc(m.name)}" style="margin-left:8px">编辑</button>
@@ -3922,8 +4502,13 @@ async function loadMemoryDetail(chatKey) {
           });
           el.textContent = '已提交 ✓';
         } catch (err) {
+          // 请求在客户端就失败时不会有 SSE 的 consolidate-done 来收尾：
+          // 必须自己把"整理中"摘掉，否则列表永远显示"整理中…"、计时器也一直空转
+          delete state.consolidating[chatKey];
+          state.consolidateResult[chatKey] = { note: `失败：${err.message}`, at: Date.now(), failed: true };
           el.textContent = '失败';
           alert(`更新记忆失败：${err.message}`);
+          renderMemoryList();
         }
         setTimeout(() => { el.disabled = false; el.textContent = old; }, 2500);
       });
@@ -4012,9 +4597,9 @@ function openMemberImpressModal(chatKey, member) {
   });
   const delBtn = overlay.querySelector('#mi-del');
   if (delBtn) delBtn.addEventListener('click', async () => {
-    if (!await askForConfirmation(`确定删除 ${note || name || userId} 的全部印象？`)) return;
+    if (!await askForConfirmation(`确定删除 ${note || name || userId} 在本会话里的印象？（其它会话记得的印象不受影响；服务端会留可回滚快照）`)) return;
     try {
-      await api(`/api/memory-files/${chatKey.replace(':', '_')}/members/${userId}`, { method: 'DELETE', body: '{}' });
+      await api(`/api/memory-files/${chatKey.replace(':', '_')}/members/${userId}`, { method: 'DELETE', body: JSON.stringify({ confirm: true }) });
       closeModelModal(overlay);
       loadMemoryDetail(chatKey);
     } catch (e) {
@@ -4103,7 +4688,7 @@ async function openMemberNoteModal(qq, chatKey) {
 async function loadSettings() {
   const [cfg, tplData, provData, visionData, priceData] = await Promise.all([
     api('/api/config'),
-    api('/api/persona-templates').catch(() => ({ templates: [] })),
+    api('/api/persona-templates').catch(() => ({ templates: [], failed: true })),
     api('/api/providers').catch(() => ({ providers: [] })),
     api('/api/vision/results').catch(() => ({ results: {}, scanning: false })),
     api('/api/model-prices').catch(() => ({ prices: [], current: null }))
@@ -4115,6 +4700,8 @@ async function loadSettings() {
   state.visionScanning = !!visionData.scanning;
   state.modelPrices = priceData || { prices: [], current: null };
   state.personaTemplates = {};
+  state.personaTemplatesVersion = (state.personaTemplatesVersion || 0) + 1;   // 卡库变了：让卡库/正文的缓存指纹失效
+  state.personaTemplatesFailed = tplData.failed === true;
   for (const t of tplData.templates || []) state.personaTemplates[t.id] = {
     name: t.name, text: t.text, customRules: t.customRules || '',
     behaviorProfile: t.behaviorProfile || 'legacy', builtin: !!t.builtin
@@ -4123,20 +4710,219 @@ async function loadSettings() {
 }
 
 /** 设置页「远程价格表」状态行：来源（在线/缓存/内置）、时间、条目数、错误。 */
+/**
+ * 渠道价目表列表（设置页）：每个渠道的地址、条数、上次时间、错误 + 拉取/删除。
+ * 数据来自 /api/model-prices 的 channelFeeds（后端 src/pricing/channel-prices.js）。
+ */
+function renderChannelFeeds() {
+  const box = $('#channel-feeds');
+  if (!box) return;
+  const feeds = state.modelPrices?.channelFeeds || [];
+  if (!feeds.length) {
+    box.innerHTML = '<div class="muted" style="font-size:12px">还没有配置渠道价目表。用下面的「从渠道自动拉价」探测一次，或直接填 URL。</div>';
+    return;
+  }
+  box.innerHTML = feeds.map((f) => {
+    const when = f.fetchedAt ? fmtTime(f.fetchedAt) : '-';
+    const state1 = f.ok
+      ? `生效中：${f.count} 条 · 上次拉取 ${when}${f.dropped ? ` · ${f.dropped} 条不合格` : ''}`
+      : `拉取失败：${esc(f.error || '未知错误')}${f.count ? ` · 仍在用上次的 ${f.count} 条` : ''}`;
+    return `<div class="cf-row">
+      <div class="cf-main"><strong>${esc(f.vendor)}</strong><span class="muted">${esc(f.url)}</span></div>
+      <div class="cf-state ${f.ok ? 'ok' : 'bad'}">${state1}</div>
+      <div class="cf-actions">
+        <button class="btn btn-small" data-feed-refresh="${esc(f.vendor)}">立即拉取</button>
+        <button class="btn btn-small" data-feed-remove="${esc(f.vendor)}">删除</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/** 探测渠道价：只预览，不写配置。 */
+async function runChannelProbe() {
+  const statusEl = $('#probe-status');
+  const resultEl = $('#probe-result');
+  const btn = $('#probe-btn');
+  const url = String($('#probe-url')?.value || '').trim();
+  if (btn) btn.disabled = true;
+  if (resultEl) { resultEl.classList.add('hidden'); resultEl.innerHTML = ''; }
+  if (statusEl) { statusEl.textContent = '探测中…（读渠道的 /api/pricing）'; statusEl.className = 'hint'; }
+  try {
+    const res = await api('/api/model-prices/probe', { method: 'POST', body: JSON.stringify({ url }) });
+    state.probeResult = res;
+    renderProbeResult(res);
+  } catch (error) {
+    if (statusEl) { statusEl.textContent = `探测失败：${error.message}`; statusEl.className = 'hint error'; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/** 渲染探测结果：识别方式 + 预览表 + 写入按钮（只写入在用的 / 全部写入）。 */
+async function renderProbeResult(res) {
+  const statusEl = $('#probe-status');
+  const resultEl = $('#probe-result');
+  if (!resultEl) return;
+  if (!res?.ok) {
+    if (statusEl) {
+      statusEl.textContent = res?.error || '探测失败';
+      statusEl.className = 'hint error';
+    }
+    if (Array.isArray(res?.tried) && res.tried.length) {
+      resultEl.classList.remove('hidden');
+      resultEl.innerHTML = `<div class="muted" style="font-size:12px">试过的地址：<br>${res.tried.map((u) => esc(u)).join('<br>')}</div>`;
+    }
+    return;
+  }
+  const entries = Object.entries(res.prices || {});
+  const kindTxt = res.kind === 'one-api'
+    ? `按 one-api/new-api 倍率换算（分组 ${esc(res.group || 'default')} ×${res.groupRatio} · 汇率 ${res.usdRate}）`
+    : '直接读到的价目表（元/百万 token）';
+  const vendor = String(res.vendor || state.modelPrices?.currentVendor || '');
+  if (statusEl) {
+    statusEl.textContent = `识别到 ${res.modelCount} 个模型：${kindTxt}`
+      + `${res.skipped ? `；${res.skipped} 条按次计费已跳过` : ''}`;
+    statusEl.className = 'hint';
+  }
+
+  // 在用的模型：当前模型 + 最近 30 天用量里出现过的
+  const used = new Set();
+  const current = String(state.config?.api?.model || '').trim();
+  if (current) used.add(current);
+  try {
+    const stats = await api('/api/usage/stats?range=30');
+    for (const m of (stats?.models || [])) if (m?.model) used.add(String(m.model));
+  } catch { /* 拿不到用量就只按当前模型 */ }
+  const usedHits = entries.filter(([model]) => used.has(model));
+
+  const preview = entries.slice(0, 12).map(([model, p]) => (
+    `<tr><td>${esc(model)}${used.has(model) ? '<span class="uc-chip">在用</span>' : ''}</td>`
+    + `<td class="r">${p.in}</td><td class="r">${p.out}</td><td class="r">${p.cached ?? '-'}</td></tr>`
+  )).join('');
+  resultEl.classList.remove('hidden');
+  resultEl.innerHTML = `
+    <table class="usage-table" style="margin-top:4px">
+      <thead><tr><th>模型</th><th class="r">输入</th><th class="r">输出</th><th class="r">缓存命中</th></tr></thead>
+      <tbody>${preview}</tbody>
+    </table>
+    ${entries.length > 12 ? `<div class="muted" style="font-size:12px;margin-top:4px">…等共 ${entries.length} 个模型</div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-small" id="probe-apply-used"
+        ${usedHits.length ? '' : 'disabled'}>写入在用的 ${usedHits.length} 个</button>
+      <button class="btn btn-small" id="probe-apply-all">全部写入（${entries.length} 个）</button>
+    </div>
+    <div class="hint" style="margin-top:4px">写入后价格以「${esc(vendor || '当前渠道')}：模型」为键存进自定义价格，只对该渠道生效；官方表不动。</div>`;
+
+  const write = async (rows) => {
+    if (!rows.length) return;
+    const hx = $('#probe-status');
+    const vendorLabel = vendor || state.modelPrices?.currentVendor || '';
+    if (!vendorLabel) {
+      if (hx) { hx.textContent = '拿不到当前渠道名，无法写成渠道价：请先在「手动添加提供商」里配好渠道。'; hx.className = 'hint error'; }
+      return;
+    }
+    const patch = {};
+    for (const [model, p] of rows) {
+      patch[`${vendorLabel}：${model}`] = { in: p.in, out: p.out, cached: p.cached ?? p.in, note: p.note || '' };
+    }
+    try {
+      const saved = await api('/api/config', { method: 'POST', body: JSON.stringify({ api: { modelPrices: patch } }) });
+      if (saved?.config) state.config = saved.config;
+      else {
+        state.config = state.config || {};
+        state.config.api = state.config.api || {};
+        state.config.api.modelPrices = { ...(state.config.api.modelPrices || {}), ...patch };
+      }
+      if (hx) { hx.textContent = `已写入 ${rows.length} 条渠道价（${vendorLabel}）。用量页会按新价重算。`; hx.className = 'hint success'; }
+      await loadSettings();
+      if (state.tab === 'usage') loadUsageView({ force: true });
+    } catch (error) {
+      if (hx) { hx.textContent = `写入失败：${error.message}`; hx.className = 'hint error'; }
+    }
+  };
+  $('#probe-apply-used')?.addEventListener('click', () => write(usedHits));
+  $('#probe-apply-all')?.addEventListener('click', () => write(entries));
+}
+
+/** 添加/更新一个渠道价目表并立即拉取。 */
+async function addChannelFeed() {
+  const hint = $('#channel-feed-hint');
+  const vendor = String($('#channel-feed-vendor')?.value || '').trim()
+    || String(state.modelPrices?.currentVendor || '');
+  const url = String($('#channel-feed-url')?.value || '').trim();
+  if (!vendor || !url) {
+    if (hint) { hint.textContent = '渠道名（或先在提供商里配好当前渠道）与价目表 URL 都要填。'; hint.className = 'hint error'; }
+    return;
+  }
+  if (hint) { hint.textContent = `正在拉取 ${vendor} 的价目表…`; hint.className = 'hint'; }
+  try {
+    const res = await api('/api/channel-prices', { method: 'POST', body: JSON.stringify({ vendor, url }) });
+    if (state.modelPrices) state.modelPrices.channelFeeds = res.feeds || [];
+    renderChannelFeeds();
+    const hit = (res.feeds || []).find((f) => f.vendor === vendor);
+    if (hint) {
+      hint.textContent = hit?.ok
+        ? `已生效：${hit.count} 条（${vendor}）`
+        : `配置已保存，但拉取失败：${hit?.error || '未知错误'}`;
+      hint.className = `hint ${hit?.ok ? 'success' : 'error'}`;
+    }
+    if ($('#channel-feed-url')) $('#channel-feed-url').value = '';
+  } catch (error) {
+    if (hint) { hint.textContent = `添加失败：${error.message}`; hint.className = 'hint error'; }
+  }
+}
+
+/** 渠道价目表行上的「立即拉取」「删除」。 */
+async function onChannelFeedAction(event) {
+  const refreshBtn = event.target.closest('[data-feed-refresh]');
+  const removeBtn = event.target.closest('[data-feed-remove]');
+  if (!refreshBtn && !removeBtn) return;
+  const hint = $('#channel-feed-hint');
+  const vendor = refreshBtn ? refreshBtn.dataset.feedRefresh : removeBtn.dataset.feedRemove;
+  try {
+    const res = refreshBtn
+      ? await api('/api/channel-prices/refresh', { method: 'POST', body: JSON.stringify({ vendor }) })
+      : await api('/api/channel-prices/remove', { method: 'POST', body: JSON.stringify({ vendor }) });
+    if (state.modelPrices) state.modelPrices.channelFeeds = res.feeds || [];
+    renderChannelFeeds();
+    if (hint) {
+      if (removeBtn) { hint.textContent = `已删除 ${vendor} 的价目表`; hint.className = 'hint'; }
+      else {
+        const hit = (res.feeds || []).find((f) => f.vendor === vendor);
+        hint.textContent = hit?.ok ? `${vendor}：拉取成功，${hit.count} 条` : `${vendor}：拉取失败（${hit?.error || '未知错误'}）`;
+        hint.className = `hint ${hit?.ok ? 'success' : 'error'}`;
+      }
+    }
+    if (state.tab === 'usage') loadUsageView({ force: true });
+  } catch (error) {
+    if (hint) { hint.textContent = `操作失败：${error.message}`; hint.className = 'hint error'; }
+  }
+}
+
 function renderPriceFeedStatus() {
   const el = $('#price-feed-status');
   if (!el) return;
   const r = state.modelPrices?.remote;
+  el.className = 'hint';
   if (!r || !r.enabled) {
-    el.textContent = '未配置远程价格表 —— 当前使用内置表。填上 URL 并保存后，启动时与每 24 小时自动拉取。';
+    el.textContent = '远程价格表已关闭（只用内置表）。想用项目默认表就把输入框清空保存，或填自己的表 URL。';
     return;
   }
   const when = r.fetchedAt ? fmtTime(r.fetchedAt) : '-';
   const droppedTxt = r.dropped ? `，${r.dropped} 条不合格被丢弃` : '';
+  const from = r.sourceUrl ? ` · ${r.sourceUrl}` : (r.url ? '' : ' · 项目默认地址');
+  // 地址改了、新地址还没拉成功：生效的仍是上一组地址拉到的表。
+  // 这条必须排在"生效中"前面 —— 否则界面会拿新地址 + 旧数据说"已生效"。
+  if (r.sourceStale) {
+    el.className = 'hint error';
+    el.textContent = `新地址还没拉到（${r.error || '拉取失败'}），当前生效的仍是上一次成功拉取的 ${r.sourceUrl}`
+      + `（${when}${droppedTxt}）。想彻底改用新地址，先把它调通。`;
+    return;
+  }
   if (r.ok && r.source === 'remote') {
-    el.textContent = `远程表生效中：${r.count} 条覆盖内置表 · 上次拉取 ${when}${droppedTxt}`;
+    el.textContent = `远程表生效中：${r.count} 条覆盖内置表 · 上次拉取 ${when}${from}${droppedTxt}`;
   } else if (!r.ok && r.source === 'cache') {
-    el.textContent = `服务器暂时拉不到（${r.error || '未知错误'}），正在用上次缓存的远程表（${r.count} 条）· ${when}`;
+    el.textContent = `暂时拉不到（${r.error || '未知错误'}），正在用上次缓存的远程表（${r.count} 条）· ${when}`;
   } else if (!r.ok) {
     el.textContent = `拉取失败（${r.error || '未知错误'}），暂用内置表 · ${when}`;
   } else {
@@ -4145,46 +4931,108 @@ function renderPriceFeedStatus() {
 }
 
 /**
- * 刷新「当前模型单价」卡片。
- *
- * ── 规则（只跟开关绑定，绝不依赖保存状态）──
- *   开关开 → 展示内置官方价，输入框**只读**
- *            匹配不到就是 0，提示关掉开关自填
- *   开关关 → 输入框**可编辑**，优先该模型的自定义价，没设则用全局兜底
- *
- * 匹配判断在本地用 state.modelPrices.prices 直接算，
- * 不读 state.modelPrices.current —— 那是后端按「当时请求的模型」算的，
- * 切换模型后若不重新请求就会拿到旧值。
- */
-/**
  * 在内置价格表里匹配模型（前端版）。
  *
- * 前端是无模块单文件，拿不到 src/model-prices.js 的导出，所以这里实现一份
- * 与后端 matchPriceTable 完全相同的逻辑：精确 → 去前缀 → 最长前缀匹配。
- * 用本地数据算而不是读 state.modelPrices.current —— 后者是后端按
- * 「当时请求的模型」算的，切换模型后不重新请求就会拿到旧值。
+ * 前端是无模块单文件，拿不到 src/pricing/model-prices.js 的导出，所以这里实现一份
+ * 与后端 matchModelId 完全相同的逻辑（改后端时这里要一起改）：
+ *   候选名（原样 → 去渠道前缀 → 去叫法后缀/日期后缀 → 点号归并）
+ *   → 别名 → 表内精确 → 前缀匹配（取最长）
+ * 返回条目并带上 confidence/via：'alias'（按别名）/ 'fuzzy'（近似）要在界面上标出来。
+ * 别名表来自 /api/model-prices 的 aliases（内置 + 远程）。
  */
-function matchPriceTable(modelId, table) {
-  const raw = String(modelId || '').trim();
+function matchPriceTable(modelId, table, aliases = null) {
+  const raw = String(modelId || '').trim().toLowerCase();
   if (!raw) return null;
-  const id = raw.toLowerCase();
-  const list = table || [];
+  const list = Array.isArray(table) ? table : Object.entries(table || {}).map(([id, e]) => ({ id, ...e }));
+  if (!list.length) return null;
+  const aliasMap = aliases || state.modelPrices?.aliases || {};
 
-  const exact = list.find((x) => String(x.id).toLowerCase() === id);
-  if (exact) return exact;
-
-  if (id.includes('/')) {
-    const bare = id.split('/').pop();
-    const hit = list.find((x) => String(x.id).toLowerCase() === bare);
-    if (hit) return hit;
-  }
-
-  let best = null;
+  const byId = new Map();
   for (const x of list) {
-    const xid = String(x.id).toLowerCase();
-    if (id.startsWith(xid) && (!best || xid.length > String(best.id).length)) best = x;
+    const key = String(x?.id ?? '').toLowerCase();
+    if (key) byId.set(key, x);
   }
-  return best;
+
+  // 候选名（与后端 modelIdCandidates 一致）
+  const candidates = [];
+  const push = (id, confidence, via) => {
+    if (id && !candidates.some((c) => c.id === id)) candidates.push({ id, confidence, via });
+  };
+  const suffixes = [':free', ':beta', ':latest', '-free', '-beta', '-latest',
+    '-preview', '-exp', '-experimental', '-thinking', '-nothink', '-nonthinking', '-non-thinking'];
+  push(raw, 'exact', '');
+  const bare = raw.includes('/') ? raw.slice(raw.indexOf('/') + 1) : raw;
+  if (bare !== raw) push(bare, 'exact', '去渠道前缀');
+  for (const base of [raw, bare]) {
+    let id = base;
+    for (const suffix of suffixes) {
+      if (id.endsWith(suffix) && id.length > suffix.length) id = id.slice(0, -suffix.length);
+    }
+    if (id !== base) push(id, 'normalized', '去掉叫法后缀');
+    const noDate = id.replace(/-(?:\d{4}|\d{6}|\d{8})$/, '');
+    if (noDate !== id) push(noDate, 'normalized', '去掉日期快照后缀');
+  }
+  for (const cand of [...candidates]) {
+    const minor = cand.id.replace(/v(\d+)\.(\d+)/g, 'v$1');
+    if (minor !== cand.id) push(minor, 'fuzzy', '点号版本归并');
+    const dashed = cand.id.replace(/\./g, '-');
+    if (dashed !== cand.id) push(dashed, 'fuzzy', '点号转连字符');
+  }
+
+  for (const cand of candidates) {
+    const alias = aliasMap[cand.id];
+    if (alias && byId.has(alias)) {
+      return { ...byId.get(alias), matched: alias, confidence: 'alias', via: `${cand.id} → ${alias}` };
+    }
+    if (byId.has(cand.id)) {
+      return { ...byId.get(cand.id), matched: cand.id, confidence: cand.confidence, via: cand.via };
+    }
+  }
+
+  for (const cand of candidates) {
+    let best = null;
+    for (const key of byId.keys()) {
+      if (
+        cand.id === key
+        || cand.id.startsWith(`${key}/`) || cand.id.startsWith(`${key}-`)
+        || cand.id.startsWith(`${key}@`) || cand.id.startsWith(`${key}:`)
+      ) {
+        if (!best || key.length > best.length) best = key;
+      }
+    }
+    if (best) return { ...byId.get(best), matched: best, confidence: 'prefix', via: '前缀匹配' };
+  }
+  return null;
+}
+
+/**
+ * 渠道倍率：没填 = 1；填了 0 就是 0（免费渠道）。与后端 parseMultiplier 保持一致 ——
+ * 不能用 `Number(x) || 1`，那会把用户填的 0 悄悄变成原价。
+ */
+function mulOf(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return 1;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
+/** 价格展示：最多 4 位小数并去掉尾随 0（0.0500 → 0.05）。 */
+function priceTxt(value) {
+  return (Number(value) || 0).toFixed(4).replace(/\.?0+$/, '') || '0';
+}
+
+/**
+ * 手填的一条价目算不算"填了价"：判据是写没写 in/out 字段（0 是合法价，代表免费），
+ * 与后端 hasManualPrice 保持一致。
+ */
+function hasOwnPrice(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (String(entry.billing ?? '').trim()) return true;
+  for (const key of ['in', 'out']) {
+    const value = entry[key];
+    if (value === undefined || value === null || String(value).trim() === '') continue;
+    if (Number.isFinite(Number(value))) return true;
+  }
+  return false;
 }
 
 /**
@@ -4205,6 +5053,8 @@ function matchPriceTable(modelId, table) {
 function refreshModelPriceCard() {
   const modelEl = $('#pc-model');
   const noteEl = $('#pc-note');
+  const effEl = $('#pc-effective');
+  const inputNoteEl = $('#pc-input-note');
   const inEl = $('#cfg-price-in');
   const outEl = $('#cfg-price-out');
   const cachedEl = $('#cfg-price-cached');
@@ -4218,69 +5068,409 @@ function refreshModelPriceCard() {
   const modelInput = $('#cfg-model');
   const useOfficial = box ? box.checked : (api.useOfficialPrice !== false);
   const model = String((modelInput ? modelInput.value : api.model) || '').trim();
+  const vendor = state.modelPrices?.currentVendor || '';
 
-  modelEl.textContent = model || '（未选择模型）';
+  modelEl.textContent = model ? (vendor ? `${model} · ${vendor}` : model) : '（未选择模型）';
+
+  // ── 两组控件的分工（2026-09-21 拆开，别再合并）──
+  //   #pc-effective   生效价：查价链路算出来的结果，只读展示
+  //   #cfg-price-*    自填单价：只在"保存真的会生效"时可编辑 ——
+  //                   官方价开关开着、或这个模型走渠道价时，保存会被守卫跳过，
+  //                   那就不该让用户以为改了有用（判据与 collectConfig 的 priceEditable 一致）。
+  const customMap = api.modelPrices || {};
+  const ownPrice = (model && hasOwnPrice(customMap[model])) ? customMap[model] : null;
+  const channelKey = model && vendor ? `${vendor}：${model}` : '';
+  const hasChannelPrice = Boolean(channelKey && hasOwnPrice(customMap[channelKey]));
+  const editable = !useOfficial && !hasChannelPrice;
 
   if (!model) {
+    if (effEl) effEl.textContent = '—';
     [inEl, outEl, cachedEl].forEach((el) => { if (el) { el.value = 0; el.disabled = true; } });
     if (noteEl) noteEl.textContent = '先在上方选择一个模型，才能查看/设定它的单价。';
+    if (inputNoteEl) inputNoteEl.textContent = '';
     return;
   }
 
-  let shown, locked, sourceTxt;
+  // 生效价按与后端一致的链路算：渠道价 → 自定义价 → 账户口径 → 渠道价目表 →
+  // 官方/远程表（×倍率）→ 兜底 → 未定价。
+  // 界面开关与已保存配置一致时，直接用后端算好的权威结果（渠道价目表那层只有后端知道）；
+  // 只有用户刚拨了开关还没保存时才临时本地重算，避免"按了没反应"。
+  const savedOfficial = api.useOfficialPrice !== false;
+  const eff = useOfficial === savedOfficial
+    ? effectivePriceFor(model, vendor)
+    : effectivePriceFor(model, vendor, { useOfficialPrice: useOfficial });
+  let sourceTxt = '';
 
-  if (useOfficial) {
-    locked = true;
-    const official = matchPriceTable(model, state.modelPrices?.prices || []);
-    if (official) {
-      shown = {
-        in: official.in ?? 0,
-        out: official.out ?? 0,
-        cached: official.cached == null ? official.in : official.cached
-      };
-      const tag = official.src === 'official' ? '厂商官方定价页直取' : '二手折算，仅供参考';
-      sourceTxt = `内置官方价格表已匹配到「${official.id}」（${tag}）。开关开启时只读 —— 要自定义请关闭上方开关。`;
-      if (official.peak) {
-        sourceTxt += `　该模型分时段计价（高峰 ${official.peak.in}/${official.peak.out}/${official.peak.cached}）。`;
-      }
-      if (official.image) {
-        sourceTxt += '　支持图片输入：' + (official.image.mode === 'capped'
-          ? `每张封顶 ${official.image.maxTokensPerImage} token`
-          : official.image.mode === 'pixel'
-            ? `每张 = 宽×高/${official.image.divisor}+${official.image.base} token`
-            : '换算规则待补');
-      }
-    } else {
-      shown = { in: 0, out: 0, cached: 0 };
-      sourceTxt = '';
-    }
+  if (eff.billing === 'flat') {
+    const periodTxt = eff.period === 'day' ? '元/天' : '元/月';
+    sourceTxt = `包月/订阅：¥${Number(eff.amount) || 0}${periodTxt} —— 这些调用不按 token 计价，`
+      + '用量页把订阅费作为固定支出单列，不计入按量成本。改计费方式用下面的「给这个模型定价」。';
+  } else if (eff.billing === 'none') {
+    sourceTxt = '本地/自建模型：只统计 token，不计费（也不算"未定价"）。';
+  } else if (eff.source === 'channel') {
+    sourceTxt = `正在使用你为「${vendor}」这个渠道单独填的价（实付口径，覆盖官方价）。`;
+  } else if (eff.source === 'channel-table') {
+    sourceTxt = `正在使用「${vendor}」这个渠道拉到的价目表（实付口径）。`;
+  } else if (eff.source === 'custom') {
+    sourceTxt = '正在使用你为这个模型填的价（实付口径，覆盖官方价）。';
+  } else if (eff.source === 'remote') {
+    sourceTxt = '这个价来自远程价格表（你配置的那份），可以直接改；改完就变成你自己的价。';
+  } else if (eff.source === 'multiplier') {
+    sourceTxt = `正在按「${eff.via || `官方价 ×${mulOf(api.costMultiplier)}`}」折算（你声明的渠道价）——`
+      + '这是实付口径的估算，不是账单原样；换口径在下面的「成本怎么算」。';
+  } else if (eff.source === 'manual') {
+    sourceTxt = '官方价格表没有命中，正在用「全局兜底单价」估算 —— 想让这个模型更准，用下面的「给这个模型定价」。';
+  } else if (eff.source === 'unmatched') {
+    sourceTxt = `未定价：价格表里没有「${model}」这一条 —— 用量页会把它的成本算成 0（不是免费）。`
+      + '用下面的「给这个模型定价」填一条就行。';
   } else {
-    locked = false;
-    // 自定义价读已保存的配置（那才是用户存的），但模型身份用实时模型名去查
-    const custom = (api.modelPrices || {})[model];
-    if (custom && (Number(custom.in) || Number(custom.out))) {
-      shown = {
-        in: Number(custom.in) || 0,
-        out: Number(custom.out) || 0,
-        cached: custom.cached == null ? Number(custom.in) || 0 : Number(custom.cached) || 0
-      };
-      sourceTxt = '正在使用你为该模型设定的单价。';
-    } else {
-      shown = {
-        in: Number(api.priceInputPerM) || 0,
-        out: Number(api.priceOutputPerM) || 0,
-        cached: Number(api.priceCachedPerM) || Number(api.priceInputPerM) || 0
-      };
-      sourceTxt = '已关闭官方价格表，可在此填写该模型的单价（也可在「批量自定义价格编辑」里为多个模型分别设定）。';
+    const tag = eff.src === 'official' ? '厂商官方定价页直取' : '二手折算，仅供参考';
+    sourceTxt = `内置官方价格表已匹配到「${eff.matched || model}」（${tag}）。这是**估算**口径，不是你的账单；`
+      + '要按实付价算，用下面的「给这个模型定价」。';
+    if (eff.confidence === 'alias') {
+      sourceTxt += `　按别名映射：${eff.via}。`;
+    } else if (eff.confidence === 'fuzzy') {
+      sourceTxt += `　近似匹配：${eff.via}（价格可能与实际型号有差异）。`;
+    } else if (eff.confidence === 'normalized') {
+      sourceTxt += `　匹配时${eff.via}。`;
+    }
+    if (eff.peak) {
+      sourceTxt += `　该模型分时段计价（高峰 ${eff.peak.in}/${eff.peak.out}/${eff.peak.cached}）。`;
+    }
+    if (eff.image) {
+      sourceTxt += '　支持图片输入：' + (eff.image.mode === 'capped'
+        ? `每张封顶 ${eff.image.maxTokensPerImage} token`
+        : eff.image.mode === 'pixel'
+          ? `每张 = 宽×高/${eff.image.divisor}+${eff.image.base} token`
+          : '换算规则待补');
     }
   }
 
-  if (inEl) { inEl.value = shown.in ?? 0; inEl.disabled = locked; }
-  if (outEl) { outEl.value = shown.out ?? 0; outEl.disabled = locked; }
-  if (cachedEl) { cachedEl.value = shown.cached ?? 0; cachedEl.disabled = locked; }
+  // 生效价：只读展示（包月/不计费/未定价直接写字，不摆一排数字）
+  if (effEl) {
+    effEl.textContent = eff.billing === 'flat'
+      ? `包月 ¥${Number(eff.amount) || 0}/${eff.period === 'day' ? '天' : '月'}`
+      : eff.billing === 'none'
+        ? '不计费（只统计 token）'
+        : eff.unpriced
+          ? '未定价（价格表里没有这个模型）'
+          : `输入 ${priceTxt(eff.in)} · 输出 ${priceTxt(eff.out)} · 缓存命中 ${priceTxt(eff.cached)}（元/百万）`;
+  }
+
+  // 自填单价：只放"用户自己填的数"（该模型的自定义价 → 全局兜底），
+  // 不再把生效价填进来 —— 那正是过去"一个控件兼两种含义"的根源。
+  const savedIn = ownPrice ? ownPrice.in : api.priceInputPerM;
+  const savedOut = ownPrice ? ownPrice.out : api.priceOutputPerM;
+  const savedCached = ownPrice ? ownPrice.cached : api.priceCachedPerM;
+  if (inEl) { inEl.value = Number(savedIn) || 0; inEl.disabled = !editable; }
+  if (outEl) { outEl.value = Number(savedOut) || 0; outEl.disabled = !editable; }
+  if (cachedEl) { cachedEl.value = Number(savedCached) || 0; cachedEl.disabled = !editable; }
   const card = $('#model-price-card');
-  if (card) card.classList.toggle('locked', locked);
+  if (card) card.classList.toggle('locked', !editable);
+  if (inputNoteEl) {
+    inputNoteEl.textContent = editable
+      ? '填你的实付价，保存后覆盖上面的价格表；三项全 0 = 清除自定义。'
+      : hasChannelPrice
+        ? `这个模型用的是「${vendor}」的渠道价（只对该渠道生效），所以这三个框停用；要改就用下面的「给这个模型定价」另存一条。`
+        : '「用内置官方价格表估算」开着，这三个框保存时会被忽略；走中转站要自填，先关掉上面那个开关。';
+  }
   if (noteEl) noteEl.textContent = sourceTxt;
+}
+
+/**
+ * 前端版查价链路（与后端 resolveModelPrice 保持一致，改后端时要一起改）：
+ *   ① 渠道价 modelPrices[渠道：模型]  ② 自定义价 modelPrices[模型]
+ *   ③ 官方/远程价格表（useOfficialPrice !== false 时）  ④ 全局兜底单价  ⑤ 未定价
+ * 返回里带 kind：actual（实付）/ estimate（估算）/ unpriced（未定价），界面据此标口径。
+ *
+ * @param {string} model 模型 id
+ * @param {string} vendor 渠道名（可空）
+ * @param {object} [overrides] 覆盖 config.api 的实时值（如界面上的开关）
+ */
+function effectivePriceFor(model, vendor, overrides = null) {
+  const api = { ...((state.config || {}).api || {}), ...(overrides || {}) };
+  const customMap = api.modelPrices || {};
+  const id = String(model || '').trim();
+  if (!id) {
+    return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: true, billing: 'token' };
+  }
+
+  // 没有临时覆盖时，优先用后端算好的权威结果（渠道价目表那层只有后端知道）
+  const detail = state.modelPrices?.currentDetail;
+  if (!overrides && detail && String(detail.model || '') === id
+    && String(detail.vendor || '') === String(vendor || '')) {
+    return { ...detail };
+  }
+
+  // 计费方式（与后端 billingOf 一致）
+  const billingShape = (entry) => {
+    const raw = String(entry?.billing ?? '').trim().toLowerCase();
+    if (raw === 'flat') {
+      return { billing: 'flat', amount: Number(entry.amount) || 0, period: String(entry.period) === 'day' ? 'day' : 'month' };
+    }
+    if (raw === 'none') return { billing: 'none', amount: 0, period: 'month' };
+    return { billing: 'token', amount: 0, period: 'month' };
+  };
+
+  const customShape = (entry, source, matched, via) => {
+    const bill = billingShape(entry);
+    const perToken = bill.billing === 'token';
+    return {
+      in: perToken ? Number(entry.in) || 0 : 0,
+      out: perToken ? Number(entry.out) || 0 : 0,
+      cached: perToken ? (entry.cached == null ? Number(entry.in) || 0 : Number(entry.cached) || 0) : 0,
+      peak: perToken ? (entry.peak || null) : null,
+      source,
+      matched,
+      via,
+      confidence: source,
+      kind: 'actual',
+      unpriced: false,
+      locked: false,
+      ...bill
+    };
+  };
+
+  if (vendor) {
+    const key = `${vendor}：${id}`;
+    const hit = customMap[key];
+    if (hasOwnPrice(hit)) return customShape(hit, 'channel', key, `渠道价（${vendor}）`);
+  }
+  const own = customMap[id];
+  if (hasOwnPrice(own)) return customShape(own, 'custom', id, '自定义价');
+
+  // 账户口径：按月付（与后端 ③ 一致）—— 固定月费，不按 token 算
+  const costMode = String(api.costMode || 'official');
+  const monthlyFee = Number(api.costMonthlyFee) || 0;
+  if (costMode === 'subscription' && monthlyFee > 0) {
+    return {
+      in: 0, out: 0, cached: 0, peak: null, image: null,
+      billing: 'flat', amount: monthlyFee, period: 'month',
+      source: 'subscription', matched: null, via: `按月付 ¥${monthlyFee}/月`,
+      confidence: 'manual', kind: 'actual', unpriced: false, locked: false
+    };
+  }
+
+  if (api.useOfficialPrice !== false) {
+    const hit = matchPriceTable(id, state.modelPrices?.prices || [], state.modelPrices?.aliases || null);
+    if (hit) {
+      const remote = hit.remote === true;
+      // 渠道倍率（与后端 ⑤ 一致）：官方/远程表的价按用户声明的倍率折算，
+      // 折算后是"实付"口径，所以卡片不能再按"官方估算"解释。
+      const mul = costMode === 'multiplier' ? mulOf(api.costMultiplier) : 1;
+      const discounted = mul !== 1;
+      const scale = (value) => Number((((Number(value) || 0) * mul)).toFixed(6));
+      const peak = hit.peak
+        ? (discounted
+          ? { in: scale(hit.peak.in), out: scale(hit.peak.out), cached: hit.peak.cached == null ? scale(hit.cached) : scale(hit.peak.cached) }
+          : hit.peak)
+        : null;
+      const bill = billingShape(hit);
+      const perToken = bill.billing === 'token';
+      return {
+        in: perToken ? scale(hit.in) : 0,
+        out: perToken ? scale(hit.out) : 0,
+        cached: perToken ? (hit.cached == null ? scale(hit.in) : scale(hit.cached)) : 0,
+        peak: perToken ? peak : null,
+        image: perToken ? (hit.image || null) : null,
+        src: hit.src || '',
+        source: discounted ? 'multiplier' : (remote ? 'remote' : 'official'),
+        matched: hit.matched,
+        confidence: discounted ? 'manual' : (hit.confidence || 'exact'),
+        via: discounted ? `官方价 ×${mul}` : (hit.via || ''),
+        kind: discounted ? 'actual' : 'estimate',
+        unpriced: false,
+        locked: discounted ? false : !remote,
+        ...bill
+      };
+    }
+    return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: true, billing: 'token' };
+  }
+
+  const fi = Number(api.priceInputPerM) || 0;
+  const fo = Number(api.priceOutputPerM) || 0;
+  if (fi || fo) {
+    return {
+      in: fi,
+      out: fo,
+      cached: Number(api.priceCachedPerM) || fi,
+      source: 'manual',
+      matched: null,
+      via: '全局兜底单价',
+      confidence: 'manual',
+      kind: 'estimate',
+      unpriced: false,
+      locked: false,
+      billing: 'token',
+      amount: 0,
+      period: 'month'
+    };
+  }
+  return { in: 0, out: 0, cached: 0, source: 'unmatched', kind: 'unpriced', unpriced: true, confidence: 'none', via: '', locked: false, billing: 'token' };
+}
+
+/** 定价弹窗当前编辑的对象：{ model, vendor }。 */
+let priceDialogState = null;
+
+/** 计费方式切换时：包月只显示"金额"，token 只显示三档单价。 */
+function syncPriceDialogBilling() {
+  const billing = String($('#price-dialog-billing')?.value || 'token');
+  const flatRow = $('#price-dialog-flat-row');
+  for (const id of ['#price-dialog-token-row', '#price-dialog-token-row-2', '#price-dialog-token-row-3']) {
+    const el = $(id);
+    if (el) el.style.display = billing === 'flat' ? 'none' : '';
+  }
+  if (flatRow) flatRow.style.display = billing === 'flat' ? '' : 'none';
+  const hint = $('#price-dialog-hint');
+  if (hint) {
+    hint.textContent = billing === 'flat'
+      ? '包月/订阅：这些调用不按 token 计价，面板把它作为固定支出单列（不计入按量成本）。'
+      : billing === 'none'
+        ? '本地/自建模型：只统计 token，不计费（也不再算"未定价"）。'
+        : '只写这一条价：同一个模型在不同渠道可以分别定价；官方价格表不会被改动，用量页会立刻按新价重算。';
+  }
+}
+
+/**
+ * 打开「给这个模型定价」弹窗。
+ * 渠道下拉：当前渠道（默认）→ 全部渠道 → 配置里已出现过的渠道。
+ * 预填当前生效价；保存只写这一条（官方表不动）。
+ */
+function openPriceDialog({ model, vendor } = {}) {
+  const dlg = $('#price-dialog');
+  if (!dlg) return;
+  const cfg = state.config || {};
+  const api = cfg.api || {};
+  const customMap = api.modelPrices || {};
+  const currentVendor = String(vendor || state.modelPrices?.currentVendor || '');
+  const modelId = String(model || api.model || '').trim();
+  priceDialogState = { model: modelId, vendor: currentVendor };
+
+  const channels = new Set();
+  for (const key of Object.keys(customMap)) {
+    const i = key.indexOf('：');
+    if (i > 0) channels.add(key.slice(0, i));
+  }
+  if (currentVendor) channels.delete(currentVendor);
+  const options = [];
+  if (currentVendor) options.push({ value: currentVendor, label: `当前渠道（${currentVendor}）` });
+  options.push({ value: '', label: '全部渠道（不分渠道）' });
+  for (const v of [...channels].sort()) options.push({ value: v, label: v });
+  const select = $('#price-dialog-channel');
+  if (select) {
+    select.innerHTML = options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+    select.value = currentVendor;
+  }
+
+  const eff = effectivePriceFor(modelId, currentVendor);
+  for (const [id, value] of [['#price-dialog-in', eff.in], ['#price-dialog-out', eff.out], ['#price-dialog-cached', eff.cached]]) {
+    const el = $(id);
+    if (el) el.value = Number(value) || 0;
+  }
+  const billingSel = $('#price-dialog-billing');
+  if (billingSel) billingSel.value = eff.billing === 'flat' ? 'flat' : (eff.billing === 'none' ? 'none' : 'token');
+  const amountEl = $('#price-dialog-amount');
+  if (amountEl) amountEl.value = Number(eff.amount) || '';
+  const periodEl = $('#price-dialog-period');
+  if (periodEl) periodEl.value = eff.period === 'day' ? 'day' : 'month';
+  syncPriceDialogBilling();
+
+  const title = $('#price-dialog-title');
+  if (title) title.textContent = modelId ? `给「${modelId}」定价` : '给模型定价';
+  const sub = $('#price-dialog-sub');
+  if (sub) {
+    sub.textContent = eff.kind === 'unpriced'
+      ? '这个模型现在没有价（成本算 0）。填一条只影响它，官方价格表不会被改动。'
+      : `当前生效价来自：${eff.via || eff.source}。保存后这条价优先于官方价。`;
+  }
+  const result = $('#price-dialog-result');
+  if (result) { result.textContent = ''; result.className = 'control-result muted'; }
+  const delBtn = $('#price-dialog-delete');
+  if (delBtn) delBtn.style.display = (eff.source === 'channel' || eff.source === 'custom') ? '' : 'none';
+  if (!dlg.open) dlg.showModal();
+}
+
+/** 保存定价弹窗：只写 modelPrices 的一条（键 = 渠道：模型 或 模型）。 */
+async function savePriceDialog() {
+  const st = priceDialogState;
+  const result = $('#price-dialog-result');
+  if (!st?.model) return;
+  const vendor = String($('#price-dialog-channel')?.value || '');
+  const billing = String($('#price-dialog-billing')?.value || 'token');
+  const num = (sel) => Number(String($(sel)?.value ?? '').trim()) || 0;
+  const key = vendor ? `${vendor}：${st.model}` : st.model;
+  let entry;
+  if (billing === 'flat') {
+    const amount = num('#price-dialog-amount');
+    if (!(amount > 0)) {
+      if (result) { result.textContent = '包月要填金额（元）。'; result.className = 'control-result error'; }
+      return;
+    }
+    entry = { billing: 'flat', amount, period: String($('#price-dialog-period')?.value || 'month') };
+  } else if (billing === 'none') {
+    entry = { billing: 'none' };
+  } else {
+    const inV = num('#price-dialog-in');
+    const outV = num('#price-dialog-out');
+    if (!inV && !outV) {
+      if (result) { result.textContent = '输入/输出至少要填一个非 0 的数。'; result.className = 'control-result error'; }
+      return;
+    }
+    entry = { in: inV, out: outV, cached: num('#price-dialog-cached') };
+  }
+  try {
+    const res = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ api: { modelPrices: { [key]: entry } } })
+    });
+    if (res?.config) state.config = res.config;
+    else {
+      // 接口没回整体配置时，本地也要记上，否则卡片/重算还在用旧价
+      state.config = state.config || {};
+      state.config.api = state.config.api || {};
+      state.config.api.modelPrices = { ...(state.config.api.modelPrices || {}), [key]: entry };
+    }
+    if (result) { result.textContent = `已保存：${key}`; result.className = 'control-result success'; }
+    $('#price-dialog')?.close();
+    refreshModelPriceCard();
+    // 用量页正在看的话，让它重算（价格变了）
+    if (state.tab === 'usage') loadUsageView({ force: true });
+  } catch (error) {
+    if (result) { result.textContent = `保存失败：${error.message}`; result.className = 'control-result error'; }
+  }
+}
+
+/** 删除当前正在生效的那条自定义/渠道价。 */
+async function deletePriceDialog() {
+  const st = priceDialogState;
+  const result = $('#price-dialog-result');
+  if (!st?.model) return;
+  const vendor = String($('#price-dialog-channel')?.value || '');
+  const key = vendor ? `${vendor}：${st.model}` : st.model;
+  const next = { ...((state.config?.api?.modelPrices) || {}) };
+  if (!(key in next)) {
+    if (result) { result.textContent = `没有找到 ${key} 这条自定义价。`; result.className = 'control-result error'; }
+    return;
+  }
+  delete next[key];
+  try {
+    const res = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ api: { modelPrices: { __replace__: next } } })
+    });
+    if (res?.config) state.config = res.config;
+    else {
+      state.config = state.config || {};
+      state.config.api = state.config.api || {};
+      state.config.api.modelPrices = next;
+    }
+    if (result) { result.textContent = `已删除：${key}`; result.className = 'control-result success'; }
+    $('#price-dialog')?.close();
+    refreshModelPriceCard();
+    if (state.tab === 'usage') loadUsageView({ force: true });
+  } catch (error) {
+    if (result) { result.textContent = `删除失败：${error.message}`; result.className = 'control-result error'; }
+  }
 }
 
 /**
@@ -4362,9 +5552,14 @@ function openBatchPriceModal() {
     const c = edits[m] || {};
     // 官方价不占列（太挤）：placeholder 里有，模型名悬停也有
     const offTitle = off ? `官方价：输入 ${off.in} / 输出 ${off.out} / 缓存 ${off.cached ?? '—'}（元/百万）` : '官方价格表未收录';
+    // 计费方式在这里看不到就会"静默变味"：包月/本地条目必须自己标出来，
+    // 否则用户改一下缓存列，包月就变成了按 token 计价。
+    const billBadge = c.billing === 'flat'
+      ? `<span class="uc-chip" title="包月/订阅：按固定支出计，不按 token 计价">包月 ${Number(c.amount) || 0}${c.period === 'day' ? '/天' : '/月'}</span>`
+      : (c.billing === 'none' ? '<span class="uc-chip" title="本地/自建模型：只统计 token，不计费">本地</span>' : '');
     return `
       <tr data-model="${esc(m)}">
-        <td title="${esc(offTitle)}">${esc(p.names[m] || m)}<div class="muted" style="font-size:11px">${esc(m)}</div></td>
+        <td title="${esc(offTitle)}">${esc(p.names[m] || m)}${billBadge}<div class="muted" style="font-size:11px">${esc(m)}</div></td>
         <td><input type="number" step="0.01" min="0" class="bp-in" value="${esc(c.in ?? '')}" placeholder="${off ? off.in : 0}" /></td>
         <td><input type="number" step="0.01" min="0" class="bp-out" value="${esc(c.out ?? '')}" placeholder="${off ? off.out : 0}" /></td>
         <td><input type="number" step="0.01" min="0" class="bp-cached" value="${esc(c.cached ?? '')}" placeholder="${off ? (off.cached ?? 0) : 0}" /></td>
@@ -4394,8 +5589,20 @@ function openBatchPriceModal() {
           return v === '' ? null : (Number(v) || 0);
         };
         const i = num('.bp-in'), o = num('.bp-out'), c = num('.bp-cached');
-        if (i === null && o === null && c === null) delete edits[m];
-        else edits[m] = { in: i ?? 0, out: o ?? 0, cached: c ?? (i ?? 0) };
+        if (i === null && o === null && c === null) {
+          delete edits[m];
+          return;
+        }
+        // 计费方式不在这张表里编辑：只动缓存列不该把"包月/本地"静默变成按 token 计价。
+        // 只有在输入/输出列写了数字（= 明确要按 token 定价）时才转成 token 口径。
+        const prev = edits[m] || {};
+        const tokenIntent = i !== null || o !== null;
+        // 输入/输出空着、只填了缓存命中：这不算"要按 token 定价"。写进去会得到
+        // in:0/out:0 的"明确免费价"，把官方价变成 0 元 —— 按"清掉自定义价"处理。
+        if (!tokenIntent && !String(prev.billing || '').trim()) { delete edits[m]; return; }
+        const next = { ...prev, in: i ?? 0, out: o ?? 0, cached: c ?? (i ?? 0) };
+        if (tokenIntent) { delete next.billing; delete next.amount; delete next.period; }
+        edits[m] = next;
       };
       tr.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', sync));
     });
@@ -4437,7 +5644,7 @@ function openBatchPriceModal() {
       refreshModelPriceCard();
       $('#provider-action-hint').textContent = `已保存 ${Object.keys(next).length} 个模型的自定义单价。`;
     } catch (e) {
-      hintEl.textContent = `保存失败：${esc(e.message)}`;
+      hintEl.textContent = `保存失败：${e.message}`;   // textContent 不吃 HTML，esc() 会把实体原样显示出来
     }
   });
 }
@@ -4456,49 +5663,477 @@ function currentPersonaId() {
   );
 }
 
-function syncPersonaButtons() {
-  const id = currentPersonaId();
-  const tpl = state.personaTemplates[id];
-  const delBtn = $('#del-persona-btn');
-  if (delBtn) delBtn.classList.toggle('hidden', !id.startsWith('custom_'));
-  const input = $('#cfg-persona-pick');
-  if (input) input.value = tpl?.name || '';
-  const hint = $('#persona-pick-hint');
-  if (hint) hint.textContent = tpl ? (tpl.builtin ? '内置人设' : '自定义人设') : '';
+/** 草稿与生效配置不一致时，卡库/详情头要跟着草稿说，不能只认已保存的那份。 */
+function personaDraftState() {
+  const cfg = state.config || {};
+  return {
+    id: currentPersonaId(),
+    roleText: $('#cfg-roletext')?.value ?? (cfg.persona?.roleText || ''),
+    behaviorProfile: $('#cfg-behavior-profile')?.value || cfg.persona?.behaviorProfile || 'legacy',
+    customRules: $('#cfg-customrules')?.value ?? (cfg.persona?.customRules || '')
+  };
 }
 
-function applyPersonaDraft(tpl) {
+function syncPersonaButtons() {
+  const draft = personaDraftState();
+  refreshPersonaFold(draft.roleText);
+  const tpl = state.personaTemplates[draft.id];
+  // 卡库还没读出来时，"匹配不到任何卡"并不等于"正文被改过" —— 下面几处提示都要区分这两种情况
+  const templatesKnown = Object.keys(state.personaTemplates || {}).length > 0;
+  const delBtn = $('#del-persona-btn');
+  if (delBtn) delBtn.classList.toggle('hidden', !String(draft.id).startsWith('custom_'));
+  const hint = $('#persona-pick-hint');
+  // 正文与内置模板不一致时（升级改了模板而实例里存的是旧正文，或管理员手改过），
+  // 选择框会是空的，容易让人以为人设丢了 —— 用提示行说明这是按自定义处理。
+  const hasText = String(draft.roleText || '').trim().length > 0;
+  if (hint) {
+    hint.textContent = tpl
+      ? (tpl.builtin ? `内置卡：跟着 roles/ 下的卡文件走，改卡重启即生效。` : `自定义卡「${tpl.name}」。`)
+      : (hasText
+        ? (templatesKnown ? '当前正文与内置模板不一致（按自定义处理，可在上面的卡库里点一张卡换回来）'
+          : (state.personaTemplatesFailed ? '人设卡读取失败，刷新页面重试。' : '正在读取人设卡…'))
+        : '');
+  }
+  // 详情视图：正文、档位、绑定状态都按草稿渲染。
+  // 「恢复本节 / 恢复整张卡」按**草稿那张卡**取文件正文（不是 config 里已保存的绑定）——
+  // 刚在卡库点了另一张卡、还没保存时，用旧绑定会把两张卡的内容拼在一起。
+  const baseTpl = state.personaTemplates[personaBaseCardId()];
+  const fileText = baseTpl?.builtin ? baseTpl.text : '';
+  // 只有内容真的变了才重画：人设页的输入事件（改名字、改附加规则、改正文）都会走到这里，
+  // 每次都重画 15KB 正文 + 5 张卡的话，打字时每敲一键都要多花约 10ms。
+  const viewKey = [draft.roleText, personaEditingSection,
+    [...personaCollapsedSections].sort((a, b) => a - b).join(','), fileText].join('\u0000');
+  const detail = $('#persona-card-view');
+  if (detail && viewKey !== personaViewKey) {
+    personaViewKey = viewKey;
+    detail.innerHTML = renderPersonaCardBody(draft.roleText, {
+      collapsed: personaCollapsedSections,
+      editing: personaEditingSection,
+      fileText
+    });
+  }
+  const restoreBtn = $('#restore-persona-btn');
+  if (restoreBtn) {
+    const dirty = Boolean(fileText) && String(draft.roleText || '').trim() !== String(fileText).trim();
+    restoreBtn.classList.toggle('hidden', !dirty);
+  }
+  const note = $('#persona-edit-note');
+  if (note) {
+    // 提示只在"草稿与卡文件不一致"时留着；一旦恢复成卡文件原文就自动消失
+    const dirty = Boolean(fileText)
+      ? String(draft.roleText || '').trim() !== String(fileText).trim()
+      : true;
+    note.textContent = dirty ? personaEditNote : '';
+  }
+  const title = $('#persona-view-title');
+  if (title) title.textContent = tpl?.name || (hasText ? (templatesKnown ? '自定义正文' : '角色设定') : '（还没设置角色设定）');
+  const profileChip = $('#persona-view-profile');
+  if (profileChip) profileChip.textContent = draft.behaviorProfile === 'grounded' ? '自然可靠' : '原版群友';
+  const bindChip = $('#persona-view-binding');
+  if (bindChip) {
+    const boundId = String((state.config?.persona?.templateId) || '');
+    bindChip.className = 'chip';
+    if (tpl?.builtin) {
+      // 只有草稿正文就是这张卡的正文、且实例确实绑着它，才算"正在跟随卡文件"
+      bindChip.classList.add(draft.id === boundId ? 'ok' : 'warn');
+      bindChip.textContent = draft.id === boundId ? '跟随卡文件' : '保存后跟随卡文件';
+    } else if (tpl) {
+      bindChip.textContent = '自定义卡';
+    } else if (hasText && templatesKnown) {
+      bindChip.classList.add('warn');
+      bindChip.textContent = '自定义正文 · 与卡文件解绑';
+    } else if (hasText) {
+      // 卡库还没读出来（或读取失败）时别断言"已解绑"——那时根本不知道有没有对应的卡
+      bindChip.textContent = state.personaTemplatesFailed ? '卡库读取失败' : '读取卡库中…';
+    } else {
+      bindChip.textContent = '';
+    }
+  }
+  const gridKey = [state.personaTemplatesVersion || 0,
+    String(state.config?.persona?.templateId || ''),
+    state.config?.persona?.roleText || '', state.config?.persona?.behaviorProfile || '',
+    state.config?.persona?.customRules || '', draft.roleText, draft.behaviorProfile, draft.customRules].join('\u0000');
+  const grid = $('#persona-grid');
+  if (grid && gridKey !== personaGridKey) {
+    personaGridKey = gridKey;
+    grid.innerHTML = renderPersonaGrid(state.config || {}, draft);
+  }
+  // 折叠按钮的文案要跟着实际状态走（折叠状态是跨分区保留的，不能只靠点击时改文字）
+  const expandBtn = $('#persona-expand-btn');
+  if (expandBtn) {
+    const total = parsePersonaCard(draft.roleText).sections.length;
+    expandBtn.textContent = total > 0 && personaCollapsedSections.size >= total ? '全部展开' : '全部收起';
+  }
+}
+
+function applyPersonaDraft(tpl, id = '') {
   $('#cfg-roletext').value = tpl.text;
   $('#cfg-customrules').value = tpl.customRules || '';
   $('#cfg-behavior-profile').value = tpl.behaviorProfile || 'legacy';
+  personaEditingSection = -1;
+  personaEditNote = '';
+  // 记下"草稿是从哪张卡来的"：没保存之前 config 里还是旧绑定，
+  // 「恢复本节 / 恢复整张卡」必须按草稿这张卡来，否则会把两张卡拼在一起。
+  personaDraftCardId = id || findPersonaTemplateId(tpl.text, tpl.behaviorProfile || 'legacy', tpl.customRules || '');
   syncPersonaButtons();
 }
 
-function renderPersonaPicker(c) {
-  const currentId = findPersonaTemplateId(
-    c.persona?.roleText || '', c.persona?.behaviorProfile || 'legacy', c.persona?.customRules || ''
-  );
-  const currentName = state.personaTemplates[currentId]?.name || '';
-  return `
-    <div class="field-row" style="align-items:flex-end">
-      <div class="field">
-        <label>选择人设</label>
-        <div style="display:flex;gap:8px">
-          <input type="text" id="cfg-persona-pick" readonly placeholder="点击选择人设" value="${esc(currentName)}" style="flex:1;cursor:pointer" />
-          <button class="btn btn-small" id="new-persona-btn">＋ 添加人设</button>
-          <button class="btn btn-small btn-danger hidden" id="del-persona-btn">删除当前自定义人设</button>
-        </div>
-        <span id="persona-pick-hint" class="muted" style="font-size:12px"></span>
-      </div>
-    </div>`;
+/**
+ * 草稿对应的内置卡 id：正文与某张内置卡完全一致就用那张；否则用用户最近点的那张
+ * （点完卡再逐节改，正文就不完全一致了，但"基准卡"还是它）。
+ */
+function personaBaseCardId() {
+  const draft = personaDraftState();
+  const exact = findPersonaTemplateId(draft.roleText, draft.behaviorProfile, draft.customRules);
+  if (exact && state.personaTemplates[exact]?.builtin) return exact;
+  const picked = String(personaDraftCardId || '');
+  return picked && state.personaTemplates[picked]?.builtin ? picked : '';
 }
 
-function renderPersonaSaveBar() {
+/**
+ * 把"正在编辑的小节"落回草稿。分节编辑框不是唯一数据源（#cfg-roletext 才是），
+ * 所以保存、折叠、恢复这些会重画视图的动作之前都得先冲一次，否则刚打的字会消失。
+ * @returns {boolean} 有改动被落回时 true
+ */
+function flushPersonaSectionEdit() {
+  if (personaEditingSection < 0) return false;
+  const roleBox = $('#cfg-roletext');
+  const box = document.querySelector(`#persona-card-view .pd-edit-text[data-sec="${personaEditingSection}"]`);
+  if (!roleBox || !box) return false;
+  // 输入框内容与"按渲染规则解析出来的正文"逐字一致 → 这一节根本没改过，别写回。
+  // replacePersonaSectionBody 会规范化行尾空白与多余空行：原样写回也会让正文与卡文件不再逐字节相同，
+  // 保存时 currentPersonaId() 按整串比较就把它当成"自定义" → 静默解绑内置卡（用户什么都没改）。
+  if (box.value === personaSectionBody(roleBox.value, personaEditingSection)) return false;
+  const next = replacePersonaSectionBody(roleBox.value, personaEditingSection, box.value);
+  if (next === roleBox.value) return false;
+  roleBox.value = next;
+  return true;
+}
+
+// ── 角色正文的结构化渲染 ──
+// 卡正文是 markdown，只给一个大 textarea 太糙：这里解析成分节面板 ——
+// 「你的标志」渲染成一排标签、「AI 味黑名单」渲染成打叉标签、示例渲染成聊天气泡，
+// 让人一眼看出这张卡会让它怎么说话。保存仍然以 #cfg-roletext 的原文为准（视图只读）。
+/** 管理员附加规则的常用例子：点一下就填进去，省得对着空白框发呆。 */
+const PERSONA_RULE_EXAMPLES = [
+  '别装傻、别反问，不想接就安静',
+  '说话短一点，一轮最多两条',
+  '被怼只淡淡带过，不还嘴',
+  '称呼固定用「老板」',
+  '不用网络梗和颜文字'
+];
+
+let personaCollapsedSections = new Set();
+let personaFoldKey = null;
+let personaEditingSection = -1;   // 正在按小节编辑的序号；-1 = 没在编辑
+let personaEditNote = '';         // 小节编辑后的提示（"还得点保存设置"这类）
+let personaViewKey = null;        // 上次画正文视图用的内容指纹（没变就跳过重画）
+let personaGridKey = null;        // 同上，卡库
+let personaViewTimer = null;      // 正文输入时的合并渲染定时器
+let personaDraftCardId = '';      // 草稿是从哪张卡来的（点卡时记下）
+
+/**
+ * 默认折叠策略：只展开"你是谁"和"你的标志"，其余小节收起来。
+ * 一张卡的正文能有三千多像素，全展开会把下面的名字/参与度/附加规则/保存按钮压到很远，
+ * 用起来像"页面滚不动"。想看全的点「全部展开」。
+ */
+function defaultPersonaFold(roleText) {
+  const card = parsePersonaCard(roleText);
+  const folded = new Set();
+  card.sections.forEach((section, index) => {
+    if (!/你是谁|标志|招牌/.test(section.name)) folded.add(index);
+  });
+  return folded;
+}
+
+/**
+ * 正文变了就更新折叠基准：换了另一张卡就按默认折叠重算，
+ * 只是改了某一节（小节数没变）就保留用户当前展开/收起的状态。
+ */
+function refreshPersonaFold(roleText) {
+  const key = String(roleText || '');
+  if (personaFoldKey === key) return;
+  const previousKey = personaFoldKey;
+  const sameShape = previousKey !== null
+    && parsePersonaCard(previousKey).sections.length === parsePersonaCard(key).sections.length;
+  personaFoldKey = key;
+  if (!sameShape) {
+    personaCollapsedSections = defaultPersonaFold(key);
+    personaEditingSection = -1;
+  }
+}
+
+const PERSONA_SECTION_EMOJI = {
+  你是谁: '🪪',
+  说话方式: '💬',
+  偏好: '🍜',
+  工具: '🧰',
+  分寸: '🧭'
+};
+
+/** 行内格式：`code`、**加粗**（先转义再替换，避免注入）。 */
+function personaInline(text) {
+  return esc(String(text))
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+
+/**
+ * 把角色正文解析成 { title, sections: [{ num, name, blocks, from, to }] }。
+ * 只认卡里实际用的写法：一级标题、`## 一、小节`、`>` 引用、`-`/`1.` 列表、正文续行，
+ * 以及示例段的 `群友：/你不要：/你可以：/或者：`（同一组群友发言归到一个气泡组里）。
+ *
+ * from / to 是这一节在原始文本里的行号区间（`from` 是小节标题那一行、`to` 是下一节标题
+ * 那一行或文末，左闭右开）—— 按小节编辑时要靠它把改动精确地拼回去。
+ */
+/**
+ * 解析结果按"整段文本"缓存一份：人设页一次同步会解析同一段正文好几次
+ * （默认折叠、卡库简介、正文渲染、取单节正文…），3~4KB 的正文每次重解析不划算。
+ * 调用方都只读返回值，不要改它。
+ */
+let personaParseCache = { text: null, card: null };
+
+function parsePersonaCard(text) {
+  const source = String(text || '');
+  if (personaParseCache.text === source) return personaParseCache.card;
+  const card = { title: '', sections: [] };
+  let section = null;
+  const blocks = () => (section ? section.blocks : (card.intro ||= []));
+  const lastBlock = () => blocks()[blocks().length - 1];
+  const lines = String(text || '').split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    const h1 = line.match(/^#\s+(.*)$/);
+    if (h1) { card.title = h1[1].trim(); continue; }
+    const h2 = line.match(/^##\s*(?:([一二三四五六七八九十]+|\d+)\s*[、.．]\s*)?(.*)$/);
+    if (h2) {
+      if (section) section.to = index;
+      section = { num: (h2[1] || '').trim(), name: (h2[2] || '').trim(), blocks: [], from: index, to: lines.length };
+      card.sections.push(section);
+      continue;
+    }
+    const quote = line.match(/^>\s?(.*)$/);
+    if (quote) {
+      const last = lastBlock();
+      if (last?.type === 'quote') last.lines.push(quote[1]);
+      else blocks().push({ type: 'quote', lines: [quote[1]] });
+      continue;
+    }
+    const listItem = line.match(/^\s*(?:[-*]|\d+[.．])\s+(.*)$/);
+    if (listItem) {
+      const last = lastBlock();
+      if (last?.type === 'list') last.items.push(listItem[1]);
+      else blocks().push({ type: 'list', items: [listItem[1]] });
+      continue;
+    }
+    const turn = line.trim().match(/^(群友|你不要|你可以|或者|但|示例)[：:]\s*(.*)$/);
+    if (turn) {
+      const role = turn[1] === '群友' ? 'peer' : (turn[1] === '你不要' ? 'bad' : 'ok');
+      const last = lastBlock();
+      if (role === 'peer' || last?.type !== 'example') {
+        blocks().push({ type: 'example', turns: [{ role, text: turn[2] }] });
+      } else {
+        last.turns.push({ role, text: turn[2] });
+      }
+      continue;
+    }
+    // 续行：接到上一段/上一条列表项后面（卡里的换行大多是折行，不是新句）
+    const last = lastBlock();
+    if (last?.type === 'list' && last.items.length) last.items[last.items.length - 1] += ` ${line.trim()}`;
+    else if (last?.type === 'p') last.text += ` ${line.trim()}`;
+    else blocks().push({ type: 'p', text: line.trim() });
+  }
+  personaParseCache = { text: source, card };
+  return card;
+}
+
+/** 取某一节的正文（不含小节标题那一行）。 */
+function personaSectionBody(text, index) {
+  const source = String(text || '');
+  const section = parsePersonaCard(source).sections[index];
+  if (!section) return '';
+  return source.split(/\r?\n/).slice(section.from + 1, section.to).join('\n').replace(/^\n+|\n+$/g, '');
+}
+
+/**
+ * 用 newBody 替换第 index 节的正文，其余部分原样保留（小节标题不动）。
+ * "按小节编辑"就落在这里：正文全文仍是唯一数据源，只是改哪节拼哪节。
+ * 标题与正文之间的空行、正文与下一节之间的空行，都按原文的样子决定 ——
+ * 这样"原样写回"逐字节不变，编辑别的节也不会把整篇格式弄乱。
+ */
+function replacePersonaSectionBody(text, index, newBody) {
+  const source = String(text || '');
+  const section = parsePersonaCard(source).sections[index];
+  if (!section) return source;
+  const lines = source.split(/\r?\n/);
+  const blankAfterHeader = lines[section.from + 1] !== undefined && !lines[section.from + 1].trim();
+  const blankBeforeNext = section.to < lines.length && !String(lines[section.to - 1] ?? '').trim();
+  const body = String(newBody ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+$/, ''))
+    .join('\n')
+    .replace(/^\n+|\n+$/g, '');
+  const next = lines.slice(0, section.from + 1);   // 含小节标题那行
+  if (body) {
+    if (blankAfterHeader) next.push('');
+    next.push(...body.split('\n'));
+    if (blankBeforeNext) next.push('');
+  }
+  next.push(...lines.slice(section.to));
+  return next.join('\n');
+}
+
+function renderPersonaBlock(block, { asTags = '' } = {}) {
+  if (block.type === 'quote') {
+    return `<div class="pd-quote">${block.lines.map(personaInline).join('<br>')}</div>`;
+  }
+  if (block.type === 'list') {
+    if (asTags) {
+      return `<div class="pd-tags">${block.items.map((item) => `<span class="pd-tag ${asTags}">${personaInline(item)}</span>`).join('')}</div>`;
+    }
+    return `<ul class="pd-list">${block.items.map((item) => `<li>${personaInline(item)}</li>`).join('')}</ul>`;
+  }
+  if (block.type === 'example') {
+    const MARK = { peer: '', bad: '✗', ok: '✓' };
+    return `<div class="pd-chat">${block.turns.map((t) => `
+      <div class="pd-msg ${t.role}">
+        <span class="mark">${MARK[t.role] || ''}</span>
+        <span class="bubble">${t.role === 'peer' ? '<span class="who">群友 </span>' : ''}${personaInline(t.text)}</span>
+      </div>`).join('')}</div>`;
+  }
+  if (block.type === 'p') return `<p>${personaInline(block.text)}</p>`;
+  return '';
+}
+
+const PERSONA_TAG_SECTIONS = /标志|招牌/;
+const PERSONA_BAD_SECTIONS = /黑名单|禁止|不要/;
+
+/**
+ * 把卡正文渲染成分节视图。
+ * @param {object} options
+ *   collapsed  收起来的小节序号集合
+ *   editing    正在按小节编辑的序号（-1 = 没在编辑）
+ *   fileText   这张卡对应的卡文件正文（有值时每节出现「恢复本节」）
+ */
+function renderPersonaCardBody(text, { collapsed = new Set(), showTitle = true, editing = -1, fileText = '' } = {}) {
+  const card = parsePersonaCard(text);
+  if (!card.sections.length) {
+    return `<div class="pd-empty">这段正文还没分节，点「编辑正文」直接改；想有分节视图就按内置卡的写法用 <code>## 一、小节名</code>。</div>`;
+  }
+  const fileCard = fileText ? parsePersonaCard(fileText) : null;
+  const sections = card.sections.map((sec, i) => {
+    const isStar = PERSONA_TAG_SECTIONS.test(sec.name);
+    const isBad = PERSONA_BAD_SECTIONS.test(sec.name);
+    const emoji = isStar ? '✨' : (isBad ? '🚫' : (PERSONA_SECTION_EMOJI[sec.name.replace(/（.*?）/g, '')] || ''));
+    const body = sec.blocks.map((block) => renderPersonaBlock(block, {
+      asTags: isStar ? 'star' : (isBad ? 'bad' : '')
+    })).join('');
+    const chips = [];
+    if (isStar) chips.push('<span class="chip star">招牌特征</span>');
+    if (/示例/.test(sec.name)) chips.push('<span class="chip">✓ 可用 / ✗ 禁用</span>');
+    const isEditing = editing === i;
+    // 卡文件里同一节还在、而且写法不同 → 给一个"只把这一节改回卡文件写法"的入口
+    const fileBody = fileCard && fileCard.sections[i] && fileCard.sections[i].name === sec.name
+      ? personaSectionBody(fileText, i) : null;
+    const canRevert = fileBody !== null && fileBody !== personaSectionBody(text, i);
+    const actions = `
+      <span class="pd-sec-actions">
+        ${canRevert ? `<button type="button" class="pd-sec-revert" data-sec="${i}">恢复本节</button>` : ''}
+        <button type="button" class="pd-sec-edit" data-sec="${i}">${isEditing ? '正在编辑' : '编辑'}</button>
+      </span>`;
+    const sectionBody = isEditing
+      ? `<div class="pd-edit">
+           <textarea class="pd-edit-text" data-sec="${i}" spellcheck="false" placeholder="这一节的正文（markdown）。小节标题不在这里改。">${esc(personaSectionBody(text, i))}</textarea>
+           <div class="pd-edit-row">
+             <button type="button" class="btn btn-small btn-primary pd-sec-save" data-sec="${i}">保存本节</button>
+             <button type="button" class="btn btn-small pd-sec-cancel">取消</button>
+             <span class="muted pd-edit-hint">保存只是改草稿；要生效还得点底部那条「保存设置」。</span>
+           </div>
+         </div>`
+      : body;
+    return `
+      <div class="pd-sec ${collapsed.has(i) && !isEditing ? 'collapsed' : ''} ${isEditing ? 'editing' : ''}" data-sec="${i}">
+        <div class="pd-sec-head">
+          <span class="idx">${esc(sec.num || String(i + 1))}</span>
+          <span class="name">${emoji ? `${emoji} ` : ''}${esc(sec.name)}</span>
+          ${chips.join('')}
+          ${actions}
+          <span class="caret">▾</span>
+        </div>
+        <div class="pd-sec-body">${sectionBody}</div>
+      </div>`;
+  }).join('');
+  const head = showTitle && card.title
+    ? `<div class="pd-headline">${esc(card.title)}</div>`
+    : '';
+  return `${head}${sections}`;
+}
+
+/** 卡库里的一张卡：草稿中的那张会高亮，真正生效且绑着卡文件的那张挂「使用中」。 */
+/** 卡库简介（取自「你是谁」第一段）按卡正文缓存 —— 卡库每次重画都要用 5 次。 */
+const personaDescCache = new Map();
+
+function personaCardDesc(tpl) {
+  const key = `${tpl.name}\u0000${tpl.text.length}\u0000${tpl.text.slice(0, 24)}`;
+  if (personaDescCache.has(key)) return personaDescCache.get(key);
+  const parsed = parsePersonaCard(tpl.text);
+  const sec = parsed.sections.find((s) => s.name.includes('你是谁'));
+  const text = sec?.blocks.find((b) => b.type === 'p')?.text || '';
+  const desc = text.length > 46 ? `${text.slice(0, 46)}…` : text;
+  personaDescCache.set(key, desc);
+  return desc;
+}
+
+function renderPersonaGrid(c, draft = {}) {
+  const draftText = draft.roleText ?? c.persona?.roleText ?? '';
+  const draftProfile = draft.behaviorProfile ?? c.persona?.behaviorProfile ?? 'legacy';
+  const draftRules = draft.customRules ?? c.persona?.customRules ?? '';
+  const draftId = findPersonaTemplateId(draftText, draftProfile, draftRules);
+  const savedId = findPersonaTemplateId(
+    c.persona?.roleText || '', c.persona?.behaviorProfile || 'legacy', c.persona?.customRules || ''
+  );
+  const boundId = String(c.persona?.templateId || '');
+  const templates = Object.entries(state.personaTemplates || {});
+  if (!templates.length) {
+    // 区分"卡库还没读出来/读取失败"和"真的一张卡都没有"，别让人以为人设丢了
+    return state.personaTemplatesFailed
+      ? '<div class="pd-empty">人设卡读取失败，刷新页面重试。</div>'
+      : '<div class="pd-empty">正在读取人设卡…</div>';
+  }
+  return templates.map(([id, tpl]) => {
+    const isDraft = id === draftId;
+    const isInUse = id === savedId && id === boundId;
+    const desc = personaCardDesc(tpl);
+    return `
+      <div class="persona-card ${isDraft ? 'selected' : ''}" data-persona-id="${esc(id)}" role="button" tabindex="0">
+        <div class="pc-top">
+          <span class="pc-name">${esc(tpl.name)}</span>
+          ${isInUse ? '<span class="chip ok">使用中</span>' : (isDraft ? '<span class="chip">草稿中</span>' : '')}
+        </div>
+        <div class="pc-meta">
+          <span class="pc-tag">${tpl.behaviorProfile === 'grounded' ? '自然可靠' : '原版群友'}</span>
+          <span class="pc-src">${tpl.builtin ? '内置 · 跟随卡文件' : '自定义'}</span>
+        </div>
+        <div class="pc-desc">${esc(desc)}</div>
+      </div>`;
+  }).join('');
+}
+
+/** 人设卡库：点一张卡就把它的正文填进草稿（保存后才生效）。 */
+function renderPersonaLibrary(c) {
   return `
-    <div class="persona-save-row">
-      <button class="btn btn-primary" id="save-persona-btn">保存人设修改</button>
-      <span id="persona-save-result" class="muted"></span>
-    </div>`;
+    <div class="persona-lib">
+      <div class="persona-lib-head">
+        <span class="pl-title">人设卡库</span>
+        <span class="spacer"></span>
+        <button class="btn btn-small" id="persona-expand-btn">全部收起</button>
+        <button class="btn btn-small" id="new-persona-btn">＋ 新建自定义卡</button>
+        <button class="btn btn-small btn-danger hidden" id="del-persona-btn">删除当前自定义卡</button>
+      </div>
+      <div class="persona-grid" id="persona-grid">${renderPersonaGrid(c)}</div>
+    </div>
+    <span id="persona-pick-hint" class="muted" style="font-size:12px"></span>`;
 }
 
 function renderHealthCard() {
@@ -4656,6 +6291,7 @@ function renderSettingsSidebar() {
     ['moments', '每日动态'],
     ['qzone-interactions', '动态互动'],
     ['time-control', '时间控制'],
+    ['token-saver', '省 Token'],
     ['persona', '人设'],
     ['allow', '聊天白名单'],
     ['chat', '聊天设置'],
@@ -4665,8 +6301,8 @@ function renderSettingsSidebar() {
   sidebar.innerHTML = `
     <div class="settings-runstate">
       <div class="rs-title">机器人运行状态</div>
-      <div class="rs-row"><span class="dot ${s?.onebot?.connected ? 'dot-on' : 'dot-off'}"></span><span>${s?.onebot?.connected ? '运行中' : '未就绪'}</span></div>
-      <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${s.orchestrator.model}` : '模型：未设置')}</div>
+      <div class="rs-row" ${s?.onebot?.connected ? '' : `title="${esc(onebotIssueText(s?.onebot) || '正在等待首次连接')}"`}><span class="dot ${s?.onebot?.connected ? 'dot-on' : 'dot-off'}"></span><span>${s?.onebot?.connected ? '运行中' : '未就绪'}</span></div>
+      <div class="rs-row muted">${state.paused ? '⏸ 已暂停' : (s?.orchestrator?.model ? `模型：${esc(s.orchestrator.model)}` : '模型：未设置')}</div>
     </div>
     <div class="settings-menu">
       ${menu.map(([id, label]) => `<button class="settings-menu-item ${state.settingsSection === id ? 'active' : ''}" data-section="${id}">${label}</button>`).join('')}
@@ -4699,6 +6335,7 @@ function renderSettingsSection(c) {
     moments: () => renderDailyMomentsSection(c),
     'qzone-interactions': () => renderQzoneInteractionSection(c),
     'time-control': () => renderTimeControlSection(c),
+    'token-saver': () => renderTokenSaverSection(c),
     persona: () => renderPersonaSection(c),
     allow: () => renderAllowSection(c),
     chat: () => renderChatSection(c),
@@ -4706,12 +6343,15 @@ function renderSettingsSection(c) {
     onebot: () => renderOnebotSection(c)
   };
   const render = sections[sec] || sections.api;
+  // 保存条放在内容**末尾**并 sticky 贴底：长页面（人设页能滚好几屏）里从顶部就能看到它，
+  // 一直悬在视口底部，滚到底时正好落在内容末尾。以前它渲染在最前面，既不悬浮又容易
+  // 和分区里自己的保存按钮撞车（人设页就多过一个"保存人设修改"，其实调的是同一个保存）。
   return `
+    ${render()}
     <div class="save-bar">
       <button class="btn btn-primary" id="save-cfg-btn">保存设置</button>
       <span id="cfg-save-result" class="muted"></span>
-    </div>
-    ${render()}`;
+    </div>`;
 }
 
 function renderApiSection(c) {
@@ -4753,17 +6393,64 @@ function renderApiSection(c) {
       <span id="vision-switch-hint" class="muted" style="font-size:12px;align-self:center"></span></div>
     <div class="settings-divider"></div>
 
-    <h3>成本核算</h3>
+    <h3>成本怎么算</h3>
+    <div class="hint" style="margin-bottom:8px">选一个就行，不用逐个模型配。默认第一项。</div>
+    <div id="cost-mode-block">
+      <label class="radio-row"><input type="radio" name="cost-mode" value="official"
+        ${(!c.api.costMode || c.api.costMode === 'official') ? 'checked' : ''} />
+        <span>按模型官方价估（数字是估算，不是你的账单）</span></label>
+      <label class="radio-row"><input type="radio" name="cost-mode" value="multiplier"
+        ${c.api.costMode === 'multiplier' ? 'checked' : ''} />
+        <span>我按渠道价：官方价 ×
+          <input type="number" id="cfg-cost-multiplier" step="0.01" min="0" value="${esc(c.api.costMultiplier ?? 1)}" style="width:80px" />
+          （例如 0.5 = 打五折；中转站常用；填 0 = 这个渠道不花钱）</span></label>
+      <label class="radio-row"><input type="radio" name="cost-mode" value="subscription"
+        ${c.api.costMode === 'subscription' ? 'checked' : ''} />
+        <span>我按月付 ¥
+          <input type="number" id="cfg-cost-monthly" step="1" min="0" value="${esc(c.api.costMonthlyFee ?? 0)}" style="width:90px" />
+          /月（订阅套餐、本地自建；不按 token 算）</span></label>
+      <label class="checkbox-row" style="margin-top:6px"><input type="checkbox" id="cfg-fallback-current"
+        ${c.api.fallbackToCurrentModel !== false ? 'checked' : ''} />
+        <label for="cfg-fallback-current">没有价格的模型按「当前模型」的价估算（推荐：避免出现"未定价"）</label></label>
+      <div class="hint" id="cost-mode-status" style="margin-top:4px"></div>
+    </div>
 
-    <div class="checkbox-row"><input type="checkbox" id="cfg-useofficialprice" ${c.api.useOfficialPrice !== false ? 'checked' : ''} />
-      <label for="cfg-useofficialprice">用内置官方价格表估算（按模型 id 自动匹配；走中转站请关掉）</label></div>
+    <details class="collapsible settings-advanced" id="price-advanced">
+      <summary>高级：逐模型定价 / 渠道价目表 / 远程价格表</summary>
+      <div class="checkbox-row" style="margin-top:8px"><input type="checkbox" id="cfg-useofficialprice" ${c.api.useOfficialPrice !== false ? 'checked' : ''} />
+        <label for="cfg-useofficialprice">用内置官方价格表估算（按模型 id 自动匹配；走中转站请关掉）</label></div>
 
-    <div class="field" style="margin-top:6px"><label>远程价格表 URL</label>
-      <div style="display:flex;gap:8px">
-        <input type="text" id="cfg-price-remote-url" placeholder="例如 https://你的服务器/prices.json" value="${esc(c.api.priceRemoteUrl || '')}" style="flex:1" />
-        <button class="btn btn-small" id="price-feed-refresh-btn" title="不等定时，立即拉一次">立即拉取</button>
+      <div class="field" style="margin-top:6px"><label>远程价格表 URL</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="cfg-price-remote-url" placeholder="留空 = 项目默认价格表；none = 关闭" value="${esc(c.api.priceRemoteUrl || '')}" style="flex:1" />
+          <button class="btn btn-small" id="price-feed-refresh-btn" title="不等定时，立即拉一次">立即拉取</button>
+        </div>
+        <div class="hint" id="price-feed-status" style="margin-top:4px"></div>
       </div>
-      <div class="hint" id="price-feed-status" style="margin-top:4px"></div>
+
+      <!-- 从渠道自动拉价（探测）：把中转站/自建渠道公布的价格拉下来，写成"渠道价" -->
+      <div class="settings-divider"></div>
+      <h3>从渠道自动拉价</h3>
+    <div class="field">
+      <label>渠道地址（默认用上面的 Base URL；one-api / new-api 站会读它的 /api/pricing 倍率）</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="probe-url" placeholder="https://api.example.com/provider/v1"
+          value="${esc(c.api.baseUrl || '')}" style="flex:1" />
+        <button class="btn btn-small" id="probe-btn">探测</button>
+      </div>
+      <div class="hint" id="probe-status" style="margin-top:4px">探测只做预览，不会改动任何配置；确认后才写成"渠道价"。</div>
+      <div id="probe-result" class="hidden" style="margin-top:8px"></div>
+    </div>
+
+    <!-- 渠道价目表：每个渠道一份，自动拉取（配置里的 channelPriceFeeds） -->
+    <div class="field" style="margin-top:10px"><label>渠道价目表（每个渠道一份，启动时自动刷新）</label>
+      <div id="channel-feeds"></div>
+      <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+        <input type="text" id="channel-feed-vendor" placeholder="渠道名（留空用当前渠道）" style="flex:1;min-width:160px" />
+        <input type="text" id="channel-feed-url" placeholder="价目表 URL（http(s)://…/pricing.json）" style="flex:2;min-width:200px" />
+        <button class="btn btn-small" id="channel-feed-add">添加并拉取</button>
+      </div>
+      <div class="hint" id="channel-feed-hint" style="margin-top:4px">拉到的价只在该渠道的调用上生效；手填的价仍然优先。</div>
     </div>
 
     <!-- 当前模型的价格卡片：切换模型时内容跟着变 -->
@@ -4773,6 +6460,12 @@ function renderApiSection(c) {
         <span class="pc-model" id="pc-model">${esc(c.api.model || '（未选择模型）')}</span>
       </div>
       <div class="pc-rows">
+        <div class="pc-row"><span class="pc-label">生效价</span>
+          <span class="pc-effective" id="pc-effective">—</span></div>
+      </div>
+      <div class="pc-note" id="pc-note"></div>
+      <div class="pc-subhead">自填单价（元/百万 token）</div>
+      <div class="pc-rows">
         <div class="pc-row"><span class="pc-label">输入</span>
           <input type="number" id="cfg-price-in" step="0.01" min="0" value="0" /><span class="pc-unit">元/百万</span></div>
         <div class="pc-row"><span class="pc-label">输出</span>
@@ -4780,13 +6473,15 @@ function renderApiSection(c) {
         <div class="pc-row"><span class="pc-label">缓存命中</span>
           <input type="number" id="cfg-price-cached" step="0.01" min="0" value="0" /><span class="pc-unit">元/百万</span></div>
       </div>
-      <div class="pc-note" id="pc-note"></div>
+      <div class="pc-note" id="pc-input-note"></div>
     </div>
 
     <div style="display:flex;gap:8px;margin:8px 0">
+      <button class="btn btn-small" id="pc-price-btn">给这个模型定价</button>
       <button class="btn btn-small" id="batch-price-btn">批量自定义价格编辑</button>
-      <span class="muted" style="font-size:12px;align-self:center">为多个模型分别设定单价</span>
+      <span class="muted" style="font-size:12px;align-self:center">填你的渠道实付价（覆盖官方价）；也可为多个模型分别设定</span>
     </div>
+    </details>
 
     <div class="settings-divider"></div>
 
@@ -4832,6 +6527,7 @@ function renderSearchSection(c) {
         <option value="bocha" ${prov === 'bocha' ? 'selected' : ''}>博查 AI Search</option>
         <option value="baidu" ${prov === 'baidu' ? 'selected' : ''}>百度千帆 AI Search</option>
         <option value="metaso" ${prov === 'metaso' ? 'selected' : ''}>秘塔 AI 搜索</option>
+        <option value="doubao" ${prov === 'doubao' ? 'selected' : ''}>豆包搜索（火山 Agent Plan）</option>
         ${customProvs.map((p) => `<option value="custom:${esc(p.id)}" ${prov === `custom:${p.id}` ? 'selected' : ''}>${esc(p.name || p.baseUrl)}（自定义 · ${p.type === 'bing' ? '网页解析' : 'JSON 接口'}）</option>`).join('')}
       </select></div>
     <div class="field" id="custom-provider-manage" style="${prov.startsWith('custom:') ? '' : 'display:none'}">
@@ -4881,6 +6577,12 @@ function renderSearchSection(c) {
       <div style="display:flex;gap:8px">
         <input type="password" id="cfg-metaso-key" value="${esc(c.webSearch?.metaso?.hasApiKey ? '******' : '')}" placeholder="输入新 Key 可替换；留空保持不变" autocomplete="new-password" style="flex:1" />
         <button class="btn btn-small" id="cfg-metaso-key-toggle" type="button">显示</button>
+      </div></div>
+    <div class="field" id="doubao-search-fields" style="${prov === 'doubao' ? '' : 'display:none'}">
+      <label>豆包搜索 API Key（火山 Agent Plan 搜索服务 Key / 环境变量 DOUBAO_SEARCH_API_KEY）</label>
+      <div style="display:flex;gap:8px">
+        <input type="password" id="cfg-doubao-key" value="${esc(c.webSearch?.doubao?.hasApiKey ? '******' : '')}" placeholder="输入新 Key 可替换；留空保持不变" autocomplete="new-password" style="flex:1" />
+        <button class="btn btn-small" id="cfg-doubao-key-toggle" type="button">显示</button>
       </div></div>
 
     <h3>添加自定义搜索服务</h3>
@@ -4959,13 +6661,10 @@ function renderExperimentalSettingsSection(c) {
           </span>
         </div>
         <div class="control-key-row">
-          <span><strong>自动好友添加</strong><small id="experiment-auto-friend-state">${autoFriendEnabled ? '已启用' : '已停用'} · ${friend.graduated === true ? '已固化' : '实验中'}</small></span>
+          <span><strong>自动好友添加</strong><small id="experiment-auto-friend-state">已退役（Issue #10：协议端不支持且易触发风控）</small></span>
           <span class="settings-actions" style="margin:0">
-            <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-auto-friend-enabled" ${autoFriendEnabled ? 'checked' : ''} /><span>启用</span></label>
-            <button type="button" class="btn btn-small ${friend.graduated === true ? '' : 'btn-primary'}"
-              id="launch-auto-friend-feature" ${friend.graduated === true ? 'disabled' : ''}>
-              ${friend.graduated === true ? '已固化' : '固化上线'}
-            </button>
+            <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-auto-friend-enabled" disabled /><span>启用</span></label>
+            <button type="button" class="btn btn-small" id="launch-auto-friend-feature" disabled>已退役</button>
           </span>
         </div>
         <div class="control-key-row">
@@ -5285,11 +6984,25 @@ async function loadIncomingFriendRequests(status) {
   const box = $('#identity-incoming-friend-requests');
   if (!box) return;
   const feature = status?.incomingFriendRequest || {};
+  // 总开关开着、但统一身份库没起来（active=false，比如启动时出错）时，下面这个接口是 409：
+  // 直接给提示，别让请求失败把整页（连同设置表单）换成一整块错误信息。
+  if (status?.active === false) {
+    box.innerHTML = '<div class="empty-hint">统一身份库没有启动：先看页面上提示的启动错误</div>';
+    return;
+  }
   if (!feature.enabled) {
     box.innerHTML = '<div class="empty-hint">入站好友请求审批当前关闭</div>';
     return;
   }
-  const data = await api('/api/identity-pilot/incoming-friend-requests?limit=100');
+  let data;
+  try {
+    data = await api('/api/identity-pilot/incoming-friend-requests?limit=100');
+  } catch (error) {
+    // 外层是 Promise.allSettled，不再替它兜错：失败要显示在这个框里，
+    // 否则页面看起来像"没有好友请求"，而不是"读不到"
+    box.innerHTML = `<div class="empty-hint">读取失败：${esc(error.message)}</div>`;
+    return;
+  }
   const requests = data.requests || [];
   if (!requests.length) {
     box.innerHTML = '<div class="empty-hint">当前没有收到好友请求</div>';
@@ -5354,7 +7067,18 @@ async function loadFriendProposals(status) {
     box.innerHTML = '<div class="empty-hint">主动好友候选当前关闭</div>';
     return;
   }
-  const data = await api('/api/identity-pilot/friend-proposals?limit=100');
+  // 同 loadIncomingFriendRequests：身份库没起来时下面两个接口都是 409
+  if (status?.active === false) {
+    box.innerHTML = '<div class="empty-hint">统一身份库没有启动：先看页面上提示的启动错误</div>';
+    return;
+  }
+  let data;
+  try {
+    data = await api('/api/identity-pilot/friend-proposals?limit=100');
+  } catch (error) {
+    box.innerHTML = `<div class="empty-hint">读取失败：${esc(error.message)}</div>`;
+    return;
+  }
   const proposals = data.proposals || [];
   if (!proposals.length) {
     box.innerHTML = '<div class="empty-hint">当前没有好友候选</div>';
@@ -5396,7 +7120,18 @@ async function loadFriendOpportunities(status) {
     box.innerHTML = '<div class="empty-hint">当前使用提示词提名模式，没有消息触发记录</div>';
     return;
   }
-  const data = await api('/api/identity-pilot/friend-opportunities?limit=100');
+  // 同 loadIncomingFriendRequests：身份库没起来时下面这个接口是 409
+  if (status?.active === false) {
+    box.innerHTML = '<div class="empty-hint">统一身份库没有启动：先看页面上提示的启动错误</div>';
+    return;
+  }
+  let data;
+  try {
+    data = await api('/api/identity-pilot/friend-opportunities?limit=100');
+  } catch (error) {
+    box.innerHTML = `<div class="empty-hint">读取失败：${esc(error.message)}</div>`;
+    return;
+  }
   const opportunities = data.opportunities || [];
   if (!opportunities.length) {
     box.innerHTML = '<div class="empty-hint">尚无抽签或评估记录</div>';
@@ -5549,7 +7284,7 @@ function renderFriendFeaturePage(c, status) {
     </div>
     <section class="control-section">
       <div class="control-section-title">
-        <div><h3>运行设置</h3><span class="muted">启停由“设置 → 实验功能”统一控制</span></div>
+        <div><h3>运行设置</h3><span class="muted">主动加好友已退役（Issue #10），下表配置不再生效；入站好友请求审批不受影响</span></div>
         <button type="button" class="btn btn-primary btn-small" id="friend-feature-save">保存好友设置</button>
       </div>
       <div class="field-row">
@@ -5688,7 +7423,9 @@ async function loadFriendFeaturePage() {
     state.config = cfg;
     syncGraduatedFeatureNavigation(cfg);
     renderFriendFeaturePage(cfg, status);
-    await Promise.all([
+    // 三个列表各自把失败显示在自己的框里（各自的 try/catch）：用 allSettled 而不是 all，
+    // 一个接口出错不会把整页（含下面的设置表单与刷新按钮）换成一整块错误信息。
+    await Promise.allSettled([
       loadIncomingFriendRequests(status),
       loadFriendProposals(status),
       loadFriendOpportunities(status)
@@ -6119,6 +7856,7 @@ function bindTimeControlEvents() {
 const MOMENT_STATUS_LABELS = {
   running: '生成中', preview: '草稿', skipped: '决定不发布',
   publishing: '发布中', published: '已发布', 'publish-unknown': '发布结果待核对',
+  'publish-missed': '已核对·确认未发出',
   failed: '生成失败', interrupted: '生成已中断', deferred: '等待活跃时间',
   missed: '已错过窗口', cancelled: '已取消', pending: '待执行'
 };
@@ -6131,6 +7869,8 @@ function renderDailyMomentsSection(c) {
   const randomMode = Array.isArray(moments.scheduleWindows);
   const hour = Number(moments.hour ?? 23);
   const minute = String(moments.minute ?? 30).padStart(2, '0');
+  const interval = Math.min(30, Math.max(1, Math.round(Number(moments.intervalDays) || 1)));
+  const intervalIsPreset = [1, 2, 3, 5, 7].includes(interval);
   const windows = moments.scheduleWindows || [{
     start: `${String(hour).padStart(2, '0')}:${minute}`,
     end: `${String((hour + 1) % 24).padStart(2, '0')}:${minute}`, count: 1
@@ -6147,10 +7887,27 @@ function renderDailyMomentsSection(c) {
         <option value="fixed" ${randomMode ? '' : 'selected'}>固定时刻</option>
       </select>
     </div>
-    <div id="moment-fixed-time" ${randomMode ? 'hidden' : ''}><div class="field-row">
-      <div class="field"><label>执行小时（上海时间）</label><input type="number" id="cfg-moments-hour" min="0" max="23" value="${esc(moments.hour ?? 23)}" /></div>
-      <div class="field"><label>执行分钟</label><input type="number" id="cfg-moments-minute" min="0" max="59" value="${esc(moments.minute ?? 30)}" /></div>
-    </div></div>
+    <div id="moment-fixed-time" ${randomMode ? 'hidden' : ''}>
+      <div class="field-row">
+        <div class="field"><label>执行小时（上海时间）</label><input type="number" id="cfg-moments-hour" min="0" max="23" value="${esc(moments.hour ?? 23)}" /></div>
+        <div class="field"><label>执行分钟</label><input type="number" id="cfg-moments-minute" min="0" max="59" value="${esc(moments.minute ?? 30)}" /></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="cfg-moments-interval">发送间隔</label>
+          <select id="cfg-moments-interval">
+            <option value="1" ${interval === 1 ? 'selected' : ''}>每天</option>
+            <option value="2" ${interval === 2 ? 'selected' : ''}>每 2 天</option>
+            <option value="3" ${interval === 3 ? 'selected' : ''}>每 3 天</option>
+            <option value="5" ${interval === 5 ? 'selected' : ''}>每 5 天</option>
+            <option value="7" ${interval === 7 ? 'selected' : ''}>每 7 天</option>
+            <option value="custom" ${intervalIsPreset ? '' : 'selected'}>自定义</option>
+          </select></div>
+        <div class="field" id="moment-interval-custom-wrap" ${intervalIsPreset ? 'hidden' : ''}>
+          <label for="cfg-moments-interval-custom">自定义天数（1-30）</label>
+          <input type="number" id="cfg-moments-interval-custom" min="1" max="30" value="${esc(interval)}" /></div>
+      </div>
+      <div class="hint">发送间隔以上次成功发布为基准：满 N 天才发下一篇；没到期的日子不读群聊、不调模型。失败不顺延，次日重试。</div>
+    </div>
     <div id="moment-random-windows" ${randomMode ? '' : 'hidden'}>
       <div id="moment-window-rows">${windows.map(renderMomentWindowRow).join('')}</div>
       <button type="button" class="btn btn-small" id="moment-window-add" title="添加时间范围" aria-label="添加时间范围">+</button>
@@ -6222,6 +7979,10 @@ async function loadDailyMomentsStatus() {
       && ['publishing', 'published', 'publish-unknown'].includes(record.status));
     for (const button of $$('#daily-moments-preview-btn,#daily-moments-run-btn')) button.disabled = status.running;
     const publishable = latest?.status === 'preview' && latest.decision === 'publish' && latest.content;
+    // 待核对记录可能与"当前选中"不是同一条（阻断期间手动生成过预览草稿就会这样）：
+    // 按钮必须跟着未决记录走，否则入口藏在旧记录里、面板上看不到，阻断却仍在。
+    const unresolvedRecord = records.find((record) => record.status === 'publish-unknown');
+    const blockingRecord = records.find((record) => ['publishing', 'publish-unknown'].includes(record.status));
     box.innerHTML = `
       <div class="field-row">
         <div class="field"><label>任务状态</label><div>${status.running ? '运行中' : (status.enabled ? '等待中' : '已关闭')}</div></div>
@@ -6229,6 +7990,7 @@ async function loadDailyMomentsStatus() {
         <div class="field"><label>当前记录</label><div>${latest ? esc(`${latest.dayKey} · ${momentStatusLabel(latest)}`) : '-'}</div></div>
       </div>
       ${renderMomentSchedule(status)}
+      ${blockingRecord && blockingRecord.id !== latest?.id ? `<div class="hint">有一条「${esc(momentStatusLabel(blockingRecord))}」的记录（${esc(blockingRecord.dayKey || '-')}）正在挡住所有时段的发布；下面的人工确认/核对按钮针对这条记录。</div>` : ''}
       ${latest?.content ? `<div class="field"><label>正文</label><div class="daily-moments-content">${esc(latest.content)}</div></div>` : ''}
       ${latest?.reason ? `<div class="field"><label>决定理由</label><div>${esc(latest.reason)}</div></div>` : ''}
       ${latest?.error ? `<div class="moment-error" role="alert">${esc(latest.error)}</div>` : ''}
@@ -6236,7 +7998,9 @@ async function loadDailyMomentsStatus() {
       ${latest?.imageErrors?.length ? `<div class="moment-error">${latest.imageErrors.map(esc).join('<br>')}</div>` : ''}
       <div class="settings-actions">
         ${publishable ? `<button type="button" class="btn btn-primary btn-small" id="moment-publish-draft" ${status.running ? 'disabled' : ''}>发布这份草稿</button>` : ''}
-        ${latest?.status === 'publish-unknown' ? `<button type="button" class="btn btn-small" id="moment-reconcile" ${status.running ? 'disabled' : ''}>核对空间发布结果</button>` : ''}
+        ${unresolvedRecord ? `<button type="button" class="btn btn-small" id="moment-reconcile" ${status.running ? 'disabled' : ''}>核对空间发布结果</button>
+        <button type="button" class="btn btn-small" id="moment-resolve-missed" ${status.running ? 'disabled' : ''}>人工确认未发出</button>
+        <button type="button" class="btn btn-small" id="moment-resolve-sent" ${status.running ? 'disabled' : ''}>人工确认已发出</button>` : ''}
       </div>
       ${latest?.groupSummaries?.length ? `<details class="moment-summaries"><summary>内部群摘要（${latest.groupSummaries.length}）</summary>
         ${latest.groupSummaries.map((group) => `<div class="field"><label>${esc(group.groupName || group.chatKey)}</label><div>${esc(group.summary)}</div></div>`).join('')}
@@ -6257,7 +8021,7 @@ async function loadDailyMomentsStatus() {
       state.currentMomentId = button.dataset.momentSelect;
       loadDailyMomentsStatus();
     }));
-    const recordAction = async (action) => {
+    const recordAction = async (action, targetId) => {
       if (action === 'publish') {
         const visibility = $('#cfg-moments-visibility')?.selectedOptions?.[0]?.textContent || '当前可见范围';
         const duplicateWarning = alreadyPublishedThatDay
@@ -6266,12 +8030,12 @@ async function loadDailyMomentsStatus() {
         if (!await askForConfirmation(`确认发布这份草稿？（${visibility}）${duplicateWarning}\n\n${String(latest.content).slice(0, 180)}`)) return;
       }
       const hint = $('#daily-moments-action-result');
-      const buttons = $$('#daily-moments-preview-btn,#daily-moments-run-btn,#moment-publish-draft,#moment-reconcile');
+      const buttons = $$('#daily-moments-preview-btn,#daily-moments-run-btn,#moment-publish-draft,#moment-reconcile,#moment-resolve-missed,#moment-resolve-sent');
       buttons.forEach((button) => { button.disabled = true; });
       if (hint) hint.textContent = action === 'publish' ? '发布中…' : '核对中…';
       try {
         if (action === 'publish') await saveConfig({ quiet: true });
-        const result = await api(`/api/daily-moments/records/${latest.id}/${action}`, {
+        const result = await api(`/api/daily-moments/records/${targetId || latest.id}/${action}`, {
           method: 'POST',
           body: JSON.stringify({
             confirm: action === 'publish',
@@ -6279,7 +8043,7 @@ async function loadDailyMomentsStatus() {
             confirmDuplicateRisk: action === 'publish'
           })
         });
-        state.currentMomentId = result.record?.id || latest.id;
+        state.currentMomentId = result.record?.id || targetId || latest.id;
         if (hint) hint.textContent = result.matched === false
           ? '近期列表未找到，仍需人工核对；未重发'
           : `${result.alreadyAttempted ? '未重复发布：' : ''}${momentStatusLabel(result.record)}`;
@@ -6291,7 +8055,33 @@ async function loadDailyMomentsStatus() {
       }
     };
     $('#moment-publish-draft')?.addEventListener('click', () => recordAction('publish'));
-    $('#moment-reconcile')?.addEventListener('click', () => recordAction('reconcile'));
+    $('#moment-reconcile')?.addEventListener('click', () => recordAction('reconcile', unresolvedRecord?.id));
+    // 自动核对（reconcile）在空间里找不到那条说说时，记录会一直停在待核对并挡住所有
+    // 时段的发布；这两个按钮是人工终局：确认未发出（解除阻断）或确认已发出（保持阻断）。
+    const resolveAction = async (result, targetId) => {
+      const warning = result === 'missed'
+        ? '确认这条说说【没有发出去】？确认后解除待核对状态，当天可以重新发布；若它实际已发出，可能造成重复发布。'
+        : '确认这条说说【已经发出】？确认后按已发布处理，不会再为这条重发。';
+      if (!await askForConfirmation(warning)) return;
+      const hint = $('#daily-moments-action-result');
+      const buttons = $$('#daily-moments-preview-btn,#daily-moments-run-btn,#moment-publish-draft,#moment-reconcile,#moment-resolve-missed,#moment-resolve-sent');
+      buttons.forEach((button) => { button.disabled = true; });
+      if (hint) hint.textContent = '记录人工核对结果…';
+      try {
+        const res = await api(`/api/daily-moments/records/${targetId || latest.id}/resolve`, {
+          method: 'POST',
+          body: JSON.stringify({ confirm: true, result })
+        });
+        if (hint) hint.textContent = `已记录：${momentStatusLabel(res.record)}`;
+      } catch (error) {
+        if (hint) hint.textContent = `人工核对失败：${error.message}`;
+      } finally {
+        buttons.forEach((button) => { button.disabled = false; });
+        await loadDailyMomentsStatus();
+      }
+    };
+    $('#moment-resolve-missed')?.addEventListener('click', () => resolveAction('missed', unresolvedRecord?.id));
+    $('#moment-resolve-sent')?.addEventListener('click', () => resolveAction('sent', unresolvedRecord?.id));
   } catch (error) {
     box.innerHTML = `<span class="muted">状态读取失败：${esc(error.message)}</span>`;
   }
@@ -6303,6 +8093,7 @@ const QZONE_RUN_LABELS = {
   idle: '没有新内容',
   done: '已完成',
   'partial-unknown': '部分结果待核对',
+  'partial-feed-error': '好友动态未取到',
   failed: '执行失败',
   interrupted: '执行中断',
   deferred: '等待活跃时间'
@@ -6387,6 +8178,8 @@ async function loadQzoneInteractionStatus() {
     const status = await api('/api/qzone-interactions/status');
     const records = Array.isArray(status.records) ? status.records : [];
     const latest = records[0];
+    // 好友动态抓取失败不再让整轮失败：原因记在 feedError 上，这里照样把它显示出来
+    const runAlert = latest?.error || (latest?.feedError ? `好友动态未取到：${latest.feedError}` : '');
     for (const button of $$('#qzi-run-feed-btn,#qzi-run-reply-btn')) {
       button.disabled = status.running;
     }
@@ -6402,7 +8195,7 @@ async function loadQzoneInteractionStatus() {
         <div class="field"><label>上次好友动态检查</label><div>${status.lastFeedPollAt ? esc(fmtTime(status.lastFeedPollAt)) : '-'}</div></div>
         <div class="field"><label>上次评论检查</label><div>${status.lastReplyPollAt ? esc(fmtTime(status.lastReplyPollAt)) : '-'}</div></div>
       </div>
-      ${latest?.error ? `<div class="moment-error" role="alert">${esc(latest.error)}</div>` : ''}
+      ${runAlert ? `<div class="moment-error" role="alert">${esc(runAlert)}</div>` : ''}
       ${records.length ? `<div class="table-wrap"><table class="usage-table">
         <thead><tr><th>时间</th><th>类型</th><th>状态</th><th>动态</th><th>回复</th><th>写操作</th><th>延后</th></tr></thead>
         <tbody>${records.slice(0, 10).map((record) => `
@@ -6423,9 +8216,33 @@ async function loadQzoneInteractionStatus() {
 }
 
 function renderPersonaSection(c) {
+  const roleText = c.persona.roleText || '';
+  refreshPersonaFold(roleText);
+  // 整个设置页会重画 DOM：正文视图与卡库都要按当前状态（折叠/编辑中）画一次，
+  // 并把指纹清空，交给随后的 syncPersonaButtons 校一遍。
+  personaViewKey = null;
+  personaGridKey = null;
   return `
     <h3>人设</h3>
-    ${renderPersonaPicker(c)}
+    ${renderPersonaLibrary(c)}
+    <div class="persona-detail">
+      <div class="pd-head">
+        <span class="pd-title" id="persona-view-title"></span>
+        <span class="chip" id="persona-view-profile"></span>
+        <span class="chip" id="persona-view-binding"></span>
+        <span class="spacer"></span>
+        <button class="btn btn-small hidden" id="restore-persona-btn">恢复整张卡</button>
+        <button class="btn btn-small" id="toggle-persona-edit">编辑全文</button>
+      </div>
+      <div class="pd-body" id="persona-card-view">${renderPersonaCardBody(roleText)}</div>
+    </div>
+    <div class="hint" id="persona-edit-note"></div>
+    <div class="field hidden" id="persona-raw-field">
+      <label>角色设定（原文）</label>
+      <textarea id="cfg-roletext" class="persona-role-text" placeholder="例如：你是运维群里的老油条……">${esc(roleText)}</textarea>
+      <div class="hint">上面那屏是这份原文的读法，保存的也是这份原文。平时逐节改就够了（每节右上角有「编辑」「恢复本节」）；
+        这里改一个字也会<strong>解除与内置卡的绑定</strong>（正文归你自己管），想重新跟随卡文件，回上面的卡库里点一下那张卡。</div>
+    </div>
     <div class="field-row">
       <div class="field"><label>机器人名字</label><input type="text" id="cfg-botname" value="${esc(c.persona.botName)}" /></div>
       <div class="field"><label>群内展示名（可选）</label><input type="text" id="cfg-selfnick" value="${esc(c.persona.selfNickname || '')}" /></div>
@@ -6441,11 +8258,14 @@ function renderPersonaSection(c) {
           <option value="high" ${c.persona.participation === 'high' ? 'selected' : ''}>活跃型</option>
         </select></div>
     </div>
-    <div class="field"><label>角色设定</label>
-      <textarea id="cfg-roletext" class="persona-role-text" placeholder="例如：你是运维群里的老油条……">${esc(c.persona.roleText || '')}</textarea></div>
-    <div class="field"><label>管理员附加规则（可选，追加到系统提示）</label>
-      <textarea id="cfg-customrules" class="persona-role-text" style="min-height:100px">${esc(c.persona.customRules || '')}</textarea></div>
-    ${renderPersonaSaveBar()}`;
+    <div class="hint">交流策略：「原版群友」那套允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据。嫌它冲或想让它听话，选后者。角色设定里写了相反的脾气时，以角色设定为准（它优先级更高）；参与度（安静/普通/活跃）不受角色设定影响。</div>
+    <div class="field"><label>管理员附加规则（可选；排在所有平台规则之后 —— 想压过默认风格就写这里）</label>
+      <div class="pd-tags" id="persona-rule-chips">
+        ${PERSONA_RULE_EXAMPLES.map((rule) => `<button type="button" class="pd-tag rule-chip" data-rule="${esc(rule)}">＋ ${esc(rule)}</button>`).join('')}
+      </div>
+      <textarea id="cfg-customrules" class="persona-role-text" style="min-height:100px" placeholder="例如：别装傻、别反问，不接话就安静；称呼固定用「老板」；被怼只淡淡带过">${esc(c.persona.customRules || '')}</textarea>
+      <div class="hint">冲突时优先级：安全规则 &gt; 这里 &gt; 角色设定 &gt; 平台默认风格。角色的口吻/称呼/脾气写在「角色设定」里就行，这里的硬要求会盖过平台默认风格。上面几个例子点一下就加进去，可以再改。</div></div>
+    <div class="hint">改完记得点页面最下面那条<strong>「保存设置」</strong>（一直悬在底部）——它保存的就是这一页的人设。</div>`;
 }
 
 function renderAllowSection(c) {
@@ -6517,47 +8337,93 @@ function clampInt(raw, min, max, fallback) {
 /*
  * 滑条换算（前端显示用）。
  *
- * ⚠️ 必须与 src/tier-slider.js 保持完全一致 —— 后端保存配置时会用它
+ * ⚠️ 必须与 src/core/tier-slider.js 保持完全一致 —— 后端保存配置时会用它
  *    **重新权威换算**档位与概率，所以前端即使算错也不会影响实际行为；
  *    但两边不一致会让"界面显示的档位"和"实际生效的档位"对不上，造成困惑。
  *    ui/app.js 是普通 script（非 ES module），无法 import，只能镜像一份。
  */
-const TIER_SLIDER_BANDS = { tier1End: 10, tier2End: 20, tier3End: 90 };
-
-function sliderToTierUI(pos) {
-  const b = TIER_SLIDER_BANDS;
-  const raw = Number(pos);
-  if (!Number.isFinite(raw)) return { tier: 4, randomPercent: 100 };
-  const p = Math.min(100, Math.max(0, raw));
-  if (p <= b.tier1End) return { tier: 1, randomPercent: 0 };
-  if (p <= b.tier2End) return { tier: 2, randomPercent: 0 };
-  if (p <= b.tier3End) {
-    const pct = ((p - b.tier2End) / (b.tier3End - b.tier2End)) * 100;
-    return { tier: 3, randomPercent: Math.round(pct * 10) / 10 };
-  }
-  return { tier: 4, randomPercent: 100 };
+/** 概率取值（与后端 tier-slider.js 的 clampProbability 同一套规则）。 */
+function clampProbabilityUI(value, fallback = 100) {
+  // 与后端一致：先判"有没有值"，Number(null)/Number('') 都是 0，不能拿来当概率
+  const missing = value === undefined || value === null || String(value).trim() === '';
+  const n = missing ? NaN : Number(value);
+  if (!Number.isFinite(n)) return Math.min(100, Math.max(0, Number(fallback) || 0));
+  return Math.min(100, Math.max(0, Math.round(n * 10) / 10));
 }
 
-/** 已保存配置 → 滑条位置（优先用存下来的位置，老配置没有就从 tier/概率反推）。 */
+/** 滑条值 = 概率；tier 只用来选读多少条与展示触发方式。 */
+function sliderToTierUI(pos) {
+  const probability = clampProbabilityUI(pos, 100);
+  return {
+    tier: probability <= 0 ? 1 : (probability >= 100 ? 4 : 3),
+    randomPercent: probability
+  };
+}
+
+/** 老四段式滑条位置 → 概率（与后端 legacySliderToProbability 同一套规则）。 */
+function legacySliderToProbabilityUI(pos) {
+  const raw = Number(pos);
+  if (!Number.isFinite(raw)) return 100;
+  const p = Math.min(100, Math.max(0, raw));
+  if (p <= 20) return 0;
+  if (p >= 90) return 100;
+  return Math.round(((p - 20) / 70) * 1000) / 10;
+}
+
+/**
+ * 已保存配置 → 滑条位置。存的就是概率；
+ * 老配置（四段式，没打 sliderMode 标记）要先按老口径换算 ——
+ * 否则界面会把"老 1 档的位置 5"当成"5% 概率"显示并回写，用户一保存就被悄悄改掉。
+ */
 function sliderToTierUI_tierToSlider(st) {
-  const b = TIER_SLIDER_BANDS;
-  const saved = Number(st?.contextSliderPos);
-  if (Number.isFinite(saved)) return Math.min(100, Math.max(0, saved));
+  const rawPos = st?.contextSliderPos;
+  // ⚠️ 不能用 Number(rawPos) 判有没有值：Number(null) === 0，会把"没设位置"当成"位置 0"
+  const hasPos = rawPos !== undefined && rawPos !== null && String(rawPos).trim() !== '';
+  const legacyMode = String(st?.sliderMode || '') !== 'probability';
+  if (hasPos) {
+    return legacyMode ? legacySliderToProbabilityUI(rawPos) : clampProbabilityUI(rawPos);
+  }
   const t = Math.min(4, Math.max(1, Number(st?.contextTier) || 4));
-  const pct = Math.min(100, Math.max(0, Number(st?.randomPercent) || 0));
-  if (t === 1) return b.tier1End / 2;
-  if (t === 2) return (b.tier1End + b.tier2End) / 2;
-  if (t === 3) return b.tier2End + (pct / 100) * (b.tier3End - b.tier2End);
-  return (b.tier3End + 100) / 2;
+  if (t >= 4) return 100;
+  if (t <= 2) return 0;
+  return clampProbabilityUI(st?.randomPercent, 0);
+}
+
+/** 分群表：老配置的值也要换算成概率（界面上显示的与保存的都按新语义）。 */
+function groupSliderPosForUi(st) {
+  const map = st?.groupSliderPos || {};
+  if (String(st?.sliderMode || '') === 'probability') return map;
+  const out = {};
+  for (const [groupId, pos] of Object.entries(map)) out[groupId] = legacySliderToProbabilityUI(pos);
+  return out;
+}
+
+/** 概率落在刻度条的哪一段（只影响高亮）。 */
+function segOfProbability(value) {
+  const p = clampProbabilityUI(value);
+  if (p <= 0) return 1;
+  if (p >= 100) return 4;
+  return p < 50 ? 2 : 3;
+}
+
+/** 四个"读取条数"参数里哪些现在用得上：被 @ / 关键词那两条始终算数。 */
+function paramActiveForProbability(value) {
+  const p = clampProbabilityUI(value);
+  return { at: true, keyword: true, random: p > 0 && p < 100, all: p >= 100 };
 }
 
 /** 滑条位置 → 一句话说明（给用户的即时反馈）。 */
 function sliderDesc(pos) {
-  const { tier, randomPercent } = sliderToTierUI(pos);
-  if (tier === 1) return '<b>1 档 · 仅艾特</b>：只有被 @ 时才响应，其余消息标记已读、不调模型（最省）';
-  if (tier === 2) return '<b>2 档 · +关键词</b>：被 @ 或命中关键词时响应';
-  if (tier === 3) return `<b>3 档 · +随机</b>：被 @ / 关键词必响应；此外每批普通消息有 <b>${randomPercent}%</b> 概率响应`;
-  return '<b>4 档 · 全响应</b>：任何消息都响应，且艾特/关键词/随机的判定全部失效';
+  const p = clampProbabilityUI(pos);
+  let main;
+  if (p <= 0) main = '<b>0%</b>：普通消息不回（标记已读、不调模型）；<b>被 @ 或命中关键词一定回</b>';
+  else if (p >= 100) main = '<b>100% · 全响应</b>：任何消息都回';
+  else main = `普通消息 <b>${p}%</b> 概率回（大约每 100 批接 ${p} 批）；<b>被 @ 或命中关键词一定回</b>`;
+  // 档位管的是"它没在跟人对话时，要不要接这句话"。下面两条路不受档位限制，
+  // 不写清楚就会被当成"档位调了没生效"。
+  return main
+    + '<br><span class="muted">档位只管群聊里"要不要搭话"：私聊被直接找时总会回；'
+    + '对话模式是「参与者续接 / 完整生命周期」时，刚跟你说过话的人在活跃窗口内的消息也直接回（这两条不看概率）。</span>';
 }
 
 const TIER_NAME = { 1: '仅艾特', 2: '+关键词', 3: '+随机', 4: '全响应' };
@@ -6662,13 +8528,12 @@ function renderConversationModePanels(conversation = {}) {
 function renderChatSection(c) {
   const st = c.store || {};
   const conversation = c.conversation || {};
-  // 滑条位置是唯一真相；档位与概率都由它派生（与后端 tier-slider.js 同一套规则）
+  // 滑条位置是唯一真相，而且**滑条上的数字就是概率**（与后端 tier-slider.js 同一套规则）
   const sliderPos = sliderToTierUI_tierToSlider(st);
-  const { tier: curTier, randomPercent: curPct } = sliderToTierUI(sliderPos);
-  // 模板里要按各段占比画刻度条，这里简写成 B 供下方 ${B.xxx} 使用。
-  // ⚠️ 这个别名不能删 —— 曾经漏掉它，导致模板里 B 未定义，
-  //    整个 renderChatSection 抛 ReferenceError，聊天设置页直接打不开。
-  const B = TIER_SLIDER_BANDS;
+  const { randomPercent: curPct } = sliderToTierUI(sliderPos);
+  // 刻度高亮与参数高亮都按"当前概率落在哪一段"来点
+  const curSeg = segOfProbability(curPct);
+  const paramOn = paramActiveForProbability(curPct);
 return `
     <h3>对话模式</h3>
     ${renderConversationModePanels(conversation)}
@@ -6748,19 +8613,19 @@ return `
     <div class="hint conversation-trigger-hint" id="conversation-trigger-hint"></div>
 
     <div class="checkbox-row"><input type="checkbox" id="cfg-unifiedtier" ${st.unifiedTier !== false ? 'checked' : ''} />
-      <label for="cfg-unifiedtier">统一设置全部响应档位（关掉就能给每个白名单群聊单独拖档位）</label></div>
+      <label for="cfg-unifiedtier">统一设置响应概率（关掉就能给每个白名单群聊单独拖）</label></div>
 
     <!-- 统一模式：一个滑条管所有会话（原行为） -->
     <div id="tier-unified-wrap"${st.unifiedTier === false ? ' style="display:none"' : ''}>
     <div class="tier-slider-wrap">
       <input type="range" id="ctx-tier-slider" class="tier-slider"
              min="0" max="100" step="0.5" value="${esc(sliderPos)}"
-             aria-label="响应档位滑条" />
+             aria-label="响应概率滑条" />
       <div class="tier-scale" id="tier-scale">
-        <span class="tier-seg seg1${curTier === 1 ? ' on' : ''}" data-seg="1" style="flex:${B.tier1End}">仅艾特</span>
-        <span class="tier-seg seg2${curTier === 2 ? ' on' : ''}" data-seg="2" style="flex:${B.tier2End - B.tier1End}">+关键词</span>
-        <span class="tier-seg seg3${curTier === 3 ? ' on' : ''}" data-seg="3" style="flex:${B.tier3End - B.tier2End}">+随机（概率递增）</span>
-        <span class="tier-seg seg4${curTier === 4 ? ' on' : ''}" data-seg="4" style="flex:${100 - B.tier3End}">全响应</span>
+        <span class="tier-seg seg1${curSeg === 1 ? ' on' : ''}" data-seg="1" style="flex:12">0% · 只回 @/关键词</span>
+        <span class="tier-seg seg2${curSeg === 2 ? ' on' : ''}" data-seg="2" style="flex:30">约 33%</span>
+        <span class="tier-seg seg3${curSeg === 3 ? ' on' : ''}" data-seg="3" style="flex:30">约 66%</span>
+        <span class="tier-seg seg4${curSeg === 4 ? ' on' : ''}" data-seg="4" style="flex:28">100% · 全响应</span>
       </div>
     </div>
 
@@ -6772,41 +8637,42 @@ return `
       <div class="field"><label>选择要单独设置的群聊（来自白名单）</label>
         <select id="tier-group-select"></select>
       </div>
-      <input type="hidden" id="tier-group-json" value="${esc(JSON.stringify(st.groupSliderPos || {}))}" />
+      <input type="hidden" id="tier-group-json" value="${esc(JSON.stringify(groupSliderPosForUi(st)))}" />
       <div class="tier-slider-wrap">
         <input type="range" id="ctx-tier-slider-g" class="tier-slider"
                min="0" max="100" step="0.5" value="${esc(sliderPos)}"
-               aria-label="该群响应档位滑条" />
+               aria-label="该群响应概率滑条" />
         <div class="tier-scale" id="tier-scale-g">
-          <span class="tier-seg seg1" data-seg="1" style="flex:${B.tier1End}">仅艾特</span>
-          <span class="tier-seg seg2" data-seg="2" style="flex:${B.tier2End - B.tier1End}">+关键词</span>
-          <span class="tier-seg seg3" data-seg="3" style="flex:${B.tier3End - B.tier2End}">+随机（概率递增）</span>
-          <span class="tier-seg seg4" data-seg="4" style="flex:${100 - B.tier3End}">全响应</span>
+          <span class="tier-seg seg1" data-seg="1" style="flex:12">0% · 只回 @/关键词</span>
+          <span class="tier-seg seg2" data-seg="2" style="flex:30">约 33%</span>
+          <span class="tier-seg seg3" data-seg="3" style="flex:30">约 66%</span>
+          <span class="tier-seg seg4" data-seg="4" style="flex:28">100% · 全响应</span>
         </div>
       </div>
       <div class="hint" id="ctx-tier-note-g" style="margin-top:8px"></div>
       <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
         <button class="btn btn-small btn-danger" id="tier-group-clear-btn">清除该群的单独设置</button>
-        <span class="hint" style="margin:0">没单独设置过的群聊和所有私聊，跟随上方统一档位的滑条位置。</span>
+        <span class="hint" style="margin:0">没单独设置过的群聊和所有私聊，跟随上方统一滑条的概率。</span>
       </div>
     </div>
 
     <div class="tier-params">
-      <div class="tier-param${curTier === 1 ? '' : ' dim'}">
+      <div class="tier-param${paramOn.at ? '' : ' dim'}">
         <label>① 被艾特时：发未读 + <input type="number" id="cfg-atcount" min="0" max="500" value="${esc(st.atCount ?? 20)}" /> 条已读</label>
-        <div class="hint">有人 @机器人时才响应。<b>任何档位下被艾特都会响应</b>。</div>
+        <div class="hint">有人 @ 机器人时<b>一定响应</b>，不受上面概率的影响。</div>
       </div>
-      <div class="tier-param${curTier === 2 ? '' : ' dim'}">
+      <div class="tier-param${paramOn.keyword ? '' : ' dim'}">
         <label>② 命中关键词时：发未读 + <input type="number" id="cfg-kwcount" min="0" max="500" value="${esc(st.keywordCount ?? 15)}" /> 条已读</label>
-        <div class="hint">关键词（每行一个，不区分大小写）：</div>
+        <div class="hint">关键词（每行一个，不区分大小写）；命中<b>一定响应</b>。留空就只回 @：</div>
         <textarea id="cfg-keywords" rows="3" placeholder="小鲸鱼&#10;bot">${esc((st.keywords || []).join('\n'))}</textarea>
       </div>
-      <div class="tier-param${curTier === 3 ? '' : ' dim'}">
-        <label>③ 随机命中时：发未读 + <input type="number" id="cfg-randcount" min="0" max="500" value="${esc(st.randomCount ?? 8)}" /> 条已读</label>
+      <div class="tier-param${paramOn.random ? '' : ' dim'}">
+        <label>③ 按概率响应时：发未读 + <input type="number" id="cfg-randcount" min="0" max="500" value="${esc(st.randomCount ?? 8)}" /> 条已读</label>
+        <div class="hint">概率在 0 和 100 之间时，普通消息按这个概率接。</div>
       </div>
-      <div class="tier-param${curTier >= 4 ? '' : ' dim'}">
-        <label>④ 其余情况也响应：发未读 + <input type="number" id="cfg-allcount" min="0" max="500" value="${esc(st.allCount ?? 80)}" /> 条已读</label>
-        <div class="hint"><b>任何消息都响应</b>。</div>
+      <div class="tier-param${paramOn.all ? '' : ' dim'}">
+        <label>④ 全响应时：发未读 + <input type="number" id="cfg-allcount" min="0" max="500" value="${esc(st.allCount ?? 80)}" /> 条已读</label>
+        <div class="hint">滑条拖到 <b>100%</b> 时，任何消息都响应。</div>
       </div>
     </div>
 
@@ -6815,6 +8681,41 @@ return `
       <button class="btn btn-small" id="blocklist-btn">管理屏蔽名单</button>
       <div class="hint" style="margin-top:6px">被屏蔽群员的消息不会存档、不会触发回复，也不会作为聊天背景发给模型。机器人自己的发言不受影响。</div>
     </div>`;
+}
+
+function renderTokenSaverSection(c) {
+  const mode = ['off', 'balanced', 'aggressive'].includes(c.tokenSaver?.mode) ? c.tokenSaver.mode : 'off';
+  const saver = state.status?.tokenSaver || null;
+  const caps = saver?.capsByMode || {};
+  // 档位条数按 被艾特/关键词/随机 三档说明（allCount 与被艾特档同值），数字全部来自服务端上限表
+  const summarize = (m) => {
+    const k = caps[m];
+    if (!k) return '';
+    return `档位读 ${k.atCount}/${k.keywordCount}/${k.randomCount} 条，轮数 ≤${k.maxRounds}、单次预算 ≤${Math.round(k.maxRunTokens / 10000)} 万 token，`
+      + `交接 ≤${k.handoffMaxChars} 字符、印象 ≤${k.memoryBlockChars} 字符、表情清单 ≤${k.promptMaxStickers} 条`;
+  };
+  const rows = (saver?.rows || []).map((row) => `<tr>
+      <td>${esc(row.label)}</td>
+      <td class="muted">${esc(row.user)}</td>
+      <td>${row.clamped ? `<strong>${esc(row.effective)}</strong> <span class="muted">（被夹住）</span>` : esc(row.effective)}</td>
+    </tr>`).join('');
+  return `
+    <h3 id="settings-token-saver">省 Token</h3>
+    <div class="hint" style="margin-bottom:8px">开启后只给下面这些项<b>夹上限</b>，不改写你在各分区填的值 —— 关掉立刻恢复原样。
+      每次模型调用的固定底（系统提示 + 工具定义，约 1.2 万-1.5 万 token）不受此影响，
+      想再省就配合「聊天设置」的响应概率与「搜索服务 / 图片输入」开关。</div>
+    <label class="radio-row"><input type="radio" name="token-saver-mode" value="off" ${mode === 'off' ? 'checked' : ''} />
+      <span>关闭：完全按你自己的设置</span></label>
+    <label class="radio-row"><input type="radio" name="token-saver-mode" value="balanced" ${mode === 'balanced' ? 'checked' : ''} />
+      <span>省：${esc(summarize('balanced') || '档位条数、轮数、预算、交接/印象、表情清单都收一档')}</span></label>
+    <label class="radio-row"><input type="radio" name="token-saver-mode" value="aggressive" ${mode === 'aggressive' ? 'checked' : ''} />
+      <span>很省：${esc(summarize('aggressive') || '再收一档，接话更省但读的历史更少')}</span></label>
+    <div class="settings-divider"></div>
+    <h3>实际生效值</h3>
+    ${rows
+      ? `<div class="table-wrap"><table class="usage-table"><thead><tr><th>项目</th><th>你的设置</th><th>当前生效</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<div class="hint">正在读取生效值…（刷新页面后显示）</div>'}
+    <div class="hint" style="margin-top:8px">改完点底部「保存设置」生效；效果在「用量」页按天看得到。</div>`;
 }
 
 function renderDesktopSection(c) {
@@ -6826,7 +8727,7 @@ function renderDesktopSection(c) {
           placeholder="${c.server?.hasToken ? '输入当前 Token' : '当前未设置 Token'}" /></div>
       <div class="field"><label>新 Token</label>
         <input type="password" id="cfg-console-token-new" autocomplete="new-password"
-          placeholder="16~128 位字母、数字或 . _ ~ -" /></div>
+          placeholder="16-128 位字母、数字或 . _ ~ -" /></div>
       <div class="field"><label>确认新 Token</label>
         <input type="password" id="cfg-console-token-confirm" autocomplete="new-password"
           placeholder="再次输入新 Token" /></div>
@@ -6862,7 +8763,8 @@ function renderOnebotSection(c) {
       <div class="field"><label>HTTP 令牌（与 WS 不同时填）</label><input type="password" id="cfg-obhttptoken"
         placeholder="${c.onebot.hasHttpAccessToken ? '已保存；留空保持不变' : '未设置'}" /></div>
     </div>
-    <div class="hint">改完 OneBot 地址或令牌后，执行 <code>manage.sh restart</code> 生效。</div>`;
+    <div id="onebot-status-line">${onebotStatusLineHtml()}</div>
+    <div class="hint">改完 OneBot 地址或令牌后，执行 <code>manage.sh restart</code> 生效（连接只在启动时建立一次，改完不重启还是旧地址）。</div>`;
 }
 
 function bindSettingsEvents(c) {
@@ -6870,6 +8772,12 @@ function bindSettingsEvents(c) {
   // 保存当前区块设置（通用保存按钮）。只有当前区块的字段才会被读取，不会 null 报错。
   const saveCfgBtn = $('#save-cfg-btn');
   if (saveCfgBtn) saveCfgBtn.addEventListener('click', async () => {
+    // 人设页的分节编辑框不是唯一数据源：#cfg-roletext 才是。保存前先把正在编辑的
+    // 那一节落回草稿，否则"边编辑边点保存"会存下旧正文（界面还提示"已保存"）。
+    if (flushPersonaSectionEdit()) {
+      personaEditNote = '';
+      syncPersonaButtons();
+    }
     try {
       await saveConfig();
       const res = $('#cfg-save-result');
@@ -6877,7 +8785,29 @@ function bindSettingsEvents(c) {
       res.classList.remove('saved-flash');
       void res.offsetWidth;
       res.classList.add('saved-flash');
-      refreshStatus();
+      // 保存成功后，人设页那条"还没生效"的提示就没意义了，清掉它
+      if (state.settingsSection === 'persona') {
+        personaEditNote = '';
+        const note = $('#persona-edit-note');
+        if (note) note.textContent = '';
+      }
+      refreshStatus().then(() => {
+        // 省 Token 的"实际生效值"表按 /api/status 渲染：保存完要等状态回来再重画一次，
+        // 否则切了档位、表格还显示上一档的数字（要刷新页面才对得上）。
+        if (state.settingsSection !== 'token-saver') return;
+        const section = state.settingsSection;
+        renderSettings();
+        // 重画会把上面写好的"已保存 ✓"连同节点一起换掉 —— 这里补写一次，
+        // 否则在省 Token 页点保存看不到任何成功反馈（数字本来就低于上限时尤其明显）。
+        if (state.settingsSection !== section) return;
+        const again = $('#cfg-save-result');
+        if (again) {
+          again.textContent = '已保存 ✓';
+          again.classList.remove('saved-flash');
+          void again.offsetWidth;
+          again.classList.add('saved-flash');
+        }
+      }).catch(() => {});
       startListPoller();   // 刷新间隔可能刚被改过，用新值重启轮询
     } catch (e) {
       $('#cfg-save-result').textContent = `保存失败：${e.message}`;
@@ -6951,6 +8881,12 @@ function bindSettingsEvents(c) {
       $('#cfg-moments-catchup-label').textContent = randomMode
         ? '重启后在未结束的范围内补跑' : '服务错过固定时刻后补跑';
     });
+    const syncIntervalCustom = () => {
+      const wrap = $('#moment-interval-custom-wrap');
+      if (wrap) wrap.hidden = $('#cfg-moments-interval')?.value !== 'custom';
+    };
+    $('#cfg-moments-interval')?.addEventListener('change', syncIntervalCustom);
+    syncIntervalCustom();
     const refreshWindowButtons = () => {
       const rows = $$('#moment-window-rows .moment-window-row');
       $('#moment-window-add').disabled = rows.length >= 8;
@@ -7075,7 +9011,8 @@ function bindSettingsEvents(c) {
       zhipu: '#zhipu-search-fields',
       bocha: '#bocha-search-fields',
       baidu: '#baidu-search-fields',
-      metaso: '#metaso-search-fields'
+      metaso: '#metaso-search-fields',
+      doubao: '#doubao-search-fields'
     };
     for (const [provider, sel] of Object.entries(fields)) {
       const el = $(sel);
@@ -7165,23 +9102,21 @@ function bindSettingsEvents(c) {
   if (tierSlider) {
     const sync = () => {
       const pos = Number(tierSlider.value);
-      const { tier: t } = sliderToTierUI(pos);
-      // 提示行：显示当前档位与概率
+      // 提示行：显示当前概率与"哪些一定回"
       const note = $('#ctx-tier-note');
       if (note) note.innerHTML = sliderDesc(pos);
-      // 参数区高亮：只点亮"当前真正会用到的那一档"
-      // 1档→只亮①；2档→亮②；3档→亮③；4档→亮④（且①②③失效）
-      const params = document.querySelectorAll('.tier-param');
-      params.forEach((el, idx) => {
-        const n = idx + 1;
-        el.classList.toggle('dim', n !== t);
+      // 参数区高亮：①②（被 @ / 关键词）始终算数；③ 概率在中间时用得上；④ 只有 100% 才用得上
+      const on = paramActiveForProbability(pos);
+      const actives = [on.at, on.keyword, on.random, on.all];
+      document.querySelectorAll('.tier-param').forEach((el, idx) => {
+        el.classList.toggle('dim', !actives[idx]);
       });
-      // 刻度段高亮：滑到哪一档，那一档的标签 + 上边线一起变色。
+      // 刻度段高亮：概率落在哪一段就点亮哪一段。
       // ⚠️ 之前这段完全没做，颜色全靠 CSS 写死（.s1 永远亮、.s4 永远橙），
       //    所以拖动滑条时刻度毫无反应 —— 看起来就像"没生效"。
-      const segs = document.querySelectorAll('#tier-scale .tier-seg');
-      segs.forEach((el) => {
-        el.classList.toggle('on', Number(el.dataset.seg) === t);
+      const seg = segOfProbability(pos);
+      document.querySelectorAll('#tier-scale .tier-seg').forEach((el) => {
+        el.classList.toggle('on', Number(el.dataset.seg) === seg);
       });
       // 滑条填充色（用 CSS 变量告诉样式当前百分比）
       tierSlider.style.setProperty('--pos', pos + '%');
@@ -7317,17 +9252,25 @@ function bindSettingsEvents(c) {
 
     const syncG = () => {
       const pos = Number(gSlider.value);
-      const { tier: t } = sliderToTierUI(pos);
       if (gNote) gNote.innerHTML = sliderDesc(pos);
+      // 参数高亮跟着"当前这个群"的概率走（统一滑条隐藏时，①②③④ 的灰显会误导）
+      const on = paramActiveForProbability(pos);
+      const actives = [on.at, on.keyword, on.random, on.all];
+      document.querySelectorAll('.tier-param').forEach((el, idx) => {
+        el.classList.toggle('dim', !actives[idx]);
+      });
+      const seg = segOfProbability(pos);
       document.querySelectorAll('#tier-scale-g .tier-seg')
-        .forEach((el) => el.classList.toggle('on', Number(el.dataset.seg) === t));
+        .forEach((el) => el.classList.toggle('on', Number(el.dataset.seg) === seg));
       gSlider.style.setProperty('--pos', pos + '%');
     };
     const loadGroup = () => {
       const gid = groupSel.value;
       const m = readMap();
       // 没单独设置过的群：从全局滑条当前值起步，所见即所得
-      gSlider.value = m[gid] !== undefined ? m[gid] : (Number($('#ctx-tier-slider')?.value) || 100);
+      // 注意 0 是合法位置（1 档），不能写 `|| 100`
+      const globalPos = Number($('#ctx-tier-slider')?.value);
+      gSlider.value = m[gid] !== undefined ? m[gid] : (Number.isFinite(globalPos) ? globalPos : 100);
       syncG();
     };
     groupSel.addEventListener('change', loadGroup);
@@ -7378,6 +9321,37 @@ function bindSettingsEvents(c) {
 
   // 批量自定义价格编辑
   $('#batch-price-btn')?.addEventListener('click', () => openBatchPriceModal());
+  // 给"当前模型"定价（渠道价/自定义价，覆盖官方价）
+  $('#pc-price-btn')?.addEventListener('click', () => openPriceDialog({
+    model: String($('#cfg-model')?.value || state.config?.api?.model || '').trim(),
+    vendor: state.modelPrices?.currentVendor || ''
+  }));
+
+  // ── 从渠道自动拉价（探测）+ 渠道价目表管理 ──
+  renderChannelFeeds();
+  $('#probe-btn')?.addEventListener('click', runChannelProbe);
+  $('#channel-feed-add')?.addEventListener('click', addChannelFeed);
+  $('#channel-feeds')?.addEventListener('click', onChannelFeedAction);
+
+  // ── 成本口径三选一：只让被选中的那一项可填 ──
+  const syncCostModeInputs = () => {
+    const picked = $('input[name="cost-mode"]:checked')?.value || 'official';
+    const mult = $('#cfg-cost-multiplier');
+    const monthly = $('#cfg-cost-monthly');
+    if (mult) mult.disabled = picked !== 'multiplier';
+    if (monthly) monthly.disabled = picked !== 'subscription';
+    const status = $('#cost-mode-status');
+    if (status) {
+      status.textContent = picked === 'multiplier'
+        ? `官方价 ×${mulOf(mult?.value)} = 你的渠道价（按实付口径显示）`
+        : picked === 'subscription'
+          ? `按 ¥${Number(monthly?.value) || 0}/月 固定支出显示，不再按 token 算`
+          : '按内置官方价格表估算：数字是估算，不是你的账单';
+    }
+  };
+  $$('input[name="cost-mode"]').forEach((el) => el.addEventListener('change', syncCostModeInputs));
+  ['#cfg-cost-multiplier', '#cfg-cost-monthly'].forEach((sel) => $(sel)?.addEventListener('input', syncCostModeInputs));
+  syncCostModeInputs();
 
   // ── 远程价格表：状态展示 + 立即拉取 ──
   renderPriceFeedStatus();
@@ -7388,7 +9362,18 @@ function bindSettingsEvents(c) {
     if (statusEl) statusEl.textContent = '正在拉取…';
     try {
       const r = await api('/api/model-prices/refresh', { method: 'POST', body: '{}' });
-      state.modelPrices = { prices: r.prices, current: r.current, remote: r.remote };
+      // 合并而不是整体替换：响应里没有的字段（渠道价目表状态等）必须留住，
+      // 否则这一下会把渠道价、别名、渠道价目表清单全部抹掉，卡片当场显示错价。
+      state.modelPrices = {
+        ...(state.modelPrices || {}),
+        prices: r.prices,
+        current: r.current,
+        remote: r.remote,
+        currentVendor: r.currentVendor ?? state.modelPrices?.currentVendor,
+        currentDetail: r.currentDetail ?? state.modelPrices?.currentDetail,
+        aliases: r.aliases ?? state.modelPrices?.aliases,
+        channelFeeds: r.channelFeeds ?? state.modelPrices?.channelFeeds
+      };
       renderPriceFeedStatus();
       refreshModelPriceCard();   // 价格可能变了，当前模型卡片跟着刷
     } catch (e) {
@@ -7416,7 +9401,8 @@ function bindSettingsEvents(c) {
     ['cfg-zhipu-key-toggle', 'cfg-zhipu-key'],
     ['cfg-bocha-key-toggle', 'cfg-bocha-key'],
     ['cfg-baidu-key-toggle', 'cfg-baidu-key'],
-    ['cfg-metaso-key-toggle', 'cfg-metaso-key']
+    ['cfg-metaso-key-toggle', 'cfg-metaso-key'],
+    ['cfg-doubao-key-toggle', 'cfg-doubao-key']
   ];
   for (const [btnId, inputId] of pwdToggles) {
     const btn = $(`#${btnId}`);
@@ -7456,7 +9442,8 @@ function bindSettingsEvents(c) {
     'cfg-zhipu-key': 'zhipu',
     'cfg-bocha-key': 'bocha',
     'cfg-baidu-key': 'baidu',
-    'cfg-metaso-key': 'metaso'
+    'cfg-metaso-key': 'metaso',
+    'cfg-doubao-key': 'doubao'
   };
 
   // 前端点“显示”时向后端要真实 Key。
@@ -7664,14 +9651,158 @@ function bindSettingsEvents(c) {
   applyShowVision();
 
   // ── 人设区块事件 ──
-  const personaPick = $('#cfg-persona-pick');
-  for (const selector of ['#cfg-roletext', '#cfg-customrules', '#cfg-behavior-profile']) {
+  // 附加规则/交流策略：变化很便宜（卡库有指纹、解析有缓存），即时同步
+  for (const selector of ['#cfg-customrules', '#cfg-behavior-profile']) {
     $(selector)?.addEventListener('input', syncPersonaButtons);
     $(selector)?.addEventListener('change', syncPersonaButtons);
   }
-  if (personaPick) {
-    personaPick.addEventListener('click', () => openPersonaPicker());
+  // 角色正文：整段正文每敲一键都要重画分节视图（约 10ms），打字时按 140ms 合并成一次；
+  // 失焦/提交立刻同步，不会留下过期视图。
+  $('#cfg-roletext')?.addEventListener('input', () => {
+    if (personaViewTimer) clearTimeout(personaViewTimer);
+    personaViewTimer = setTimeout(() => { personaViewTimer = null; syncPersonaButtons(); }, 140);
+  });
+  $('#cfg-roletext')?.addEventListener('change', () => {
+    if (personaViewTimer) { clearTimeout(personaViewTimer); personaViewTimer = null; }
+    syncPersonaButtons();
+  });
+  // 卡库：点一张卡（或回车/空格）就把它的正文填进草稿。事件挂在容器上 ——
+  // syncPersonaButtons 会重画卡库，挂在卡片上会被重画冲掉。
+  const personaGrid = $('#persona-grid');
+  if (personaGrid) {
+    const pickCard = (target) => {
+      const card = target?.closest?.('.persona-card');
+      const id = card?.dataset?.personaId;
+      const tpl = id ? state.personaTemplates[id] : null;
+      if (tpl) applyPersonaDraft(tpl, id);
+    };
+    personaGrid.addEventListener('click', (event) => pickCard(event.target));
+    personaGrid.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pickCard(event.target); }
+    });
   }
+  // 正文视图：点小节标题折叠/展开；小节上的「编辑/保存本节/取消/恢复本节」按钮优先处理
+  const personaView = $('#persona-card-view');
+  if (personaView) {
+    personaView.addEventListener('click', (event) => {
+      const roleBox = $('#cfg-roletext');
+      const button = event.target?.closest?.('button');
+      const buttonIsAction = button && (button.classList.contains('pd-sec-edit')
+        || button.classList.contains('pd-sec-save')
+        || button.classList.contains('pd-sec-cancel')
+        || button.classList.contains('pd-sec-revert'));
+      if (buttonIsAction && roleBox) {
+        const idx = Number(button.closest('.pd-sec')?.dataset?.sec);
+        if (!Number.isFinite(idx)) return;
+        const baseTpl = state.personaTemplates[personaBaseCardId()];
+        if (button.classList.contains('pd-sec-edit')) {
+          // 全文编辑框和分节编辑框只留一个：开了分节就把「编辑全文」收起来
+          const rawField = $('#persona-raw-field');
+          if (rawField) {
+            rawField.classList.add('hidden');
+            const toggle = $('#toggle-persona-edit');
+            if (toggle) toggle.textContent = '编辑全文';
+          }
+          // 切到另一节继续编辑时，先把当前这节未保存的改动落回草稿，别让输入白白丢掉
+          if (flushPersonaSectionEdit()) {
+            personaEditNote = '上一节已更新（还没生效）：确认无误后点底部那条「保存设置」。';
+          }
+          personaEditingSection = personaEditingSection === idx ? -1 : idx;
+        } else if (button.classList.contains('pd-sec-save')) {
+          const box = personaView.querySelector(`.pd-edit-text[data-sec="${idx}"]`);
+          if (box) {
+            roleBox.value = replacePersonaSectionBody(roleBox.value, idx, box.value);
+            personaEditingSection = -1;
+            // 刚保存的这一节保持展开：别让它立刻折回去，看起来像"没保存上"
+            personaCollapsedSections.delete(idx);
+            personaEditNote = '这一节已更新（还没生效）：确认无误后点底部那条「保存设置」。';
+          }
+        } else if (button.classList.contains('pd-sec-cancel')) {
+          personaEditingSection = -1;
+        } else if (button.classList.contains('pd-sec-revert')) {
+          // 先落回正在编辑的那一节（可能是另一节），再恢复本节
+          const flushed = flushPersonaSectionEdit();
+          if (baseTpl?.builtin) {
+            roleBox.value = replacePersonaSectionBody(roleBox.value, idx, personaSectionBody(baseTpl.text, idx));
+            personaEditingSection = -1;
+            personaCollapsedSections.delete(idx);
+            personaEditNote = `${flushed ? '上一节已更新；' : ''}这一节已恢复成卡文件「${baseTpl.name}」里的写法（还没生效）：记得点底部的「保存设置」。`;
+          }
+        }
+        syncPersonaButtons();
+        return;
+      }
+      const head = event.target?.closest?.('.pd-sec-head');
+      const sec = head?.closest?.('.pd-sec');
+      if (!sec) return;
+      const idx = Number(sec.dataset.sec);
+      if (!Number.isFinite(idx)) return;
+      // 正在编辑的那节不许收起：一收起就会重画视图，输入框里没保存的字会丢
+      if (idx === personaEditingSection) return;
+      // 收起/展开会重画整个视图（viewKey 里含折叠集合）：先把正在编辑的另一节落回草稿，
+      // 否则它的输入框会被按旧正文重建 —— 刚敲的字静默消失
+      flushPersonaSectionEdit();
+      if (personaCollapsedSections.has(idx)) personaCollapsedSections.delete(idx);
+      else personaCollapsedSections.add(idx);
+      syncPersonaButtons();
+    });
+  }
+  // 整张卡恢复成卡文件原文（手改乱了就用它撤回）—— 同样按草稿那张卡
+  const restoreBtn = $('#restore-persona-btn');
+  if (restoreBtn) restoreBtn.addEventListener('click', () => {
+    flushPersonaSectionEdit();
+    const baseTpl = state.personaTemplates[personaBaseCardId()];
+    const roleBox = $('#cfg-roletext');
+    if (!baseTpl?.builtin || !roleBox) return;
+    roleBox.value = baseTpl.text;
+    personaEditingSection = -1;
+    personaCollapsedSections = defaultPersonaFold(baseTpl.text);
+    personaEditNote = `正文已恢复成卡文件「${baseTpl.name}」的原文（还没生效）：点底部的「保存设置」确认。`;
+    syncPersonaButtons();
+  });
+  const expandBtn = $('#persona-expand-btn');
+  if (expandBtn) expandBtn.addEventListener('click', () => {
+    // 折叠会重画视图：先把正在编辑的那节落回草稿，否则输入框里的字会没
+    flushPersonaSectionEdit();
+    const total = parsePersonaCard($('#cfg-roletext')?.value || '').sections.length;
+    // 只要还有展开的就全收，全收了就全展 —— 一个按钮两种状态，省一个开关
+    if (personaCollapsedSections.size < total) {
+      personaCollapsedSections = new Set(Array.from({ length: total }, (_, i) => i));
+      expandBtn.textContent = '全部展开';
+    } else {
+      personaCollapsedSections = new Set();
+      expandBtn.textContent = '全部收起';
+    }
+    syncPersonaButtons();
+  });
+  // 「编辑全文」：平时看分节视图（逐节可编辑），点它才露出整段原文 textarea
+  const editToggle = $('#toggle-persona-edit');
+  if (editToggle) editToggle.addEventListener('click', () => {
+    const field = $('#persona-raw-field');
+    if (!field) return;
+    const collapsed = field.classList.toggle('hidden');
+    if (!collapsed) {
+      // 开整段编辑前，先把分节编辑框里的内容落回草稿，并收起它（两种编辑框只留一个）
+      flushPersonaSectionEdit();
+      personaEditingSection = -1;
+      syncPersonaButtons();
+      editToggle.textContent = '收起全文编辑';
+      $('#cfg-roletext')?.focus();
+    } else {
+      editToggle.textContent = '编辑全文';
+    }
+  });
+  // 附加规则的示例标签：点一下追加到 textarea（已经写过就不重复加）
+  const ruleChips = $('#persona-rule-chips');
+  if (ruleChips) ruleChips.addEventListener('click', (event) => {
+    const chip = event.target?.closest?.('.rule-chip');
+    const rule = chip?.dataset?.rule;
+    const box = $('#cfg-customrules');
+    if (!rule || !box) return;
+    if (String(box.value).includes(rule)) return;
+    box.value = box.value.trim() ? `${box.value.replace(/\s+$/, '')}\n${rule}` : rule;
+    syncPersonaButtons();
+  });
   const newPersonaBtn = $('#new-persona-btn');
   if (newPersonaBtn) newPersonaBtn.addEventListener('click', () => openPersonaCreateModal());
   const delPersonaBtn = $('#del-persona-btn');
@@ -7684,19 +9815,9 @@ function bindSettingsEvents(c) {
     try {
       await api(`/api/persona-templates/${id}`, { method: 'DELETE', body: '{}' });
       await loadSettings();
-      applyPersonaDraft(state.personaTemplates.xiaojingyu);
+      applyPersonaDraft(state.personaTemplates.xiaojingyu, 'xiaojingyu');
     } catch (e) {
       $('#persona-pick-hint').textContent = `删除失败：${e.message}`;
-    }
-  });
-  const savePersonaBtn = $('#save-persona-btn');
-  if (savePersonaBtn) savePersonaBtn.addEventListener('click', async () => {
-    try {
-      await saveConfig();
-      $('#persona-save-result').textContent = '人设已保存 ✓';
-      setTimeout(() => { $('#persona-save-result').textContent = ''; }, 3000);
-    } catch (e) {
-      $('#persona-save-result').textContent = `保存失败：${e.message}`;
     }
   });
   syncPersonaButtons();
@@ -7730,7 +9851,7 @@ function modelModalShell({ head, body, foot = '', danger = false }) {
   overlay.innerHTML = `
     <div class="model-modal ${danger ? 'danger' : ''}">
       <div class="model-modal-head">
-        <span>${head}</span>
+        <span>${esc(head)}</span>
         <button class="model-modal-close">×</button>
       </div>
       <div class="model-modal-body${/^\s*<div class="model-modal-left"/.test(String(body)) ? ' row' : ''}">${body}</div>
@@ -7817,37 +9938,6 @@ function openToolBreakdown() {
 // ── 人设选择/添加 模态框 ──
 
 /** 选择人设：弹窗列出所有人设（含自定义），点击后填入角色设定文本框。 */
-function openPersonaPicker() {
-  const entries = Object.entries(state.personaTemplates || {});
-  if (!entries.length) {
-    $('#persona-pick-hint').textContent = '人设列表为空';
-    return;
-  }
-  const overlay = modelModalShell({
-    head: '选择人设',
-    body: `
-      <div class="model-modal-right" id="persona-list" style="flex:1">
-        ${entries.map(([id, p]) => `
-          <div class="mm-model" data-id="${esc(id)}">
-            <span class="mm-check">${id === currentPersonaId() ? '✓' : ''}</span>
-            <span>${esc(p.name)}</span>
-            <span class="muted" style="font-size:11px">${p.builtin ? '内置' : '自定义'}</span>
-          </div>`).join('')}
-      </div>`,
-    foot: `<button class="btn" id="persona-cancel">取消</button>`
-  });
-  overlay.querySelectorAll('.mm-model').forEach((el) => {
-    el.addEventListener('click', () => {
-      const id = el.dataset.id;
-      const tpl = state.personaTemplates[id];
-      if (tpl) applyPersonaDraft(tpl);
-      closeModelModal(overlay);
-      syncPersonaButtons();
-    });
-  });
-  overlay.querySelector('#persona-cancel').addEventListener('click', () => closeModelModal(overlay));
-}
-
 /** 添加人设：弹窗填写人设名称、角色设定、管理员附加规则。 */
 function openPersonaCreateModal() {
   const overlay = modelModalShell({
@@ -7891,7 +9981,7 @@ function openPersonaCreateModal() {
       closeModelModal(overlay);
       await loadSettings();
       applyPersonaDraft({ name, text, customRules, behaviorProfile });
-      $('#persona-pick-hint').textContent = `人设「${name}」已添加。记得点「保存人设修改」使当前填写生效。`;
+      $('#persona-pick-hint').textContent = `人设「${name}」已添加。记得点底部的「保存设置」使当前填写生效。`;
     } catch (e) {
       $('#persona-pick-hint').textContent = `添加失败：${e.message}`;
     }
@@ -8294,6 +10384,13 @@ async function saveConfig({ quiet = false } = {}) {
 
   const patch = {};
 
+  if (sec === 'token-saver') {
+    const picked = $('input[name="token-saver-mode"]:checked')?.value;
+    patch.tokenSaver = {
+      mode: ['off', 'balanced', 'aggressive'].includes(picked) ? picked : (c.tokenSaver?.mode || 'off')
+    };
+  }
+
   if (sec === 'time-control') {
     captureTimeControlRule();
     patch.timeControl = {
@@ -8357,6 +10454,12 @@ async function saveConfig({ quiet = false } = {}) {
           count: Number(row.querySelector('.moment-window-count').value)
         }))
         : null,
+      intervalDays: (() => {
+        const picked = val('#cfg-moments-interval', String(c.dailyMoments?.intervalDays || 1));
+        return picked === 'custom'
+          ? clampInt(val('#cfg-moments-interval-custom', c.dailyMoments?.intervalDays), 1, 30, 3)
+          : clampInt(picked, 1, 30, 1);
+      })(),
       minMessagesPerGroup: clampInt(
         val('#cfg-moments-min-messages', c.dailyMoments?.minMessagesPerGroup),
         0, 100, 3
@@ -8441,6 +10544,21 @@ async function saveConfig({ quiet = false } = {}) {
   }
 
   if (sec === 'api') {
+    // ⚠️ 模型名与开关状态必须读**界面实时值**（c.api 是上次保存的旧值）：
+    // 用户可能改了模型/开关但还没保存过，用旧值会把价格存到错误的模型名下。
+    const curModel = String(($('#cfg-model')?.value ?? c.api?.model) || '').trim();
+    const officialOn = ($('#cfg-useofficialprice')?.checked) ?? (c.api?.useOfficialPrice !== false);
+    // 卡片上的「自填单价」三个框只在真能生效时可编辑（与 refreshModelPriceCard 同一判据）：
+    // 官方价开关开着、或这个模型走渠道价时它们停用，这时保持配置里的原值 ——
+    // 读停用框里的值写进配置，会凭空造出一条「全局兜底单价」（对所有未定价模型生效）。
+    const vendorNow = String(state.modelPrices?.currentVendor || '').trim();
+    const hasChannelPrice = Boolean(
+      vendorNow && curModel && hasOwnPrice((c.api?.modelPrices || {})[`${vendorNow}：${curModel}`])
+    );
+    const priceEditable = !officialOn && !hasChannelPrice;
+    const priceIn = priceEditable ? (Number(val('#cfg-price-in', 0)) || 0) : (Number(c.api.priceInputPerM) || 0);
+    const priceOut = priceEditable ? (Number(val('#cfg-price-out', 0)) || 0) : (Number(c.api.priceOutputPerM) || 0);
+    const priceCached = priceEditable ? (Number(val('#cfg-price-cached', 0)) || 0) : (Number(c.api.priceCachedPerM) || 0);
     patch.api = {
       vision: chk('#cfg-vision', c.api.vision !== false),
       temperature: Number(val('#cfg-temperature', c.api.temperature)) || 0.8,
@@ -8455,36 +10573,40 @@ async function saveConfig({ quiet = false } = {}) {
       ),
       // 成本核算：官方价开关（走中转站时通常要关掉开关自己填）
       useOfficialPrice: chk('#cfg-useofficialprice', c.api.useOfficialPrice !== false),
+      // 账户级口径三选一：官方价估算 / 渠道倍率 / 按月付
+      costMode: (() => {
+        const picked = $('input[name="cost-mode"]:checked')?.value;
+        return ['official', 'multiplier', 'subscription'].includes(picked) ? picked : (c.api.costMode || 'official');
+      })(),
+      costMultiplier: mulOf(val('#cfg-cost-multiplier', c.api.costMultiplier ?? 1)),
+      costMonthlyFee: Number(val('#cfg-cost-monthly', c.api.costMonthlyFee ?? 0)) || 0,
+      // 没有价格的模型按当前模型的价估算（默认开）
+      fallbackToCurrentModel: chk('#cfg-fallback-current', c.api.fallbackToCurrentModel !== false),
       // 远程价格表 URL：留空 = 只用内置表
       priceRemoteUrl: val('#cfg-price-remote-url', c.api.priceRemoteUrl || '').trim(),
       // 全局兜底单价：仅当没有模型级价格时生效
-      priceInputPerM: Number(val('#cfg-price-in', c.api.priceInputPerM ?? 0)) || 0,
-      priceOutputPerM: Number(val('#cfg-price-out', c.api.priceOutputPerM ?? 0)) || 0,
-      priceCachedPerM: Number(val('#cfg-price-cached', c.api.priceCachedPerM ?? 0)) || 0
+      priceInputPerM: priceIn,
+      priceOutputPerM: priceOut,
+      priceCachedPerM: priceCached
     };
     // 把当前模型的单价存进 modelPrices[模型]（只影响这一个模型，不动内置官方表）。
-    // 若开关是打开的，则不应写入 —— 那时输入框是禁用的，读到的值就是官方价，
-    // 写进去会凭空产生一条自定义价。
-    //
-    // ⚠️ 模型名与开关状态都必须读**界面实时值**（c.api 是上次保存的旧值）：
-    // 用户可能改了模型/开关但还没保存过，用旧值会把价格存到错误的模型名下。
-    const curModel = String(($('#cfg-model')?.value ?? c.api?.model) || '').trim();
-    const officialOn = ($('#cfg-useofficialprice')?.checked) ?? (c.api?.useOfficialPrice !== false);
-    if (curModel) {
-      const isLocked = officialOn;   // 锁定只跟开关绑定
-      if (!isLocked) {
-        const nextMap = { ...(c.api?.modelPrices || {}) };
-        const i = Number(val('#cfg-price-in', 0)) || 0;
-        const o = Number(val('#cfg-price-out', 0)) || 0;
-        const ca = Number(val('#cfg-price-cached', 0)) || 0;
-        if (i || o || ca) {
-          nextMap[curModel] = { in: i, out: o, cached: ca || i };
-        } else {
-          delete nextMap[curModel];   // 全 0 = 清除自定义，回落到官方表
-        }
-        // 同样需要整体替换，否则 delete 掉的那一项会在合并时复活
-        patch.api.modelPrices = { __replace__: nextMap };
+    // 官方价开关打开时不写（那时输入框禁用，读到的就是官方价，写进去会凭空多一条自定义价）；
+    // 这个模型已经有**渠道价**时也不写 —— 卡片显示的正是那条渠道价，
+    // 存成 modelPrices[模型] 会把"只对这个渠道生效"悄悄扩大成所有渠道。
+    if (curModel && priceEditable) {
+      const nextMap = { ...(c.api?.modelPrices || {}) };
+      const i = Number(val('#cfg-price-in', 0)) || 0;
+      const o = Number(val('#cfg-price-out', 0)) || 0;
+      const ca = Number(val('#cfg-price-cached', 0)) || 0;
+      // 输入/输出才是"按 token 定价"的表达：只填缓存命中不算一条价（写进去会变成
+      // in:0/out:0 的"明确免费价"，把官方价直接算成 0 元）。
+      if (i || o) {
+        nextMap[curModel] = { in: i, out: o, cached: ca || i };
+      } else if (!String(nextMap[curModel]?.billing || '').trim()) {
+        delete nextMap[curModel];   // 全 0（且不是包月/不计费）= 清除自定义，回落到官方表
       }
+      // 同样需要整体替换，否则 delete 掉的那一项会在合并时复活
+      patch.api.modelPrices = { __replace__: nextMap };
     }
     // 当前 API Key：只有用户在框里输入了非掩码的新值才走 /api/providers/set-key；
     // 掩码/留空都表示不改。
@@ -8511,6 +10633,7 @@ async function saveConfig({ quiet = false } = {}) {
     const enteredBochaKey = val('#cfg-bocha-key', '').trim();
     const enteredBaiduKey = val('#cfg-baidu-key', '').trim();
     const enteredMetasoKey = val('#cfg-metaso-key', '').trim();
+    const enteredDoubaoKey = val('#cfg-doubao-key', '').trim();
     patch.webSearch = {
       ...c.webSearch,
       enabled: chk('#cfg-websearch', c.webSearch?.enabled !== false),
@@ -8538,6 +10661,10 @@ async function saveConfig({ quiet = false } = {}) {
         ...(c.webSearch?.metaso || {}),
         ...(enteredMetasoKey && enteredMetasoKey !== '******' ? { apiKey: enteredMetasoKey } : {})
       },
+      doubao: {
+        ...(c.webSearch?.doubao || {}),
+        ...(enteredDoubaoKey && enteredDoubaoKey !== '******' ? { apiKey: enteredDoubaoKey } : {})
+      },
       // 自定义搜索服务走 webSearch.providers 数组（由「添加自定义搜索服务」按钮维护），
       // 不在这里随表单提交 —— 避免每次保存都把动态列表覆盖掉。
       providers: c.webSearch?.providers || []
@@ -8545,13 +10672,25 @@ async function saveConfig({ quiet = false } = {}) {
   }
 
   if (sec === 'persona') {
+    // 模板 id 跟着正文一起存：绑着内置卡（比如"猫娘（二次元）"）时后端会按 roles/*.md
+    // 刷新正文，卡文件改了不用再来这里重选一次；手写了正文、或选的是自定义卡时这里为空，
+    // 正文就按自定义处理，不会被文件覆盖。
+    const roleTextDraft = val('#cfg-roletext', c.persona.roleText || '');
+    const pickedId = currentPersonaId();
+    let templateId = pickedId.startsWith('custom_') ? '' : pickedId;
+    if (!templateId && roleTextDraft === (c.persona.roleText || '')) {
+      // 模板没匹配上但正文一个字没动（典型：模板列表还没加载成功就要保存别的字段）
+      // 就别把原有的绑定清掉——正文没变，绑定关系也不该变。
+      templateId = c.persona.templateId || '';
+    }
     patch.persona = {
       botName: val('#cfg-botname', c.persona.botName).trim() || '小鲸鱼',
       selfNickname: val('#cfg-selfnick', c.persona.selfNickname || '').trim(),
       participation: val('#cfg-participation', c.persona.participation),
       behaviorProfile: val('#cfg-behavior-profile', c.persona.behaviorProfile || 'legacy'),
-      roleText: val('#cfg-roletext', c.persona.roleText || ''),
-      customRules: val('#cfg-customrules', c.persona.customRules || '')
+      roleText: roleTextDraft,
+      customRules: val('#cfg-customrules', c.persona.customRules || ''),
+      templateId
     };
   }
 
@@ -8560,7 +10699,10 @@ async function saveConfig({ quiet = false } = {}) {
       groups: parseList(val('#cfg-allowgroups', (c.allow?.groups || []).join(','))),
       private: parseList(val('#cfg-allowprivate', (c.allow?.private || []).join(',')))
     };
-    patch.deny = { groups: [], private: [] };
+    // 这里以前无条件发 deny = { groups: [], private: [] }：界面里没有 deny 的编辑控件，
+    // 于是"保存白名单"会把 --import-bridge / 手改 config.json 配的屏蔽名单静默清空
+    // （access.js 仍按 deny 拦人，但名单已经没了 = 被屏蔽的群/人重新可用）。
+    // 不传这个字段，服务端会原样保留现有 deny。
     // 原先这里硬编码 false：只要点过保存就把该开关永久重置，
     // 而 UI 里根本没有输入控件 —— 只能手改 JSON，改完一保存就丢。改为读取复选框。
     const allowAllBox = $('#cfg-allowallwhenempty');
@@ -8680,15 +10822,18 @@ async function saveConfig({ quiet = false } = {}) {
         const pos = sl ? Number(sl.value) : (c.store?.contextSliderPos ?? 100);
         return sliderToTierUI(pos).randomPercent;
       })(),
-      atCount: clampInt(val('#cfg-atcount', c.store?.atCount), 1, 500, 20),
-      keywordCount: clampInt(val('#cfg-kwcount', c.store?.keywordCount), 1, 500, 15),
+      // 下界是 0 不是 1：四个输入框都写着 min="0"，后端也把 0 当合法值（= 不读历史），
+      // 夹到 1 会让"填 0"静默变成"读 1 条"，与界面和文档都对不上。
+      atCount: clampInt(val('#cfg-atcount', c.store?.atCount), 0, 500, 20),
+      keywordCount: clampInt(val('#cfg-kwcount', c.store?.keywordCount), 0, 500, 15),
       keywords: String($('#cfg-keywords')?.value || '')
         .split('\n').map((x) => x.trim()).filter(Boolean),
-      randomPercent: clampInt(val('#cfg-randpct', c.store?.randomPercent), 0, 100, 10),
-      randomCount: clampInt(val('#cfg-randcount', c.store?.randomCount), 1, 500, 8),
-      allCount: clampInt(val('#cfg-allcount', c.store?.allCount), 1, 500, 80),
+      randomCount: clampInt(val('#cfg-randcount', c.store?.randomCount), 0, 500, 8),
+      allCount: clampInt(val('#cfg-allcount', c.store?.allCount), 0, 500, 80),
       // 统一开关 + 分群滑条表（__replace__：删掉的群设置要真删，深合并做不到）
       unifiedTier: chk('#cfg-unifiedtier', c.store?.unifiedTier !== false),
+      // 明确声明语义：滑条上的数字就是概率（后端据此跳过老配置迁移）
+      sliderMode: 'probability',
       groupSliderPos: {
         __replace__: (() => { try { return JSON.parse($('#tier-group-json')?.value || '{}'); } catch { return {}; } })()
       }
@@ -8867,6 +11012,19 @@ $$('.tab').forEach((tab) => {
   } catch { /* 老浏览器不支持 addEventListener，忽略 */ }
   $('#theme-btn')?.addEventListener('click', cycleTheme);
 
+  // 「发现新版本」弹窗的三个按钮
+  $('#update-notice-later')?.addEventListener('click', () => $('#update-notice')?.close());
+  $('#update-notice-run')?.addEventListener('click', runUpdateFromNotice);
+  $('#update-notice-ignore')?.addEventListener('click', ignoreUpdateVersion);
+
+  // 「给模型定价」弹窗：入口在用量页（未定价提示条）与设置页（价格卡片），
+  // 但按钮监听必须在这里一次性绑好 —— 挂在设置页渲染里会导致"从未打开设置页时
+  // 弹窗里的按钮点了没反应"。
+  $('#price-dialog-save')?.addEventListener('click', savePriceDialog);
+  $('#price-dialog-delete')?.addEventListener('click', deletePriceDialog);
+  $('#price-dialog-cancel')?.addEventListener('click', () => $('#price-dialog')?.close());
+  $('#price-dialog-billing')?.addEventListener('change', syncPriceDialogBilling);
+
   // 地址栏带 ?token= 时先自动登录（供快捷方式/脚本免输令牌）；
   // 成功后清掉地址栏里的明文令牌再重载，避免留在浏览历史里。
   try {
@@ -8903,6 +11061,9 @@ $$('.tab').forEach((tab) => {
     }
     else if (cfg0 && !('ui' in cfg0)) { /* 后端还没这个字段，保持本地值 */ }
   } catch { /* 接口不可用就用本地的 */ }
+
+  // 发现新版本提示：打开控制台时查一次（后端缓存 30 分钟），失败静默
+  checkUpdateNotice().catch(() => {});
 
   // 首启引导：关键配置（模型/白名单）没填就直接带去设置页
   try {

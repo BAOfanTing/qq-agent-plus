@@ -1,7 +1,7 @@
 // Linux 服务入口：node src/server.js
-import { createApp } from './app.js';
-import { installManualFriendReviewRoute } from './manual-friend-review-route.js';
-import { installExperimentalMultimodalContextPilot } from './experimental-multimodal-context.js';
+import { createApp } from './console/app.js';
+import { installManualFriendReviewRoute } from './console/manual-friend-review-route.js';
+import { installExperimentalMultimodalContextPilot } from './pilots/experimental-multimodal-context.js';
 
 let app = null;
 process.on('unhandledRejection', (error) => {

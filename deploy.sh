@@ -6,6 +6,8 @@ INSTALL_DIR="$ROOT"
 DATA_DIR=""
 HOST="127.0.0.1"
 PORT="3210"
+HOST_SET=false
+PORT_SET=false
 SERVICE="qq-agent-linux"
 IMPORT_BRIDGE=""
 CREDENTIAL_FILE=""
@@ -20,8 +22,10 @@ Usage: bash deploy.sh [options]
 Options:
   --install-dir PATH     Application directory (default: repository directory)
   --data-dir PATH        Persistent data directory (default: INSTALL_DIR/data)
-  --host ADDRESS         Console bind address (default: 127.0.0.1)
-  --port PORT            Console port (default: 3210)
+  --host ADDRESS         Console bind address (default: 127.0.0.1; on updates the
+                         address already recorded in config.json is reused)
+  --port PORT            Console port (default: 3210; on updates the port already
+                         recorded in config.json is reused)
   --service NAME         systemd user service name (default: qq-agent-linux)
   --node PATH            Existing Node.js >=22.13 binary
   --import-bridge PATH   Import legacy Bridge config on first install
@@ -39,8 +43,8 @@ while (($#)); do
   case "$1" in
     --install-dir) require_value "$@"; INSTALL_DIR="$2"; shift 2 ;;
     --data-dir) require_value "$@"; DATA_DIR="$2"; shift 2 ;;
-    --host) require_value "$@"; HOST="$2"; shift 2 ;;
-    --port) require_value "$@"; PORT="$2"; shift 2 ;;
+    --host) require_value "$@"; HOST="$2"; HOST_SET=true; shift 2 ;;
+    --port) require_value "$@"; PORT="$2"; PORT_SET=true; shift 2 ;;
     --service) require_value "$@"; SERVICE="$2"; shift 2 ;;
     --node) require_value "$@"; NODE_BIN="$2"; shift 2 ;;
     --import-bridge) require_value "$@"; IMPORT_BRIDGE="$2"; shift 2 ;;
@@ -70,9 +74,9 @@ if [[ "$ROOT" != "$INSTALL_DIR" && "$INSTALL_DIR" == "$ROOT/"* ]]; then
   printf 'Installation path must not be nested inside the source repository\n' >&2
   exit 2
 fi
-command -v systemctl >/dev/null
-systemctl --user show-environment >/dev/null
-command -v rsync >/dev/null
+command -v systemctl >/dev/null || { printf 'systemctl is required: deploy on a Linux host with systemd\n' >&2; exit 1; }
+systemctl --user show-environment >/dev/null || { printf 'The systemd user manager is unavailable for %s: run this script from a normal login session (for example over SSH), not from a non-login context\n' "$(id -un)" >&2; exit 1; }
+command -v rsync >/dev/null || { printf 'rsync is required: install it first (Debian/Ubuntu: apt install -y rsync)\n' >&2; exit 1; }
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 
 LOCK_DIR="$DATA_DIR/.deploy.lock"
@@ -124,6 +128,37 @@ NODE_BIN="$("$NODE_BIN" -p 'process.execPath')"
 [[ "$NODE_BIN" != *[[:space:]%\"]* ]] || { printf 'Node path contains unsupported characters\n' >&2; exit 2; }
 export PATH="$(dirname "$NODE_BIN"):$PATH"
 
+# 更新已有安装时，没有显式给出的 --host/--port 沿用 config.json 里的现值：用默认值覆盖会让一次
+# 普通更新把控制台从"所有网卡"或原来的地址悄悄改成只监听本机。
+if [[ "$HOST_SET" != true || "$PORT_SET" != true ]] && [[ -f "$DATA_DIR/config.json" ]]; then
+  mapfile -t PREVIOUS_ENDPOINT < <("$NODE_BIN" -e '
+    const fs = require("node:fs");
+    const out = ["", ""];
+    try {
+      const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      if (typeof cfg?.server?.host === "string") out[0] = cfg.server.host;
+      if (Number.isInteger(cfg?.server?.port)) out[1] = String(cfg.server.port);
+    } catch { /* 配置损坏时按新装处理，交给 configure-linux 报错 */ }
+    process.stdout.write(`${out[0]}\n${out[1]}\n`);
+  ' "$DATA_DIR/config.json" 2>/dev/null)
+  if [[ "$HOST_SET" != true && -n "${PREVIOUS_ENDPOINT[0]:-}" ]]; then
+    HOST="${PREVIOUS_ENDPOINT[0]}"
+  fi
+  if [[ "$PORT_SET" != true && -n "${PREVIOUS_ENDPOINT[1]:-}" ]]; then
+    PORT="${PREVIOUS_ENDPOINT[1]}"
+  fi
+  [[ "$PORT" =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || {
+    printf 'Port from config.json must be an integer from 1 to 65535, got: %s\n' "$PORT" >&2
+    exit 2
+  }
+  [[ "$HOST" != *[[:space:]%\"]* ]] || {
+    printf 'Listen address must not contain whitespace, %% or quotes: %s\n' "$HOST" >&2
+    exit 2
+  }
+  [[ "$HOST_SET" == true && "$PORT_SET" == true ]] \
+    || printf 'Reusing the recorded listen endpoint %s:%s (pass --host/--port to change it)\n' "$HOST" "$PORT"
+fi
+
 for required in package.json package-lock.json src/server.js src/auto-update.js scripts/auto-update.mjs scripts/configure-linux.mjs scripts/install-service.mjs scripts/manage.mjs manage.sh; do
   [[ -f "$ROOT/$required" ]] || {
     printf 'Source repository is incomplete: missing %s\n' "$required" >&2
@@ -145,6 +180,9 @@ RSYNC_PRESERVE=(
   --exclude=/.env
   --exclude='/.env.*'
   --exclude='*.log'
+  # 更新器跑测试时会在 checkout 根建这两个目录（runner 会在 rsync 前删掉，这里再兜一层：
+  # rsync 是 `-a --delete` 从 checkout 根同步的，根目录多什么就会被部署什么）
+  --exclude='/.auto-update-test-*/'
 )
 if [[ "$DATA_DIR" == "$INSTALL_DIR/"* ]]; then
   DATA_REL="${DATA_DIR#"$INSTALL_DIR"/}"
@@ -166,6 +204,19 @@ if [[ "$BACKUP_ENABLED" == true && -f "$INSTALL_DIR/package.json" ]]; then
   mkdir -p "$ROLLBACK_DIR/app"
   rsync -a "${RSYNC_PRESERVE[@]}" "$INSTALL_DIR/" "$ROLLBACK_DIR/app/"
   printf 'Created rollback snapshot: %s\n' "$ROLLBACK_DIR"
+  # 快照上限 3 份在"创建时"就维护，而不是部署成功之后：连续失败的更新每次都会
+  # 留一份完整快照（含 node_modules），不在创建时轮转会把数据盘慢慢占满
+  # （自动更新无人值守场景）。刚创建的这份最新，必然保留。
+  kept=0
+  pruned=0
+  while IFS= read -r stale; do
+    kept=$((kept + 1))
+    if ((kept > 3)); then
+      rm -rf -- "$stale"
+      pruned=$((pruned + 1))
+    fi
+  done < <(ls -1dt "$BACKUP_ROOT"/*/ 2>/dev/null)
+  ((pruned == 0)) || printf 'Pruned %s old snapshot(s), keeping the 3 newest\n' "$pruned"
 fi
 
 UNIT_FILE="$HOME/.config/systemd/user/$SERVICE.service"
@@ -219,6 +270,9 @@ fi
 
 rollback_deployment() {
   local status=$?
+  # 显式调用点（npm 缺失、健康检查失败）是在 printf 之后进来的，此时 $? 已经是 0；
+  # 那种情况必须按失败退出，否则调用方（自动更新按退出码判定）会把回滚过的部署当成成功。
+  ((status != 0)) || status=1
   trap - ERR INT TERM
   set +e
   printf '\nDeployment failed; restoring the previous installation...\n' >&2
@@ -288,7 +342,7 @@ fi
 cd "$INSTALL_DIR"
 NPM_BIN="$(dirname "$NODE_BIN")/npm"
 [[ -x "$NPM_BIN" ]] || NPM_BIN="$(command -v npm || true)"
-[[ -n "$NPM_BIN" && -x "$NPM_BIN" ]] || { printf 'npm is required\n' >&2; exit 1; }
+[[ -n "$NPM_BIN" && -x "$NPM_BIN" ]] || { printf 'npm is required\n' >&2; rollback_deployment; exit 1; }
 "$NPM_BIN" ci --omit=dev --ignore-scripts
 
 # Do not silently choose another port on a server.
@@ -301,7 +355,7 @@ ARGS=(--data-dir "$DATA_DIR" --host "$HOST" --port "$PORT")
 [[ -z "$IMPORT_BRIDGE" ]] || ARGS+=(--import-bridge "$IMPORT_BRIDGE")
 [[ -z "$CREDENTIAL_FILE" ]] || ARGS+=(--credential-file "$CREDENTIAL_FILE")
 "$NODE_BIN" scripts/configure-linux.mjs "${ARGS[@]}"
-export QQ_INSTALL_DIR="$INSTALL_DIR" QQ_DATA_DIR="$DATA_DIR" QQ_NODE="$NODE_BIN" QQ_SERVICE="$SERVICE"
+export QQ_INSTALL_DIR="$INSTALL_DIR" QQ_DATA_DIR="$DATA_DIR" QQ_NODE="$NODE_BIN" QQ_SERVICE="$SERVICE" QQ_HOST="$HOST" QQ_PORT="$PORT"
 "$NODE_BIN" scripts/install-service.mjs
 systemd-analyze --user verify "$HOME/.config/systemd/user/$SERVICE.service"
 systemd-analyze --user verify "$UPDATE_UNIT_FILE"
@@ -318,16 +372,21 @@ case "$HOST" in
   *) HEALTH_HOST="$HOST" ;;
 esac
 HEALTHY=false
-for _ in {1..50}; do
+# 90 秒窗口：慢机器冷启动（大库迁移、慢磁盘）可能超过旧版 50×0.2s≈10-20 秒，
+# 被误判失败会触发回滚，形成"每次更新都回滚"的怪圈；deploy-all 对同服务给的是
+# 30-90 秒，这里对齐同一量级。
+for _ in {1..90}; do
   if "$NODE_BIN" -e 'fetch(process.argv[1]).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))' \
       "http://$HEALTH_HOST:$PORT/healthz"; then
     HEALTHY=true
     break
   fi
-  sleep 0.2
+  sleep 1
 done
-[[ "$HEALTHY" == true ]] || { printf 'Service health check failed\n' >&2; exit 1; }
+[[ "$HEALTHY" == true ]] || { printf 'Service health check failed\n' >&2; rollback_deployment; exit 1; }
 trap - ERR INT TERM
+# 每份快照是整个安装目录（含 node_modules），而自动更新会无人值守地反复部署：
+# 不清理会把数据盘慢慢填满。保留最近的 3 份。
 if [[ "${QQ_AGENT_SOURCE_REVISION:-}" =~ ^[0-9a-f]{40}$ ]]; then
   REVISION="$QQ_AGENT_SOURCE_REVISION"
 elif command -v git >/dev/null && git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then

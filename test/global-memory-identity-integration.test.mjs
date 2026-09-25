@@ -8,10 +8,10 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-global-memory-identity-')
 process.env.QQ_AGENT_DATA_DIR = root;
 process.on('exit', () => fs.rmSync(root, { recursive: true, force: true }));
 
-const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
-const { MemoryStore } = await import('../src/memory.js');
-const { IdentityStore, readLegacyIdentityMemories } = await import('../src/identity-store.js');
-const { ChatStore } = await import('../src/store.js');
+const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
+const { MemoryStore } = await import('../src/memory/memory.js');
+const { IdentityStore, readLegacyIdentityMemories } = await import('../src/identity/identity-store.js');
+const { ChatStore } = await import('../src/core/store.js');
 
 const cfg = structuredClone(DEFAULT_CONFIG);
 setRuntimeConfig(cfg);

@@ -8,13 +8,12 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-stable-infra-'));
 process.env.QQ_AGENT_DATA_DIR = root;
 process.env.NODE_TEST_CONTEXT = '1';
 
-const { DEFAULT_CONFIG } = await import('../src/config.js');
-const { ChatStore } = await import('../src/store.js');
-const { IdentityPilotManager } = await import('../src/identity-pilot.js');
-const { IncidentPilotManager } = await import('../src/incident-pilot.js');
+const { DEFAULT_CONFIG } = await import('../src/core/config.js');
+const { ChatStore } = await import('../src/core/store.js');
+const { IdentityPilotManager } = await import('../src/identity/identity-pilot.js');
+const { IncidentPilotManager } = await import('../src/pilots/incident-pilot.js');
 
-test('identity, automatic friends and incident infrastructure start without an approval owner', async (t) => {
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+test('identity and incident infrastructure start without an approval owner; friend proposal stays retired', async (t) => {
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allowAllWhenEmpty = true;
@@ -33,6 +32,8 @@ test('identity, automatic friends and incident infrastructure start without an a
     },
     log: () => {}
   });
+  // 清理顺序：identity 库句柄先关，incidents 库随最后的钩子关闭，
+  // rmSync 放最后并带 EBUSY 重试（Windows 上句柄释放与 rmSync 有竞态）。
   t.after(() => {
     identity.stop();
     store.close();
@@ -41,8 +42,8 @@ test('identity, automatic friends and incident infrastructure start without an a
   const identityStatus = await identity.start();
   assert.equal(identityStatus.enabled, true);
   assert.equal(identityStatus.active, true);
-  assert.equal(identityStatus.friendProposal.enabled, true);
-  assert.equal(identityStatus.friendProposal.activeDispatchEnabled, true);
+  assert.equal(identityStatus.friendProposal.enabled, false);
+  assert.equal(identityStatus.friendProposal.activeDispatchEnabled, false);
   assert.equal(identityStatus.friendProposal.ownerConfigured, false);
   assert.equal(identityStatus.incomingFriendRequest.enabled, true);
   assert.equal(identityStatus.incomingFriendRequest.ownerConfigured, false);
@@ -63,7 +64,18 @@ test('identity, automatic friends and incident infrastructure start without an a
     notifyAvailable: () => false,
     log: () => {}
   });
-  t.after(() => incidents.stop());
+  t.after(async () => {
+    incidents.stop();
+    for (let i = 0; i < 10; i += 1) {
+      try {
+        fs.rmSync(root, { recursive: true, force: true });
+        return;
+      } catch (error) {
+        if (error.code !== 'EBUSY' && error.code !== 'EPERM') throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+  });
   const incidentStatus = incidents.start();
   assert.equal(incidentStatus.enabled, true);
   assert.equal(incidentStatus.active, true);

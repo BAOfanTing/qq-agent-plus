@@ -5,7 +5,7 @@ import {
   multimodalContextPilotConfig,
   recordMultimodalToolResult,
   rewriteMultimodalLifecycleCommit
-} from '../src/experimental-multimodal-context-core.js';
+} from '../src/pilots/experimental-multimodal-context-core.js';
 
 const store = {
   findByLocalId(chatKey, id) {

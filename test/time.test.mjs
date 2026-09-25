@@ -6,7 +6,7 @@ import {
   formatShortTime,
   shanghaiDayStart,
   todayKey
-} from '../src/util.js';
+} from '../src/core/util.js';
 
 describe('Shanghai reporting day', () => {
   it('formats model and session timestamps in Asia/Shanghai', () => {

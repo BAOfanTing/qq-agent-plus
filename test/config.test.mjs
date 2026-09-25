@@ -62,15 +62,15 @@ const {
   slangPilotEnabled,
   triggeredFriendProposalEnabled,
   updateConfig
-} = await import('../src/config.js');
+} = await import('../src/core/config.js');
 
-test('promoted capabilities share one admin and retired slang config is purged', async (t) => {
+test('promoted capabilities share one admin; slang purged; friend proposal retired', async (t) => {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   assert.equal(DEFAULT_CONFIG.identityPilot.enabled, true);
   assert.equal(DEFAULT_CONFIG.identityPilot.incomingFriendRequest.enabled, true);
-  assert.equal(DEFAULT_CONFIG.identityPilot.friendProposal.enabled, true);
-  assert.equal(DEFAULT_CONFIG.identityPilot.friendProposal.activeDispatchEnabled, true);
+  assert.equal(DEFAULT_CONFIG.identityPilot.friendProposal.enabled, false);
+  assert.equal(DEFAULT_CONFIG.identityPilot.friendProposal.activeDispatchEnabled, false);
   assert.equal(DEFAULT_CONFIG.incidentPilot.enabled, true);
   assert.deepEqual(DEFAULT_CONFIG.slangPilot, { enabled: false, graduated: false });
   assert.equal(DEFAULT_CONFIG.admin.ownerUin, '');
@@ -91,9 +91,9 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.equal(cfg.identityPilot.enabled, true);
   assert.equal(cfg.identityPilot.graduated, true);
   assert.equal(cfg.identityPilot.incomingFriendRequest.enabled, true);
-  assert.equal(cfg.identityPilot.friendProposal.enabled, true);
-  assert.equal(cfg.identityPilot.friendProposal.graduated, true);
-  assert.equal(cfg.identityPilot.friendProposal.activeDispatchEnabled, true);
+  assert.equal(cfg.identityPilot.friendProposal.enabled, false);
+  assert.equal(cfg.identityPilot.friendProposal.graduated, false);
+  assert.equal(cfg.identityPilot.friendProposal.activeDispatchEnabled, false);
   assert.equal(cfg.identityPilot.incomingFriendRequest.autoWhitelist, false);
   assert.equal(cfg.identityPilot.incomingFriendRequest.maxPending, 25);
   assert.equal(cfg.identityPilot.friendProposal.mode, 'prompt');
@@ -104,8 +104,8 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.equal(cfg.incidentPilot.retentionDays, 123);
 
   assert.equal(identityPilotEnabled({ identityPilot: { enabled: false } }), true);
-  assert.equal(friendProposalEnabled({}), true);
-  assert.equal(friendRequestDispatchEnabled({}), true);
+  assert.equal(friendProposalEnabled({}), false);
+  assert.equal(friendRequestDispatchEnabled({}), false);
   assert.equal(incomingFriendRequestEnabled({}), true);
   assert.equal(incidentPilotEnabled({ incidentPilot: { enabled: false } }), true);
   assert.equal(slangPilotEnabled({ slangPilot: { enabled: true } }), false);
@@ -145,8 +145,8 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.deepEqual(stale.slangPilot, { enabled: false, graduated: false });
   assert.equal(stale.identityPilot.enabled, true);
   assert.equal(stale.identityPilot.incomingFriendRequest.enabled, true);
-  assert.equal(stale.identityPilot.friendProposal.enabled, true);
-  assert.equal(stale.identityPilot.friendProposal.activeDispatchEnabled, true);
+  assert.equal(stale.identityPilot.friendProposal.enabled, false);
+  assert.equal(stale.identityPilot.friendProposal.activeDispatchEnabled, false);
   assert.equal(stale.incidentPilot.enabled, true);
 
   // The global setting is the only supported write path. It fans out to the
@@ -174,8 +174,89 @@ test('promoted capabilities share one admin and retired slang config is purged',
   assert.equal(saved.autoUpdate.ownerUin, '23456789');
   assert.equal(saved.identityPilot.enabled, true);
   assert.equal(saved.identityPilot.incomingFriendRequest.enabled, true);
-  assert.equal(saved.identityPilot.friendProposal.enabled, true);
-  assert.equal(saved.identityPilot.friendProposal.activeDispatchEnabled, true);
+  assert.equal(saved.identityPilot.friendProposal.enabled, false);
+  assert.equal(saved.identityPilot.friendProposal.activeDispatchEnabled, false);
   assert.equal(saved.incidentPilot.enabled, true);
   assert.deepEqual(saved.slangPilot, { enabled: false, graduated: false });
+});
+
+test('响应滑条：滑条值就是概率；updateConfig 的兜底分支按老口径换算', async () => {
+  // 说明：生产里老配置在**读盘时**就由 migrateConfig 迁移好了（见 config-migration.test.mjs），
+  // 这里覆盖的是"没走读盘"的配置（setRuntimeConfig 注入那类）走 updateConfig 时的兜底换算
+  const { updateConfig } = await import('../src/core/config.js');
+
+  // 新语义：传什么就是多少概率（0 是合法值，不能被当成"没填"回落成 100）
+  const zero = updateConfig({ store: { contextSliderPos: 0, sliderMode: 'probability' } });
+  assert.equal(zero.store.randomPercent, 0, '0% = 只回 @ 和关键词');
+  assert.equal(zero.store.contextTier, 1, '0% 归 1 档展示');
+  const mid = updateConfig({ store: { contextSliderPos: 43, sliderMode: 'probability' } });
+  assert.equal(mid.store.randomPercent, 43);
+  assert.equal(mid.store.contextTier, 3);
+  const full = updateConfig({ store: { contextSliderPos: 100, sliderMode: 'probability' } });
+  assert.equal(full.store.randomPercent, 100);
+  assert.equal(full.store.contextTier, 4, '100% = 全响应');
+
+  // 老配置（四段式，没打标记）保存时换算：老 1/2 档不掷骰子 → 0%
+  const legacy1 = updateConfig({ store: { contextSliderPos: 5, sliderMode: '', contextTier: 1, randomPercent: 0 } });
+  assert.equal(legacy1.store.randomPercent, 0, '老 1 档（仅艾特）迁移成 0%');
+  const legacy2 = updateConfig({ store: { contextSliderPos: 15, sliderMode: '', contextTier: 2, randomPercent: 0 } });
+  assert.equal(legacy2.store.randomPercent, 0, '老 2 档（+关键词）迁移成 0%');
+  const legacy3 = updateConfig({ store: { contextSliderPos: 55, sliderMode: '', contextTier: 3, randomPercent: 50 } });
+  assert.equal(legacy3.store.randomPercent, 50, '老 3 档的概率原样保留');
+  const legacy4 = updateConfig({ store: { contextSliderPos: 95, sliderMode: '', contextTier: 4, randomPercent: 100 } });
+  assert.equal(legacy4.store.randomPercent, 100, '老 4 档（全响应）迁移成 100%');
+  assert.equal(legacy4.store.sliderMode, 'probability', '迁移后要打上标记，别重复换算');
+
+  // 老配置连滑条位置都没有（只有 tier/概率）也要能迁
+  const legacyNoPos = updateConfig({ store: { contextSliderPos: null, sliderMode: '', contextTier: 3, randomPercent: 24.3 } });
+  assert.equal(legacyNoPos.store.randomPercent, 24.3);
+  const legacyNoPos4 = updateConfig({ store: { contextSliderPos: null, sliderMode: '', contextTier: 4, randomPercent: 0 } });
+  assert.equal(legacyNoPos4.store.randomPercent, 100, '老 4 档没有位置时按全响应');
+
+  // 分群滑条（存的是概率）跟着迁移
+  const grouped = updateConfig({
+    store: { sliderMode: '', contextTier: 4, randomPercent: 100, groupSliderPos: { '111': 5, '222': 55 } }
+  });
+  assert.deepEqual(grouped.store.groupSliderPos, { '111': 0, '222': 50 }, '分群的老位置也要换算成概率');
+  // 界面保存分群表时带 __replace__（删掉的群要真删），这里用同一套写法
+  const groupedNew = updateConfig({
+    store: { sliderMode: 'probability', groupSliderPos: { __replace__: { '111': 30 } } }
+  });
+  assert.deepEqual(groupedNew.store.groupSliderPos, { '111': 30 }, '新语义下原样保留');
+});
+
+test('分群响应概率：单独设过的群按它算，别的群与私聊跟全局（0 也是合法值）', async () => {
+  const { updateConfig, storeConfigForChat } = await import('../src/core/config.js');
+
+  updateConfig({
+    store: {
+      sliderMode: 'probability', contextSliderPos: 50, unifiedTier: false,
+      groupSliderPos: { __replace__: { '111': 30, '222': 0 } }
+    }
+  });
+  assert.equal(storeConfigForChat('group:111').randomPercent, 30, '这个群按 30%');
+  assert.equal(storeConfigForChat('group:111').contextTier, 3);
+  assert.equal(storeConfigForChat('group:222').randomPercent, 0, '0% 是合法值：不能被当成"没设"回落全局');
+  assert.equal(storeConfigForChat('group:222').contextTier, 1);
+  assert.equal(storeConfigForChat('group:999').randomPercent, 50, '没单独设的群跟全局');
+  assert.equal(storeConfigForChat('private:2').randomPercent, 50, '私聊永远跟全局');
+
+  // 关掉统一开关之前，全局滑条仍然管所有群
+  updateConfig({ store: { unifiedTier: true, groupSliderPos: { __replace__: {} } } });
+  assert.equal(storeConfigForChat('group:111').randomPercent, 50);
+});
+
+test('保存白名单不会清掉屏蔽名单（界面没有 deny 控件，靠服务端保留现状）', async () => {
+  // 背景（2026-09-23 全项目审查）：ui 的「保存白名单」以前无条件发 deny={groups:[],private:[]}，
+  // 而 deepMerge 对数组是整体替换 —— --import-bridge / 手改 config.json 配的屏蔽名单被静默清空，
+  // access.js 却还按（已经空了的）deny 判人。现在 UI 不再发这个字段，这里钉住服务端行为。
+  const { updateConfig } = await import('../src/core/config.js');
+
+  updateConfig({ deny: { groups: ['999'], private: ['888'] } });
+  assert.deepEqual(updateConfig({}).deny, { groups: ['999'], private: ['888'] }, '不带 deny 的保存要原样保留');
+
+  // 界面「保存白名单」发的 patch 形状：只有 allow + allowAllWhenEmpty
+  const afterAllowSave = updateConfig({ allow: { groups: ['123'], private: [] }, allowAllWhenEmpty: false });
+  assert.deepEqual(afterAllowSave.deny, { groups: ['999'], private: ['888'] }, '保存白名单不能清掉 deny');
+  assert.deepEqual(afterAllowSave.allow.groups, ['123']);
 });

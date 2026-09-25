@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-const { normalizeManualToolArguments } = await import('../src/manual-friend-review-route.js');
+const { normalizeManualToolArguments } = await import('../src/console/manual-friend-review-route.js');
 
 const payload = {
   decision: 'propose',

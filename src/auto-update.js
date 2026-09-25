@@ -7,6 +7,8 @@ const STATE_FILE = 'auto-update.json';
 const REQUEST_FILE = 'auto-update-request.json';
 const ACTIVE_STATES = new Set(['queued', 'checking', 'testing', 'deploying']);
 const REQUEST_MODES = new Set(['manual', 'scheduled', 'probe']);
+// 活跃状态超过这个时长还不动，就当它卡住了：不再抑制"发现新版本"提示，让人能再点一次
+const PENDING_TTL_MS = 30 * 60 * 1000;
 
 function cleanText(value, max = 1200) {
   return String(value ?? '')
@@ -116,6 +118,39 @@ export function writeAutoUpdateRequest(dataDir, mode = 'manual') {
   return request;
 }
 
+/**
+ * 有没有一个"已经提交、还没跑完"的更新。
+ * 控制台的「发现新版本」提示要用它：用户点过「立即更新」之后就别再弹同一个版本了 ——
+ * 部署完成前 deployed-revision 还是旧的，光比版本永远会认为"有新版本没装"，
+ * 于是每次刷新都弹一遍，看起来像"更新没生效"（2026-09-21 反馈）。
+ * 超过 PENDING_TTL_MS 还停在活跃状态就当卡住了，返回 null，让人能再点一次。
+ * @returns {{status: string, mode: string, version: string, revision: string, updatedAt: number} | null}
+ */
+export function autoUpdatePending(dataDir) {
+  const state = readAutoUpdateState(dataDir);
+  const status = String(state.status || '');
+  if (!ACTIVE_STATES.has(status)) return null;
+  // 基准是"最近一次进度"：
+  //   progressAt —— requestManual 与更新器**每个阶段**都写（正常更新会一直续期）；
+  //   startedAt  —— 兜底（老版本更新器没写 progressAt）；
+  //   updatedAt  —— 最后兜底。
+  // ⚠️ 不能直接用 updatedAt 当主基准：checkForUpdate 存提示也会调 writeAutoUpdateState，
+  //    控制台一开就把基准推到现在，于是"卡住 30 分钟就放开"永远不成立（更新器被 kill 后
+  //    提示被永久压住、手动更新按钮一直是灰的）。只用 startedAt 也不够：慢机器上一轮正常
+  //    更新就可能超过 30 分钟（npm ci 10 分钟 + 单测 20 分钟 + 部署 20 分钟），会被误判成卡住。
+  const base = Number(state.progressAt || 0) || Number(state.startedAt || 0) || Number(state.updatedAt || 0);
+  if (!base || Date.now() - base > PENDING_TTL_MS) return null;
+  return {
+    status,
+    mode: String(state.mode || ''),
+    version: String(state.targetVersion || ''),
+    revision: String(state.targetRevision || ''),
+    startedAt: Number(state.startedAt || 0),
+    progressAt: Number(state.progressAt || 0),
+    updatedAt: Number(state.updatedAt || 0)
+  };
+}
+
 export function consumeAutoUpdateRequest(dataDir) {
   const file = autoUpdatePaths(dataDir).request;
   const request = readObject(file, null);
@@ -221,9 +256,9 @@ export class AutoUpdateManager {
     const network = normalizeUpdateNetworkSettings(settings);
     const state = readAutoUpdateState(this.dataDir);
     const intervalMs = Math.max(1, Number(settings.intervalHours) || 6) * 60 * 60 * 1000;
-    const busy = this.serviceActive()
-      || (ACTIVE_STATES.has(state.status)
-        && Date.now() - Number(state.updatedAt || 0) < 30 * 60 * 1000);
+    // 与「发现新版本」提示用同一套判据（autoUpdatePending）：一处说"在跑"、另一处说"卡住"
+    // 会让用户卡在"提示弹出来了、按钮却是灰的"。基准见 autoUpdatePending 的注释。
+    const busy = this.serviceActive() || autoUpdatePending(this.dataDir) !== null;
     let deployedRevision = '';
     try {
       deployedRevision = fs.readFileSync(
@@ -294,14 +329,18 @@ export class AutoUpdateManager {
       },
       ...(adminPatch ? { admin: adminPatch } : {})
     });
-    writeAutoUpdateState(this.dataDir, {
-      status: 'idle',
-      phase: '',
-      error: '',
-      autoDisabled: false,
-      completedAt: Date.now(),
-      lastCheckAt: 0
-    });
+    // 更新正在跑时不要把它写成 idle：那会清掉"已提交未跑完"的抑制与 busy 判据，
+    // 让控制台一边显示在跑、一边又能再点一次（直接调接口才会遇到，2026-09-22 审查发现）
+    if (!this.serviceActive() && !autoUpdatePending(this.dataDir)) {
+      writeAutoUpdateState(this.dataDir, {
+        status: 'idle',
+        phase: '',
+        error: '',
+        autoDisabled: false,
+        completedAt: Date.now(),
+        lastCheckAt: 0
+      });
+    }
     this.emit('auto-update', this.status());
     return cfg.autoUpdate;
   }
@@ -324,7 +363,7 @@ export class AutoUpdateManager {
     return cfg.autoUpdate;
   }
 
-  requestManual() {
+  requestManual({ version = '' } = {}) {
     if (!this.installed()) {
       throw updateError('自动更新服务尚未安装，请先用 deploy.sh 部署当前版本');
     }
@@ -355,6 +394,10 @@ export class AutoUpdateManager {
 
     const mode = probeOnly ? 'probe' : 'manual';
     writeAutoUpdateRequest(this.dataDir, mode);
+    // 记下这次要更到哪个版本：控制台的「发现新版本」提示要用它判断"这个版本的更新
+    // 已经提交过了，别再弹"（更新器跑到能解析 tag 的阶段才会自己写 targetVersion，
+    // 在那之前状态里是空的，只靠版本号比对会一直弹）。
+    const targetVersion = mode === 'manual' ? cleanText(version, 64).trim() : '';
     writeAutoUpdateState(this.dataDir, {
       status: 'queued',
       mode,
@@ -362,6 +405,9 @@ export class AutoUpdateManager {
       startedAt: Date.now(),
       completedAt: 0,
       error: '',
+      // 没带版本也要显式清空：不然上一次的版本会留在状态里，前端拿它比对会误判
+      targetVersion,
+      progressAt: Date.now(),
       ...(probeOnly ? {
         connectivity: {
           status: 'queued',
@@ -512,6 +558,13 @@ export class AutoUpdateManager {
       '处理入口：控制台 → 控制 → 更新部署'
     ].join('\n');
     try {
+      // 发送前先把状态落成"结果未知"：这条链路没有 outbox 那样的 sending 落盘，原来
+      // 发送途中崩溃/重启的话 pending 还是 true，重启 resumeNotifications 会把同一条
+      // 失败通知再发一遍。先落 unknown（pending=false）；确定没发出去的情况由下面的
+      // catch 恢复成 pending 等重试，其余失败保持 unknown 等人工确认。
+      writeAutoUpdateState(this.dataDir, {
+        notification: { ...state.notification, pending: false, deliveryUnknown: true, ownerUin, error: '' }
+      });
       await this.notify(text, ownerUin);
       const updated = writeAutoUpdateState(this.dataDir, {
         notification: {
@@ -519,17 +572,28 @@ export class AutoUpdateManager {
           pending: false,
           ownerUin,
           sentAt: Date.now(),
-          error: ''
+          error: '',
+          // 这一条已经确认发出去了，之前那条"结果未知"的标记不能留着 ——
+          // 否则 data/auto-update.json 会一直显示"需人工确认"，与 docs/AUTO_UPDATE.md 的语义对不上。
+          deliveryUnknown: false
         }
       });
       this.emit('auto-update', this.status());
       return updated;
     } catch (error) {
+      // 发送失败要分清"确定没发出去"和"结果未知"：只有前者能自动重试。这条通知走
+      // onebot.sendText，超时属于结果未知。此前 pending 一直留着，于是 30 秒一次的定时器
+      // 会把同一条【更新部署失败】反复发给管理员（项目规则：结果未知不外发重试）。
+      const definitelyNotSent = error?.beforeWrite === true;
       writeAutoUpdateState(this.dataDir, {
         notification: {
           ...state.notification,
+          pending: definitelyNotSent,
           ownerUin,
-          error: cleanText(error?.message ?? error, 500)
+          error: cleanText(error?.message ?? error, 500),
+          // 发送前已经把 deliveryUnknown 落成 true：确定没发出去时要显式归位 false，
+          // 否则"未连接"这种可重试的失败也会被标成结果未知
+          deliveryUnknown: !definitelyNotSent
         }
       });
       throw error;

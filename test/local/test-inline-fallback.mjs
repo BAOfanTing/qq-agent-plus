@@ -4,14 +4,14 @@
 //   T=$(mktemp -d); QQ_AGENT_DATA_DIR=$T node test/local/test-inline-fallback.mjs
 //
 // 说明：本用例用桩对象驱动 QzoneInteractionManager，不连真实 OneBot、不发消息；
-//       但会在 /tmp/qz-behavior/ 下写一个状态文件。不要把它指向生产数据目录。
+//       但会在系统临时目录下的 qq-inline-fallback-behavior/ 写一个状态文件。不要把它指向生产数据目录。
 import fs from 'node:fs';
 
-const { parseInlineToolCalls, resolveToolCalls } = await import(new URL('../../src/inline-tools.js', import.meta.url).href);
-const { parseRelationshipResponse } = await import(new URL('../../src/relationship-pilot.js', import.meta.url).href);
-const { parseFriendReview } = await import(new URL('../../src/identity-pilot-core.js', import.meta.url).href);
-const { parseManualFriendReview } = await import(new URL('../../src/identity-pilot.js', import.meta.url).href);
-const { QzoneInteractionManager } = await import(new URL('../../src/qzone-interactions.js', import.meta.url).href);
+const { parseInlineToolCalls, resolveToolCalls } = await import(new URL('../../src/tools/inline-tools.js', import.meta.url).href);
+const { parseRelationshipResponse } = await import(new URL('../../src/pilots/relationship-pilot.js', import.meta.url).href);
+const { parseFriendReview } = await import(new URL('../../src/identity/identity-pilot-core.js', import.meta.url).href);
+const { parseManualFriendReview } = await import(new URL('../../src/identity/identity-pilot.js', import.meta.url).href);
+const { QzoneInteractionManager } = await import(new URL('../../src/features/qzone-interactions.js', import.meta.url).href);
 
 let pass = 0, fail = 0;
 const check = (name, ok, extra = '') => {
@@ -53,8 +53,13 @@ try { parseManualFriendReview(inlineFriend, [], {}); } catch (e) { idErr2 = Stri
 check('身份评估(manual)：不再报"未提交唯一"', !/未提交唯一/.test(idErr2), idErr2 ? '（改为:' + idErr2.slice(0, 40) + '）' : '（解析通过）');
 
 console.log('\n=== T3 空间互动：模型用内联文本提交计划，能不能真的执行 ===');
-const stateFile = '/tmp/qz-behavior/state.json';
-fs.mkdirSync('/tmp/qz-behavior', { recursive: true });
+// 用系统临时目录，别硬编码 /tmp：Windows 上会落到 C:	mp，而且 run.mjs 给的
+// QQ_AGENT_DATA_DIR 对它无效（local/README 里记过这个历史遗留）
+const os = await import('node:os');
+const path = await import('node:path');
+const behaviorDir = path.join(os.tmpdir(), 'qq-inline-fallback-behavior');
+fs.mkdirSync(behaviorDir, { recursive: true });
+const stateFile = path.join(behaviorDir, 'state.json');
 const nowSec = Math.floor(Date.now() / 1000);
 fs.writeFileSync(stateFile, JSON.stringify({
   version: 1, feedInitializedAt: Date.now() - 3600000, replyInitializedAt: Date.now() - 3600000,

@@ -33,9 +33,11 @@
   function connectivityText(status) {
     const c = status?.connectivity || {};
     if (c.status === 'testing' || c.status === 'queued') return 'GitHub 连通性：测试中…';
+    // 通道：git = 直连 GitHub 的 git 协议；api = git 不通时改走 GitHub API + codeload 源码包
+    const lane = c.transport === 'api' ? '（API/源码包通道）' : (c.transport === 'git' ? '（git 通道）' : '');
     if (c.status === 'ok') {
       const revision = c.revision ? ` · ${String(c.revision).slice(0, 12)}` : '';
-      return `GitHub 连通性：正常 · ${Number(c.attempts) || 1} 次尝试 · ${Number(c.latencyMs) || 0} ms${revision}`;
+      return `GitHub 连通性：正常${lane} · ${Number(c.attempts) || 1} 次尝试 · ${Number(c.latencyMs) || 0} ms${revision}`;
     }
     if (c.status === 'failed') return `GitHub 连通性：失败 · ${c.error || '未知错误'}`;
     return 'GitHub 连通性：尚未测试';

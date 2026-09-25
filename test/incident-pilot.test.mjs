@@ -7,7 +7,7 @@ import { test } from 'node:test';
 const {
   IncidentPilotManager,
   incidentDatabasePath
-} = await import('../src/incident-pilot.js');
+} = await import('../src/pilots/incident-pilot.js');
 
 function fixture(t, patch = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-incident-pilot-'));
@@ -15,7 +15,7 @@ function fixture(t, patch = {}) {
     incidentPilot: {
       enabled: true,
       graduated: false,
-      ownerUin: '2948771712',
+      ownerUin: '10000003',
       notifyWarnings: true,
       duplicateWindowMinutes: 10,
       unknownWritesBlockChat: false,
@@ -86,7 +86,7 @@ test('captures, redacts, deduplicates, notifies, resolves and deletes incidents'
   });
   await f.manager.waitForIdle();
   assert.equal(f.notifications.length, 1);
-  assert.equal(f.notifications[0].ownerUin, '2948771712');
+  assert.equal(f.notifications[0].ownerUin, '10000003');
   assert.doesNotMatch(first.message, /secret-value|abcdefghijklmnop/);
   assert.equal(first.details.apiKey, '[redacted]');
 

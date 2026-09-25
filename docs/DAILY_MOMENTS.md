@@ -39,7 +39,7 @@
 `customRules`。不截取角色卡前几段，不使用固定的小鲸鱼口癖覆盖用户人设。
 人格保持不变，表达场景从“群聊接话”切换到“自己的 QQ 空间”。
 
-实现位于 `src/moment-prompt.js`，提示词版本为 `persona-moment-v2`。
+实现位于 `src/llm/moment-prompt.js`，提示词版本为 `persona-moment-v2`。
 角色卡和附加规则有指纹；发布旧草稿时如果人设发生变化，必须重新生成。
 
 ## 提示词设计
@@ -85,7 +85,8 @@
 | 已取消 | 配置移除范围或减少计划条数 | 不自动恢复原槽位 |
 | 发布中 | 已准备发起外部写入 | 禁止再发 |
 | 已发布 | 返回了有效 tid，或在空间核对到相同内容 | 不重复发 |
-| 发布结果待核对 | 请求超时、无 tid，或发送中重启 | 只读核对空间；未找到也不能证明未发布 |
+| 发布结果待核对 | 请求超时、无 tid，或发送中重启 | 核对空间（只读），或人工确认未发出 / 已发出；未找到也不能证明未发布 |
+| 已核对·未发出 | 人工确认该次没有发出 | 已解除阻断；同一天可以重新发布 |
 
 非法 JSON/不完整字段会作为工具错误反馈给模型，在最大轮次内纠正。
 无法完成时记录真实失败及已消耗用量，不悄悄变成 skip。
@@ -111,3 +112,5 @@
 - `POST /api/daily-moments/records/:id/publish`：`confirm=true` 发布指定草稿；
   同日人工追加发布同样需要 `force=true, confirmDuplicateRisk=true`。
 - `POST /api/daily-moments/records/:id/reconcile`：只读核对不确定的发布结果，不重新发送。
+- `POST /api/daily-moments/records/:id/resolve`：`confirm=true` 加 `result=missed\|sent` 的人工终局。
+  `missed` 确认没发出去（解除阻断，同一天可重新发布）；`sent` 确认已发出（按已发布处理）。

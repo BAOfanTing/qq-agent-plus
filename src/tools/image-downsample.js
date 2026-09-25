@@ -1,0 +1,181 @@
+// 超大图片兜底（Issue #6）：群友发 >12MiB 的图时，常规拉取直接失败，
+// 视觉模型什么都看不到。这里放宽上限取回全量，再用系统 ffmpeg 降采样到
+// 2048px JPEG 交给视觉模型（实测 48MB PNG → 3.6MB JPEG）。
+// ffmpeg 是可选能力：缺失或失败时抛出带指引的错误，绝不影响常规 ≤12MiB 路径。
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { safeFetchBinary } from '../llm/safe-fetch.js';
+
+// safe-fetch.js readBounded 的超限报错形态（"响应体超过 N 字节限制"）。
+// 用报错形态识别"是不是拉超了"，其他错误（HTTP 4xx/5xx、SSRF 拦截）原样上抛。
+export const OVERSIZE_LIMIT_RE = /响应体超过\s*\d+\s*字节限制/;
+
+const PROBE_TTL_MS = 10 * 60 * 1000;
+let probeCache = { at: 0, path: null };
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 单次探测：启动 ffmpeg -version，按退出结果返回 {code} 或 {error}。 */
+async function probeFfmpegOnce() {
+  let child;
+  try {
+    child = spawn('ffmpeg', ['-version'], { stdio: 'ignore', windowsHide: true });
+  } catch {
+    return { error: true };
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      // 超时主动兜底 resolve：kill 后若进程成僵尸不触发 exit，不能永久挂住调用方
+      try { child.kill(); } catch { /* 已退出 */ }
+      resolve({ error: true });
+    }, 5000);
+    timer.unref?.();
+    child.on('error', (error) => { clearTimeout(timer); resolve({ error }); });
+    child.on('exit', (code) => { clearTimeout(timer); resolve({ code }); });
+  });
+}
+
+/** 探测系统 ffmpeg（进程内缓存，含失败结果；失败 10 分钟后允许重探一次）。
+ * Windows 上 spawn 偶发 EBUSY（AV 扫描/资源占用）：瞬态，重试一次再下结论。 */
+export async function resolveFfmpeg() {
+  const cached = probeCache.path;
+  if (cached && Date.now() - probeCache.at < PROBE_TTL_MS) return cached;
+  if (!cached && Date.now() - probeCache.at < PROBE_TTL_MS) return null;
+  probeCache.at = Date.now();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const outcome = await probeFfmpegOnce();
+    if (!outcome.error) {
+      probeCache.path = outcome.code === 0 ? 'ffmpeg' : null;
+      return probeCache.path;
+    }
+    if (attempt === 0) await sleep(250);
+  }
+  probeCache.path = null;
+  return probeCache.path;
+}
+
+async function runFfmpegOnce(ffmpegPath, buffer, vf, signal) {
+  signal?.throwIfAborted(); // 入口即中止：别让 ffmpeg 白跑 30 秒才被超时杀掉
+  // 输入必须走临时文件：部分 Linux 发行版的 ffmpeg（如 Ubuntu 22.04 的 4.4.2）
+  // 解 GIF 需要可 seek 的输入，从管道直读报 "pipe:0: Input/output error"
+  // （Windows 的 ffmpeg 无此问题——这正是测试全绿、服务器翻车的根因）。
+  // 输出保持 pipe:1（JPEG 顺序写，无需 seek）。
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-ffmpeg-'));
+  const inputPath = path.join(workDir, 'input');
+  const cleanup = () => { try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* 尽力清理 */ } };
+  let child;
+  try {
+    fs.writeFileSync(inputPath, buffer);
+    child = spawn(ffmpegPath, [
+      '-hide_banner', '-loglevel', 'error',
+      '-i', inputPath,
+      '-vf', vf,
+      '-frames:v', '1',
+      '-q:v', '5',
+      '-f', 'image2pipe',
+      '-vcodec', 'mjpeg',
+      'pipe:1'
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    // 写入失败（磁盘满/权限）或 spawn 同步抛出（EINVAL 类）：清理后原样传播，
+    // 错误信息不含"启动失败"，不会被 runFfmpeg 误判成 EBUSY 重试。
+    cleanup();
+    throw error;
+  }
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let stderr = '';
+    let settled = false;
+    let timer = null;
+    const onAbort = () => settle(reject, new Error('已中止'));
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      try { child.kill(); } catch { /* 已退出 */ }
+      cleanup();
+      fn(value);
+    };
+    timer = setTimeout(() => settle(reject, new Error('ffmpeg 降采样超时（30 秒）')), 30000);
+    timer.unref?.();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    child.stdout.on('data', (chunk) => chunks.push(chunk));
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+      // 保留尾部：ffmpeg 的真实报错在 stderr 的最后一行，头部只有 banner 噪音
+      if (stderr.length > 4000) stderr = stderr.slice(-4000);
+    });
+    child.on('error', (error) => settle(reject, new Error(`ffmpeg 启动失败：${error.message}`)));
+    child.on('close', (code) => {
+      const out = Buffer.concat(chunks);
+      if (code === 0 && out.length) settle(resolve, out);
+      else settle(reject, new Error(`ffmpeg 降采样失败（exit ${code}）：${stderr.trim().split('\n').pop() || '无错误输出'}`));
+    });
+  });
+}
+
+/** runFfmpegOnce 的重试壳：Windows 瞬态 EBUSY 重试一次，其他错误直接抛。 */
+async function runFfmpeg(ffmpegPath, buffer, vf, signal) {
+  try {
+    return await runFfmpegOnce(ffmpegPath, buffer, vf, signal);
+  } catch (error) {
+    if (!/启动失败/.test(String(error?.message ?? ''))) throw error;
+    await sleep(250);
+    return runFfmpegOnce(ffmpegPath, buffer, vf, signal);
+  }
+}
+
+/**
+ * 常规上限拉取抛出"超限"时调用：放宽到 largeCap 重拉一次，确认拿到的确实是
+ * 图片（content-type image/*）后交给 ffmpeg 降采样成 JPEG。
+ * 拿不到图 / 二次拉取失败 → 把原始超限错误抛回去（贴近真相）；
+ * ffmpeg 缺失 → 抛带安装指引的错误；降采样失败 → 抛 ffmpeg 的具体错误。
+ */
+export async function fetchOversizedImageAsJpeg(safeUrl, originalError, signal, {
+  cap = 12 * 1024 * 1024,
+  largeCap = 96 * 1024 * 1024
+} = {}) {
+  if (!OVERSIZE_LIMIT_RE.test(String(originalError?.message ?? ''))) throw originalError;
+  const ffmpegPath = await resolveFfmpeg();
+  if (!ffmpegPath) {
+    throw new Error(`${originalError.message}；图片超过 ${Math.round(cap / 1024 / 1024)} MiB 且系统未安装 ffmpeg，无法自动降采样（安装 ffmpeg 后即可支持超大图）`);
+  }
+  let buffer;
+  let contentType;
+  try {
+    ({ buffer, contentType } = await safeFetchBinary(safeUrl, largeCap, signal));
+  } catch (error) {
+    // 二次拉取被中止（时间窗关闭/手动停止）时如实抛中止，别伪装成超限错误
+    if (signal?.aborted || error?.name === 'AbortError') throw error;
+    throw originalError; // 其他二次拉取失败：原始超限错误更贴近真相
+  }
+  if (!buffer?.length || !/^image\//i.test(String(contentType || ''))) throw originalError;
+  // 动图走帧条（与常规 GIF 路径同一口径，别只给模型一帧）；其他图按尺寸降采样
+  const vf = /^image\/gif/i.test(String(contentType || ''))
+    ? 'fps=2,scale=512:-2,tile=2x2'
+    : "scale='min(2048,iw)':-2";
+  const jpeg = await runFfmpeg(ffmpegPath, buffer, vf, signal);
+  return { buffer: jpeg, contentType: 'image/jpeg' };
+}
+
+/**
+ * GIF → JPEG 帧条（Issue 反馈：模型读不了 GIF——主流视觉网关不接受
+ * image/gif，且动图的情绪信息在动作里，单帧会丢）。
+ * 做法：按每秒 2 帧采样最多 4 帧，拼成 2x2 帧条输出单张 JPEG，视觉模型
+ * 一次就能看到动作走向；透明背景按 ffmpeg 默认合成（黑底）。
+ * 返回 JPEG Buffer；ffmpeg 缺失或转换失败返回 null，由调用方回退原始 GIF。
+ */
+export async function convertGifToStillStrip(buffer, signal) {
+  const ffmpegPath = await resolveFfmpeg();
+  if (!ffmpegPath) return null;
+  try {
+    const jpeg = await runFfmpeg(ffmpegPath, buffer, 'fps=2,scale=512:-2,tile=2x2', signal);
+    if (!jpeg?.length) return null;
+    return jpeg;
+  } catch {
+    return null;
+  }
+}

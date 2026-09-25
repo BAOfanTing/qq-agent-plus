@@ -31,7 +31,7 @@ fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({
   }
 }));
 
-const { chatCompletion } = await import(new URL('../../src/llm.js', import.meta.url).href);
+const { chatCompletion } = await import(new URL('../../src/llm/llm.js', import.meta.url).href);
 const forced = { type: 'function', function: { name: 'submit_sticker_pick' } };
 const tools = [{ type: 'function', function: { name: 'submit_sticker_pick', parameters: {} } }];
 

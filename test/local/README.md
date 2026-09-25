@@ -15,7 +15,7 @@ QQ_AGENT_DATA_DIR=$T node test/local/test-sender-retry.mjs
 ```
 
 **必须用临时 QQ_AGENT_DATA_DIR**：下表中标记"需要 DATA_DIR"的用例都要一个可写的数据目录
-（其中两个会 seed 一份放行的 `config.json`，`src/access.js` 的 `assertCanSend` 才不拦发送；
+（其中两个会 seed 一份放行的 `config.json`，`src/core/access.js` 的 `assertCanSend` 才不拦发送；
 `test-send-tools.mjs` 会往里复制表情名表），指向生产目录会覆盖线上配置。
 最简单的写法就是上面那两行：先 `mktemp -d`，再带上 `QQ_AGENT_DATA_DIR=$T`。
 

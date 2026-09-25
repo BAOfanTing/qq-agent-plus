@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { after, test } from 'node:test';
-import { ChatStore } from '../src/store.js';
-import { IdentityPilotManager } from '../src/identity-pilot.js';
-import { relationshipDatabasePath } from '../src/relationship-pilot-store.js';
-import '../src/relationship-runtime-integration.js';
+import { ChatStore } from '../src/core/store.js';
+import { IdentityPilotManager } from '../src/identity/identity-pilot.js';
+import { relationshipDatabasePath } from '../src/pilots/relationship-pilot-store.js';
+import '../src/pilots/relationship-runtime-integration.js';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-rel-boundary-'));
 const chatStore = new ChatStore(0, { dataDir, filename: path.join(dataDir, 'messages.sqlite') });

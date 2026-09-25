@@ -191,11 +191,58 @@
   <dialog id="console-login">
     <form id="console-login-form">
       <h2>QQ Agent Linux</h2>
+      <!-- 浏览器要求密码表单带用户名框（可隐藏），否则 F12 里会有一条 DOM 提示。
+           控制台登录本来就是单令牌，放个隐藏占位即可。 -->
+      <input id="console-account" type="text" name="username" value="console" autocomplete="username" hidden aria-hidden="true" tabindex="-1" />
       <label for="console-token">控制台 Token</label>
       <input id="console-token" type="password" autocomplete="current-password" required />
       <p id="console-login-error" role="alert"></p>
       <button class="btn" type="submit">登录</button>
     </form>
+  </dialog>
+
+  <dialog id="update-notice">
+    <div id="update-notice-panel">
+      <h2 id="update-notice-title">发现新版本</h2>
+      <p class="muted" id="update-notice-sub"></p>
+      <pre id="update-notice-notes"></pre>
+      <p class="control-result muted" id="update-notice-result" role="status" aria-live="polite"></p>
+      <div id="update-notice-actions">
+        <button class="btn btn-primary" type="button" id="update-notice-run">立即更新</button>
+        <button class="btn" type="button" id="update-notice-later">稍后</button>
+        <button class="btn" type="button" id="update-notice-ignore">忽略这个版本</button>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="price-dialog">
+    <div id="price-dialog-panel">
+      <h2 id="price-dialog-title">给模型定价</h2>
+      <p class="muted" id="price-dialog-sub"></p>
+      <div class="pd-rows">
+        <label class="pd-row"><span>渠道</span><select id="price-dialog-channel"></select></label>
+        <label class="pd-row"><span>计费</span><select id="price-dialog-billing">
+          <option value="token">按 token 计价</option>
+          <option value="flat">包月 / 订阅（固定支出）</option>
+          <option value="none">本地 / 不计费</option>
+        </select></label>
+        <label class="pd-row" id="price-dialog-flat-row" style="display:none"><span>金额</span>
+          <input type="number" id="price-dialog-amount" step="0.01" min="0" />
+          <select id="price-dialog-period" style="max-width:110px">
+            <option value="month">元 / 月</option>
+            <option value="day">元 / 天</option>
+          </select></label>
+        <label class="pd-row" id="price-dialog-token-row"><span>输入</span><input type="number" id="price-dialog-in" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
+        <label class="pd-row" id="price-dialog-token-row-2"><span>输出</span><input type="number" id="price-dialog-out" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
+        <label class="pd-row" id="price-dialog-token-row-3"><span>缓存命中</span><input type="number" id="price-dialog-cached" step="0.01" min="0" /><span class="pd-unit">元/百万</span></label>
+      </div>
+      <p class="muted" id="price-dialog-hint">只写这一条价：同一个模型在不同渠道可以分别定价；官方价格表不会被改动，用量页会立刻按新价重算。</p>
+      <p class="control-result muted" id="price-dialog-result" role="status" aria-live="polite"></p>
+      <div id="price-dialog-actions">
+        <button class="btn btn-primary" type="button" id="price-dialog-save">保存</button>
+        <button class="btn" type="button" id="price-dialog-delete">删除这条价</button>
+        <button class="btn" type="button" id="price-dialog-cancel">取消</button>
+      </div>
+    </div>
   </dialog>
   <script src="/app.js"></script>
   <script src="/stable-features.js"></script>

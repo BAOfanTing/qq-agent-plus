@@ -80,3 +80,25 @@ test('Git transport defaults to HTTP/1.1 and can be disabled', () => {
   assert.ok(args.some((value) => String(value).startsWith('http.lowSpeedTime=')));
   assert.deepEqual(gitTransportPrefix({ forceHttp11: false }), []);
 });
+
+test('undici 的 fetch 失败按其 cause 判定为可重试', async () => {
+  // undici 抛的是 TypeError('fetch failed')，真正的原因在 cause 上；
+  // 不看 cause 会把这些"连接级抖动"判成不可重试，重试配置在这条通道上等于空转。
+  const withCause = (code) => new TypeError('fetch failed', {
+    cause: Object.assign(new Error(code), { code })
+  });
+  assert.equal(isRetryableUpdateNetworkError(withCause('ECONNRESET')), true);
+  assert.equal(isRetryableUpdateNetworkError(withCause('ENOTFOUND')), true);
+  assert.equal(isRetryableUpdateNetworkError(withCause('ECONNREFUSED')), true);
+  assert.equal(isRetryableUpdateNetworkError(withCause('UND_ERR_SOCKET')), true,
+    'fetch failed 本身就是网络层失败，认不出的子码也按可重试处理');
+  assert.equal(isRetryableUpdateNetworkError(new TypeError('fetch failed')), true, '没有 cause 时按关键字兜底');
+  assert.equal(isRetryableUpdateNetworkError(new Error('socket hang up')), true);
+  // 既不认识、也没有网络关键字：不猜（避免把语义错误当抖动重试几分钟）
+  assert.equal(isRetryableUpdateNetworkError(Object.assign(new Error('something odd'), {
+    cause: Object.assign(new Error('x'), { code: 'WEIRD' })
+  })), false);
+  // 明确表示"请求本身有问题"的错误仍然不重试
+  assert.equal(isRetryableUpdateNetworkError(new Error('authentication failed')), false);
+  assert.equal(isRetryableUpdateNetworkError(Object.assign(new Error('x'), { retryable: false })), false);
+});

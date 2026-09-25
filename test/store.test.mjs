@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { ChatStore } from '../src/store.js';
+import { ChatStore } from '../src/core/store.js';
 
 describe('ChatStore', () => {
   function fixture(t, cap = 0) {

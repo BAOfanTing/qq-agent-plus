@@ -66,8 +66,8 @@ For the current modules:
 | Feature | Runtime switch | Graduation switch | Owned page |
 | --- | --- | --- | --- |
 | Person impressions | `identityPilot.enabled` | `identityPilot.graduated` | `identity` / 旧印象 |
-| Automatic friend handling | nested friend switches | `identityPilot.friendProposal.graduated` | `friends` / 好友管理 |
-| Slang research | `slangPilot.enabled` | `slangPilot.graduated` | `slang` / 黑话研究 |
+| Automatic friend handling | retired 2026-09-25（整体退役，见 docs/KNOWN-ISSUES.md） | retired | `friends` / 好友管理（仅入站审批） |
+| Slang research | retired | retired | 黑话资产并入观测页 |
 
 ## 4. API And Persistence
 

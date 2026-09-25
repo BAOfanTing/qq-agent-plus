@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { normalizeMomentWindows, updateMomentPlan, MOMENT_MIN_GAP_MS } from '../src/moment-schedule.js';
+import { normalizeMomentWindows, updateMomentPlan, MOMENT_MIN_GAP_MS } from '../src/features/moment-schedule.js';
 
 const at = (clock) => Date.parse(`2026-09-14T${clock}+08:00`);
 const windows = [{ start: '17:00', end: '18:00', count: 3 }];

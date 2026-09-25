@@ -6,10 +6,10 @@ import path from 'node:path';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-moment-publish-'));
 process.env.QQ_AGENT_DATA_DIR = root;
-const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/config.js');
-const { DailyMomentsManager } = await import('../src/daily-moments.js');
-const { buildMomentSystemPrompt, momentPersonaHash } = await import('../src/moment-prompt.js');
-const { SessionRegistry } = await import('../src/sessions.js');
+const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
+const { DailyMomentsManager } = await import('../src/features/daily-moments.js');
+const { buildMomentSystemPrompt, momentPersonaHash } = await import('../src/llm/moment-prompt.js');
+const { SessionRegistry } = await import('../src/core/sessions.js');
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const now = Date.parse('2026-09-12T08:00:00Z');
@@ -511,4 +511,38 @@ test('changing an in-flight window cancels its send without replacing the new ti
   await settleTimers();
   assert.equal(f.sends.length, 1);
   assert.equal(f.manager.status().latest.scheduleSlotId, `${dayKey}/17:01-17:10/1`);
+});
+
+test('reconcile 找不到时，人工 resolve 是终局出口（missed 解除阻断 / sent 保持已发布）', async (t) => {
+  let sends = 0;
+  const f = scheduledFixture(t, { onebot: { selfId: '888', call: async (action) => {
+    if (action === 'get_qzone_msg_list') return { msglist: [] };
+    sends++;
+    throw new Error('response lost');
+  } } });
+  f.manager.start();
+  t.mock.timers.tick(15000);
+  await settleTimers();
+  assert.equal(sends, 1);
+  const record = f.manager.status().latest;
+  assert.equal(record.status, 'publish-unknown');
+  // 自动核对在空间里找不到 → 记录仍停在待核对（这就是没有人工出口时会无限期卡住的形态）
+  assert.equal((await f.manager.reconcile(record.id)).matched, false);
+  // 非法 result 拒绝
+  await assert.rejects(() => f.manager.resolveRecord(record.id, { result: 'whatever' }), /result 必须是/);
+  // 人工确认没发出去 → 终态 publish-missed
+  assert.equal((await f.manager.resolveRecord(record.id, { result: 'missed' })).record.status, 'publish-missed');
+  assert.equal(f.manager.status().latest.status, 'publish-missed');
+  assert.equal(f.manager.status().scheduleSlots[0].status, 'publish-missed');
+  // 已终局的记录不能再核对
+  await assert.rejects(() => f.manager.resolveRecord(record.id, { result: 'missed' }), /无需人工核对/);
+  // 解除后下一个时段能正常发起发布（桩件仍失败 → 新的 publish-unknown），不再被 unresolved 挡住
+  t.mock.timers.tick(30 * 60000);
+  await settleTimers();
+  assert.equal(sends, 2, '解除待核对后，下一个时段应当能重新发起发布');
+  const next = f.manager.status().latest;
+  assert.equal(next.status, 'publish-unknown');
+  // 确认已发出 → published，保持"这条已发布"的阻断语义
+  assert.equal((await f.manager.resolveRecord(next.id, { result: 'sent' })).record.status, 'published');
+  assert.equal(f.manager.status().scheduleSlots[1].status, 'published');
 });

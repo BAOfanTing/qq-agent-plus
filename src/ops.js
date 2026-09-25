@@ -22,6 +22,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { resolveModelPrice, modelLabel, setRemotePrices, setChannelPrices } from './pricing/model-prices.js';
 
 const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const IS_WINDOWS = process.platform === 'win32';
@@ -260,6 +261,76 @@ function sqliteIntegrity(file) {
   }
 }
 
+/**
+ * 把磁盘上的价格表缓存注入查价层（只读，不发网络请求）。
+ *   - data/price-feed-cache.json → 远程价格表（项目/社区公共参考价）
+ *   - data/channel-prices.json   → 每渠道价目表（只注入 config 里还配着的渠道）
+ * 与服务进程启动时的行为一致（src/pricing/price-feed.js / src/pricing/channel-prices.js 也是先吃缓存）。
+ */
+function injectCachedPriceTables(dataDir, priceCfg) {
+  try {
+    const cache = JSON.parse(fs.readFileSync(path.join(dataDir, 'price-feed-cache.json'), 'utf8'));
+    if (cache?.prices && typeof cache.prices === 'object') {
+      setRemotePrices(cache.prices, cache.aliases && typeof cache.aliases === 'object' ? cache.aliases : null);
+    }
+  } catch { /* 没有缓存就只用内置表 */ }
+  try {
+    const cache = JSON.parse(fs.readFileSync(path.join(dataDir, 'channel-prices.json'), 'utf8'));
+    const feeds = cache?.feeds && typeof cache.feeds === 'object' ? cache.feeds : {};
+    const wanted = new Set((Array.isArray(priceCfg?.api?.channelPriceFeeds) ? priceCfg.api.channelPriceFeeds : [])
+      .map((f) => String(f?.vendor || '').trim())
+      .filter(Boolean));
+    for (const [vendor, feed] of Object.entries(feeds)) {
+      if (!wanted.has(vendor)) continue;
+      const prices = feed?.prices;
+      setChannelPrices(vendor, prices && typeof prices === 'object' ? prices : null);
+    }
+  } catch { /* 同上 */ }
+}
+
+/**
+ * 价格缺口（只读）：扫会话留档，找出"没有价格"的模型。
+ * 与用量页同一条判价链（含账户口径、渠道价目表、远程价格表、"按当前模型估算"），
+ * 所以这里剩下的就是真正没算进成本的调用。没有留档时返回 null。
+ *
+ * 远程表与渠道价目表用**磁盘缓存**注入（不发网络请求）：体检是只读的，
+ * 而服务进程启动时也是先吃这两份缓存 —— 不在线拉才能既对齐口径又不打扰外部站点。
+ */
+function priceGapReport(cfg) {
+  // 用配置文件的完整内容判价（ops 自己的 cfg 是扁平结构，缺 api.* 会让
+  // 账户口径与按当前模型估算失效，报出的缺口就跟控制台对不上）
+  let priceCfg = {};
+  try { priceCfg = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'config.json'), 'utf8')); } catch { priceCfg = {}; }
+  injectCachedPriceTables(cfg.dataDir, priceCfg);
+  const dir = path.join(cfg.dataDir, 'sessions');
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return null; }
+  const counts = new Map();
+  for (const name of files) {
+    let session;
+    try { session = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
+    const vendor = String(session?.vendor || '').trim();
+    for (const message of (session?.messages || [])) {
+      const raw = message?.raw;
+      if (!raw || typeof raw !== 'object') continue;
+      const usage = raw.usage || {};
+      const promptTokens = Number(usage.prompt_tokens) || 0;
+      const completionTokens = Number(usage.completion_tokens) || 0;
+      if (!promptTokens && !completionTokens) continue;
+      const model = String(raw.model || session?.model || '').trim();
+      const at = Number(raw.created) ? Number(raw.created) * 1000 : (Number(session?.startedAt) || 0);
+      const price = resolveModelPrice(model, priceCfg, null, { vendor, at });
+      if (price.unpriced !== true) continue;
+      const key = modelLabel(vendor, model);
+      const current = counts.get(key) || { key, calls: 0, tokens: 0 };
+      current.calls += 1;
+      current.tokens += promptTokens + completionTokens;
+      counts.set(key, current);
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.calls - a.calls);
+}
+
 // ───────────────────────── 未定义调用扫描（原 scan-undefined-calls.py） ─────────────────────────
 
 const SCAN_GLOBALS = new Set(`console Math JSON Object Array String Number Boolean Date Promise Set Map WeakMap WeakSet Buffer
@@ -395,15 +466,16 @@ function scanDirectory(dir, ignore) {
   const lines = [];
   let total = 0;
   if (!exists(dir)) return { lines, total, files: 0 };
-  const files = fs.readdirSync(dir).filter((name) => name.endsWith('.js')).sort();
+  // 递归（src/ 按领域分了子目录）：漏掉子目录会让这个门禁静默只扫一部分代码
+  const files = findJsFiles(dir);
   for (const name of files) {
-    const missing = scanSourceFile(path.join(dir, name), ignore);
+    const missing = scanSourceFile(name, ignore);
     if (missing.size === 0) continue;
     total += missing.size;
     const items = [...missing.entries()]
       .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
       .map(([key, line]) => `${key}(第${line}行)`);
-    lines.push(`${name} → ${items.join(', ')}`);
+    lines.push(`${path.relative(dir, name).split(path.sep).join('/')} → ${items.join(', ')}`);
   }
   return { lines, total, files: files.length };
 }
@@ -652,30 +724,34 @@ function auditHost(args) {
 // ─────────────────────────── 服务体检（原 audit-server.sh） ───────────────────────────
 
 const AUDIT_MARKERS = [
-  ['normalizeMid 定义', 1, 'src/tools-core.js', '^function normalizeMid\\(value\\)'],
-  ['normalizeMid 调用点', 3, 'src/tools-core.js', 'replyToMessageId: normalizeMid\\(args'],
-  ['store.findByMid 归一化', 1, 'src/store.js', 'normalizeMid\\(mid\\)'],
-  ['贴纸同步防清空守卫', 1, 'src/stickers.js', 'if \\(!fetchedIds\\.size\\) return out'],
-  ['主动间隔守卫', 1, 'src/orchestrator.js', 'minGapMs'],
-  ['主动判定落盘', 1, 'src/orchestrator.js', 'writeProactiveLastAttempt\\(nowTick\\)'],
-  ['多窗口工具函数', 1, 'src/orchestrator.js', 'function proactiveWindowState'],
-  ['补话安排', 1, 'src/orchestrator.js', 'maybeScheduleFollowUp\\(chatKey'],
-  ['重连补课', 2, 'src/app.js', 'catchUpMissedMessages|scheduleCatchUp'],
-  ['空间互动失败退避', 2, 'src/qzone-interactions.js', 'failStreak|backoff'],
-  ['发送网络级重试', 1, 'src/sender.js', 'isTransient|transient'],
-  ['QQ表情标签', 1, 'src/onebot.js', 'QQ表情'],
-  ['看图先读情绪', 1, 'src/prompt.js', '看图先读情绪'],
-  ['表情编号≠stickerId 提醒', 1, 'src/prompt.js', '别拿这个编号去 get_sticker_image'],
-  ['发言唯一通道提示', 1, 'src/prompt.js', '发言的唯一通道'],
-  ['收尾自检段', 2, 'src/prompt.js', '沉默就是零输出|每次结束前必读'],
-  ['多气泡鼓励', 1, 'src/prompt.js', '别把一轮压成一句点评'],
-  ['一轮说完', 1, 'src/prompt.js', '有想法就一轮里说完'],
-  ['贴纸选图提示', 1, 'src/stickers.js', '选图很简单'],
-  ['审核拦截重试', 1, 'src/llm.js', '审核拦截整次请求'],
-  ['兜底模型接入', 1, 'src/llm.js', '改用兜底模型'],
-  ['人设·别当评委', 1, 'config.json', '聊天是双向的，别当评委'],
-  ['闲聊带自己', 1, 'src/prompt.js', '把自己的那半句补上'],
-  ['表情清单常驻', 1, 'src/prompt.js', '表情清单常驻系统提示']
+  ['normalizeMid 定义', 1, 'src/tools/tools-core.js', '^function normalizeMid\\(value\\)'],
+  ['normalizeMid 调用点', 3, 'src/tools/tools-core.js', 'replyToMessageId: normalizeMid\\(args'],
+  ['store.findByMid 归一化', 1, 'src/core/store.js', 'normalizeMid\\(mid\\)'],
+  ['贴纸同步防清空守卫', 1, 'src/onebot/stickers.js', 'if \\(!fetchedIds\\.size\\) return out'],
+  ['主动间隔守卫', 1, 'src/core/orchestrator.js', 'minGapMs'],
+  ['主动判定落盘', 1, 'src/core/orchestrator.js', 'writeProactiveLastAttempt\\(nowTick\\)'],
+  ['多窗口工具函数', 1, 'src/core/orchestrator.js', 'function proactiveWindowState'],
+  ['补话安排', 1, 'src/core/orchestrator.js', 'maybeScheduleFollowUp\\(chatKey'],
+  ['重连补课', 2, 'src/console/app.js', 'catchUpMissedMessages|scheduleCatchUp'],
+  ['空间互动失败退避', 2, 'src/features/qzone-interactions.js', 'failStreak|backoff'],
+  // 重试实现早就改成"按可确认未送达的错误判断"，不再用 isTransient 命名 ——
+  // 标记要跟着指向现在的实现，否则每次体检都误报一项。
+  ['发送网络级重试', 1, 'src/onebot/sender.js', '能证明请求没被对方收到|1.5 秒后重试一次'],
+  ['QQ表情标签', 1, 'src/onebot/onebot.js', 'QQ表情'],
+  ['看图先读情绪', 1, 'src/llm/prompt.js', '看图先读情绪'],
+  ['表情编号≠stickerId 提醒', 1, 'src/llm/prompt.js', '别拿这个编号去 get_sticker_image'],
+  ['发言唯一通道提示', 1, 'src/llm/prompt.js', '发言的唯一通道'],
+  ['收尾自检段', 2, 'src/llm/prompt.js', '沉默就是零输出|每次结束前必读'],
+  ['多气泡鼓励', 1, 'src/llm/prompt.js', '别把一轮压成一句点评'],
+  ['一轮说完', 1, 'src/llm/prompt.js', '有想法就一轮里说完'],
+  ['贴纸选图提示', 1, 'src/onebot/stickers.js', '选图很简单'],
+  ['审核拦截重试', 1, 'src/llm/llm.js', '审核拦截整次请求'],
+  ['兜底模型接入', 1, 'src/llm/llm.js', '改用兜底模型'],
+  // 这条以前查 config.json（实例当前人设）：管理员改过人设就不含这句话，于是永远误报。
+  // 改查随版本发布的内置卡，才对应"这个补丁在不在"的本意。
+  ['人设·别当评委', 1, 'roles/xiaojingyu.md', '不要总结、不要升华'],
+  ['闲聊带自己', 1, 'src/llm/prompt.js', '把自己的那半句补上'],
+  ['表情清单常驻', 1, 'src/llm/prompt.js', '表情清单常驻系统提示']
 ];
 
 function loadConfigJson(dataDir) {
@@ -752,7 +828,7 @@ async function auditServer(args) {
     const restarts = systemctlUser(['show', cfg.service, '-p', 'NRestarts', '--value']);
     const started = systemctlUser(['show', cfg.service, '-p', 'ActiveEnterTimestamp', '--value']);
     noteLine(`重启次数: ${restarts.stdout.trim() || '未知'}  启动时间: ${started.stdout.trim() || '未知'}`);
-    noteLine(`更新定时器（应为 disabled）: ${text(systemctlUser(['is-enabled', cfg.updateTimer])) || '未知'}`);
+    noteLine(`更新定时器（应为 enabled，它负责定期检查更新）: ${text(systemctlUser(['is-enabled', cfg.updateTimer])) || '未知'}`);
     noteLine(`进程看门狗（应为 enabled）: ${text(systemctlUser(['is-enabled', cfg.guardTimer])) || '未知'}`);
     const timers = systemctlUser(['list-timers', '--all', '--no-pager']);
     for (const line of timers.stdout.split('\n').slice(0, 6)) if (line.trim()) noteLine(line.trim());
@@ -824,9 +900,8 @@ async function auditServer(args) {
   const inlineDir = path.join(cfg.appDir, 'src');
   let inlineFiles = 0;
   if (exists(inlineDir)) {
-    inlineFiles = fs.readdirSync(inlineDir)
-      .filter((name) => name.endsWith('.js'))
-      .filter((name) => readFileSafe(path.join(inlineDir, name)).includes('import { resolveToolCalls }'))
+    inlineFiles = findJsFiles(inlineDir)
+      .filter((file) => readFileSafe(file).includes('import { resolveToolCalls }'))
       .length;
   }
   if (inlineFiles >= 5) okLine(`内联工具兜底接入（${inlineFiles} 个文件）`);
@@ -837,8 +912,8 @@ async function auditServer(args) {
   else if (cfgJson.__invalid) ngLine('config.json 不是合法 JSON');
   else {
     const proactive = cfgJson.proactive || {};
-    const windows = (proactive.activeHours?.windows || []).map((win) => `[${win.start}~${win.end}]`).join(' ');
-    const interval = (min, max) => `${(Number(min) / 3.6e6).toFixed(1)}~${(Number(max) / 3.6e6).toFixed(1)}h`;
+    const windows = (proactive.activeHours?.windows || []).map((win) => `[${win.start}-${win.end}]`).join(' ');
+    const interval = (min, max) => `${(Number(min) / 3.6e6).toFixed(1)}-${(Number(max) / 3.6e6).toFixed(1)}h`;
     noteLine(`主动开话题: enabled=${proactive.enabled} 概率=${proactive.probability} 间隔=${interval(proactive.checkIntervalMinMs, proactive.checkIntervalMaxMs)} 窗口=${windows} 冷场=${Math.round(Number(proactive.idleThresholdMs || 0) / 60000)}分钟`);
     noteLine(`思考开关: ${JSON.stringify(cfgJson.api?.thinking ?? null)}`);
     noteLine(`自动更新: ${cfgJson.autoUpdate?.enabled}`);
@@ -885,6 +960,23 @@ async function auditServer(args) {
     try { sessionCount = fs.readdirSync(sessionsDir).length; } catch { sessionCount = 0; }
   }
   noteLine(`会话文件: ${sessionCount} 个`);
+
+  // 价格缺口（只读）：出现过的模型里，哪些没有价格。
+  // 判价逻辑与用量页一致（含账户口径与"按当前模型估算"），所以这里报出来的
+  // 是真正没算进成本的那些调用 —— 免得用户过几天才发现成本少算了。
+  section('7.1 价格缺口（模型有没有价）');
+  const gaps = priceGapReport(cfg);
+  if (gaps === null) skipLine('没有会话留档，无法判定');
+  else if (!gaps.length) okLine('出现过的模型都有价格（或已按当前模型估算）');
+  else {
+    const calls = gaps.reduce((sum, g) => sum + g.calls, 0);
+    const tokens = gaps.reduce((sum, g) => sum + g.tokens, 0);
+    badWarn(`有 ${gaps.length} 个模型没有价格：`
+      + gaps.slice(0, 5).map((g) => `${g.key}（${g.calls} 次）`).join('、')
+      + `${gaps.length > 5 ? ' 等' : ''}`);
+    noteLine(`  → 共 ${calls} 次调用 / ${tokens} token 没算进成本`);
+    noteLine('  → 到控制台「设置 → 模型价格」定价，或打开"按当前模型估算"（默认已开）');
+  }
 
   section('8. 运行态');
   if (!consoleInfo.token) skipLine('未设置 QQ_AGENT_CONSOLE_TOKEN，且 config.json 无 server.token，跳过控制台状态接口');
@@ -1076,7 +1168,8 @@ async function cmdBackup(args) {
     ngLine('本机缺少 tar 命令，无法备份');
     return 1;
   }
-  fs.mkdirSync(cfg.backupDir, { recursive: true });
+  // 包里是 config.json（含密钥）/console-access.txt/messages.sqlite，权限必须收紧
+  fs.mkdirSync(cfg.backupDir, { recursive: true, mode: 0o700 });
   const outFile = path.join(cfg.backupDir, `qq-agent-data-${formatStamp()}.tar.gz`);
   const du = run('du', ['-sh', cfg.dataDir]);
   if (!du.missing && du.ok) noteLine(`源大小: ${du.stdout.trim().split(/\s+/)[0]}`);
@@ -1120,6 +1213,7 @@ async function cmdBackup(args) {
   const size = (() => {
     try { return (fs.statSync(outFile).size / 1024 / 1024).toFixed(1); } catch { return '?'; }
   })();
+  try { fs.chmodSync(outFile, 0o600); } catch { /* 权限设不上不影响备份本身 */ }
   okLine(`备份完成: ${size} MB ${outFile}`);
   for (const item of backups.slice(0, keep)) noteLine(`  ${item.name}`);
   return 0;
@@ -1346,8 +1440,15 @@ function cmdGuard(args) {
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, count]) => `${name}:${count}`).join(' ');
   say(`=== ${new Date().toLocaleString('zh-CN', { hour12: false })} 触发：${target} 进程数 ${procs.length} ===`);
   noteLine(`各程序计数: ${top}`);
+  // 只按"同类进程数超阈值"判定失控（bash 200 个 = 真 fork 炸弹）。
+  // 旧逻辑在进程总数超限时把目标用户的全部 bash/sh/grep/tr/sleep 一网打尽——
+  // 包括管理员自己的 SSH 会话和正在跑的部署脚本（真实误杀形态，勿回退）。
+  // 总数超限但没有同类失控组时，只告警不杀。
   const runaway = procs.filter((proc) => ['bash', 'grep', 'tr', 'sh', 'sleep'].includes(proc.comm)
-    && ((counts.get(proc.comm) || 0) > 200 || procs.length > 3000));
+    && (counts.get(proc.comm) || 0) > 200);
+  if (procs.length > 3000 && runaway.length === 0) {
+    say(`  进程总数 ${procs.length} 超过 3000，但没有单类进程超过 200：不做查杀（避免误杀正常会话与部署脚本）`);
+  }
   if (dryRun) {
     say(`  （预演）将清理 ${runaway.length} 个失控进程，不写日志、不杀进程`);
     for (const proc of runaway.slice(0, 20)) noteLine(`  pid=${proc.pid} ${proc.comm} ${proc.cmdline.slice(0, 100)}`);
@@ -1454,12 +1555,12 @@ function cmdFaceNames(args) {
     const numbers = [...merged.keys()].filter((key) => /^\d+$/.test(key)).map(Number).sort((a, b) => a - b);
     if (printOnly) {
       say(JSON.stringify(payload, null, 2));
-      noteLine(`（预演：未写入 ${outFile}；共 ${merged.size} 条，编号范围 ${numbers[0] ?? '-'} ~ ${numbers.at(-1) ?? '-'}）`);
+      noteLine(`（预演：未写入 ${outFile}；共 ${merged.size} 条，编号范围 ${numbers[0] ?? '-'} - ${numbers.at(-1) ?? '-'}）`);
       return 0;
     }
     fs.mkdirSync(cfg.dataDir, { recursive: true });
     fs.writeFileSync(outFile, JSON.stringify(payload, null, 0), 'utf8');
-    okLine(`已导出 ${merged.size} 条 -> ${outFile}（编号范围 ${numbers[0] ?? '-'} ~ ${numbers.at(-1) ?? '-'}）`);
+    okLine(`已导出 ${merged.size} 条 -> ${outFile}（编号范围 ${numbers[0] ?? '-'} - ${numbers.at(-1) ?? '-'}）`);
     noteLine('提示：onebot.js 的表情名补丁读取该文件，改完需重启服务。');
     return 0;
   } finally {
@@ -1547,23 +1648,36 @@ async function cmdDeploy(args) {
     return 1;
   }
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  // 模型 Key 不进子进程环境（/proc/<pid>/environ 能读到）：写一个 0600 临时文件，
+  // 由 deploy-all.sh 按 QQ_AGENT_MODEL_KEY_FILE 读进去（它自己还会再转到 0600 文件给部署步骤）。
+  let modelKeyDir = '';
   const childEnv = {
     ...process.env,
     XDG_RUNTIME_DIR: envStr('XDG_RUNTIME_DIR', `/run/user/${uid}`),
     LANG: envStr('LANG', 'C.UTF-8'),
-    QQ_AGENT_MODEL_API_KEY: key,
     QQ_AGENT_MODEL_BASE_URL: baseUrl,
     QQ_AGENT_MODEL: model
   };
+  delete childEnv.QQ_AGENT_MODEL_API_KEY;
+  if (key) {
+    modelKeyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-agent-model-key-'));
+    const keyFile = path.join(modelKeyDir, 'model-key');
+    fs.writeFileSync(keyFile, key, { mode: 0o600 });
+    childEnv.QQ_AGENT_MODEL_KEY_FILE = keyFile;
+  }
   say();
   const child = spawn('bash', scriptArgs, { cwd: srcDir, stdio: 'inherit', env: childEnv, windowsHide: true });
-  return await new Promise((resolve) => {
+  const exitCode = await new Promise((resolve) => {
     child.on('error', (error) => {
       ngLine(`无法启动部署脚本: ${error && error.message ? error.message : error}`);
       resolve(1);
     });
     child.on('close', (code) => resolve(code ?? 1));
   });
+  if (modelKeyDir) {
+    try { fs.rmSync(modelKeyDir, { recursive: true, force: true }); } catch { /* 残留只是空目录+旧 key 文件，下次覆盖 */ }
+  }
+  return exitCode;
 }
 
 // ─────────────────────────── console 子命令（原 qq-console.bat） ───────────────────────────

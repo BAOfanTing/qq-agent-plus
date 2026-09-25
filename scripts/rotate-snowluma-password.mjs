@@ -10,9 +10,12 @@ const { values } = parseArgs({
 });
 
 const baseUrl = String(values.url || '').replace(/\/+$/, '');
+// 密码优先走环境变量：命令行参数会出现在 /proc/<pid>/cmdline，对本机所有用户可读。
+const current = String(values.current || process.env.QQ_AGENT_SNOWLUMA_CURRENT_PASSWORD || '');
+const next = String(values.next || process.env.QQ_AGENT_SNOWLUMA_PASSWORD || '');
 if (!baseUrl) throw new Error('--url is required');
-if (!values.current) throw new Error('--current is required');
-if (!values.next) throw new Error('--next is required');
+if (!current) throw new Error('--current or QQ_AGENT_SNOWLUMA_CURRENT_PASSWORD is required');
+if (!next) throw new Error('--next or QQ_AGENT_SNOWLUMA_PASSWORD is required');
 
 async function post(route, body, token = '') {
   const response = await fetch(`${baseUrl}${route}`, {
@@ -34,7 +37,7 @@ async function post(route, body, token = '') {
 }
 
 const login = await post('/api/login', {
-  password: values.current,
+  password: current,
   ...(values.totp ? { totp: values.totp } : {})
 });
 if (login.result?.needsTotp) {
@@ -45,8 +48,8 @@ if (!login.response.ok || login.result?.success !== true || !login.result?.token
 }
 
 const changed = await post('/api/auth/change-password', {
-  oldPassword: values.current,
-  newPassword: values.next
+  oldPassword: current,
+  newPassword: next
 }, login.result.token);
 if (!changed.response.ok || changed.result?.success !== true) {
   throw new Error(changed.result?.message || `SnowLuma password change failed with HTTP ${changed.response.status}`);

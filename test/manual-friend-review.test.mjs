@@ -6,11 +6,14 @@ import { test } from 'node:test';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-manual-friend-review-'));
 process.env.QQ_AGENT_DATA_DIR = root;
+// 用例自己造的临时目录自己清（约定见 test/README.md）：以前只删 case-* 子目录，
+// 根目录每跑一次漏一个，Windows 上尤其明显
+process.on('exit', () => { try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* 清理失败不影响结论 */ } });
 process.env.NODE_TEST_CONTEXT = '1';
 
-const { ChatStore } = await import('../src/store.js');
-const { SessionRegistry } = await import('../src/sessions.js');
-const { IdentityPilotManager } = await import('../src/identity-pilot.js');
+const { ChatStore } = await import('../src/core/store.js');
+const { SessionRegistry } = await import('../src/core/sessions.js');
+const { IdentityPilotManager } = await import('../src/identity/identity-pilot.js');
 
 function config() {
   return {

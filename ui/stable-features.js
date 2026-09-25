@@ -24,7 +24,7 @@
     ['启停由「设置 → 实验功能」统一控制', '正式功能，随服务恒定启动'],
     ['异常处理试点运行中', '异常处理基础设施运行中'],
     ['异常处理试点', '异常处理基础设施'],
-    ['主动发送实验开关已关闭', '主动好友申请为正式功能'],
+    ['主动发送实验开关已关闭', '主动好友候选已整体退役（2026-09-25）'],
     ['统一身份库总开关已关闭', '人物统一印象为正式功能']
   ];
 
@@ -153,7 +153,7 @@
       const note = document.createElement('div');
       note.className = 'hint';
       note.dataset.stableFriendDispatch = 'true';
-      note.textContent = '管理员批准后的好友申请发送为正式能力，恒定启用。';
+      note.textContent = '主动好友派发已随候选功能整体退役（2026-09-25），该开关不再生效。';
       dispatchRow.replaceWith(note);
     }
     syncAdminInputs();

@@ -15,6 +15,10 @@ try {
 const snowlumaWebuiUrl = String(
   process.env.QQ_SNOWLUMA_WEBUI_URL || previous.snowlumaWebuiUrl || ''
 ).trim();
+// 记下监听地址：deploy.sh 在未显式传 --host/--port 时用它沿用以外的值，避免更新把控制台
+// 改成只监听本机。
+const host = String(process.env.QQ_HOST || previous.host || '').trim();
+const port = Number(process.env.QQ_PORT || previous.port || 0) || 0;
 const repository = String(
   process.env.QQ_AGENT_REPOSITORY
   || previous.repository
@@ -67,7 +71,8 @@ WorkingDirectory=${root}
 Environment=${quote(`QQ_AGENT_DATA_DIR=${data}`)}
 Environment=NODE_ENV=production
 ExecStart=${quote(node)} ${quote(path.join(root, 'scripts/auto-update.mjs'))} --app-dir ${quote(root)} --data-dir ${quote(data)} --service ${quote(service)}
-TimeoutStartSec=30min
+TimeoutStartSec=75min
+TimeoutStopSec=10min
 UMask=0077
 NoNewPrivileges=true
 Nice=10
@@ -92,6 +97,8 @@ fs.writeFileSync(path.join(dir, `${updateService}.timer`), updateTimer, { mode: 
 fs.writeFileSync(deploymentFile, JSON.stringify({
   root,
   data,
+  ...(host ? { host } : {}),
+  ...(port ? { port } : {}),
   node,
   service,
   updateService,

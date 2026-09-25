@@ -2,9 +2,21 @@
 // 目的：像"B 未定义"这类错误，node --check（语法检查）根本查不出来，
 // 只有真正跑一遍渲染才会暴露。
 import fs from 'node:fs';
+import os from 'node:os';
 import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// 必须指到临时数据目录：这个用例会 import src/console/app.js，控制台启动时会把身份与
+// 异常两个试点的 SQLite 建在 DATA_DIR 下。不重定向就会动到开发机（甚至部署机）自己的
+// data/*.sqlite —— 和之前"跑测试覆盖掉 data/config.json"是同一类问题。
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-render-'));
+process.env.QQ_AGENT_DATA_DIR = TEST_DATA_DIR;
+process.on('exit', () => {
+  try {
+    fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true });
+  } catch { /* 清理失败不影响用例结论 */ }
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -71,13 +83,23 @@ const document = {
   },
   querySelectorAll: () => [],
   getElementById: (id) => document.querySelector('#' + id),
-  createElement: (tag) => makeEl('', ''),
+  createElement: (tag) => {
+    const el = makeEl('', '');
+    // 假 DOM 不解析 HTML：patchKeyedList 的 makeNode 会读 <template>.content.firstElementChild。
+    // 给个空壳（firstElementChild 为 null），定时器触发的列表渲染就会安全跳过 ——
+    // 否则会在测试收尾阶段抛 TypeError，把整个用例文件带崩（随机复现）。
+    el.content = { firstElementChild: null };
+    return el;
+  },
   addEventListener() {},
   removeEventListener() {}
 };
 
 // SSE 处理器注册表：桩捕获 connectSSE 绑定的监听，测试可直接派发合成事件
 const sseRegistry = {};
+// 定时器计数：进度行的每秒 ticker 必须能停（切页、跑完都要清），这里数活动定时器个数，
+// 断言"回到基线"而不是"等于 0" —— 控制台本来就有常驻轮询定时器。
+const activeIntervals = new Set();
 const sandbox = {
   document,
   window: null,
@@ -88,7 +110,14 @@ const sandbox = {
     this.addEventListener = (type, fn) => { (sseRegistry[type] ||= []).push(fn); };
     this.close = () => {};
   },
-  setTimeout, clearTimeout, setInterval, clearInterval,
+  setTimeout, clearTimeout,
+  setInterval: (fn, ms, ...rest) => {
+    const id = setInterval(fn, ms, ...rest);
+    activeIntervals.add(id);
+    return id;
+  },
+  clearInterval: (id) => { activeIntervals.delete(id); clearInterval(id); },
+  __intervalStats: () => ({ active: activeIntervals.size }),
   console,
   alert: () => {},
   confirm: () => true,
@@ -120,14 +149,14 @@ try {
     'renderQzoneInteractionSection', 'renderTimeControlSection',
     'renderPersonaSection', 'renderAllowSection',
     'renderChatSection', 'renderDesktopSection', 'renderOnebotSection',
-    'renderPersonaPicker', 'renderHealthCard',
+    'renderPersonaLibrary', 'renderPersonaGrid', 'renderHealthCard', 'renderTokenSaverSection',
     'renderAssetSummary', 'renderStickerAssets', 'renderSlangAssets',
     'renderSlangResearch', 'renderIdentityAssets', 'renderMemoryAssets'
   ];
 
   // 直接用后端的 DEFAULT_CONFIG 做桩 —— 不要手敲字段名，
   // 手敲容易猜错层级（我刚把 minGapMs 放错层，误报了一个不存在的问题）。
-  const { DEFAULT_CONFIG } = await import('../src/config.js');
+  const { DEFAULT_CONFIG } = await import('../src/core/config.js');
   const cfg = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   // 再叠加上本轮关心的档位字段（默认值里没有 contextSliderPos）
   cfg.store = {
@@ -136,6 +165,9 @@ try {
     atCount: 5, keywordCount: 10, keywords: ['大肥鱼'],
     randomPercent: 50, randomCount: 20, allCount: 80
   };
+  // 有的分区（健康卡）读的是 state.config —— 控制台是拉到配置后填进去的，测试里先塞好，
+  // 否则按"配置还没加载"的分支走，拿不到真实渲染结果。
+  vm.runInContext(`state.config = ${JSON.stringify(cfg)};`, ctx);
 
 
   console.log('=== 实际执行各设置分区渲染函数 ===\n');
@@ -157,11 +189,13 @@ try {
     }
   }
   const { PERSONAS } = await import('../src/personas.js');
+  // 夹具照控制台 /api/persona-templates 的真实载荷来：内置卡带 builtin: true
+  // （卡库靠它显示"内置 · 跟随卡文件"，少了这个标志会一律显示成"自定义"）。
   const personaTemplates = {
-    ...PERSONAS,
+    ...Object.fromEntries(Object.entries(PERSONAS).map(([id, p]) => [id, { ...p, builtin: true }])),
     custom_0: {
-      ...PERSONAS.xiaojingyu_game_client,
-      name: 'Developer copy',
+      ...PERSONAS.jishu_zhai,
+      name: 'Grounded copy',
       customRules: 'Explain version assumptions'
     }
   };
@@ -179,8 +213,12 @@ try {
   }
   document.querySelector('#cfg-roletext').value += '\nEdited';
   ctx.syncPersonaButtons();
+  // 匹配不上任何内置卡时：既不能错误标记成原模板，提示行也要说清"这是按自定义处理"，
+  // 否则升级后（模板改过、实例存的是旧正文）看起来像人设丢了。
+  // （旧的 #cfg-persona-pick 隐藏输入框已随人设页改版删除，这里改看提示行与绑定徽章。）
   if (ctx.currentPersonaId() === ''
-      && document.querySelector('#cfg-persona-pick').value === '') {
+      && document.querySelector('#persona-pick-hint').textContent.includes('与内置模板不一致')
+      && document.querySelector('#persona-view-binding').textContent.includes('解绑')) {
     pass++;
     console.log('  OK    修改人设后不错误标记为原模板');
   } else {
@@ -209,6 +247,184 @@ try {
     fail++;
     console.log('  FAIL  交流策略未回显');
   }
+  // ── 人设页改版：卡库 + 结构化正文视图 ──
+  // 角色正文原来只给一个 textarea（"留言板"）；现在解析成分节面板，
+  // 招牌渲染成标签、黑名单渲染成打叉标签、示例渲染成聊天气泡。
+  const catText = PERSONAS.maoniang.text;
+  const catParsed = ctx.parsePersonaCard(catText);
+  const parseOk = catParsed.title === '角色卡：猫娘（二次元）'
+    && catParsed.sections.length >= 8
+    && catParsed.sections.some((s) => s.name.includes('你的标志'));
+  parseOk ? pass++ : fail++;
+  console.log('  ' + (parseOk ? 'OK   ' : 'FAIL ') + '正文解析出分节与卡名'
+    + (parseOk ? '' : ` -> title=${catParsed.title} sections=${catParsed.sections.length}`));
+
+  const exampleSection = catParsed.sections.find((s) => s.name.includes('示例'));
+  const exampleBlocks = exampleSection ? exampleSection.blocks.filter((b) => b.type === 'example') : [];
+  const askGranted = exampleBlocks.some((b) => b.turns.some((t) => t.role === 'peer' && t.text.includes('给我喵一个'))
+    && b.turns.some((t) => t.role === 'ok' && t.text.includes('喵')));
+  const exOk = exampleBlocks.length >= 8 && askGranted;
+  exOk ? pass++ : fail++;
+  console.log('  ' + (exOk ? 'OK   ' : 'FAIL ') + '示例按"群友/你不要/你可以"分组（含"给我喵一个"的给法）'
+    + (exOk ? '' : ` -> blocks=${exampleBlocks.length} askGranted=${askGranted}`));
+
+  const catView = ctx.renderPersonaCardBody(catText);
+  const viewOk = catView.includes('pd-tag star') && catView.includes('招牌特征')
+    && catView.includes('pd-tag bad')
+    && catView.includes('pd-quote')
+    && catView.includes('pd-msg bad') && catView.includes('pd-msg ok');
+  viewOk ? pass++ : fail++;
+  console.log('  ' + (viewOk ? 'OK   ' : 'FAIL ') + '招牌=标签、黑名单=打叉标签、示例=气泡、原则=引用块');
+
+  const plainView = ctx.renderPersonaCardBody('就一段没分节的正文，说明这是自定义内容');
+  const plainOk = plainView.includes('pd-empty');
+  plainOk ? pass++ : fail++;
+  console.log('  ' + (plainOk ? 'OK   ' : 'FAIL ') + '没分节的正文给出提示而不是空白');
+
+  const personaSectionHtml = ctx.renderPersonaSection(cfg);
+  const keepOk = ['id="persona-grid"', 'id="persona-card-view"', 'id="cfg-roletext"',
+    'id="cfg-behavior-profile"', 'id="persona-pick-hint"', 'id="toggle-persona-edit"',
+    'id="new-persona-btn"', 'id="del-persona-btn"'].every((needle) => personaSectionHtml.includes(needle));
+  keepOk ? pass++ : fail++;
+  console.log('  ' + (keepOk ? 'OK   ' : 'FAIL ') + '人设页改版后保留原有 DOM 契约（保存/绑定/删除按钮仍在）');
+
+  const gridHtml = ctx.renderPersonaGrid(cfg, {});
+  const gridOk = gridHtml.includes('persona-card') && gridHtml.includes('使用中')
+    && gridHtml.includes('内置 · 跟随卡文件');
+  gridOk ? pass++ : fail++;
+  console.log('  ' + (gridOk ? 'OK   ' : 'FAIL ') + '卡库渲染出卡片与"内置 · 跟随卡文件"来源标记'
+    + (gridOk ? '' : ' -> ' + gridHtml.replace(/\s+/g, ' ').slice(0, 240)));
+
+  // 附加规则不再是空白框：给几个点一下就填进去的例子
+  const ruleChipsOk = personaSectionHtml.includes('id="persona-rule-chips"')
+    && personaSectionHtml.includes('class="pd-tag rule-chip"')
+    && personaSectionHtml.includes('＋ 别装傻、别反问，不想接就安静')
+    && personaSectionHtml.includes('id="persona-expand-btn"')
+    && personaSectionHtml.includes('全部收起');
+  ruleChipsOk ? pass++ : fail++;
+  console.log('  ' + (ruleChipsOk ? 'OK   ' : 'FAIL ') + '附加规则给出可点选的例子、正文有全部收起按钮');
+
+  // ── 逐节编辑：解析出小节的行号区间，改动按节拼回去 ──
+  const catLines = catText.split(/\r?\n/);
+  const sec0 = catParsed.sections[0];
+  const sec1 = catParsed.sections[1];
+  const rangeOk = catLines[sec0.from].startsWith('## ') && catLines[sec1.from].startsWith('## ')
+    && sec0.to === sec1.from && catParsed.sections[catParsed.sections.length - 1].to === catLines.length;
+  rangeOk ? pass++ : fail++;
+  console.log('  ' + (rangeOk ? 'OK   ' : 'FAIL ') + '小节记录了自己在原文里的行号区间');
+
+  const sec0Body = ctx.personaSectionBody(catText, 0);
+  // 用"只出现在下一节里的句子"来判断没串到隔壁：'说话方式' 这种词正文里本来就有，不能当判据
+  const bodyOk = sec0Body.includes('二次元猫娘') && !sec0Body.includes('## ')
+    && !sec0Body.includes('颜文字和表情符号偶尔用');
+  bodyOk ? pass++ : fail++;
+  console.log('  ' + (bodyOk ? 'OK   ' : 'FAIL ') + '取单节正文不含标题、不含隔壁小节'
+    + (bodyOk ? '' : ` -> len=${sec0Body.length} head=${JSON.stringify(sec0Body.slice(0, 60))}`));
+
+  const edited = ctx.replacePersonaSectionBody(catText, 0, '你是群里的新正文，就这一句。');
+  const editedCard = ctx.parsePersonaCard(edited);
+  const editOk = editedCard.sections.length === catParsed.sections.length
+    && edited.includes('## 一、你是谁') && edited.includes('你是群里的新正文，就这一句。')
+    && edited === catText.replace(ctx.personaSectionBody(catText, 0), '你是群里的新正文，就这一句。');
+  editOk ? pass++ : fail++;
+  console.log('  ' + (editOk ? 'OK   ' : 'FAIL ') + '按节替换只动那一节，其余部分逐字节不变');
+
+  const roundTrip = ctx.replacePersonaSectionBody(catText, 3, ctx.personaSectionBody(catText, 3));
+  const roundOk = roundTrip === catText;
+  roundOk ? pass++ : fail++;
+  console.log('  ' + (roundOk ? 'OK   ' : 'FAIL ') + '原样写回时正文逐字节不变（可反复编辑）'
+    + (roundOk ? '' : ` -> ${roundTrip.length} vs ${catText.length}`));
+
+  const dirtyText = ctx.replacePersonaSectionBody(catText, 0, '手改过的一节');
+  const dirtyView = ctx.renderPersonaCardBody(dirtyText, { fileText: catText });
+  // 要能鉴别"只有被改的那一节才给恢复按钮"：数一下按钮个数，并确认它挂在这一节上
+  const revertCount = (dirtyView.match(/pd-sec-revert/g) || []).length;
+  const revertOk = dirtyView.includes('pd-sec-edit') && revertCount === 1
+    && /class="pd-sec[^"]*"[^>]*data-sec="0"[\s\S]*?pd-sec-revert/.test(dirtyView);
+  revertOk ? pass++ : fail++;
+  console.log('  ' + (revertOk ? 'OK   ' : 'FAIL ') + '只有被改过的那一节出现「恢复本节」'
+    + (revertOk ? '' : ` -> 按钮数=${revertCount}`));
+
+  const cleanView = ctx.renderPersonaCardBody(catText, { fileText: catText });
+  const cleanOk = cleanView.includes('pd-sec-edit') && !cleanView.includes('pd-sec-revert');
+  cleanOk ? pass++ : fail++;
+  console.log('  ' + (cleanOk ? 'OK   ' : 'FAIL ') + '没改过的小节不给"恢复本节"（本来就跟卡文件一致）');
+
+  const editingView = ctx.renderPersonaCardBody(catText, { editing: 1 });
+  const editorOk = editingView.includes('pd-edit-text') && editingView.includes('pd-sec-save')
+    && editingView.includes('pd-sec-cancel')
+    && /<div class="pd-sec[^"]*\bediting\b/.test(editingView)
+    && editingView.includes('正在编辑');
+  editorOk ? pass++ : fail++;
+  console.log('  ' + (editorOk ? 'OK   ' : 'FAIL ') + '正在编辑的那节渲染成 textarea + 保存/取消'
+    + (editorOk ? '' : ` -> ${editingView.match(/<div class="pd-sec[^"]*"/g)?.join(' | ') || '(没找到小节容器)'}`));
+
+  // 分节编辑：没改过的节不许"原样写回"（会规范化行尾空白/多余空行 → 与卡文件不再逐字节相同
+  // → 保存时被当成"自定义" → 静默解绑内置卡）；收起别的节前必须先落草稿（否则正在敲的字会丢）
+  const editorRoleBox = document.querySelector('#cfg-roletext');
+  const messyCard = '## 一、你是谁\n\n\n你是群里的猫娘，带喵。   \n\n## 二、说话方式\n\n短句。\n';
+  const editorField = (idx) => document.querySelector(`#persona-card-view .pd-edit-text[data-sec="${idx}"]`);
+  vm.runInContext('personaEditingSection = 0;', ctx);
+  editorRoleBox.value = messyCard;
+  editorField(0).value = ctx.personaSectionBody(messyCard, 0);
+  const flushedNoop = ctx.flushPersonaSectionEdit();
+  const noopOk = flushedNoop === false && editorRoleBox.value === messyCard;
+  noopOk ? pass++ : fail++;
+  console.log('  ' + (noopOk ? 'OK   ' : 'FAIL ') + '没改过的小节原样写回不落草稿（正文与卡文件保持逐字节相同）'
+    + (noopOk ? '' : ` -> flushed=${flushedNoop} len=${editorRoleBox.value.length}/${messyCard.length}`));
+
+  editorField(0).value = '你是群里的新正文，就这一句。';
+  const flushedEdit = ctx.flushPersonaSectionEdit();
+  const editFlushOk = flushedEdit === true && editorRoleBox.value.includes('你是群里的新正文，就这一句。')
+    && !editorRoleBox.value.includes('带喵。   ');
+  editFlushOk ? pass++ : fail++;
+  console.log('  ' + (editFlushOk ? 'OK   ' : 'FAIL ') + '改过的小节落回草稿（并去掉行尾空白）');
+
+  // 正在编辑第 1 节时收起第 0 节：先落草稿再重画，输入框里的字不能丢。
+  // 注意顺序：先让折叠基准对齐这张卡（section 数变了的话 refreshPersonaFold 会取消编辑态，
+  // 那是"换卡"时的正常行为，不是这条用例要测的东西）。
+  const collapseRoleBox = document.querySelector('#cfg-roletext');
+  collapseRoleBox.value = catText;
+  ctx.syncPersonaButtons();
+  vm.runInContext('personaEditingSection = 1;', ctx);
+  editorField(1).value = '正在编辑、还没保存的正文';
+  // 这些点击行为挂在 bindSettingsEvents 里：测试要显式绑一次（真实控制台是渲染设置页时绑的）。
+  // 绑定过程中会同步"视觉开关"，它读 state.config —— 前面的用例把它清过，这里补上。
+  vm.runInContext(`state.config = ${JSON.stringify(cfg)};`, ctx);
+  ctx.bindSettingsEvents(cfg);
+  const fakeSection = { dataset: { sec: '0' } };
+  const fakeHead = { closest: (sel) => (sel === '.pd-sec' ? fakeSection : null) };
+  const fakeTarget = { closest: (sel) => (sel === '.pd-sec-head' ? fakeHead : null) };
+  for (const handler of document.querySelector('#persona-card-view')._listeners?.click || []) {
+    handler({ target: fakeTarget });
+  }
+  const collapsedNow = vm.runInContext('[...personaCollapsedSections].join(",")', ctx);
+  const stillEditing = vm.runInContext('personaEditingSection', ctx) === 1;
+  const collapseOk = collapseRoleBox.value.includes('正在编辑、还没保存的正文')
+    && collapsedNow.split(',').includes('0') && stillEditing;
+  collapseOk ? pass++ : fail++;
+  console.log('  ' + (collapseOk ? 'OK   ' : 'FAIL ') + '收起别的小节前先落草稿（编辑中的字不会丢）'
+    + (collapseOk ? '' : ` -> 折叠=${collapsedNow} 含草稿=${collapseRoleBox.value.includes('正在编辑、还没保存的正文')} 编辑态=${stillEditing}`));
+  vm.runInContext('personaEditingSection = -1; personaCollapsedSections = new Set();', ctx);
+  collapseRoleBox.value = '';
+
+  // 记忆页每条印象的来源标记：多老 + 谁写的
+  const metaNow = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now(), origin: 'model' });
+  const metaOld = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() - 40 * 24 * 3600 * 1000, origin: 'manual' });
+  const metaLegacy = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() });
+  const metaAncient = ctx.impressionMetaLabel({ content: 'x', createdAt: Date.now() - 400 * 24 * 3600 * 1000, origin: 'consolidated' });
+  const metaBroken = ctx.impressionMetaLabel({ content: 'x', createdAt: 0 });
+  const metaOk = /^\[\d{2}-\d{2} · 模型记的\] $/.test(metaNow)
+    && /· 手动编辑\] $/.test(metaOld)
+    && /· 早先的\] $/.test(metaLegacy)
+    && metaNow !== metaOld
+    // 一年以上的要带年份（只给月-日会被读成"还没到的那天"）
+    && /^\[\d{4}-\d{2}-\d{2} · 整理改写\] $/.test(metaAncient)
+    && /^\[\?\?-\?\? · 早先的\] $/.test(metaBroken);
+  metaOk ? pass++ : fail++;
+  console.log('  ' + (metaOk ? 'OK   ' : 'FAIL ') + '印象标记带日期与来源（今年的月-日 / 往年带年份 / 坏时间戳给 ??)'
+    + (metaOk ? '' : ` -> ${metaNow} | ${metaOld} | ${metaLegacy} | ${metaAncient} | ${metaBroken}`));
+
   vm.runInContext('state.personaTemplates = {};', ctx);
   const desktopHtml = ctx.renderDesktopSection(cfg);
   const apiHtml = ctx.renderApiSection(cfg);
@@ -369,7 +585,7 @@ try {
         enabled: true,
         graduated: true,
         activeDispatchEnabled: true,
-        ownerUin: '2948771712',
+        ownerUin: '10000003',
         minMessageCount: 50,
         cooldownDays: 30,
         maxPending: 10
@@ -378,7 +594,7 @@ try {
     slangPilot: {
       enabled: true,
       graduated: false,
-      ownerUin: '2948771712',
+      ownerUin: '10000003',
       minOccurrences: 3,
       minSpeakers: 2,
       windowHours: 72,
@@ -394,35 +610,45 @@ try {
     incidentPilot: {
       enabled: true,
       graduated: true,
-      ownerUin: '2948771712',
+      ownerUin: '10000003',
       notifyWarnings: true,
       duplicateWindowMinutes: 10,
       unknownWritesBlockChat: false,
       retentionDays: 90
     }
   });
+  // 「关掉时的样子」显式摆出来：出厂配置不等于"关"（人物印象现在默认就是开的），
+  // 拿出厂配置当对照组的话，断言会跟着默认值飘。
+  const experimentalOffHtml = ctx.renderExperimentalSettingsSection({
+    ...cfg,
+    identityPilot: { ...cfg.identityPilot, enabled: false, graduated: false },
+    slangPilot: { ...cfg.slangPilot, enabled: false, graduated: false },
+    incidentPilot: { ...cfg.incidentPilot, enabled: false, graduated: false }
+  });
   if (
-    experimentalHtml.includes('id="cfg-identity-pilot-enabled"')
-    && experimentalHtml.includes('id="cfg-auto-friend-enabled"')
-    && experimentalHtml.includes('id="cfg-slang-pilot-enabled"')
-    && experimentalHtml.includes('id="cfg-incident-pilot-enabled"')
-    && !/id="cfg-identity-pilot-enabled" checked/.test(experimentalHtml)
+    experimentalOffHtml.includes('id="cfg-identity-pilot-enabled"')
+    && experimentalOffHtml.includes('id="cfg-auto-friend-enabled"')
+    && experimentalOffHtml.includes('id="cfg-slang-pilot-enabled"')
+    && experimentalOffHtml.includes('id="cfg-incident-pilot-enabled"')
+    && !/id="cfg-identity-pilot-enabled" checked/.test(experimentalOffHtml)
     && /id="cfg-identity-pilot-enabled" checked/.test(experimentalOnHtml)
     && experimentalOnHtml.includes('id="cfg-slang-pilot-enabled" checked')
     && experimentalOnHtml.includes('id="cfg-incident-pilot-enabled" checked')
-    && experimentalHtml.includes('id="launch-identity-feature"')
-    && experimentalHtml.includes('固化上线')
-    && experimentalHtml.includes('id="launch-auto-friend-feature"')
-    && experimentalHtml.includes('id="launch-slang-feature"')
-    && experimentalHtml.includes('id="launch-incident-feature"')
+    && experimentalOffHtml.includes('id="launch-identity-feature"')
+    && experimentalOffHtml.includes('固化上线')
+    && !/id="launch-identity-feature"[^>]*disabled/.test(experimentalOffHtml)
+    && /id="launch-identity-feature"[^>]*disabled/.test(experimentalOnHtml)
+    && experimentalOffHtml.includes('id="launch-auto-friend-feature"')
+    && experimentalOffHtml.includes('id="launch-slang-feature"')
+    && experimentalOffHtml.includes('id="launch-incident-feature"')
     && experimentalOnHtml.includes('人物统一印象')
     && experimentalOnHtml.includes('自动好友添加')
     && experimentalOnHtml.includes('已固化')
-    && !experimentalHtml.includes('id="identity-pilot-stats"')
-    && !experimentalHtml.includes('id="identity-pilot-people"')
-    && !experimentalHtml.includes('id="cfg-identity-friend-owner"')
-    && !experimentalHtml.includes('id="cfg-slang-owner"')
-    && !experimentalHtml.includes('data-open-feature')
+    && !experimentalOnHtml.includes('id="identity-pilot-stats"')
+    && !experimentalOnHtml.includes('id="identity-pilot-people"')
+    && !experimentalOnHtml.includes('id="cfg-identity-friend-owner"')
+    && !experimentalOnHtml.includes('id="cfg-slang-owner"')
+    && !experimentalOnHtml.includes('data-open-feature')
   ) {
     pass++;
     console.log('  OK    实验页只保留启用与固化动作');
@@ -437,7 +663,7 @@ try {
     {
       enabled: true,
       activeDispatchEnabled: true,
-      ownerUin: '2948771712',
+      ownerUin: '10000003',
       minMessageCount: 80
     },
     { enabled: true, autoWhitelist: true, maxPending: 25 }
@@ -448,7 +674,7 @@ try {
     && pilotOffPatch.enabled === false
     && pilotOnPatch.friendProposal.enabled === true
     && pilotOnPatch.friendProposal.activeDispatchEnabled === true
-    && pilotOnPatch.friendProposal.ownerUin === '2948771712'
+    && pilotOnPatch.friendProposal.ownerUin === '10000003'
     && pilotOnPatch.friendProposal.minMessageCount === 80
     && pilotOnPatch.incomingFriendRequest.enabled === true
     && pilotOnPatch.incomingFriendRequest.autoWhitelist === true
@@ -466,9 +692,9 @@ try {
   const launchPatchFn =
     ctx.experimentalFeatureLaunchPatch || sandbox.experimentalFeatureLaunchPatch;
   const identityLaunchPatch = launchPatchFn(cfg, 'identity');
-  const friendLaunchPatch = launchPatchFn(cfg, 'auto-friend', '2948771712');
-  const slangLaunchPatch = launchPatchFn(cfg, 'slang', '2948771712');
-  const incidentLaunchPatch = launchPatchFn(cfg, 'incidents', '2948771712');
+  const friendLaunchPatch = launchPatchFn(cfg, 'auto-friend', '10000003');
+  const slangLaunchPatch = launchPatchFn(cfg, 'slang', '10000003');
+  const incidentLaunchPatch = launchPatchFn(cfg, 'incidents', '10000003');
   if (
     identityLaunchPatch.identityPilot.enabled === true
     && identityLaunchPatch.identityPilot.graduated === true
@@ -477,16 +703,16 @@ try {
     && friendLaunchPatch.identityPilot.friendProposal.enabled === true
     && friendLaunchPatch.identityPilot.friendProposal.graduated === true
     && friendLaunchPatch.identityPilot.friendProposal.activeDispatchEnabled === true
-    && friendLaunchPatch.identityPilot.friendProposal.ownerUin === '2948771712'
+    && friendLaunchPatch.identityPilot.friendProposal.ownerUin === '10000003'
     && friendLaunchPatch.identityPilot.incomingFriendRequest.enabled === true
     && friendLaunchPatch.identityPilot.incomingFriendRequest.autoWhitelist === true
     && Object.keys(friendLaunchPatch).length === 1
     && slangLaunchPatch.slangPilot.enabled === true
     && slangLaunchPatch.slangPilot.graduated === true
-    && slangLaunchPatch.slangPilot.ownerUin === '2948771712'
+    && slangLaunchPatch.slangPilot.ownerUin === '10000003'
     && incidentLaunchPatch.incidentPilot.enabled === true
     && incidentLaunchPatch.incidentPilot.graduated === true
-    && incidentLaunchPatch.incidentPilot.ownerUin === '2948771712'
+    && incidentLaunchPatch.incidentPilot.ownerUin === '10000003'
   ) {
     pass++;
     console.log('  OK    实验功能支持人物印象与自动好友添加一键上线');
@@ -506,7 +732,7 @@ try {
         enabled: true,
         graduated: true,
         activeDispatchEnabled: true,
-        ownerUin: '2948771712'
+        ownerUin: '10000003'
       }
     }
   };
@@ -538,7 +764,7 @@ try {
       ...cfg.incidentPilot,
       enabled: true,
       graduated: true,
-      ownerUin: '2948771712'
+      ownerUin: '10000003'
     }
   }, {
     active: true,
@@ -561,8 +787,6 @@ try {
     && indexHtml.includes('id="view-identity"')
     && indexHtml.includes('data-tab="friends"')
     && indexHtml.includes('id="view-friends"')
-    && indexHtml.includes('data-tab="slang"')
-    && indexHtml.includes('id="view-slang"')
     && indexHtml.includes('data-tab="incidents"')
     && indexHtml.includes('id="view-incidents"')
     && store.get('#identity-page').innerHTML.includes('人物统一印象')
@@ -592,6 +816,68 @@ try {
     fail++;
     console.log('  FAIL  固化实验功能独立页面不完整');
   }
+
+  // 省 Token 分区：三档选择 + "用户值 / 生效值"对照表（上限数字来自服务端，界面不另抄一份）
+  vm.runInContext(`state.status = { ...(state.status || {}), tokenSaver: ${JSON.stringify({
+    mode: 'balanced',
+    label: '省',
+    active: true,
+    capsByMode: {
+      off: null,
+      balanced: { atCount: 80, keywordCount: 50, randomCount: 30, allCount: 80, maxRounds: 8, maxRunTokens: 80000, handoffMaxChars: 2000, memoryBlockChars: 3000, promptMaxStickers: 5 },
+      aggressive: { atCount: 40, keywordCount: 30, randomCount: 20, allCount: 40, maxRounds: 5, maxRunTokens: 50000, handoffMaxChars: 1200, memoryBlockChars: 1500, promptMaxStickers: 3 }
+    },
+    rows: [
+      { key: 'atCount', label: '被艾特时读多少条已读', user: 300, cap: 80, effective: 80, clamped: true },
+      { key: 'maxRounds', label: '单次运行最大工具轮数', user: 6, cap: 8, effective: 6, clamped: false }
+    ]
+  })} };`, ctx);
+  const saverHtml = ctx.renderTokenSaverSection({ ...cfg, tokenSaver: { mode: 'balanced' } });
+  ctx.renderSettingsSidebar();
+  const saverOk = saverHtml.includes('name="token-saver-mode"')
+    && /value="balanced"[^>]*checked/.test(saverHtml)
+    && /value="off"[^>]*checked/.test(saverHtml) === false
+    && saverHtml.includes('档位读 80/50/30 条')
+    && saverHtml.includes('<strong>80</strong>') && saverHtml.includes('（被夹住）')
+    && saverHtml.includes('单次运行最大工具轮数')
+    && store.get('#settings-sidebar').innerHTML.includes('省 Token');
+  saverOk ? pass++ : fail++;
+  console.log('  ' + (saverOk ? 'OK   ' : 'FAIL ') + '省 Token 分区：三档选择 + 生效值对照表 + 设置菜单入口');
+
+  // 总开关开着、但统一身份库没起来时（active=false），好友页的三个接口都会 409：
+  // 加载器要自己给提示，不能因为请求失败把整页（连同设置表单）换成一整块错误信息。
+  let friendFetchCalls = 0;
+  const fetchBeforeFriends = sandbox.fetch;
+  sandbox.fetch = async () => {
+    friendFetchCalls++;
+    return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+  };
+  await ctx.loadIncomingFriendRequests({ active: false, incomingFriendRequest: { enabled: true } });
+  await ctx.loadFriendProposals({ active: false, friendProposal: { enabled: true } });
+  await ctx.loadFriendOpportunities({ active: false, friendProposal: { enabled: true, mode: 'triggered' } });
+  sandbox.fetch = fetchBeforeFriends;
+  const inactiveHint = '统一身份库没有启动';
+  const inactiveOk = friendFetchCalls === 0
+    && store.get('#identity-incoming-friend-requests').innerHTML.includes(inactiveHint)
+    && store.get('#identity-friend-proposals').innerHTML.includes(inactiveHint)
+    && store.get('#identity-friend-opportunities').innerHTML.includes(inactiveHint);
+  inactiveOk ? pass++ : fail++;
+  console.log('  ' + (inactiveOk ? 'OK   ' : 'FAIL ') + '身份库没起来时好友页给提示、不去撞 409'
+    + (inactiveOk ? '' : ` -> fetch=${friendFetchCalls} 入站=${store.get('#identity-incoming-friend-requests').innerHTML.slice(0, 40)}`));
+
+  // 接口真的报错时，错误要显示在那个列表自己的框里（外层用 allSettled 之后没人替它兜错）
+  sandbox.fetch = async () => ({
+    ok: false, status: 500, json: async () => ({ error: '内部错误' }), text: async () => ''
+  });
+  await ctx.loadIncomingFriendRequests({ active: true, incomingFriendRequest: { enabled: true } });
+  await ctx.loadFriendProposals({ active: true, friendProposal: { enabled: true } });
+  await ctx.loadFriendOpportunities({ active: true, friendProposal: { enabled: true, mode: 'triggered' } });
+  sandbox.fetch = fetchBeforeFriends;
+  const boxes = ['#identity-incoming-friend-requests', '#identity-friend-proposals', '#identity-friend-opportunities'];
+  const errorShown = boxes.every((sel) => store.get(sel).innerHTML.includes('读取失败：内部错误'));
+  errorShown ? pass++ : fail++;
+  console.log('  ' + (errorShown ? 'OK   ' : 'FAIL ') + '好友页单个接口报错时只在该列表里显示错误'
+    + (errorShown ? '' : ` -> ${boxes.map((sel) => store.get(sel).innerHTML.slice(0, 30)).join(' | ')}`));
   const assetSummaryHtml = ctx.renderAssetSummary({
     generatedAt: Date.now(),
     stickers: { enabled: true, total: 3, annotated: 2, used: 1 },
@@ -750,7 +1036,7 @@ try {
     enabled: false,
     busy: false,
     status: 'failed',
-    ownerUin: '2948771712',
+    ownerUin: '10000003',
     repository: 'https://github.com/sakurawwwxh/qq-agent-plus.git',
     branch: 'main',
     intervalHours: 6,
@@ -763,13 +1049,16 @@ try {
   ctx.renderControlHub({
     services: [
       { id: 'agent', online: true },
-      { id: 'dsh', online: true },
-      { id: 'bridge', online: true },
+      { id: 'dsh', online: true, optional: true, configured: true },
+      { id: 'bridge', online: true, optional: true, configured: true },
       { id: 'snowluma', online: true },
       { id: 'novnc', online: false }
     ]
   });
   const controlHtml = String(document.getElementById('control-page').innerHTML || '');
+  // 错误行是运行时填进 #hub-deploy-error 的（结构只建一次、之后只更新字段），
+  // 所以"测试失败"要在元素上找，而不是在首次生成的模板字符串里找。
+  const deployErrorText = String(document.getElementById('hub-deploy-error')?.textContent || '');
   const controlUiOk =
     indexHtml.includes('data-tab="control"')
     && indexHtml.includes('id="view-control"')
@@ -778,8 +1067,8 @@ try {
     && controlHtml.includes('更新部署')
     && controlHtml.includes('手动更新')
     && controlHtml.includes('恢复自动更新')
-    && controlHtml.includes('2948771712')
-    && controlHtml.includes('测试失败')
+    && controlHtml.includes('10000003')
+    && deployErrorText.includes('测试失败')
     && controlHtml.includes('QQ Agent 控制台 Token')
     && controlHtml.includes(':3080')
     && controlHtml.includes(':3100')
@@ -792,6 +1081,139 @@ try {
   } else {
     fail++;
     console.log('  FAIL  服务入口、更新部署或密钥控制视图缺失');
+  }
+
+  // 保存白名单不能让屏蔽名单消失：界面里没有 deny 编辑控件，唯一正确的做法是不发这个字段
+  // （服务端 config.js 会按现状补 deny.private，而 deepMerge 对数组是整体替换）。
+  if (/patch\.deny\s*=/.test(code)) {
+    fail++;
+    console.log('  FAIL  保存白名单仍会覆盖屏蔽名单（不要发 patch.deny）');
+  } else {
+    pass++;
+    console.log('  OK    保存白名单不动屏蔽名单');
+  }
+
+  // 旧架构服务（DSH / Bridge）不在本仓库的部署栈里：没配置端点时显示「未部署」（灰色）而不是
+  // 终年「不可达」，指向旧控制台的入口也收起；配置过（迁移期并存）才照旧探测、报不可达。
+  const controlBox = document.getElementById('control-page');
+  const renderHubFor = (services) => {
+    // 结构只建一次，要重走模板就手动重置这两个标记
+    controlBox.__hubBuilt = false;
+    controlBox.__renderedHtml = null;
+    ctx.renderControlHub({ services });
+  };
+  // 状态是写进 controlBox 自己的 querySelector 桩里的（假 DOM 不解析 HTML），
+  // 所以要从同一个元素读，不能从 document 上另取一个桩。
+  const tileOf = (id) => controlBox.querySelector(`[data-hub-service="${id}"] .control-service-state`);
+  const bridgeRowHidden = () => /class="control-key-row hidden" data-hub-legacy-entry="bridge" href="[^"]*:3100/.test(String(controlBox.innerHTML || ''));
+  renderHubFor([
+    { id: 'agent', online: true },
+    { id: 'dsh', online: false, optional: true, configured: false },
+    { id: 'bridge', online: false, optional: true, configured: false },
+    { id: 'snowluma', online: true },
+    { id: 'novnc', online: false }
+  ]);
+  const legacyOffOk =
+    String(tileOf('dsh')?.textContent) === '未部署'
+    && String(tileOf('dsh')?.className).includes('idle')
+    && String(tileOf('bridge')?.textContent) === '未部署'
+    && String(tileOf('novnc')?.textContent) === '不可达'
+    && String(tileOf('snowluma')?.textContent) === '在线'
+    && bridgeRowHidden();
+  renderHubFor([
+    { id: 'agent', online: true },
+    { id: 'dsh', online: false, optional: true, configured: true },
+    { id: 'bridge', online: true, optional: true, configured: true }
+  ]);
+  const legacyOnOk = String(tileOf('dsh')?.textContent) === '不可达' && !bridgeRowHidden();
+  if (legacyOffOk && legacyOnOk) {
+    pass++;
+    console.log('  OK    旧架构服务未部署时标「未部署」、入口收起，配置过才报不可达');
+  } else {
+    fail++;
+    console.log(`  FAIL  旧架构服务状态文案异常（未部署 ${legacyOffOk} / 已配置 ${legacyOnOk}）`);
+  }
+
+  // 更新进度行（2026-09-22 反馈：点「立即更新」后提示框不关、也没有任何进度显示）：
+  // 运行中显示阶段与耗时；排队阶段优先看 status（phase 是上一轮残留）；跑完隐藏并清空。
+  vm.runInContext(`state.autoUpdateStatus = ${JSON.stringify({
+    installed: true,
+    enabled: true,
+    busy: true,
+    status: 'deploying',
+    phase: 'deploying',
+    targetVersion: 'v9.9.9',
+    startedAt: Date.now() - 125000,
+    progressAt: Date.now() - 65000
+  })};`, ctx);
+  ctx.renderControlHub({ services: [] });
+  const progressStage = String(document.getElementById('hub-deploy-progress-text')?.textContent || '');
+  const progressElapsed = String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '');
+  const progressShownOk = !document.getElementById('hub-deploy-progress').classList.contains('hidden')
+    && progressStage.includes('v9.9.9')
+    && progressStage.includes('部署（服务会短暂重启）')
+    && progressElapsed.includes('本阶段 1 分')
+    && progressElapsed.includes('总计 2 分');
+  const queuedText = String(ctx.updateProgressText({
+    busy: true, status: 'queued', phase: 'complete', progressAt: Date.now() - 4000
+  }) || '');
+  const progressQueuedOk = queuedText.includes('等待更新器接手') && !queuedText.includes('收尾');
+  const idleText = String(ctx.updateProgressText({ busy: false, status: 'succeeded', phase: 'complete' }) || '');
+  // 连通性测试（probe）不部署，不能说成"正在更新"
+  const probeText = String(ctx.updateProgressText({
+    busy: true, mode: 'probe', status: 'checking', phase: 'connectivity', progressAt: Date.now() - 3000
+  }) || '');
+  const progressProbeOk = probeText.includes('正在探测更新通道') && probeText.includes('检查网络连通性');
+  // 「在跑」的口径与更新器一致：busy 只说明进程在，状态是终态时（跳过间隔、禁用、跑完）不能显示进度行
+  const terminalTexts = ['succeeded', 'failed', 'no-update', 'idle'].map((status) => String(
+    ctx.updateProgressText({ busy: true, status, phase: 'complete', targetVersion: 'v9.9.9' }) || ''
+  ));
+  const progressTerminalOk = terminalTexts.every((text) => text === '');
+  vm.runInContext('state.autoUpdateStatus = { installed: true, enabled: true, busy: false, status: "succeeded", phase: "complete" };', ctx);
+  ctx.renderControlHub({ services: [] });
+  const progressHiddenOk = document.getElementById('hub-deploy-progress').classList.contains('hidden') === true
+    && String(document.getElementById('hub-deploy-progress-text')?.textContent || '') === ''
+    && String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '') === ''
+    && idleText === '';
+  if (progressShownOk && progressQueuedOk && progressHiddenOk && progressProbeOk && progressTerminalOk) {
+    pass++;
+    console.log('  OK    更新进度行：运行中显示阶段与耗时、排队优先看 status、探测不写作更新、跑完/终态隐藏');
+  } else {
+    fail++;
+    console.log(`  FAIL  更新进度行异常（显示 ${progressShownOk} / 排队 ${progressQueuedOk} / 隐藏 ${progressHiddenOk} / 探测 ${progressProbeOk}）`);
+  }
+
+  // 1 秒定时器必须真的能跑：曾经回调里调了 updateControlHubFields 的局部 setText，
+  // 更新期间每秒抛 ReferenceError；只因当时 tab 没停在 control，测试没抓到。
+  vm.runInContext(`state.tab = 'control'; state.autoUpdateStatus = ${JSON.stringify({
+    installed: true, enabled: true, busy: true, status: 'deploying', phase: 'deploying',
+    targetVersion: 'v9.9.9', startedAt: Date.now() - 3000, progressAt: Date.now() - 3000
+  })};`, ctx);
+  ctx.renderControlHub({ services: [] });
+  const elapsedBefore = String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '');
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const elapsedAfter = String(document.getElementById('hub-deploy-progress-elapsed')?.textContent || '');
+  const tickerOk = elapsedBefore !== elapsedAfter && /本阶段 [1-9]\d* 秒/.test(elapsedAfter);
+  // 定时器必须能停：切走页签、更新跑完都要清掉，否则后台每秒白跑（也会把旧耗时一直刷新）
+  const timers = ctx.__intervalStats ? ctx.__intervalStats() : null;
+  const intervalBaseline = timers ? timers.active : 0;
+  vm.runInContext('state.tab = "sessions";', ctx);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const stopOnTabOk = !timers || timers.active <= intervalBaseline;
+  vm.runInContext('state.tab = "control"; state.autoUpdateStatus = { installed: true, enabled: true, busy: false, status: "succeeded", phase: "complete" };', ctx);
+  ctx.renderControlHub({ services: [] });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const stopOnFinishOk = !timers || timers.active <= intervalBaseline;
+  tickerOk ? pass++ : fail++;
+  console.log('  ' + (tickerOk ? 'OK   ' : 'FAIL ') + '进度行每秒刷新本阶段耗时（定时器真的在跑）'
+    + (tickerOk ? '' : ` -> "${elapsedBefore}" 到 "${elapsedAfter}"`));
+  if (stopOnTabOk && stopOnFinishOk) {
+    pass++;
+    console.log('  OK    进度行定时器会停：切走页签、更新跑完都清掉'
+      + (timers ? `（活动定时器 ${timers.active}）` : '（未统计到定时器，按未泄露通过）'));
+  } else {
+    fail++;
+    console.log(`  FAIL  进度行定时器未清理（切页 ${stopOnTabOk} / 跑完 ${stopOnFinishOk}）`);
   }
   const timeHtml = ctx.renderTimeControlSection({
     ...cfg, allow: { groups: ['123'], private: ['456'] }
@@ -1077,17 +1499,23 @@ try {
     try {
       if (fnName === 'sliderToTierUI') {
         const r = fn(55);
-        const ok = r.tier === 3 && Math.abs(r.randomPercent - 50) < 0.6;
+        const ok = r.tier === 3 && Math.abs(r.randomPercent - 55) < 0.6;
         ok ? pass++ : fail++;
         console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + ' sliderToTierUI(55) → 档' + r.tier + '/' + r.randomPercent + '%');
       } else if (fnName === 'sliderToTierUI_tierToSlider') {
-        const r = fn({ contextSliderPos: 55 });
-        const ok = r === 55;
+        // 新语义：滑条位置就是概率，原样还原
+        const now = fn({ contextSliderPos: 55, sliderMode: 'probability' });
+        // 老配置（四段式位置 55 = 老 3 档 50%）要先换算成概率，不能被直接当成 55%
+        const legacy = fn({ contextSliderPos: 55 });
+        const legacyTier = fn({ contextSliderPos: null, contextTier: 4, randomPercent: 0 });
+        const ok = now === 55 && legacy === 50 && legacyTier === 100;
         ok ? pass++ : fail++;
-        console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + ' sliderToTierUI_tierToSlider() → ' + r);
+        console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + ' sliderToTierUI_tierToSlider() → 新 ' + now
+          + ' / 老位置 55 → ' + legacy + ' / 老 4 档 → ' + legacyTier);
       } else {
         const r = fn(55);
-        const ok = typeof r === 'string' && r.includes('3 档');
+        // 滑条值就是概率：55 位置应当说明"55% 概率回"
+        const ok = typeof r === 'string' && r.includes('55%');
         ok ? pass++ : fail++;
         console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + ' sliderDesc(55) → ' + String(r).slice(0, 46));
       }
@@ -1129,10 +1557,10 @@ try {
     });
 
     for (const [pos, want, desc] of [
-      [0, 1, '最左端'], [5, 1, '1档中段'], [10, 1, '1档右界'],
-      [15, 2, '2档'], [20, 2, '2档右界'],
-      [30, 3, '3档靠左'], [55, 3, '3档正中(50%)'], [75, 3, '3档靠右'], [90, 3, '3档右界'],
-      [95, 4, '4档'], [100, 4, '最右端']
+      [0, 1, '最左端(0%)'],
+      [5, 2, '5%'], [10, 2, '10%'], [15, 2, '15%'], [20, 2, '20%'], [30, 2, '30%'],
+      [55, 3, '55%'], [75, 3, '75%'], [90, 3, '90%'], [99, 3, '99%'],
+      [100, 4, '最右端(100%)']
     ]) {
       try {
         const on = activeSegs(renderAt(pos));
@@ -1144,7 +1572,7 @@ try {
     }
 
     // 任何时候只亮一段
-    for (const pos of [0, 10, 15, 20, 55, 90, 95, 100]) {
+    for (const pos of [0, 10, 30, 55, 90, 99, 100]) {
       const on = activeSegs(renderAt(pos));
       const ok = on.length === 1;
       ok ? pass++ : fail++;
@@ -1160,19 +1588,23 @@ try {
       console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + '四段都能被点亮' + (ok ? '' : '  实际 [' + [...lit].sort().join(',') + ']'));
     }
 
-    // 刻度与参数区一致（亮哪段就亮哪个参数块）
+    // 参数块高亮的规则（2026-09-22 起滑条值就是概率，不再与刻度段一一对应）：
+    //   ① 被艾特、② 关键词 —— 始终算数（任何概率下都一定响应，所以都要能读条数）
+    //   ③ 按概率响应 —— 只当概率在 (0, 100) 之间
+    //   ④ 全响应 —— 只有概率 = 100
+    const brightParams = (html) => [...html.matchAll(/class="tier-param(?!s)([^"]*)"/g)]
+      .map((m, i) => ({ idx: i + 1, dim: /\bdim\b/.test(m[1]) }))
+      .filter((x) => !x.dim)
+      .map((x) => x.idx);
     // 注意正则要带边界：容器是 tier-params（复数），不能被当前缀匹配进来
-    for (const [pos, want] of [[5, 1], [15, 2], [55, 3], [95, 4]]) {
-      const html = renderAt(pos);
-      const on = activeSegs(html);
-      const params = [...html.matchAll(/class="tier-param(?!s)([^"]*)"/g)].map((m, i) => ({
-        idx: i + 1, dim: /\bdim\b/.test(m[1])
-      }));
-      const bright = params.filter((x) => !x.dim).map((x) => x.idx);
-      const ok = on[0] === want && bright.length === 1 && bright[0] === want;
+    for (const [pos, want] of [
+      [0, [1, 2]], [5, [1, 2, 3]], [30, [1, 2, 3]], [99, [1, 2, 3]], [100, [1, 2, 4]]
+    ]) {
+      const bright = brightParams(renderAt(pos));
+      const ok = bright.join(',') === want.join(',');
       ok ? pass++ : fail++;
-      console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + pos + '% 刻度第' + on[0] + '段 / 参数第' + bright.join(',') + '块 一致'
-        + (ok ? '' : '  （期望均为 ' + want + '）'));
+      console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + String(pos).padStart(3) + '% 参数高亮 [' + bright.join(',') + ']'
+        + (ok ? '' : '  期望 [' + want.join(',') + ']'));
     }
 
 
@@ -1241,7 +1673,7 @@ try {
     // 没有任何测试真正调用它，所以删了也没人发现。这是测试盲区。
     console.log('\n=== 用量页加载（loadUsageView）===');
     {
-      const { DEFAULT_CONFIG: DC2 } = await import('../src/config.js');
+      const { DEFAULT_CONFIG: DC2 } = await import('../src/core/config.js');
       const loadUsage = ctx.loadUsageView || sandbox.loadUsageView;
       if (typeof loadUsage !== 'function') {
         fail++; console.log('  FAIL loadUsageView 未定义（用量页会一直空白）');
@@ -1331,10 +1763,26 @@ try {
 
           // ★ 用量页请求的接口必须真实存在（不能在测试里 mock 掉 404）
           //   上一轮就是凭空捏造了 /api/usage/prices，测试绿、线上白屏。
-          const { createApp: createApp2 } = await import('../src/app.js');
+          const { createApp: createApp2 } = await import('../src/console/app.js');
+          const { setRuntimeConfig: setRuntimeConfig2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await import('../src/core/config.js');
           const http = await import('node:http');
+          // console 的 start() 用的是配置里的端口（不收参数），默认 3210；而本机开着
+          // console 隧道时 3210 是被占的，用例会因为 EADDRINUSE 误报。先探一个空闲
+          // 端口写进配置，用例就不再依赖 3210 空着。
+          const freePort = await new Promise((resolve, reject) => {
+            const probe = http.createServer();
+            probe.once('error', reject);
+            probe.listen(0, '127.0.0.1', () => {
+              const port = probe.address().port;
+              probe.close(() => resolve(port));
+            });
+          });
+          setRuntimeConfig2({
+            ...structuredClone(DEFAULT_CONFIG2),
+            server: { ...DEFAULT_CONFIG2.server, host: '127.0.0.1', port: freePort }
+          });
           const realApp = createApp2({ log: () => {} });
-          const realPort = await realApp.start(40991);
+          const realPort = await realApp.start();
           const hit = (p) => new Promise((r) => {
             http.request({ host: '127.0.0.1', port: realPort, path: p, method: 'GET',
               headers: { 'x-console-token': 'qq-agent-console' } },

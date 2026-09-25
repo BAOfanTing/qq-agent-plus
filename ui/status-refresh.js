@@ -11,25 +11,35 @@ refreshStatus = async function refreshStatus() {
     const dot = $('#onebot-dot');
     const label = $('#onebot-label');
     dot.className = 'dot ' + (s.onebot.connected ? 'dot-on' : (s.onebot.everConnected ? 'dot-wait' : 'dot-off'));
+    // 状态条被顶栏高度锁死、超长会截断，所以失败原因只放 title（悬停可见）
+    const obIssue = onebotIssueText(s.onebot);
+    dot.title = obIssue ? `OneBot：${obIssue}` : 'OneBot 连接状态';
+    label.title = obIssue;
     label.textContent = s.onebot.connected
       ? `OneBot 已连接${s.onebot.self ? `（${s.onebot.self.nickname}）` : ''}`
       : 'OneBot 未连接';
-    $('#model-label').textContent = `模型：${s.orchestrator.model || '未设置'}`;
+    setStatusLabel('#model-label', `模型：${s.orchestrator.model || '未设置'}`);
     const u = s.usage;
     const c = s.cost;
     const costTxt = c && c.cost > 0 ? ` · ¥${c.cost.toFixed(3)}` : '';
+    // 口径后缀与 app.js 保持一致：包月/倍率/未定价都要在顶栏说明，别让金额被误读
+    const modeTxt = c?.costMode === 'subscription'
+      ? (Number(c.costMonthlyFee) > 0 ? ` · 包月 ¥${Number(c.costMonthlyFee)}/月` : ' · 按月付')
+      : (c?.costMode === 'multiplier' ? `（官方价 ×${mulOf(c.costMultiplier)}）` : '');
+    const unpricedTxt = c && c.unpriced ? ' · 含未定价调用' : '';
     const rate = s.cacheHitRate;
     const rateTxt = rate > 0 ? ` · 缓存 ${Math.round(rate * 100)}%` : '';
-    $('#usage-label').textContent = `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}`;
-    $('#search-count-label').textContent = `搜索：${s.webSearchCount ?? u.webSearchCount ?? 0} 次`;
+    setStatusLabel('#usage-label', `今日：${u.runs} 次运行 · ${fmtTokens(u.totalTokens)}${rateTxt}${costTxt}${modeTxt}${unpricedTxt}`);
+    setStatusLabel('#search-count-label', `搜索：${s.webSearchCount ?? u.webSearchCount ?? 0} 次`);
     state.paused = s.paused;
     state.pauseReason = s.pauseReason;
     $('#pause-btn').textContent = state.paused ? '恢复' : '暂停';
     if ($('#runtime-mode')) $('#runtime-mode').value = s.orchestrator.mode || 'observe';
     if (s.timeControl?.enabled) {
-      $('#model-label').textContent += s.timeControl.active ? ' · 活跃时段' : ' · 非活跃时段';
+      setStatusLabel('#model-label', $('#model-label').textContent + (s.timeControl.active ? ' · 活跃时段' : ' · 非活跃时段'));
     }
     if (state.tab === 'settings' && state.settingsSection === 'time-control') loadTimeControlStatus();
+    if (state.tab === 'settings' && state.settingsSection === 'onebot') updateOnebotStatusLine();
     if (state.tab === 'settings' && state.settingsSection === 'moments') loadDailyMomentsStatus();
     if (state.tab === 'settings' && state.settingsSection === 'qzone-interactions') {
       loadQzoneInteractionStatus();

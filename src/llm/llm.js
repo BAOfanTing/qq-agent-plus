@@ -1,0 +1,462 @@
+// OpenAI 兼容 Chat Completions 客户端（非流式）。
+// 支持工具调用、usage 统计和可选模型。
+import { getConfig } from '../core/config.js';
+import { resolveOfficialPrice, resolveModelPrice, priceAt } from '../pricing/model-prices.js';
+import { setTimeout as delay } from 'node:timers/promises';
+import { assertTimeAllowed, watchTimeWindow } from '../core/time-gate.js';
+
+function joinUrl(base, path) {
+  return `${String(base).replace(/\/+$/, '')}${path}`;
+}
+
+function authHeaders(apiKey, baseUrl = '', model = '') {
+  const h = apiKey ? { authorization: `Bearer ${apiKey}` } : {};
+  // OpenCode Go 强制要求会话头做路由（缺了直接 400）。注意不能只认域名：
+  // 走中转站转发时 baseUrl 不是 opencode.ai，只能靠模型 id 的 opencode-go/ 前缀识别。
+  if (/opencode\.ai/i.test(String(baseUrl)) || /^opencode-go\//i.test(String(model || ''))) {
+    h['x-opencode-session'] = getOpencodeSessionId();
+    h['user-agent'] = 'qq-agent/0.3';   // 官方文档要求客户端自报身份，别用通用库名
+  }
+  return h;
+}
+
+// OpenCode Go 会话 ID：进程级生成一次，全程复用（路由粘性 + 缓存命中）
+let opencodeSessionId = '';
+function getOpencodeSessionId() {
+  if (!opencodeSessionId) {
+    opencodeSessionId = `qqagent-${crypto.randomUUID()}`;
+  }
+  return opencodeSessionId;
+}
+
+/**
+ * 解析当前 api 配置里真正该用的 API Key。
+ *
+ * 优先级：**当前选中的目录提供商的 Key > 顶层 api.apiKey**。
+ *
+ * 注意顺序很重要：api.apiKey 是手动模式遗留字段，一旦用户在 UI 里选了某个
+ * 目录提供商，就该用它对应的 Key。否则会出现「选了 openrouter，却拿着 a6api 的
+ * Key 去请求 openrouter.ai」的情况 —— 表现为全部会话 401 Missing Authentication。
+ *
+ * 兼容历史数据：providers[].apiKey 也可能存有明文（老配置），也认。
+ */
+export function resolveApiKey(cfg) {
+  const pid = String(cfg?.api?.provider ?? '').trim();
+  if (pid) {
+    const fromCatalog = String(cfg?.providerKeys?.[pid] ?? '').trim();
+    if (fromCatalog && fromCatalog !== '******') return fromCatalog;
+    const p = (cfg?.providers || []).find((x) => x.id === pid);
+    const legacy = String(p?.apiKey ?? '').trim();
+    if (legacy && legacy !== '******') return legacy;
+  }
+  const direct = String(cfg?.api?.apiKey ?? '').trim();
+  return direct === '******' ? '' : direct;
+}
+
+/** 返回一个 key 已解析好的 api 配置（不影响配置本体）。 */
+function effectiveApi() {
+  const cfg = getConfig();
+  return { ...cfg.api, apiKey: resolveApiKey(cfg) };
+}
+
+/**
+ * 判断一个错误是否值得重试。
+ *
+ * 可重试（多半是暂时性的，再试一次可能就好）：
+ *   - 网络层失败 / 超时 / 连接被重置
+ *   - HTTP 5xx（服务端出问题）
+ *   - HTTP 429（限流，等一会儿再来）
+ *   - 响应解析失败（偶发的空响应/截断）
+ *
+ * 不重试（重试也不会变好，只会浪费额度）：
+ *   - HTTP 4xx：401 密钥错、400 请求体错、403 无权限、404 模型不存在
+ *   - 主动中止（abort）
+ */
+export function isRetryableError(error) {
+  if (error?.code === 'TIME_CONTROL_INACTIVE') return false;
+  const msg = String(error?.message ?? error ?? '');
+
+  // 主动中止（用户/系统取消）：重试没有意义
+  if (/aborted|中止|已取消|cancel/i.test(msg)) return false;
+
+  // 明确的客户端错误：重试也不会变好，只会白烧额度
+  if (/HTTP\s*(401|400|403|404|405|409|413|422)/i.test(msg)) return false;
+  if (/unauthorized|forbidden|invalid api.?key|incorrect api.?key/i.test(msg)) return false;
+
+  // 明确的暂时性故障
+  if (/HTTP\s*5\d\d/i.test(msg)) return true;                        // 5xx
+  if (/429|rate.?limit|限流|too many requests|quota/i.test(msg)) return true;
+  if (/超时|timeout|timed out/i.test(msg)) return true;
+
+  // 网络层：错误码太多列不全（bad port、EHOSTUNREACH、证书、DNS…），
+  // 凡是带 "模型请求失败" 前缀的都是 fetch 抛的，统一视为可重试
+  if (/模型请求失败/.test(msg)) return true;
+  if (/ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|EPIPE|socket hang up|fetch failed|network/i.test(msg)) return true;
+
+  // 响应解析失败（偶发空响应/截断）
+  if (/无法解析的 JSON|Unexpected end|unexpected token|JSON/i.test(msg)) return true;
+
+  // 兜底：模型 API 类错误默认不重试（避免未知错误疯狂重试）
+  return false;
+}
+
+/**
+ * 带重试的单次对话请求。
+ *
+ * 只在**可重试**的错误上重试（网络抖动、5xx、429），
+ * 4xx（密钥错、参数错）直接抛出 —— 重试不会让它变好。
+ * 退避策略：1s → 2s（指数退避，避免雪崩）。
+ *
+ * 注意：这里重试的是**同一轮**请求，messages 不变，所以是幂等的，
+ * 不会造成重复发言。会话级的整体重试在 orchestrator 里做。
+ *
+ * @param {object} args 同 chatCompletion
+ * @param {number} [retries=2] 最多额外重试几次（默认 2，即总共最多 3 次尝试）
+ */
+/**
+ * 按用途决定要不要"思考"（网关侧 thinking 开关）。
+ * 配置：api.thinking = { chat: 'off', default: 'on' }；也接受 'off' / 'on' 字符串（全局）。
+ * 只有明确 off 时才带 thinking 字段 —— 不认这个字段的网关因此不会 400。
+ */
+// 思考模式下降级强制 tool_choice 的提示只打一次（每种工具一次），避免每次判断刷屏。
+const thinkingToolChoiceWarned = new Set();
+function thinkingModeFor(purpose) {
+  let t = null;
+  try { t = getConfig().api?.thinking; } catch { return 'on'; }
+  if (t === 'off' || t === false) return 'off';
+  if (t === 'on' || t === true || t == null) return 'on';
+  if (typeof t === 'object') {
+    const v = (purpose && t[purpose] != null) ? t[purpose] : t.default;
+    return v === 'off' || v === false ? 'off' : 'on';
+  }
+  return 'on';
+}
+
+// 服务商的内容审核会偶尔把整次请求判为 high risk 直接拒绝（2026-09-18 实测：群里吵架上下文触发，
+// 模型一句话都没机会说，表现为"已读不回"）。识别到这种拒绝时，用精简上下文重试一次。
+const MODERATION_REFUSAL_RE = /considered high risk|high risk request/i;
+
+export function isModerationRefusal(response) {
+  const msg = response?.message;
+  if (!msg) return false;
+  if (Array.isArray(msg.tool_calls) && msg.tool_calls.length) return false;
+  return MODERATION_REFUSAL_RE.test(String(msg.content || ''));
+}
+
+export function trimForModerationRetry(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  const systems = list.filter((m) => m?.role === 'system');
+  const lastUser = [...list].reverse().find((m) => m?.role === 'user');
+  // 只在"这一轮还没执行过工具"时精简：一旦 send_message 等工具跑过，丢掉 tool 结果
+  // 会让模型以为没发过、重试时再发一遍 —— 群里出现两条一样的话，而 outbox 只记一条。
+  const hasToolExchange = list.some((m) => m?.role === 'tool'
+    || (Array.isArray(m?.tool_calls) && m.tool_calls.length));
+  if (hasToolExchange) return list;
+  return lastUser ? [...systems, lastUser] : systems;
+}
+
+/** 同一个模型内部的"带重试 + 审核拦截重试"完整走法；抽出来给主模型和兜底模型共用。 */
+async function runCompletionWithRetries(args, retries) {
+  let lastError = null;
+  let moderationRetried = false;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      args.signal?.throwIfAborted();
+      const response = await chatCompletion(args);
+      if (!moderationRetried && isModerationRefusal(response)) {
+        moderationRetried = true;
+        args = { ...args, messages: trimForModerationRetry(args.messages) };
+        console.warn('[llm] 服务商审核拦截整次请求，改用精简上下文重试一次');
+        await delay(600, undefined, { signal: args.signal });
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (args.signal?.aborted || attempt >= retries || !isRetryableError(error)) throw error;
+      const wait = 1000 * Math.pow(2, attempt);   // 1s, 2s
+      console.warn(`[llm] 请求失败（第 ${attempt + 1} 次尝试），${wait}ms 后重试：${error?.message ?? error}`);
+      await delay(wait, undefined, { signal: args.signal });
+    }
+  }
+  throw lastError;
+}
+
+/** 主模型不可用时，是否值得换兜底模型再试：可重试类故障，外加认证/欠费/权限类（换服务商可能就能用）。 */
+function isFallbackWorthy(error) {
+  if (isRetryableError(error)) return true;
+  const msg = String(error?.message ?? error ?? '');
+  if (/HTTP\s*(401|402|403)/i.test(msg)) return true;
+  if (/unauthorized|forbidden|invalid api.?key|incorrect api.?key|余额|欠费/i.test(msg)) return true;
+  return false;
+}
+
+/** 从配置取兜底模型覆盖项；没配 / 已停用 / 调用方自带 overrides（专用模型场景）时不兜底。 */
+function pickFallback(args) {
+  if (args.overrides) return null;
+  let fb = null;
+  try { fb = getConfig().api?.fallback; } catch { return null; }
+  if (!fb || fb.enabled === false || !String(fb.model || '').trim()) return null;
+  const api = effectiveApi();
+  return {
+    ...api,
+    baseUrl: fb.baseUrl || api.baseUrl,
+    apiKey: fb.apiKey || api.apiKey,
+    model: fb.model,
+    timeoutMs: Number(fb.timeoutMs) || api.timeoutMs
+  };
+}
+
+/**
+ * 带重试 + 兜底模型的对话请求。
+ * 主模型彻底失败（重试耗尽 / 认证欠费类错误），或两轮都被服务商审核拦下时，
+ * 自动改用 config.api.fallback 里配置的备用模型再试一次（只切一次，不递归）。
+ */
+export async function chatCompletionWithRetry(args, retries = 2) {
+  let response = null;
+  let primaryError = null;
+  try {
+    response = await runCompletionWithRetries(args, retries);
+  } catch (error) {
+    primaryError = error;
+  }
+
+  const shouldFallback = primaryError
+    ? isFallbackWorthy(primaryError)
+    : isModerationRefusal(response);
+  const fb = shouldFallback ? pickFallback(args) : null;
+  if (!fb || args.signal?.aborted) {
+    if (primaryError) throw primaryError;
+    return response;
+  }
+
+  const why = primaryError
+    ? `失败（${String(primaryError?.message ?? primaryError).slice(0, 90)}）`
+    : '两轮都被审核拦截';
+  console.warn(`[llm] 主模型${why}，改用兜底模型 ${fb.model}`);
+  return await runCompletionWithRetries({ ...args, overrides: fb }, 1);
+}
+
+/**
+ * 单次对话请求。messages 为 OpenAI 格式；tools 为 OpenAI function 格式（可为空）。
+ * 返回 { message, usage, raw }；usage 形如 { prompt_tokens, completion_tokens, total_tokens }。
+ * overrides: { baseUrl, apiKey, model, timeoutMs } 可选，用于记忆整理专用模型等场景。
+ */
+export async function chatCompletion({
+  messages,
+  tools = null,
+  toolChoice = 'auto',
+  temperature = null,
+  signal = null,
+  overrides = null,
+  cacheKey = '',
+  maxTokens = null,
+  purpose = ''
+}) {
+  assertTimeAllowed();
+  const api = overrides || effectiveApi();
+  // 聊天这类"随口回一句"的任务关掉思考：省一半输出 token、少 1~3 秒；
+  // 判断/写作类（表情包要不要收、说说、空间互动、身份评估）不传 purpose，继续思考。
+  const thinkingOff = thinkingModeFor(purpose) === 'off';
+  const body = {
+    model: api.model,
+    messages: messages.map(({ role, content, tool_calls, tool_call_id, name, reasoning_content }) => ({
+      role, content, ...(tool_calls ? { tool_calls } : {}),
+      ...(tool_call_id ? { tool_call_id } : {}), ...(name ? { name } : {}),
+      // 关思考时不能把上一轮的 reasoning_content 带回去（有的网关会 400）
+      ...(!thinkingOff && reasoning_content ? { reasoning_content } : {})
+    })),
+    stream: false
+  };
+  if (thinkingOff) body.thinking = { type: 'disabled' };
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+    // 思考模式与强制 tool_choice 不兼容：部分网关（DeepSeek 系）会整次请求 400
+    // "Thinking mode does not support this tool_choice"。此前贴纸判断就踩在这个组合上
+    // （每张图重试 3 次全失败，最后整张图跳过）。降级成 auto 由提示词与工具描述驱动，
+    // 调用方本身也有内联文本兜底解析，比硬失败强。
+    const forced = toolChoice && typeof toolChoice === 'object';
+    if (!thinkingOff && forced) {
+      const name = String(toolChoice?.function?.name || '');
+      if (!thinkingToolChoiceWarned.has(name)) {
+        thinkingToolChoiceWarned.add(name);
+        console.warn('[llm] 思考模式不接受强制 tool_choice，已降级为 auto（每种工具只提示一次）：', name || JSON.stringify(toolChoice));
+      }
+      body.tool_choice = 'auto';
+    } else {
+      body.tool_choice = toolChoice;
+    }
+  }
+  const temp = temperature === null ? (api.temperature ?? 0.8) : temperature;
+  if (temp !== null && temp !== undefined && Number.isFinite(Number(temp))) body.temperature = Number(temp);
+  if (Number.isFinite(Number(maxTokens)) && Number(maxTokens) > 0) {
+    body.max_tokens = Math.round(Number(maxTokens));
+  }
+  // OpenAI/Azure 可用显式 key 提高相同前缀的路由稳定性。兼容网关不盲传，
+  // 避免它们因未知字段返回 400；DeepSeek 使用自动前缀缓存，无需该字段。
+  if (cacheKey && /(^|\.)openai\.com$|\.openai\.azure\.com$|\.services\.ai\.azure\.com$/i.test((() => {
+    try { return new URL(api.baseUrl).hostname; } catch { return ''; }
+  })())) {
+    body.prompt_cache_key = String(cacheKey).slice(0, 64);
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = Math.max(5000, Number(api.timeoutMs) || 180000);
+  const timer = setTimeout(() => controller.abort(new Error('请求超时')), timeoutMs);
+  const abort = () => controller.abort(signal.reason ?? new Error('Run cancelled'));
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason ?? new Error('aborted'));
+    else signal.addEventListener('abort', abort, { once: true });
+  }
+  const releaseTimeGuard = watchTimeWindow((error) => controller.abort(error));
+
+  try {
+    controller.signal.throwIfAborted();
+    assertTimeAllowed();
+    const res = await fetch(joinUrl(api.baseUrl, '/chat/completions'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeaders(api.apiKey, api.baseUrl, api.model) },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`模型 API HTTP ${res.status}：${text.slice(0, 500)}`);
+    }
+    const data = await res.json();
+    const choice = data?.choices?.[0];
+    if (!choice) throw new Error('模型 API 响应缺少 choices');
+    return {
+      message: choice.message ?? {}, finishReason: choice.finish_reason ?? null,
+      usage: data.usage ?? null, model: data.model ?? api.model, raw: data
+    };
+  } catch (error) {
+    if (controller.signal.reason?.code === 'TIME_CONTROL_INACTIVE') throw controller.signal.reason;
+    if (signal?.aborted) throw signal.reason ?? new Error('Run cancelled');
+    if (controller.signal.aborted) throw new Error(`模型请求超时（${timeoutMs}ms）`);
+    if (/模型 API HTTP/.test(String(error.message))) throw error;
+    throw new Error(`模型请求失败：${error?.cause?.message ?? error?.message ?? error}`);
+  } finally {
+    releaseTimeGuard();
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  }
+}
+
+/** 获取模型列表（GET /models）。返回 [{ id }]；失败抛错。 */
+export async function listModels() {
+  const cfg = effectiveApi();
+  const res = await fetch(joinUrl(cfg.baseUrl, '/models'), {
+    headers: authHeaders(cfg.apiKey, cfg.baseUrl),
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!res.ok) throw new Error(`获取模型列表失败：HTTP ${res.status}`);
+  const data = await res.json();
+  const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+  return list.map((m) => ({ id: String(m.id ?? m.model ?? m) })).filter((m) => m.id);
+}
+
+/**
+ * 累加 usage。
+ * 同时累计 cachedTokens（命中前缀缓存的 prompt 部分）—— 中转站会在
+ * usage.prompt_tokens_details.cached_tokens 里返回它，成本看板与缓存命中率统计都依赖这个数。
+ */
+export function addUsage(target, usage) {
+  if (!usage) return target;
+  const prompt = Number(usage.prompt_tokens) || 0;
+  const completion = Number(usage.completion_tokens) || 0;
+  target.promptTokens += prompt;
+  target.completionTokens += completion;
+  target.totalTokens += Number(usage.total_tokens) || (prompt + completion);
+  target.cachedTokens = (Number(target.cachedTokens) || 0) + cachedTokensOfUsage(usage);
+  return target;
+}
+
+/** 兼容各供应商返回缓存命中 Token 的字段差异。 */
+export function cachedTokensOfUsage(usage = {}) {
+  return Number(
+    usage.prompt_tokens_details?.cached_tokens
+    ?? usage.prompt_cache_hit_tokens
+    ?? usage.cached_tokens
+    ?? 0
+  ) || 0;
+}
+
+export function emptyUsage() {
+  return { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, calls: 0 };
+}
+
+/** 缓存命中率（0~1）。没有 prompt 数据时返回 0。 */
+export function cacheHitRate(usage) {
+  const p = Number(usage?.promptTokens) || 0;
+  if (!p) return 0;
+  return Math.min(1, Math.max(0, (Number(usage?.cachedTokens) || 0) / p));
+}
+
+/**
+ * 按配置单价折算成本（元）。
+ *
+ * 三种单价来源：
+ *   1. useOfficialPrice=true 且模型 id 在内置价格表里 → 用官方价（缓存部分单独计价）
+ *   2. 否则用用户手填的 priceInputPerM / priceOutputPerM / priceCachedPerM
+ *   3. 都没有 → 0（不估算）
+ *
+ * 缓存命中部分优先走 cached 单价；官方价里 cached 为 null 时（该模型无缓存优惠）
+ * 退回按普通输入价计算。
+ *
+ * 峰谷分时：opts.at 传调用时刻（毫秒时间戳）时，对支持分时的厂商（DeepSeek）
+ * 按该时刻自动取高峰价或闲时价。不传 at 则按闲时计价（保守估值，会偏低）。
+ * 历史统计请看 sumCostByTime() —— 它按每条记录的时刻分别计价后汇总，更准。
+ */
+export function estimateCost(usage, opts = {}) {
+  const cfg = effectiveApi();
+  // 成本只与"实际调用的模型"有关。opts.model 优先（统计时逐条传入各自的模型），
+  // 不传才回退到当前选中的模型。
+  const model = String(opts.model ?? cfg.model ?? '');
+
+  const promptTokens = Number(usage?.promptTokens) || 0;
+  const completionTokens = Number(usage?.completionTokens) || 0;
+  const cachedTokens = Math.min(Number(usage?.cachedTokens) || 0, promptTokens);
+  // 未命中缓存的输入 = 总输入 - 命中部分
+  const freshTokens = Math.max(0, promptTokens - cachedTokens);
+
+  // 统一走 resolveModelPrice：自定义 > 内置官方表 > 全局兜底
+  // 注意：第二个参数要传完整配置对象（内部读 cfg.api.*），
+  // 传 effectiveApi() 的返回值（它就是 api 本身）会导致取不到字段。
+  const p = resolveModelPrice(model, getConfig());
+
+  // 峰谷：传了 at（调用时刻）且该模型有 peak 档位就取对应档
+  const tier = p.peak && opts.at ? priceAt(p, opts.at) : null;
+  const inPrice = tier ? tier.in : p.in;
+  const outPrice = tier ? tier.out : p.out;
+  const cachedPrice = tier ? tier.cached : p.cached;
+
+  const source = p.source;
+  const matched = p.matched;
+  const peak = Boolean(tier?.peak);
+  const hasPeakTiers = Boolean(p.peak);
+
+  const cost =
+    (freshTokens / 1_000_000) * inPrice +
+    (cachedTokens / 1_000_000) * cachedPrice +
+    (completionTokens / 1_000_000) * outPrice;
+
+  return {
+    cost,
+    source,
+    breakdown: {
+      fresh: (freshTokens / 1_000_000) * inPrice,
+      cached: (cachedTokens / 1_000_000) * cachedPrice,
+      output: (completionTokens / 1_000_000) * outPrice
+    },
+    prices: { in: inPrice, out: outPrice, cached: cachedPrice },
+    matched,
+    // 未定价 = 价格表里查不到（不是免费）。调用方要能区分这两种情况。
+    unpriced: p.unpriced === true,
+    confidence: p.confidence || '',
+    via: p.via || '',
+    // 峰谷信息：hasPeakTiers 表示这个模型是否分时段计价
+    peak,
+    hasPeakTiers
+  };
+}

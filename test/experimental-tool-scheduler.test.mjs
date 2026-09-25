@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
-import { buildToolDefs } from '../src/tools-core.js';
+import { buildToolDefs } from '../src/tools/tools-core.js';
 import {
   annotateExperimentalToolSchemas,
   experimentalToolClass,
   experimentalToolSchedulerConfig,
   ExperimentalToolBatch
-} from '../src/experimental-tool-scheduler.js';
+} from '../src/pilots/experimental-tool-scheduler.js';
 
 function call(id, name, args = {}) {
   return {

@@ -14,9 +14,9 @@ fs.writeFileSync(path.join(root, 'stickers.json'), JSON.stringify([{
   desc: 'test sticker'
 }]));
 
-const { StickerManager } = await import('../src/sticker-manager.js');
-const { buildToolDefs } = await import('../src/tools.js');
-const { buildStickerContext, findSticker } = await import('../src/stickers.js');
+const { StickerManager } = await import('../src/onebot/sticker-manager.js');
+const { buildToolDefs } = await import('../src/tools/tools.js');
+const { buildStickerContext, findSticker } = await import('../src/onebot/stickers.js');
 
 test('refreshes a collected QQ image URL from its source message before sending', async (t) => {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

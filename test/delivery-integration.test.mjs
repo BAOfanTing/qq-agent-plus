@@ -6,12 +6,12 @@ import path from 'node:path';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-delivery-'));
 process.env.QQ_AGENT_DATA_DIR = dir;
 process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
-const { ChatStore } = await import('../src/store.js');
-const { SessionRegistry } = await import('../src/sessions.js');
-const { SendQueue } = await import('../src/sender.js');
-const { OneBotActionError, OneBotClient } = await import('../src/onebot.js');
-const { Orchestrator } = await import('../src/orchestrator.js');
-const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/config.js');
+const { ChatStore } = await import('../src/core/store.js');
+const { SessionRegistry } = await import('../src/core/sessions.js');
+const { SendQueue } = await import('../src/onebot/sender.js');
+const { OneBotActionError, OneBotClient } = await import('../src/onebot/onebot.js');
+const { Orchestrator } = await import('../src/core/orchestrator.js');
+const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
 
 it('holds uncertain deliveries and does not automatically send again on new input', async (t) => {
   const cfg = structuredClone(DEFAULT_CONFIG);
