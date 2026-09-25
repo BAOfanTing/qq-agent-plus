@@ -159,6 +159,16 @@ export async function getFriendRequestSetting(onebot, {
   return setting;
 }
 
+/**
+ * ⚠️ 上游能力缺失（Issue #10，部署侧系统性实测确认）：
+ * 手搓的 friendlist.addFriend JCE 包能被服务端接受并到达业务层，但业务码
+ * 恒为 1（"添加失败，请稍后再试"）——与参数、目标、验证方式全部无关
+ * （已好友对照、自加、参数矩阵扫描均同一结果）。GUI 手动加好友走的是
+ * 客户端 kernel 接口 NodeIKernelBuddyService::reqToAddFriends，与这条
+ * MSF 转发路径完全不同；且 SnowLuma 官方 action 目录（345 个）中不存在
+ * "发起好友申请"能力。在该能力出现之前，此函数的派发必然失败。
+ * 恢复条件：SnowLuma 暴露 reqToAddFriends（或等价能力）后重新对齐。
+ */
 export async function sendFriendRequestViaSnowLuma(onebot, {
   selfId,
   userId,
