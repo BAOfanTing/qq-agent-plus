@@ -226,9 +226,8 @@ test('zero probability persists a miss without calling the model', async (t) => 
   assert.equal(f.manager.listFriendOpportunities()[0].status, 'lottery_miss');
 });
 
-test('approval refresh closes a proposal when the user has become a friend', async (t) => {
-  const friends = [];
-  const f = await fixture(t, { friends });
+test('friend proposal retired: approval is rejected even for an existing pending proposal', async (t) => {
+  const f = await fixture(t, {});
   await f.manager.handleSuccessfulTurn({
     chatKey: 'private:123456',
     triggerEntries: [f.incoming],
@@ -236,15 +235,16 @@ test('approval refresh closes a proposal when the user has become a friend', asy
     triggerReason: '私聊'
   });
   const proposal = await waitFor(() => f.manager.listFriendProposals()[0]);
-  friends.push({ user_id: 123456, nickname: '刚成为好友' });
 
-  const result = await f.manager.decideFriendProposal(
-    proposal.id,
-    'approve',
-    { decidedBy: '900001' }
+  // 主动好友候选已退役（Issue #10 + QQ 账号风控）：已存在的 pending 提案
+  // 也不能再被批准派发，功能门硬性拦截。
+  await assert.rejects(
+    () => f.manager.decideFriendProposal(
+      proposal.id,
+      'approve',
+      { decidedBy: '900001' }
+    ),
+    /主动好友候选功能当前未启用/
   );
-
-  assert.equal(result.execution, 'accepted');
-  assert.equal(result.proposal.status, 'accepted');
-  assert.match(result.note, /已经是好友/);
+  assert.equal(f.manager.listFriendProposals()[0].status, 'pending');
 });

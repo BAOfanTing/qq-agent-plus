@@ -379,13 +379,9 @@ test('friend proposal validation enforces message threshold and administrator co
   );
 });
 
-test('approved friend proposal dispatches once and waits for friend_add confirmation', async (t) => {
-  const dir = fs.mkdtempSync(path.join(root, 'friend-dispatch-success-'));
+test('friend proposal is retired: approval is rejected even with legacy enabled config', async (t) => {
+  const dir = fs.mkdtempSync(path.join(root, 'friend-dispatch-retired-'));
   const store = new ChatStore(0, { dataDir: dir });
-  t.after(() => {
-    store.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
   const cfg = {
     identityPilot: {
       enabled: true,
@@ -403,15 +399,6 @@ test('approved friend proposal dispatches once and waits for friend_add confirma
     allowAllWhenEmpty: false,
     blocklist: {}
   };
-  store.appendIncoming('group:100', {
-    mid: 1,
-    ts: Date.now(),
-    senderId: '123456',
-    senderName: '候选成员',
-    text: '测试发送'
-  });
-  const dispatches = [];
-  const whitelisted = [];
   const manager = new IdentityPilotManager({
     store,
     dataDir: dir,
@@ -421,47 +408,40 @@ test('approved friend proposal dispatches once and waits for friend_add confirma
       connected: true,
       call: async () => []
     },
-    sendFriendRequest: async (_onebot, params) => {
-      dispatches.push(params);
-      return { accepted: true, businessCode: 0, setting: 1, wording: '' };
-    },
-    allowPrivateUser: async (userId) => {
-      whitelisted.push(userId);
+    sendFriendRequest: async () => {
+      throw new Error('退役功能绝不能到达发包层');
     },
     log: () => {}
   });
-  t.after(() => manager.stop());
-  await manager.start();
-  const created = await manager.proposeFriend({
-    userId: '123456',
-    chatKey: 'group:100',
-    reasonCode: 'interest',
-    reason: '希望继续交流',
-    verificationMessage: '继续聊'
+  // 单钩子保证顺序：先 manager.stop()（关 identity 库句柄）再删目录，
+  // 否则 Windows 上 sqlite 句柄未释放会 EBUSY。
+  t.after(() => {
+    manager.stop();
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   });
-  const approved = await manager.decideFriendProposal(
-    created.proposal.id,
-    'approve',
-    { decidedBy: '900001' }
-  );
-  assert.equal(approved.execution, 'sent');
-  assert.equal(approved.proposal.status, 'sent');
-  assert.equal(approved.proposal.dispatchStartedAt > 0, true);
-  assert.equal(approved.proposal.dispatchedAt > 0, true);
-  assert.equal(dispatches.length, 1);
-  assert.equal(dispatches[0].userId, '123456');
-  assert.equal(dispatches[0].sourceChatKey, 'group:100');
-  assert.equal(dispatches[0].verificationMessage, '继续聊');
+  await manager.start();
+  // 主动好友候选已退役（Issue #10 + QQ 账号风控）：功能门硬编码关闭，
+  // 即使旧配置 enabled:true、即使存在真实的 pending 提案，也不能批准派发。
+  manager.identityStore.observe('group:100', {
+    senderId: '123456',
+    senderName: '候选成员',
+    ts: Date.now()
+  });
+  const created = manager.identityStore.createFriendProposal({
+    userId: '123456',
+    sourceChatKey: 'group:100',
+    reasonCode: 'interest',
+    reason: '退役验证：旧配置不得批准派发',
+    verificationMessage: '继续聊',
+    minMessageCount: 1
+  });
+  assert.equal(created.created, true);
   await assert.rejects(
-    manager.decideFriendProposal(created.proposal.id, 'approve', {
-      decidedBy: '900001'
-    }),
-    /已处理：sent/
+    () => manager.decideFriendProposal(created.proposal.id, 'approve', { decidedBy: '900001' }),
+    /主动好友候选功能当前未启用/
   );
-  assert.equal(dispatches.length, 1, 'sent proposal must never be dispatched twice');
-  assert.equal(await manager.markFriendAdded('123456'), 1);
-  assert.equal(manager.listFriendProposals()[0].status, 'accepted');
-  assert.deepEqual(whitelisted, ['123456']);
+  assert.equal(manager.identityStore.getFriendProposal(created.proposal.id).status, 'pending');
 });
 
 test('unknown friend request result is held and a crashed dispatch is recovered as unknown', async (t) => {

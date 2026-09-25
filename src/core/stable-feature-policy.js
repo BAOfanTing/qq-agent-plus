@@ -132,10 +132,16 @@ export function applyStableFeaturePolicy(config = {}) {
   const incoming = objectSection(identity, 'incomingFriendRequest');
   incoming.enabled = true;
 
+  // Active friend-adding is retired, not merely disabled (Issue #10): the
+  // hand-built friendlist.addFriend packet is uniformly rejected by the
+  // server (business code 1 regardless of fields or targets), SnowLuma
+  // upstream declined to expose the kernel capability (#480, not_planned),
+  // and the experiment burst triggered QQ account risk control. Keep the
+  // section shape so stale clients can see it cannot be reactivated.
   const friend = objectSection(identity, 'friendProposal');
-  friend.enabled = true;
-  friend.graduated = true;
-  friend.activeDispatchEnabled = true;
+  friend.enabled = false;
+  friend.graduated = false;
+  friend.activeDispatchEnabled = false;
   friend.ownerUin = ownerUin;
 
   // Automated slang research is retired, not merely disabled. Keep only the

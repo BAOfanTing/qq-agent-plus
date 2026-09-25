@@ -105,8 +105,11 @@ export function identityPilotEnabled() {
   return true;
 }
 
+// 主动好友候选已退役（Issue #10）：协议路径被服务端统一拒绝（业务码恒 1），
+// SnowLuma 上游明确不暴露内核加好友能力（#480 not_planned），连续实验还触发过
+// QQ 账号风控。功能永久关闭，不随配置恢复。
 export function friendProposalEnabled() {
-  return true;
+  return false;
 }
 
 export function triggeredFriendProposalEnabled(cfg = getConfig()) {
@@ -121,8 +124,9 @@ export function incomingFriendRequestEnabled() {
   return true;
 }
 
+// 同上：主动好友派发随功能一起退役，永久关闭。
 export function friendRequestDispatchEnabled() {
-  return true;
+  return false;
 }
 
 /** Compatibility tombstone: automated slang research cannot be reactivated. */
