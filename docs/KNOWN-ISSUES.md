@@ -62,32 +62,20 @@ Unix 路径与文件权限位等）；在 Linux 服务器与 CI（ubuntu-latest�
 
 ## 外部依赖缺口：SnowLuma 不支持"主动发起好友申请"（2026-09-25 确认）
 
-主动好友候选的**应用层管线完全正常**（候选生成 → 审批 → 派发 → 记账已端到端验证），
-但派发环节的 `friendlist.addFriend` JCE 报文被服务端秒回笼统拒绝
-（`businessCode=1`「添加失败，请稍后再试」），对陌生人、已好友、机器人自己三种目标
-表现完全一致——请求没有到达好友逻辑。
+主动好友候选的**应用层管线完全正常**（候选生成 → 审批 → 派发 → 记账已端到端验证）。派发环节的 `friendlist.addFriend` JCE 报文能被服务端解析并回包，但业务码恒为 1（"添加失败，请稍后再试"），与参数组合、目标账号（陌生人 / 已好友 / 机器人自己）完全无关——服务端对该请求统一拒绝。
 
 ### 实验记录（详见 Issue #10）
 
-- **A/B 同连接对照**：旧结构（[5] 带手工字节长度）27ms 秒拒；移除长度字段的
-  实验结构 15 秒无响应（`retcode=100`）。
-- **self-add 实验**：连"添加自己"这类必然秒回语义化错误的请求，两种结构都未触发
-  好友逻辑——实验性结构同样无效，该候选修复已回退。
-- **开源调研**：NapCat/LLOneBot/Lagrange 均只实现入站申请处理
-  （`set_friend_add_request`），无"发起申请"的公开报文实现可对照。
-- **foxlesbiao 的内核发现**：GUI 客户端发起申请走的是 NTQQ 内核
-  `reqToAddFriends`，而 SnowLuma 的 action 目录中没有此能力。
+- **A/B 同连接对照**（本仓库服务器）：旧结构（[5] 带手工字节长度）27ms 回包 result=1；移除长度字段的实验结构 15 秒无响应（`retcode=100`）。
+- **部署侧复测**（baiyu997，独立环境）：以"是否回包"为判据逐个筛结构——v0.6.16 原始结构 46ms 回包（业务码 1），移除长度字段及其全部变体均被服务端静默丢弃；随后在旧结构上扫描参数矩阵（setting / comment / friendSource / 目标，含机器人自己与允许任何人的真人小号），业务码恒为 1。结论：① 移除长度字段使包体被服务端丢弃，原始结构才是可解析形态；② 业务码 1 与字段和目标无关，是统一拒绝。
+- **内核证据**：客户端组包走 `NodeIKernelBuddyService::reqToAddFriends`（wrapper.node 字符串可确认），GUI 手动加好友并不发送这条 JCE；手搓 MSF 转发请求缺少原生客户端的会话 / 设备上下文，推测为统一拒绝的来源。
+- **开源调研**：NapCat / LLOneBot / Lagrange 均只实现入站申请处理（`set_friend_add_request`），无"发起申请"的公开实现可参考；SnowLuma action 目录（345 个）中亦无相关能力。
 
 ### 结论与当前状态
 
-**根因是协议端能力缺口，不是本仓库的包结构错误。** `friendlist.addFriend`
-这一旧服务在 NTQQ 会话下不可用，正确命令字 `reqToAddFriends` 需要
-SnowLuma 上游支持，或拿到内核报文对照后经 `send_packet` 直发（transport 已验证可用）。
+**根因是协议端能力缺口**：旧结构可解析但被统一拒绝（推测缺少原生客户端上下文），正确路径是内核接口 `reqToAddFriends`，需要 SnowLuma 上游支持。保持回退后的旧结构，不再尝试字段布局变体。
 
-- 生产配置：`identityPilot.friendProposal.activeDispatchEnabled=false`——提案照常
-  生成与审批，批准后保留为 `approved_manual`（待手动执行），不再白烧 30 天冷却。
-- **重新派发**：`failed`/`held_unknown` 提案新增管理动作（控制台"重新派发"按钮，
-  `POST /api/identity-pilot/friend-proposals/{id}/redispatch`，需 `confirm`）——
-  协议端支持落地后可立即重试存量提案，不必等冷却重新提名。
-- 恢复条件：SnowLuma 上游加入好友申请能力（或拿到 `reqToAddFriends` 报文对照）
-  → 适配 `src/identity/friend-request-protocol.js` → 打开开关 → 用重新派发验证。
+- 生产配置：`identityPilot.friendProposal.activeDispatchEnabled=false`——提案照常生成与审批，批准后保留为 `approved_manual`（待手动执行），不消耗 30 天冷却。
+- **v0.6.17 用户注意**：该版本包含曾被否定的"移除长度字段"实验性修复（已在 main 回退）；主动派发默认关闭，若已手动开启建议先关闭。
+- **重新派发**：`failed`/`held_unknown` 提案新增管理动作（控制台"重新派发"按钮，`POST /api/identity-pilot/friend-proposals/{id}/redispatch`，需 `confirm`）——上游支持落地后可立即重试存量提案。
+- 恢复条件：SnowLuma 上游提供好友申请能力（如暴露 `reqToAddFriends`）→ 适配 `src/identity/friend-request-protocol.js` → 打开开关 → 用重新派发验证。
