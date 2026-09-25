@@ -14,7 +14,6 @@ const { IdentityPilotManager } = await import('../src/identity/identity-pilot.js
 const { IncidentPilotManager } = await import('../src/pilots/incident-pilot.js');
 
 test('identity and incident infrastructure start without an approval owner; friend proposal stays retired', async (t) => {
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allowAllWhenEmpty = true;
@@ -33,6 +32,8 @@ test('identity and incident infrastructure start without an approval owner; frie
     },
     log: () => {}
   });
+  // 清理顺序：identity 库句柄先关，incidents 库随最后的钩子关闭，
+  // rmSync 放最后并带 EBUSY 重试（Windows 上句柄释放与 rmSync 有竞态）。
   t.after(() => {
     identity.stop();
     store.close();
@@ -63,7 +64,18 @@ test('identity and incident infrastructure start without an approval owner; frie
     notifyAvailable: () => false,
     log: () => {}
   });
-  t.after(() => incidents.stop());
+  t.after(async () => {
+    incidents.stop();
+    for (let i = 0; i < 10; i += 1) {
+      try {
+        fs.rmSync(root, { recursive: true, force: true });
+        return;
+      } catch (error) {
+        if (error.code !== 'EBUSY' && error.code !== 'EPERM') throw error;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+  });
   const incidentStatus = incidents.start();
   assert.equal(incidentStatus.enabled, true);
   assert.equal(incidentStatus.active, true);

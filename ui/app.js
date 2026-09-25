@@ -53,7 +53,8 @@ const state = {
 function graduatedFeatureState(c = state.config || {}) {
   return {
     identity: c.identityPilot?.graduated === true,
-    'auto-friend': c.identityPilot?.friendProposal?.graduated === true,
+    // 「好友管理」页承载入站好友申请的审批（该功能不受退役影响），导航入口
+    // 不随 friendProposal 的退役隐藏——只隐藏会把入站审批一起藏掉。
     slang: c.slangPilot?.graduated === true,
     incidents: c.incidentPilot?.graduated === true
   };
@@ -6641,13 +6642,10 @@ function renderExperimentalSettingsSection(c) {
           </span>
         </div>
         <div class="control-key-row">
-          <span><strong>自动好友添加</strong><small id="experiment-auto-friend-state">${autoFriendEnabled ? '已启用' : '已停用'} · ${friend.graduated === true ? '已固化' : '实验中'}</small></span>
+          <span><strong>自动好友添加</strong><small id="experiment-auto-friend-state">已退役（Issue #10：协议端不支持且易触发风控）</small></span>
           <span class="settings-actions" style="margin:0">
-            <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-auto-friend-enabled" ${autoFriendEnabled ? 'checked' : ''} /><span>启用</span></label>
-            <button type="button" class="btn btn-small ${friend.graduated === true ? '' : 'btn-primary'}"
-              id="launch-auto-friend-feature" ${friend.graduated === true ? 'disabled' : ''}>
-              ${friend.graduated === true ? '已固化' : '固化上线'}
-            </button>
+            <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-auto-friend-enabled" disabled /><span>启用</span></label>
+            <button type="button" class="btn btn-small" id="launch-auto-friend-feature" disabled>已退役</button>
           </span>
         </div>
         <div class="control-key-row">
@@ -7267,7 +7265,7 @@ function renderFriendFeaturePage(c, status) {
     </div>
     <section class="control-section">
       <div class="control-section-title">
-        <div><h3>运行设置</h3><span class="muted">启停由“设置 → 实验功能”统一控制</span></div>
+        <div><h3>运行设置</h3><span class="muted">主动加好友已退役（Issue #10），下表配置不再生效；入站好友请求审批不受影响</span></div>
         <button type="button" class="btn btn-primary btn-small" id="friend-feature-save">保存好友设置</button>
       </div>
       <div class="field-row">
