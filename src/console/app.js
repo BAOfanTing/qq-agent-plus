@@ -2778,6 +2778,34 @@ export function createApp({ log = console.log, autoUpdateOptions = {} } = {}) {
         return json(res, 200, { chats });
       }
 
+      // 删除存档：清数据库 + session 文件 + 记忆目录
+      const chatDeleteMatch = /^\/api\/chats\/([\w:]+)$/.exec(pathname);
+      if (chatDeleteMatch && method === 'DELETE') {
+        const chatKey = chatDeleteMatch[1].replace('_', ':');
+        if (!store.listChats().includes(chatKey)) {
+          return json(res, 404, { error: '会话不存在' });
+        }
+        const stats = store.getChatMeta(chatKey);
+        store.deleteChatData(chatKey);
+        const sessionsDir = path.join(DATA_DIR, 'sessions');
+        let sessionCount = 0;
+        try {
+          for (const f of fs.readdirSync(sessionsDir)) {
+            if (!f.endsWith('.json')) continue;
+            const fp = path.join(sessionsDir, f);
+            try {
+              const data = JSON.parse(fs.readFileSync(fp, 'utf8'));
+              if (data.chatKey === chatKey) { fs.unlinkSync(fp); sessionCount++; }
+            } catch {}
+          }
+        } catch {}
+        const memoryDir = path.join(DATA_DIR, 'memory');
+        const memDirName = chatKey.replace(/[^a-z0-9_]/gi, '_');
+        const memPath = path.join(memoryDir, memDirName);
+        if (fs.existsSync(memPath)) { fs.rmSync(memPath, { recursive: true, force: true }); }
+        return json(res, 200, { ok: true, chatKey, deletedMessages: stats.total, deletedSessions: sessionCount, hadMemory: fs.existsSync(memPath) });
+      }
+
       // 记忆文件列表（记忆页签）：白名单里的每个群都显示，含无记忆的
       if (pathname === '/api/memory-files' && method === 'GET') {
         const files = memory.listChats().map((chatKey) => {

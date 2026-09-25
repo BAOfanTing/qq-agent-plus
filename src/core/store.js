@@ -250,6 +250,14 @@ export class ChatStore {
     };
   }
 
+  deleteChatData(chatKey) {
+    return this.#transaction(() => {
+      for (const tbl of ['thread_turns', 'thread_checkpoints', 'conversation_threads', 'outbox', 'runs', 'messages', 'chats']) {
+        this.db.prepare('DELETE FROM ' + tbl + ' WHERE chat_key=?').run(chatKey);
+      }
+    });
+  }
+
   unreadCount(chatKey) {
     return this.db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE chat_key=? AND self=0
       AND state='pending' AND available_at<=?`).get(chatKey, Date.now()).n;
