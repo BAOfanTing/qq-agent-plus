@@ -956,6 +956,13 @@ try {
   collectUiOk ? pass++ : fail++;
   console.log('  ' + (collectUiOk ? 'OK   ' : 'FAIL ')
     + '设置页：收藏开关（一个开关管自动+主动）+ 每小时上限滑条（存量/混合值如实回显）');
+  // 收藏判定标准（v0.8.4 的配置面补上控制台入口）：多行文本域；留空 = 内置默认；
+  // 存量值如实回显且转义（内容可含 < > & 与换行）
+  const criteriaHtml = ctx.renderChatSection({ ...cfg, sticker: { ...cfg.sticker, collectCriteria: '只收 <梗图> & 表情' } });
+  const criteriaOk = /<textarea id="cfg-sticker-collect-criteria"[^>]*>\s*<\/textarea>/.test(defaultHtml)
+    && criteriaHtml.includes('只收 &lt;梗图&gt; &amp; 表情');
+  criteriaOk ? pass++ : fail++;
+  console.log('  ' + (criteriaOk ? 'OK   ' : 'FAIL ') + '设置页：收藏判定标准文本域（留空回显 + 存量值转义）');
   // 存量的超范围值（手改过 config.json 的 500）落到 60 档，不会渲染出 500 这种选项
   const overHtml = ctx.renderChatSection({ ...cfg, sticker: { ...cfg.sticker, promptMaxStickers: 500 } });
   // 断言只看贴纸那个滑条（同一段里发送上限的默认值就是 500，不能全局查 value="500"）
@@ -1545,6 +1552,36 @@ try {
   mapOk ? pass++ : fail++;
   console.log('  ' + (mapOk ? 'OK   ' : 'FAIL ') + '设置页：保存时模式/服务正确映射成 provider/baseUrl/model/Key 归属'
     + (mapOk ? '' : ` -> ${mapNotes.join('；')}`));
+
+  // 收藏判定标准：改文本域 → 保存 → POST 体里带着 sticker.collectCriteria；空白存成空串（=内置默认）。
+  // 夹具先放一个非空存量值：否则"空白时回退已保存值"的错误实现也会绿（2026-10-10 审查 P2）。
+  // （"控件缺失回退已保存值"那一支在垫片里测不了：querySelector 对未知选择器会惰性造元素。）
+  {
+    let ok = true;
+    const notes = [];
+    const view = { ...cfg, sticker: { ...cfg.sticker, collectCriteria: '旧的判定标准' } };
+    vm.runInContext("state.settingsSection = 'chat';", ctx);
+    vm.runInContext(`state.config = ${JSON.stringify(view)};`, ctx);
+    for (const [value, want] of [['只收干净卡通和梗图', '只收干净卡通和梗图'], ['   ', '']]) {
+      document.querySelector('#cfg-sticker-collect-criteria').value = value;
+      let posted = null;
+      const fetchBefore = sandbox.fetch;
+      sandbox.fetch = async (url, options) => {
+        if (String(url).includes('/api/config') && options?.method === 'POST') {
+          posted = JSON.parse(options.body);
+          return { ok: true, status: 200, json: async () => ({ config: view }), text: async () => '' };
+        }
+        return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+      };
+      try { await ctx.saveConfig({ quiet: true }); } catch (error) { notes.push(`saveConfig 抛错 ${error?.message}`); }
+      sandbox.fetch = fetchBefore;
+      const got = posted?.sticker?.collectCriteria;
+      if (got !== want) { ok = false; notes.push(`${JSON.stringify(value)} → ${JSON.stringify(got)}（期望 ${JSON.stringify(want)}）`); }
+    }
+    ok ? pass++ : fail++;
+    console.log('  ' + (ok ? 'OK   ' : 'FAIL ') + '设置页：收藏判定标准保存进 sticker.collectCriteria（空白 = 内置默认）'
+      + (ok ? '' : ` -> ${notes.join('；')}`));
+  }
 
   // 切换服务预设时凭据按"这家存过没有"自动填回（2026-10-02 用户要求"切预设时 Key 跟着切换"）：
   // 存过 → 掩码（保存时服务端取回这家存过的那把）；没存过 → 留空等填；都不再一律清空 + 报"要重填"。

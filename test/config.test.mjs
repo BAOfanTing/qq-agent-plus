@@ -307,6 +307,22 @@ test('人设正文与自定义规则在写入侧夹住长度（防止粘贴事�
   updateConfig({ persona: { roleText: PERSONAS?.xiaojingyu?.text ?? '默认人设', templateId: 'xiaojingyu' } });
 });
 
+test('表情判定标准在写入侧夹到 2000 字（控制台文本域同口径，2026-10-10）', async () => {
+  const { updateConfig, getConfig, setRuntimeConfig } = await import('../src/core/config.js');
+
+  updateConfig({ sticker: { collectCriteria: 'c'.repeat(2500) } });
+  assert.equal(getConfig().sticker.collectCriteria.length, 2000, '超长按 2000 夹住');
+
+  // 不改这一项时不动存量（与上面人设长文本同一设计取舍）：塞一个超长存量值，保存无关字段 → 不被截断
+  setRuntimeConfig({ ...getConfig(), sticker: { ...getConfig().sticker, collectCriteria: 'x'.repeat(3000) } });
+  updateConfig({ sticker: { enabled: true } });
+  assert.equal(getConfig().sticker.collectCriteria.length, 3000, '无关保存不回头截断存量值');
+
+  // 清空 = 回内置默认；别影响同文件后续用例
+  updateConfig({ sticker: { collectCriteria: '' } });
+  assert.equal(getConfig().sticker.collectCriteria, '');
+});
+
 test('标量 patch（{asr: 5}）按"这次没改"处理，不清空整段（否则连凭据映射一起丢）', async () => {
   const { updateConfig, getConfig } = await import('../src/core/config.js');
   updateConfig({ asr: { provider: 'tencent', baseUrl: '', model: '', apiKey: 'K', apiKeyProvider: 'tencent' } });

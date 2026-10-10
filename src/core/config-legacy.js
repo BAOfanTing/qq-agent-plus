@@ -1459,6 +1459,7 @@ const PERSONA_ROLE_TEXT_MAX = 20000;
 const PERSONA_CUSTOM_RULES_MAX = 4000;
 const MEMBER_NOTE_MAX = 200;
 const MEMBER_NOTES_MAX = 2000;
+const STICKER_COLLECT_CRITERIA_MAX = 2000;   // 与 src/onebot/sticker-manager.js 的判定期截断同口径
 
 /** 备注表归一化：值去空白并截断，丢空值，条目数设上限（防止备注表无限膨胀）。 */
 function clampMemberNotes(value) {
@@ -1520,6 +1521,11 @@ export function updateConfig(patch) {
     next.persona.customRules = next.persona.customRules.slice(0, PERSONA_CUSTOM_RULES_MAX);
   }
   if ('memberNotes' in safePatch) next.memberNotes = clampMemberNotes(next.memberNotes);
+  // 表情判定标准（2026-10-10 补上控制台输入后同口径）：只在本次 patch 带了该字段时夹到 2000 字
+  // （与 src/onebot/sticker-manager.js 判定期的截断一致）；无关保存不改写存量值。
+  if (safePatch.sticker?.collectCriteria !== undefined && typeof next.sticker?.collectCriteria === 'string') {
+    next.sticker.collectCriteria = next.sticker.collectCriteria.slice(0, STICKER_COLLECT_CRITERIA_MAX);
+  }
   next.tokenSaver = { ...(next.tokenSaver || {}), mode: normalizeTokenSaverMode(next.tokenSaver?.mode) };
   next.timeControl = normalizeTimeControl(next.timeControl);
   next.dailyMoments.scheduleWindows = normalizeMomentWindows(next.dailyMoments.scheduleWindows);

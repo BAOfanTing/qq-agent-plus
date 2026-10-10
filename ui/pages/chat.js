@@ -202,6 +202,16 @@ return `
     </div>
 
     <div class="field">
+      <label for="cfg-sticker-collect-criteria">收藏的判定标准（留空 = 内置默认）</label>
+      <textarea id="cfg-sticker-collect-criteria" rows="4" maxlength="2000" placeholder="只写「收什么 / 不收什么」；留空用内置默认（与之前版本完全一致）">${esc(c.sticker?.collectCriteria || '')}</textarea>
+      <div class="hint">
+        这段文字替换表情判定里的"判定标准"部分（"你是「谁」、正在看谁的图"仍由代码补充），
+        只影响<b>哪些图会被收进表情库</b>，不影响聊天与发送。改完即时生效、不用重启；
+        超 2000 字判定时只取前 2000。
+      </div>
+    </div>
+
+    <div class="field">
       <label>发表情包的积极程度</label>
       <select id="cfg-sticker-encourage">
         ${STICKER_LEVELS.map(([v, label]) =>

@@ -48,6 +48,17 @@
 | 省 Token 模式 | `src/core/token-saver.js`（新增）、`src/core/config-legacy.js`、`src/llm/prompt.js`、`src/core/orchestrator.js`、`src/memory/memory-global.js`、`src/features/daily-moments.js`、`src/features/qzone-interactions.js`、`ui/app.js`、`src/console/app.js` | 「设置 -> 省 Token」三档，只给上下文档位条数、单次运行轮数与预算、交接/印象注入字符数、表情清单条数**夹上限**，不改写用户设置；关掉即恢复原样 | 本仓库新增 |
 | 关闭上游调试探针 | `src/*.js`、`ui/*.js` | 上游作者留在源码里的调试上报（指向其开发机私网地址）全部关掉 | `apply-disable-upstream-debug.sh` |
 
+## 未发布 · 表情收藏判定标准补上控制台入口
+
+**尚未发版**。v0.8.4 起 `sticker.collectCriteria` 可在 `config.json` 里自定义，这一版把它补进
+控制台：**设置 → 聊天设置 →「所有模式 · 表情包」** 新增"收藏的判定标准"多行文本域。
+
+- 留空 = 内置默认（与之前完全一致）；保存写入 `sticker.collectCriteria`（空白按空串落盘）。
+- 只影响"哪些图会被收进表情库"，不影响聊天与发送；改完即时生效、不用重启；判定时超 2000 字只取前 2000。
+- **涉及文件**：`ui/pages/chat.js`（文本域，`maxlength=2000`）、`ui/pages/settings-save.js`（保存映射）、
+  `src/core/config-legacy.js`（写入侧 2000 字上界，与判定期同口径）、`test/render-test.mjs`、
+  `test/config.test.mjs`（渲染 / 保存 / 夹取三条断言）、`docs/CONFIG-EXAMPLES.md`。
+
 ## 0. 表情收藏的判定标准可配置（PR #31）、更新门禁不再依赖机器的 docker 访问（v0.8.4 起）
 
 **表情收藏的判定标准改为可配置**（社区贡献 PR #31，感谢 muhan5102）。给表情收藏判定加一个

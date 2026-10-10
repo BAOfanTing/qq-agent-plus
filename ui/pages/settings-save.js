@@ -718,6 +718,13 @@ async function saveConfig({ quiet = false } = {}) {
       maxCollectPerHour: normalizeStickerCollectMax(
         val('#cfg-sticker-collect-max', '').trim() || c.sticker?.maxCollectPerHour
       ),
+      // 判定标准（v0.8.4 的配置面补上界面）：空白存成空串 = 内置默认。空串是合法值，
+      // 不能套上面"清空保持原值"的口径；控件缺失的旧页面按已保存值回退。
+      collectCriteria: (() => {
+        const el = $('#cfg-sticker-collect-criteria');
+        if (!el) return String(c.sticker?.collectCriteria || '');
+        return String(el.value ?? '').trim();
+      })(),
       // 先取界面实时值（没这个控件时才退回已保存配置），再钳到 0~3
       encourage: Math.min(3, Math.max(0, Number(
         $('#cfg-sticker-encourage') ? $('#cfg-sticker-encourage').value : (c.sticker?.encourage ?? 1)
