@@ -17,8 +17,8 @@
 | 文档 | 说明 |
 | --- | --- |
 | [CONVERSATION_MODES.md](CONVERSATION_MODES.md) | 对话引擎三模式（legacy / threaded / lifecycle）的差异与选择 |
-| [DAILY_MOMENTS.md](DAILY_MOMENTS.md) | 每日说说：生成、发布、去重与静默时段 |
-| [QZONE_INTERACTIONS.md](QZONE_INTERACTIONS.md) | 好友动态与评论回复的巡检节奏、退避与跳过原因 |
+| [DAILY_MOMENTS.md](DAILY_MOMENTS.md) | 每日说说：生成、发布、去重与计划/时间口径 |
+| [QZONE_INTERACTIONS.md](QZONE_INTERACTIONS.md) | 好友动态与评论回复的巡检节奏与退避 |
 | [model-prices.md](model-prices.md) | 价格体系：模型 id 归一化与别名、渠道价、账户口径三选一、实付/估算/未定价 |
 | [STABLE_FEATURES.md](STABLE_FEATURES.md) | 已从实验转为默认开启的功能，以及转正的判定标准 |
 | [STABLE_FEATURE_MIGRATION_NOTES.md](STABLE_FEATURE_MIGRATION_NOTES.md) | 实验/退役功能留下的一次性兼容边界（身份、好友、异常、黑话） |

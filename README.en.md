@@ -39,8 +39,9 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
 - **Games & reminders** — hosts mini-games: stateless ones run straight from the prompt (word chain,
   guess-the-number, 20 questions, truth-or-dare), with `dice` plus the group member list for rolls, draws
   and random picks; a **state-machine host** covers turn-based multiplayer games (number bomb,
-  who-is-the-spy — turns, vote counting and verdicts live in code, the spy's word travels by private
-  message only and never enters the model context; experimental, off by default). "Remind me at X"
+  who-is-the-spy, werewolf — turns, vote counting and verdicts live in code, identities and night
+  actions travel by private message only and never enter the model context; experimental, off by
+  default, werewolf additionally needs to be whitelisted in the console). "Remind me at X"
   becomes a **persistent reminder** (survives restarts) delivered in its own voice when the time comes.
 - **Proactive talk** — three independently switchable links (cold-topic opener / follow-up
   nudge when nobody answers / model-scheduled wake-up), multiple active windows, interval
@@ -480,6 +481,9 @@ according to the configured mode, and archived messages remain available as hist
 requests, tool rounds, retries, memory work and sending are all gated. Daily summaries and the
 console model test follow the global schedule, and the daily summary excludes chats that are
 currently inactive; scheduled posts blocked by the schedule are postponed to the next active window.
+Persistent reminders and model-scheduled wake-ups due in a quiet window are likewise postponed (not
+voided, however long the quiet period lasts); in observe mode reminders keep deferring while
+scheduled wake-ups are voided and logged.
 
 Rule changes take effect immediately. In-flight requests that cross into an inactive window are
 aborted and subsequent requests and sends are blocked; a provider may still bill a request it
@@ -492,7 +496,8 @@ Data is stored in the `data` directory passed to the deploy scripts:
 
 - `config.json` — configuration and credentials, mode `0600`;
 - `messages.sqlite` — messages, leases and outbound state;
-- `sessions/` — one record per Agent run;
+- `sessions/` — one record per Agent run (default keep-2000 cap, plus a daily sweep that prunes
+  archives older than 90 days);
 - `memory/` — long-term impressions and cross-session handoff state;
 - `identity-pilot.sqlite` — unified QQ identity index and friend-request approval ledger;
 - `slang-pilot.sqlite` — the slang pilot is retired and will never be created;
@@ -511,7 +516,7 @@ npm run test:unit     # unit tests
 npm run test:local    # local regression (temporary data directory, never production data)
 node src/ops.js scan --strict
 npm audit --omit=dev
-bash -n deploy.sh manage.sh
+bash -n deploy.sh && bash -n deploy-all.sh && bash -n manage.sh
 ```
 
 CI (GitHub Actions) runs the syntax check, the strict undefined-call scan, unit tests, the local

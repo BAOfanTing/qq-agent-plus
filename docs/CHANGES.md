@@ -71,7 +71,10 @@
   控制台 500 错误响应统一脱敏截断。
 - **文档对齐 13 处**（AUTO_UPDATE 门禁描述、OPS 巡检 9 项与子命令表、LINUX 参数校验与
   更新器口径、README 连接状态与人物印象、群游戏默认白名单等），并修正 ops.js 两处帮助文本
-  （health-check 检查项数、deploy 的 QQ_AGENT_ROOT_DIR 废弃标注）。
+  （health-check 检查项数、deploy 的 QQ_AGENT_ROOT_DIR 废弃标注）；第二轮补齐同说法残留
+  3 处（LINUX OneBot 段、两份 README 的 bash -n、ASSET_OBSERVABILITY 页名），并把新行为
+  写进用户文档（会话留档 90 天、提醒/自安排唤醒静默段顺延、qzone 账号不一致退避、
+  MOMENT_BUSY 回到待执行自动重试、README 游戏清单补狼人杀）。
 
 ## 未发布 · 表情收藏判定标准补上控制台入口
 

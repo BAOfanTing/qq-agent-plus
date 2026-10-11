@@ -493,7 +493,8 @@ WAL/SHM, member memory files, per-chat `memory/*/_handoff.json`,
 Legacy `messages/group_123.json` files migrate once transactionally and are left
 unchanged. Corrupt archives abort migration rather than being treated as empty.
 Keep messages on a disk with sufficient free space; completed session logs default
-to a retention count of 2000.
+to a retention count of 2000 and are additionally pruned after 90 days by the
+daily retention sweep (whichever limit hits first).
 
 ```bash
 bash manage.sh observe
@@ -516,7 +517,7 @@ npm ci --omit=dev --ignore-scripts
 npm test
 npm run test:unit
 node --check src/server.js
-bash -n deploy.sh manage.sh
+bash -n deploy.sh && bash -n deploy-all.sh && bash -n manage.sh
 ```
 
 Tests use local mock protocol/model servers and isolated temporary data. Real QQ
@@ -525,8 +526,10 @@ activation. Observe-mode deployment validates receipt without emitting replies.
 
 ## OneBot Shows "Not Connected"
 
-The control panel reports only whether the socket is up. The actual reason is
-recorded in `/api/status` under `onebot.error`. One read-only audit prints it:
+The console's Settings → OneBot page spells out the failure reason inline (port
+not listening / token mismatch / unresolvable address, with the raw error). The
+raw reason is also recorded in `/api/status` under `onebot.error`; one read-only
+audit prints it:
 
 ```bash
 node src/ops.js audit --dir=/mnt/data/qq-agent     # line: "OneBot: connected=false error=…"
