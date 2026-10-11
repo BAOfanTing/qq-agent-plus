@@ -1,7 +1,9 @@
 # Conversation Modes
 
 The conversation engine has three runtime-selectable modes. The global default
-can be overridden for each allow-listed group; private chats use the global mode.
+can be overridden for each allow-listed group — turn off `conversation.unifiedMode`
+(the「统一设置响应概率」checkbox in the console) first; with it on, per-group
+overrides are ignored. Private chats use the global mode.
 Changing a mode does not require a restart.
 
 ## Modes

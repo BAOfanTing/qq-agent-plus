@@ -55,7 +55,8 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   **keyless local whisper.cpp** (offline, free, one click to install or fully remove in the
   console, or `node scripts/install-asr-local.mjs`). QQ voice (SILK) is decoded locally — no
   protocol-side transcoding; videos also get a 2x2 frame strip for the vision model plus separate
-  soundtrack transcription, so it sees and hears. With an OpenAI-compatible TTS endpoint configured (off by default) it can also reply by voice.
+  soundtrack transcription, so it sees and hears. With a TTS endpoint configured (off by default)
+  it can also reply by voice — OpenAI-compatible endpoints plus Volcano (v1) / Doubao 2.0 / MiniMax presets.
   ASR keys are configured separately from search;
   an hourly quota gate applies, and muted-group pre-checks report the reason instead of sending
   blindly.
@@ -346,8 +347,10 @@ examples and remote execution are documented in [docs/OPS.md](docs/OPS.md).
 
 ### OneBot connection troubleshooting
 
-The console only reports connected or not connected. The actual reason is in the `onebot.error`
-field of `/api/status`, which the health check prints:
+The console's Settings → OneBot page spells out the failure reason inline
+(port not listening / token mismatch / unresolvable address, with the raw
+error); the raw field remains `onebot.error` in `/api/status`, which the health
+check also prints:
 
 ```bash
 node src/ops.js audit --dir=/mnt/data/qq-agent     # the "OneBot: connected=false error=…" line

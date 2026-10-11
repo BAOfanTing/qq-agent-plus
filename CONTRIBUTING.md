@@ -23,7 +23,7 @@ npm run lint              # ESLint：0 error（含 ui/ 的体积闸门 max-lines
 npm run test:unit         # 单元测试
 npm run test:local        # 本地回归
 node src/ops.js scan --strict   # 未定义调用扫描
-bash -n deploy.sh deploy-all.sh manage.sh   # 改过 shell 才需要
+bash -n deploy.sh && bash -n deploy-all.sh && bash -n manage.sh   # 改过 shell 才需要；bash -n 只查第一个文件，必须逐个跑
 ```
 
 改了渲染/滚动/用量相关：另跑 `npm run test:render`、`node test/scroll-test.mjs`、
@@ -54,7 +54,7 @@ bash -n deploy.sh deploy-all.sh manage.sh   # 改过 shell 才需要
 
 - 提交信息用 `type(scope): 简述`，正文写**为什么**（失败模式 → 现行做法），别只写改了什么。
 - 一个改动一个提交，独立可回滚；结构性重构拆小步、每步全绿。
-- 版本号走补丁位（`0.7.x`），不跳 minor；发布节奏由维护者按批次攒着发（见 `AGENTS.md`）。
+- 版本号走补丁位（`0.8.x`），不跳 minor；发布节奏由维护者按批次攒着发（见 `AGENTS.md`）。
 - **不要在 PR / Issue / Release 文案里写裸的 `@用户名`**：GitHub 会解析成真人账号并通知对方。
 
 ## 文档同步

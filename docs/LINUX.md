@@ -188,12 +188,13 @@ bash deploy.sh \
 
 Create the parent directory with appropriate ownership first. Run deployment as
 the service user, not root. The installer uses sudo only for linger if required.
-`--install-dir` and `--data-dir` must match the existing installation when
-updating: a wrong directory is not rejected, it points the service at a new,
-empty data directory. `--host` and `--port` may be omitted — the script then
-reuses the address recorded in `config.json` and prints a note; when given
-explicitly they must match the first installation, otherwise the console becomes
-unreachable from outside.
+When updating, `--install-dir` / `--data-dir` / `--service` / `--repository` /
+`--branch` are verified against the installation record (`.deployment.json`)
+**before anything is touched** — a mismatch is rejected with exit 2 and nothing
+was modified (see 参数校验与逃生开关 below). `--host` and `--port` may be
+omitted — the script then reuses the address recorded in `config.json` and
+prints a note; when given explicitly they only warn on drift, since the source
+of truth for the console address is `config.json`.
 Dependencies are installed with `--omit=dev --ignore-scripts`; Linux needs no
 Electron, GUI, X11, browser, compiler or native SQLite add-on.
 If no compatible Node.js is found, the script downloads Node.js 22 into
@@ -254,10 +255,12 @@ The deployment also installs `${SERVICE}-update.service` and
 `${SERVICE}-update.timer`. The timer wakes hourly, while the persisted
 `autoUpdate.intervalHours` setting controls whether a GitHub check is due.
 Automatic updates default to disabled. When enabled from the Control page, the
-updater shallow-fetches the configured GitHub branch into a persistent bare
+updater deploys **published Releases only** (ordinary commits on the branch are
+never deployed): it shallow-fetches the release tag into a persistent bare
 cache, tests the candidate checkout, then delegates deployment and rollback to
-`deploy.sh`. Any failure disables automatic updates and queues one administrator
-notification. See [GitHub automatic updates](AUTO_UPDATE.md).
+`deploy.sh`. Any failure disables automatic updates (unless
+`autoUpdate.disableOnFailure` is explicitly set to false) and queues one
+administrator notification. See [GitHub automatic updates](AUTO_UPDATE.md).
 
 The import option is available on the first installation only:
 

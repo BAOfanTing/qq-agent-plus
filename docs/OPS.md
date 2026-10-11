@@ -28,7 +28,9 @@ node src/ops.js health-check            # 只巡检并输出 JSON（退出码 0=
 node src/ops.js health-check --confirm  # 允许在"连续 3 次失败"或"恢复"时私聊 admin.ownerUin
 ```
 
-7 项检查：控制台 `/healthz`、OneBot `get_status`、入站处理水位（到期未处理或重试耗尽的入站消息；
+9 项检查：控制台 `/healthz`、OneBot `get_status`、协议端版本（`protocol-version`：落后基线不算
+不健康，明细里提示去控制台一键升级）、Docker 套接字可读写性（`docker-socket`，Issue #30）、
+入站处理水位（到期未处理或重试耗尽的入站消息；
 `runtime.mode=observe`、Agent 暂停、当日预算降级时自动跳过）、磁盘余量（< 1GB 报警）、
 `auto-update.json` 的 `status=failed`、部署中断标记 `.deploy-in-progress`、`messages.sqlite` 完整性检查。
 
@@ -57,6 +59,8 @@ node src/ops.js install-timers --confirm   # 写入并启用 backup / process-gu
 | `watch-login` | `ops/watch-login.py` | 每 15 秒轮询协议端 HTTP 端口，直至 QQ 登录成功，随后打印登录信息 / 控制台状态 / 最近日志 | 重启协议端容器或掉线重登后确认恢复 |
 | `guard` | `ops/guard-process-explosion.sh` | 用户进程数超过阈值时清理失控的 bash/grep/tr/sh/sleep 进程树并记录现场（仅 Linux） | 配合 `process-guard.timer` 每 10 分钟执行 |
 | `face-names` | `ops/export-face-names.sh` | 合并 SnowLuma 目录 / QQ 客户端配置 / 手工补充表，导出 `data/face-names.json` | QQ 新增表情、表情名不匹配时 |
+| `snowluma-version` | —（协议端管理新增） | 看协议端（SnowLuma）镜像版本与是否落后于项目基线 | 排查「表情显示成图片」、确认协议端状态 |
+| `snowluma-update` | —（协议端管理新增） | 把协议端镜像更新到项目基线（或 `--to` 指定镜像）：备份 .env/compose → pull → up -d → 等就绪，起不来自动回滚；`--dry-run` 预演 | 控制台「设置 → OneBot」一键更新的命令行等价 |
 | `deploy` | `ops/deploy_qq_agent.sh` | 非交互部署：设置模型凭据后调用源码目录的 `deploy-all.sh -y` | 新机器初始化、CI 或远程 SSH 环境中的部署 |
 | `console` | `ops/qq-console.bat` | 使用系统 `ssh` 建立控制台 / WebUI / 远程桌面三个端口的隧道，就绪后提示或打开控制台（Windows/macOS/Linux 通用） | 日常打开控制台 |
 | `install-timers` | `ops/systemd/` | 生成并安装四个 systemd user 定时器：备份（每周日 04:10）、进程看门狗（每 10 分钟）、健康巡检（每 5 分钟）、审计日志清理（每月 1 日 04:20） | 安装定时任务 |
@@ -127,7 +131,7 @@ node src/ops.js install-timers --confirm
 | `QQ_AGENT_KEEP` | `4` | `backup` 保留份数（也可用 `--keep=N`） |
 | `QQ_AGENT_USER` | 当前登录用户 | 进程/定时任务检查的目标用户 |
 | `QQ_AGENT_NODE` | 自动查找 `$APP_DIR/.runtime/node-*/bin/node` | 执行 `--check` 使用的 node |
-| `QQ_AGENT_LOG` | `$HOME/qq-agent-undefined-calls.log` | 启动自检报告文件（`scan --log=` 可显式覆盖） |
+| `QQ_AGENT_LOG` | —（无消费者） | 历史遗留名：`scan` 的报告文件只认 `--log=` 显式指定，这个环境变量**不生效**（ops.js 帮助原文自述"仅文档用途"） |
 | `QQ_AGENT_LOG_LEVEL` | `info` | 应用日志级别（`error`/`warn`/`info`/`debug`，改进方案 #6） |
 | `QQ_AGENT_LOG_FORMAT` | `text` | 应用日志格式（`text` 保持原观感 / `json` 单行供 journald 过滤） |
 | `QQ_AGENT_CONSOLE_PORT` | `3210` | 控制台端口 |
@@ -146,7 +150,7 @@ node src/ops.js install-timers --confirm
 | `QQ_AGENT_VNC_PORT` | `6081` | QQ 远程桌面 / 扫码端口（`console` 隧道） |
 | `QQ_AGENT_SYSTEMD_DIR` | `~/.config/systemd/user` | `install-timers` 写入目录 |
 | `QQ_AGENT_SRC_DIR` | `$HOME/qq-agent-src` | `deploy` 的源码 checkout 目录（也可用 `--dir=`） |
-| `QQ_AGENT_ROOT_DIR` | `QQ_AGENT_DIR` | `deploy` 的部署根目录（也可用 `--root-dir=`） |
+| ~~`QQ_AGENT_ROOT_DIR`~~ | — | 已废弃：该环境变量**不生效**（代码从不读取）；`deploy` 的部署根目录请用 `--root-dir=` 参数，或直接用 `QQ_AGENT_DIR` |
 | `QQ_AGENT_MODEL_API_KEY` / `QQ_AGENT_MODEL_KEY_FILE` | 无（必填其一） | 模型凭据（文件优先级低于环境变量） |
 | `QQ_AGENT_MODEL_BASE_URL` / `QQ_AGENT_MODEL` | 无（必填） | 模型网关地址 / 模型名 |
 | `SNOWLUMA_IMAGE` | `motricseven7/snowluma:v1.14.22` | 协议端镜像（`deploy`）；已部署的实例可在控制台「设置 → OneBot → 协议端」一键升级/回滚 |
@@ -185,7 +189,8 @@ node src/ops.js install-timers --confirm
 | `watch-send` | 0 = 工具层成功发出消息；1 = 发送失败或再次出现未定义函数；2 = 超时 |
 | `watch-login` | 0 = 已登录；1 = 超时或缺少令牌 |
 | `backup` / `deploy` / `install-timers` / `audit-prune` | 0 = 成功；1 = 参数或执行失败（缺少 `--confirm` 亦返回 1） |
-| `audit` / `audit-host` / `guard` | 恒为 0（问题仅体现在 NG / [注意] 行数） |
+| `audit` / `audit-host` | 恒为 0（问题仅体现在 NG / [注意] 行数） |
+| `guard` | 0 = 正常或仅告警；超阈值且未加 `--confirm` 时返回 1（真实清理需显式确认） |
 
 ## 定时任务
 

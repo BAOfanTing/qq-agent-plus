@@ -84,8 +84,15 @@ timer 每小时唤醒一次，应用配置中的 `intervalHours` 决定是否已
 4. 浅拉取该 Release 的 tag（`refs/tags/<tag>:refs/tags/<tag>`），解析出它指向的提交；
    与 `data/deployed-revision` 相同则记录“已是最新”并结束。`git fetch` 同样按配置重试。
 5. 将目标提交检出到 `data/update-work/` 的临时目录。
-6. 在独立临时数据目录中执行 `npm ci`、全部 `node:test` 单元测试及关键语法检查，不读取或修改生产数据。
+6. 在独立临时数据目录中执行 `npm ci`，然后按 CI 同一套**门禁全清单**校验候选代码：全部
+   `node:test` 单元测试、`test/local/run.mjs` 与四个回归 harness（提示词 / 渲染 / 滚动 / 用量
+   端到端）、关键语法检查，最后 `node src/ops.js scan --strict`；不读取或修改生产数据。
    `npm ci` 使用 `--prefer-offline` 优先复用 npm cache，并把同一组重试参数传给 npm 的 fetch 层。
+   有失败项时，错误信息直接列出**失败的用例名与断言原因**（`failureDetail()`），不再截取输出结尾。
+   CI 与发布闸门另有一步「按 unit 的加固环境复跑」（`NoNewPrivileges` + `umask 0077` +
+   `DOCKER_HOST` 指向不可访问的假套接字），把"只在门禁环境里才失败"的用例挡在发布之前 ——
+   2026-10-10 的两次「升级装不上」（sudo 回退用例读真实 /proc、巡检用例读真实 docker 套接字）
+   都属于这一类。
 7. 调用目标提交中的 `deploy.sh`。部署脚本创建代码快照、保留数据和凭据、重装依赖、
    校验 systemd 单元、启动服务并检查 `/healthz`。
 8. 成功后记录目标提交（`currentRevision`）与 Release tag（`targetVersion`）；失败时由 `deploy.sh` 恢复旧代码和服务。
