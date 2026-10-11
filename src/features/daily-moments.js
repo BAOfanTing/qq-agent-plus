@@ -454,7 +454,10 @@ export class DailyMomentsManager {
         try {
           await this.run({ dayKey, publish: true, source: startup ? 'startup-catchup' : 'scheduled' });
         } catch (error) {
-          if (error?.code === 'TIME_CONTROL_INACTIVE') this.deferredDay = dayKey;
+          // MOMENT_BUSY（腾讯侧忙）与 TIME_CONTROL_INACTIVE 同样要"保持到期"：
+          // 丢了 deferredDay 就等于跳过今天（窗口模式本来就把它判 pending，
+          // 固定时刻模式却直接放走 —— 2026-10-10 审查 C3）。
+          if (error?.code === 'TIME_CONTROL_INACTIVE' || error?.code === 'MOMENT_BUSY') this.deferredDay = dayKey;
           else this.log('[daily-moments] run failed:', error);
         }
       }
@@ -518,7 +521,9 @@ export class DailyMomentsManager {
         writeJson(this.stateFile, this.state);
         try {
           const result = await this.run({
-            dayKey: todayKey(this.now()), publish: true,
+            // 用槽位自己的 dayKey：跨午夜的槽在 0 点后执行时，todayKey 已是新的一天，
+            // 查重/记录会挂错日期（2026-10-10 审查 C4）
+            dayKey: slot.dayKey, publish: true,
             source: startup ? 'startup-catchup' : 'scheduled', scheduleSlot: { ...slot }
           });
           slot.status = result.record.status;

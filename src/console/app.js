@@ -10,6 +10,7 @@ import { createRouter } from './router.js';
 
 import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCredentialResolve, asrCredentialSlot, asrCredentialSlotOf, asrCredentials, asrEndpointHost, asrKeyHost, asrKeySlots, asrKeySource, asrLocalBin, asrLocalModel, asrSecretId, asrSecretKey, ASR_PROVIDERS, conversationConfigForChat, findWhisperBinSync, getConfig, identityPilotEnabled, imageGenAvailable, imageGenKeyHosts, imageGenKeyOwnedBy, imageGenKeyResolve, incidentPilotEnabled, slangPilotEnabled, updateConfig, onTimeControlChange, pinImageGenKeyHost, DATA_DIR, ROOT } from '../core/config.js';
 import { tokenSaverEffective } from '../core/token-saver.js';
+import { redactText } from '../core/redact.js';
 import { catchupReplyWindowMs, catchupLogLine, isFreshForReply } from '../core/catchup-policy.js';
 import { budgetStatus } from '../core/budget.js';
 import { sanitizeConfigSecrets } from '../core/secret-keys.js';
@@ -709,13 +710,16 @@ export function createApp({
    *
    * ⚠️ 运行台账（runs）是 2026-10-09 审查补进来的：它原来只在 ChatStore 构造时清一次，
    * 连跑数月不重启 = 永不清理 —— 与另外三本台账当初踩的是同一个坑。
+   * 会话留档（sessions）是 2026-10-10 审查补进来的：默认 keepFiles=0 时它连构造时的
+   * 清理都没有，磁盘与内存 index 双向无界增长（pruneSessions 默认 90 天，与 runs 同口径）。
    */
   function retentionPruneTargets() {
     return [
       { name: '身份台账', run: () => identityPilot?.identityStore?.pruneLedgers() },
       { name: '关系台账', run: () => identityPilot?.pruneRelationshipHistory?.() },
       { name: '异常台账', run: () => incidentPilot?.pruneResolvedIncidents() },
-      { name: '运行台账', run: () => store.pruneRuns() }
+      { name: '运行台账', run: () => store.pruneRuns() },
+      { name: '会话留档', run: () => sessions.pruneSessions() }
     ];
   }
   async function sendIdentityAdminText(ownerUin, text, signal) {
@@ -1506,7 +1510,8 @@ export function createApp({
       log('[http] 处理出错:', error?.message ?? error);
       try {
         res.writeHead(error?.httpStatus || 500, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: String(error?.message ?? error) }));
+        // 错误原文可能带内部路径/compose 目录/上游响应：出控制台前过一道脱敏并截断（2026-10-10 审查）
+        res.end(JSON.stringify({ error: redactText(String(error?.message ?? error), 400) }));
       } catch { /* ignore */ }
     });
   });

@@ -487,7 +487,11 @@ export class QzoneInteractionManager {
       || now - this.state.lastFeedPollAt >= cfg.feedIntervalMinutes * 60000;
     const replyDue = !this.state.lastReplyPollAt
       || now - this.state.lastReplyPollAt >= cfg.replyIntervalMinutes * 60000;
-    if (feedDue || replyDue) {
+    // 账号不一致：#run 里会 #recordFailure 并跳过执行 —— 这里干脆不进 #exclusive，
+    // 且下面"成功清零"的分支不能吃掉这次失败（否则退避失效、退回 1Hz 空转，P1-2）
+    const runSelfId = String(this.onebot?.selfId || '');
+    const accountMismatch = Boolean(this.state.accountId) && this.state.accountId !== runSelfId;
+    if ((feedDue || replyDue) && !accountMismatch) {
       try {
         const result = await this.#exclusive('scheduled', () => this.#run({
           kind: feedDue && replyDue ? 'all' : (feedDue ? 'feed' : 'reply'),
@@ -1227,6 +1231,9 @@ export class QzoneInteractionManager {
       }
     } else if (this.state.accountId !== runSelfId) {
       this.log(`[qzone-interactions] QQ 登录账号已改变（状态属于 ${this.state.accountId}，当前 ${runSelfId || '未知'}），本轮跳过执行；如确认切换账号，请清空 qzone-interactions 状态文件`);
+      // 必须记失败走退避：裸 return 会让 lastFeedPollAt 停在过去，dueDelay 恒为 1000ms，
+      // 巡检循环 1Hz 空转（2026-10-10 审查 C2）。账号不一致本身也值得让 owner 知道。
+      this.#recordFailure('QQ 登录账号与 qzone-interactions 状态文件不一致，本轮跳过');
       return;
     }
     const cfg = normalizedConfig();

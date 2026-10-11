@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { openDatabase } from './sqlite.js';
 import { budgetStatus } from './budget.js';
+import { readJsonBounded } from './http-body.js';
 import {
   SNOWLUMA_BASELINE_IMAGE, SNOWLUMA_MIN_RECOMMENDED, readComposeEnv, parseImage, compareVersions
 } from './snowluma-update.js';
@@ -147,7 +148,8 @@ export async function runHealthCheck(opts = {}) {
     const headers = { 'content-type': 'application/json' };
     if (onebotToken) headers.authorization = `Bearer ${onebotToken}`;
     const res = await fetchImpl(`http://127.0.0.1:${onebotHttpPort}/get_status`, { method: 'POST', headers, body: '{}', signal: probeSignal() });
-    const data = await res.json().catch(() => ({}));
+    // 有界读：巡检目标是本机协议端，但"巡检把常驻进程读爆"这类亏不能再吃第二次（2026-10-10 审查）
+    const data = await readJsonBounded(res, 256 * 1024).catch(() => ({}));
     add('onebot-status', res.ok && data?.status === 'ok', res.ok ? `retcode=${data?.retcode ?? '?'}` : `HTTP ${res.status}`);
   } catch (error) {
     add('onebot-status', false, error?.message ?? String(error));

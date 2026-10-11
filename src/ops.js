@@ -23,6 +23,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './core/sqlite.js';
 import { runHealthCheck } from './core/health-check.js';
+import { readTextBounded } from './core/http-body.js';
 import { SNOWLUMA_BASELINE_IMAGE, createSnowlumaUpdater } from './core/snowluma-update.js';
 import { readOwnerUin, sendOwnerText } from './core/notify-owner.js';
 import { pruneAudit } from './core/audit-log.js';
@@ -787,7 +788,8 @@ function onebotToken(cfgJson) {
 async function fetchJson(url, headers = {}, timeoutMs = 6000) {
   try {
     const response = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
-    const body = await response.text();
+    // 有界读：探测目标是本机/局域网服务，2MB 上限只是兜"端点发疯"（2026-10-10 审查）
+    const body = await readTextBounded(response, 2 * 1024 * 1024);
     let json = null;
     try { json = JSON.parse(body); } catch { json = null; }
     return { ok: response.ok, status: response.status, body, json };
@@ -2153,7 +2155,8 @@ const HELP = {
   'health-check': `用法: node src/ops.js health-check [--confirm]
 
 一次性健康巡检并输出 JSON（退出码 0=健康 / 1=有失败项）。检查：控制台 /healthz、
-OneBot get_status、入站处理水位（到期未处理/重试耗尽的入站消息；observe / 暂停 /
+OneBot get_status、协议端版本、Docker 套接字可读写性、
+入站处理水位（到期未处理/重试耗尽的入站消息；observe / 暂停 /
 预算降级自动跳过）、磁盘余量、自动更新状态、部署中断标记、messages 库完整性。
 结果落到 data/health.json。
 
@@ -2271,13 +2274,13 @@ SSH 配置、防火墙、定时任务、可升级包、TLS 证书到期、备份
 非交互部署：调用源码目录里的 deploy-all.sh -y，凭据只从环境变量传入。
 
 --dir=目录        已 clone 的源码目录（默认 QQ_AGENT_SRC_DIR 或 ~/qq-agent-src）
---root-dir=目录   部署根目录（默认 QQ_AGENT_ROOT_DIR / QQ_AGENT_DIR）
+--root-dir=目录   部署根目录（默认 QQ_AGENT_DIR；QQ_AGENT_ROOT_DIR 已废弃、不生效）
 --confirm         实际执行（必需）
 --dry-run         只打印将执行的命令
 
 环境变量: QQ_AGENT_MODEL_API_KEY 或 QQ_AGENT_MODEL_KEY_FILE（必填其一）、
           QQ_AGENT_MODEL_BASE_URL / QQ_AGENT_MODEL（必填）、
-          QQ_AGENT_ROOT_DIR / SNOWLUMA_IMAGE /
+          SNOWLUMA_IMAGE /
           QQ_AGENT_ONEBOT_HTTP_PORT / QQ_AGENT_ONEBOT_WS_PORT`,
 
   console: `用法: node src/ops.js console [--open] [--print] [--timeout=秒]

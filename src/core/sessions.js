@@ -48,6 +48,7 @@ export class SessionRegistry {
     this.current = new Map(); // id -> session object（运行中的在内存里）
     fs.mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
     this.#loadIndex();
+    this.pruneSessions();   // 与运行台账同款：构造时清一次（常驻期间每日调度再跑）
   }
 
   #loadIndex() {
@@ -242,6 +243,54 @@ export class SessionRegistry {
       }
     } catch { /* ignore */ }
     return s;
+  }
+
+  /**
+   * 会话留档保留期（2026-10-10 审查）：默认 90 天（与运行台账 pruneRuns 同口径）。
+   * 之前只有 keepFiles>0 才会清、默认 0 = 永不清理 —— 连跑数月就是无界增长（磁盘 +
+   * 启动时全量读进内存的 index）。构造时清一次，常驻期间由每日保留期调度
+   * （retentionPruneTargets）复用同一方法。正在跑/等待中的会话不删。
+   * @returns {{ removed: number, kept: number }}
+   */
+  pruneSessions(retentionDays = 90) {
+    const days = Math.max(1, Number(retentionDays) || 90);
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    let removed = 0;
+    let files = [];
+    try {
+      files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json'));
+    } catch {
+      return { removed, kept: 0 };
+    }
+    const keptIds = new Set();
+    for (const f of files) {
+      const file = path.join(SESSIONS_DIR, f);
+      // 文件名就是会话 id（sessionFile 的口径）；先按 mtime 预筛：最近写过的文件不可能
+      // "结束于保留期之前"，不必解析 —— 把每日调度的同步读取量压到只剩旧文件（P3-1）。
+      // （启动回收重写过的新 mtime 文件，会在 mtime 老化后的下一轮被清。）
+      const id = f.replace(/\.json$/, '');
+      try {
+        if (fs.statSync(file).mtimeMs >= cutoff) {
+          keptIds.add(id);
+          continue;
+        }
+        const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (!data?.id) continue;
+        keptIds.add(String(data.id));
+        // 正在跑/等待中的不能删（硬崩溃残留会由启动回收改成 aborted，下次就按时间判了）；
+        // 其余按"结束时间（缺了用开始时间）"判旧。
+        const active = data.status === 'running' || data.status === 'waiting';
+        const ended = Number(data.endedAt) || Number(data.startedAt) || 0;
+        if (!active && ended && ended < cutoff) {
+          fs.rmSync(file, { force: true });
+          removed += 1;
+          keptIds.delete(String(data.id));
+        }
+      } catch { /* 坏文件不动（loadIndex 本来也跳过它） */ }
+    }
+    // 内存索引同步收缩（index 只在启动全量读入，不跟着删一样无界）
+    if (removed > 0) this.index = this.index.filter((e) => keptIds.has(String(e.id)));
+    return { removed, kept: keptIds.size };
   }
 
   /**

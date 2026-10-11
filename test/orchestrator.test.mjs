@@ -1591,6 +1591,85 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
     assert.equal(runner.reminders.items.find((x) => x.id === 'r-budget').status, 'fired');
   });
 
+  it('定时提醒：时间控制静默段顺延到窗口恢复而不是标成已触发', async (t) => {
+    const { runner, cfg, append } = fixture(t, { reminders: new ReminderStore(path.join(root, 'reminders-time.json')) });
+    append(1);
+    const item = { id: 'r-time', chatKey: 'group:1', at: Date.now() - 1000, text: '喝水', status: 'pending', createdBy: '42' };
+    runner.reminders.items.push(item);
+    let woke = 0;
+    runner.wake = async () => { woke++; };
+    // 时间控制开着、当前落在静默段（把窗口放到"不是今天"的那天，任何时刻跑都成立）：
+    // #wakePreflight 的 canRun 会拒掉这次唤醒 —— 派发侧必须先接住并顺延，不能 markFired。
+    const today = ((new Date().getDay() + 6) % 7) + 1;               // 1=周一
+    const otherDay = today === 7 ? 1 : today + 1;
+    setRuntimeConfig({
+      ...cfg,
+      timeControl: { enabled: true, schedule: { mode: 'custom', windows: [{ days: [otherDay], start: '00:01', end: '00:02' }] }, overrides: {} }
+    });
+    runner.fireDueReminders();
+    assert.equal(woke, 0, '静默段派不出去：不能唤醒');
+    const after = runner.reminders.items.find((x) => x.id === 'r-time');
+    assert.equal(after.status, 'pending', '没派发就不能标记已触发（否则提醒内容永久丢失）');
+    assert.ok(after.at > Date.now() + 4 * 60 * 1000,
+      `到点时间要顺延到窗口恢复，实际 ${new Date(after.at).toISOString()}`);
+    // 反向：关掉时间控制后必须正常派发（顺延不能变成永远不提醒）
+    setRuntimeConfig({ ...cfg });
+    after.at = Date.now() - 1000;
+    runner.fireDueReminders();
+    assert.equal(woke, 1, '窗口恢复后要正常派发');
+    assert.equal(runner.reminders.items.find((x) => x.id === 'r-time').status, 'fired');
+  });
+
+  it('定时提醒：观察模式下顺延而不是标成已触发（切回 active 后补发）', async (t) => {
+    const { runner, cfg } = fixture(t, { reminders: new ReminderStore(path.join(root, 'reminders-observe.json')) });
+    const item = { id: 'r-obs', chatKey: 'group:1', at: Date.now() - 1000, text: '喝水', status: 'pending', createdBy: '42' };
+    runner.reminders.items.push(item);
+    let woke = 0;
+    runner.wake = async () => { woke++; };
+    setRuntimeConfig({ ...cfg, runtime: { ...cfg.runtime, mode: 'observe' } });
+    runner.fireDueReminders();
+    assert.equal(woke, 0, '观察模式派不出去');
+    const after = runner.reminders.items.find((x) => x.id === 'r-obs');
+    assert.equal(after.status, 'pending', '观察模式下也不能标记已触发');
+    assert.ok(after.at > Date.now() + 25 * 60 * 1000, '观察模式下按 30 分钟节奏顺延');
+    setRuntimeConfig({ ...cfg });
+    after.at = Date.now() - 1000;
+    runner.fireDueReminders();
+    assert.equal(woke, 1, '切回 active 后要正常派发');
+    assert.equal(runner.reminders.items.find((x) => x.id === 'r-obs').status, 'fired');
+  });
+
+  it('自安排唤醒：静默段顺延并保留留言而不是销毁；观察模式作废；恢复后正常唤醒', async (t) => {
+    const { runner, cfg } = fixture(t, {});
+    const today = ((new Date().getDay() + 6) % 7) + 1;
+    const otherDay = today === 7 ? 1 : today + 1;
+    setRuntimeConfig({
+      ...cfg,
+      timeControl: { enabled: true, schedule: { mode: 'custom', windows: [{ days: [otherDay], start: '00:01', end: '00:02' }] }, overrides: {} }
+    });
+    const note = '【自安排】过会儿回来看看';
+    runner.scheduledWakes.set('group:1', { at: Date.now() - 1000, note, kind: 'selfWake' });
+    let woke = 0;
+    runner.wake = async () => { woke++; };
+    runner.fireDueScheduledWakes();
+    assert.equal(woke, 0, '静默段不能真的唤醒');
+    const kept = runner.scheduledWakes.get('group:1');
+    assert.ok(kept, '留言不能被销毁（删了安排又没唤醒 = 内容永久丢失）');
+    assert.equal(kept.note, note, '顺延时留言要原样保留');
+    assert.ok(kept.at > Date.now() + 50 * 1000, `到点时间要顺延，实际 ${new Date(kept.at).toISOString()}`);
+    // 观察模式：无法兑现 → 作废（不能留一个不停重排的空转）
+    setRuntimeConfig({ ...cfg, runtime: { ...cfg.runtime, mode: 'observe' } });
+    runner.scheduledWakes.set('group:2', { at: Date.now() - 1000, note: 'x', kind: 'selfWake' });
+    runner.fireDueScheduledWakes();
+    assert.equal(runner.scheduledWakes.has('group:2'), false, '观察模式下留言作废');
+    // 反向：关掉时间控制后正常唤醒
+    setRuntimeConfig({ ...cfg });
+    runner.scheduledWakes.set('group:1', { at: Date.now() - 1000, note, kind: 'selfWake' });
+    runner.fireDueScheduledWakes();
+    assert.equal(woke, 1, '窗口恢复后要正常唤醒');
+    assert.equal(runner.scheduledWakes.has('group:1'), false);
+  });
+
   it('定时提醒：@ 落在第 51–100 条未读里时 degrade 不会丢这次唤醒，提醒也不该被顺延', async (t) => {
     // 派发预检与 #wake 的 degrade 闸门必须看同一批未读（都是 100 条）。看少 50 条时，
     // @ 落在第 51–100 条会被预检判成"会丢"→ 提醒无谓顺延 24 小时，而 #wake 其实照常派发

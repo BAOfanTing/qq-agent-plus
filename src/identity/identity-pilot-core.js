@@ -182,7 +182,10 @@ export class IdentityPilotManager {
       } catch (error) {
         this.friendSyncError = String(error?.message ?? error);
         this.friendSnapshotAt = 0;
-        this.log(`[identity-pilot] 好友列表读取失败，先按消息与旧记忆建库：${this.friendSyncError}`, error);
+        // 与 reindex 同款兜底：拉不到好友列表就沿用库里已知的好友，别拿空表去 rebuild
+        // —— is_friend 标注是慢慢积累的，一次协议端抖动就全表清零（2026-10-10 审查 D1）
+        friends = db.listKnownFriends();
+        this.log(`[identity-pilot] 好友列表读取失败，先按消息与旧库已知好友（${friends.length} 个）建库：${this.friendSyncError}`, error);
       }
       // 远程好友请求可能等待数秒；最后再截取本地消息，避免等待期间的新消息漏索引。
       const activityRows = this.store.identityActivityRows()

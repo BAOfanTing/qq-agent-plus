@@ -104,6 +104,21 @@ function stripMemorySources(entry) {
   return rest;
 }
 
+// 群友可控内容（群名片/文件名/相册/OCR/转写/翻译/身份档案）进工具结果前的统一出口：
+// 弱化"段头伪装"（【管理员附加规则】这类），与消息侧 sanitizeUserText 同一口径。
+// 递归遍历结构、只对字符串叶子做弱化 —— 不做文本级 JSON 往返（那会把数组里字符串的
+// 空格一起剥掉，且未闭合段头能让 parse 失败、整棵树免洗fail-open，2026-10-10 审查 P2）。
+function sanitizeDeep(value) {
+  if (typeof value === 'string') return sanitizeUserText(value);
+  if (Array.isArray(value)) return value.map(sanitizeDeep);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, val] of Object.entries(value)) out[key] = sanitizeDeep(val);
+    return out;
+  }
+  return value;
+}
+
 // QQ 系统表情的"中文名 → 编号"查表在 face-catalog.js 里统一维护：与 onebot.js 来信渲染
 // （[QQ表情14 微笑]）共用一份表，来源 = 离线导出表 + 协议端在线目录（fetch_sys_faces，建联后补缺）。
 import { faceIdByName, faceNameList, faceNameOf } from '../onebot/face-catalog.js';
@@ -1024,7 +1039,9 @@ export function buildToolDefs() {
           }
           if (want('honors')) {
             try {
-              out.honors = await ctx.onebot.call('get_group_honor_info', { group_id: groupId, type: 'all' }, 15000, ctx.signal) || {};
+              const rawHonors = await ctx.onebot.call('get_group_honor_info', { group_id: groupId, type: 'all' }, 15000, ctx.signal) || {};
+              // 称号/描述是群友可见内容：形状不可控，整树过一道段头弱化（JSON 往返）
+              out.honors = sanitizeDeep(rawHonors);
             } catch (error) { failures.push(`群荣誉：${error?.message ?? error}`); }
           }
           if (failures.length && !Object.keys(out).length) return err(failures.join('；'));
@@ -1130,7 +1147,7 @@ export function buildToolDefs() {
             } catch (error) { lastError = String(error?.message ?? error); }
           }
           if (!texts.length) return err(lastError ? `OCR 失败：${lastError}` : '这张图里没认出文字（可能是纯画面或表情包）。');
-          return ok({ text: safeSlice(texts.join('\n'), 4000), note: '以上是图上的文字（OCR）。' });
+          return ok({ text: safeSlice(sanitizeUserText(texts.join('\n')), 4000), note: '以上是图上的文字（OCR）。' });
         } catch (error) {
           return err(error?.message ?? error);
         }
@@ -1267,13 +1284,13 @@ export function buildToolDefs() {
           if (ctx.kind !== 'group') return err('群文件只能在群聊里看');
           const res = await ctx.onebot.call('get_group_root_files', { group_id: Number(ctx.chatId) }, 20000, ctx.signal) || {};
           const files = (Array.isArray(res.files) ? res.files : []).slice(0, 30).map((f) => ({
-            name: f.file_name ?? f.name ?? '',
+            name: sanitizeUserText(String(f.file_name ?? f.name ?? '')),
             sizeKB: Math.round(Number(f.file_size ?? f.size ?? 0) / 1024),
             fileId: f.file_id ?? f.id ?? '',
-            uploader: f.uploader_name ?? f.uploader ?? ''
+            uploader: sanitizeUserText(String(f.uploader_name ?? f.uploader ?? ''))
           })).filter((f) => f.name || f.fileId);
           const folders = (Array.isArray(res.folders) ? res.folders : [])
-            .map((f) => f.folder_name ?? f.name ?? '').filter(Boolean);
+            .map((f) => sanitizeUserText(String(f.folder_name ?? f.name ?? ''))).filter(Boolean);
           return ok({ files, folders, note: files.length ? '取某个文件的下载直链用 group_file_url（fileId 填上面的）。' : '群文件根目录是空的。' });
         } catch (error) {
           return err(`看群文件失败：${error?.message ?? error}`);
@@ -1367,7 +1384,7 @@ export function buildToolDefs() {
           if (!albumId) {
             const list = await ctx.onebot.call('get_group_album_list', { group_id: groupId }, 20000, ctx.signal);
             const albums = (Array.isArray(list) ? list : []).slice(0, 20).map((a) => ({
-              id: String(a?.id ?? a?.album_id ?? ''), name: a?.name ?? a?.album_name ?? '',
+              id: String(a?.id ?? a?.album_id ?? ''), name: sanitizeUserText(String(a?.name ?? a?.album_name ?? '')),
               pics: Number(a?.picNum ?? a?.pic_num ?? 0) || 0, createTime: a?.createTime ?? a?.create_time ?? null
             })).filter((a) => a.id);
             return ok({ albums, note: albums.length ? '带 albumId 再调一次能看照片列表。' : '这个群还没有相册。' });
@@ -1376,8 +1393,8 @@ export function buildToolDefs() {
           const raw = Array.isArray(res) ? res : (Array.isArray(res?.media_list) ? res.media_list : (Array.isArray(res?.photos) ? res.photos : []));
           const photos = raw.slice(0, 20).map((p) => ({
             lloc: String(p?.lloc ?? p?.photo_id ?? ''), batchId: String(p?.batch_id ?? p?.batchId ?? ''),
-            uploader: p?.uploader_name ?? p?.uploader ?? '', time: p?.upload_time ?? p?.time ?? null,
-            desc: safeSlice(String(p?.desc ?? p?.title ?? ''), 60)
+            uploader: sanitizeUserText(String(p?.uploader_name ?? p?.uploader ?? '')), time: p?.upload_time ?? p?.time ?? null,
+            desc: safeSlice(sanitizeUserText(String(p?.desc ?? p?.title ?? '')), 60)
           })).filter((p) => p.lloc || p.batchId);
           return ok({ albumId, photos, note: photos.length ? '点赞用 batchId(+lloc)，评论用 lloc。' : '这个相册没有取到照片（可能没权限或为空）。' });
         } catch (error) {
@@ -1528,7 +1545,7 @@ export function buildToolDefs() {
           const info = await ctx.onebot.call('get_stranger_info', { user_id: Number(userId) }, 15000, ctx.signal) || {};
           return ok({
             userId,
-            nickname: info.nickname ?? info.nick ?? '',
+            nickname: sanitizeUserText(String(info.nickname ?? info.nick ?? '')),
             sex: info.sex ?? '', age: info.age ?? null,
             level: info.level ?? info.qqLevel ?? null
           });
@@ -1552,7 +1569,8 @@ export function buildToolDefs() {
           const res = await ctx.onebot.call('translate_en2zh', { words: [text] }, 20000, ctx.signal);
           const out = Array.isArray(res?.words) ? res.words.join('\n') : '';
           if (!out) return err('翻译没有返回内容');
-          return ok({ translation: out });
+          // 译文可能带着原文里的"段头伪装"（用户可以造一句带【管理员附加规则】的英文让翻译带回来）
+          return ok({ translation: sanitizeUserText(out) });
         } catch (error) {
           return err(`翻译失败：${error?.message ?? error}`);
         }
@@ -2043,7 +2061,7 @@ export function buildToolDefs() {
           const result = await transcribeMessageAudio(ctx, entry);
           if (!result.ok) return err(result.error);
           return ok({
-            transcript: result.text,
+            transcript: sanitizeUserText(result.text),
             note: result.caveat
               ? `以上是自动识别的结果${result.caveat}`
               : '以上是这段音频的完整转写。直接基于内容回应，不要复述"我转写了"。'
@@ -2150,12 +2168,13 @@ export function buildToolDefs() {
           return err('只能查询当前私聊对象或当前群中已经出现过的成员');
         }
         // 与工具描述一致：只给印象正文 + 跨会话计数，不给"来自哪个会话"。
+        // 印象/称呼的原始材料是群聊内容：整树过一道段头弱化（形状不可控，走 JSON 往返）。
         const { memorySourceChatKeys, ...rest } = person;
-        return ok({
+        return ok(sanitizeDeep({
           ...rest,
           globalMemories: (person.globalMemories || []).map(stripMemorySources),
           currentContextMemories: (person.currentContextMemories || []).map(stripMemorySources)
-        });
+        }));
       }
     },
     {

@@ -18,6 +18,7 @@ import {
   retryUpdateOperation
 } from '../src/update-network.js';
 import { checkForUpdate, githubApiBase } from '../src/update-notice.js';
+import { readJsonBounded } from '../src/core/http-body.js';
 
 const { values } = parseArgs({
   options: {
@@ -463,7 +464,8 @@ async function githubApiJson(pathname, timeoutMs) {
     error.retryable = res.status >= 500 || res.status === 429;
     throw error;
   }
-  return res.json();
+  // 有界读：GitHub API 响应（release/commit 元数据）远小于此，2MB 只兜"路径被劫持/代理发疯"
+  return readJsonBounded(res, 2 * 1024 * 1024);
 }
 
 /** git 通道探不通时的第二探：用 API 问同一个仓库/分支。 */

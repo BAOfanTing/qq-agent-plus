@@ -357,9 +357,14 @@ export function backupComposeFiles(composeDir, ts = Date.now(), { keep = SNOWLUM
 function probeWebui(port, timeoutMs = 2500) {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/api/ui/public', timeout: timeoutMs }, (res) => {
+      // 只需要判断"是不是 JSON"：超过 64KB 的部分直接丢弃，不往内存里累（2026-10-10 审查）
       let body = '';
+      let bytes = 0;
       res.setEncoding('utf8');
-      res.on('data', (c) => { body += c; });
+      res.on('data', (c) => {
+        bytes += Buffer.byteLength(c);
+        if (bytes <= 64 * 1024) body += c;
+      });
       res.on('end', () => resolve({ ok: res.statusCode === 200 && body.trim().startsWith('{'), status: res.statusCode }));
     });
     req.on('timeout', () => { req.destroy(new Error('probe timeout')); resolve({ ok: false, status: 0 }); });

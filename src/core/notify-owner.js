@@ -5,6 +5,8 @@
 // ownerUin 的读取口径与 src/auto-update.js 的 autoUpdateOwner 保持一致（admin 一节存在时
 // 是唯一真相，老字段仅做无 admin 一节时的回退）。这里有意不 import auto-update.js：
 // 本模块会被 ops 定时器在任意环境加载，不背它的部署依赖。
+// http-body.js 是零依赖实现（只有 node 内建），带它不违背上面的约束。
+import { readJsonBounded } from './http-body.js';
 
 export function readOwnerUin(config = {}) {
   const hasAdmin = Boolean(
@@ -38,7 +40,7 @@ export async function sendOwnerText({ httpPort = 3390, token = '', ownerUin, tex
       body: JSON.stringify({ user_id: Number(owner), message: text })
     });
     if (!res.ok) return { ok: false, detail: `OneBot HTTP ${res.status}` };
-    const data = await res.json().catch(() => ({}));
+    const data = await readJsonBounded(res, 256 * 1024).catch(() => ({}));
     if (data?.status && data.status !== 'ok') return { ok: false, detail: `OneBot retcode ${data.retcode ?? data.status}` };
     return { ok: true, detail: '' };
   } catch (error) {

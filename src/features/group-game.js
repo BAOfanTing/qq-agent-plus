@@ -376,6 +376,8 @@ export class GroupGameManager {
   #finishIfEnded(groupKey) {
     const cur = this.games.get(groupKey);
     if (cur && cur.state?.phase === 'ended') {
+      // 同 handleNewMessages 末尾：终局播报没送出去（pendingEnd）时保留，等重试（P1-1）
+      if (cur.pendingEnd) { this.#save(); return; }
       this.games.delete(groupKey);
       this.#save();
     }
@@ -585,8 +587,16 @@ export class GroupGameManager {
     this.#save();
     if (effects.length) await this.#applyEffects(chatKey, effects);
     if (state.phase === 'ended') {
-      this.games.delete(chatKey);
-      this.#save();
+      // 播报失败时 #applyEffects 会把 pendingEnd 挂在局上 —— 此时不能删局，
+      // 交给下个 tick 开头的重试分支送达后收尾（2026-10-10 审查 P1-1：猜中炸弹/
+      // 投票终局都走这条路，原来这里无条件删局会把终局播报永久丢掉）
+      if (this.games.get(chatKey)?.pendingEnd) {
+        this.#save();
+        this.log(`[group-game] ${chatKey} 终局播报未送达，下个 tick 重试`);
+      } else {
+        this.games.delete(chatKey);
+        this.#save();
+      }
     }
   }
 
@@ -622,8 +632,27 @@ export class GroupGameManager {
           this.log(`[group-game] ${chatKey} 已不在白名单，进行中的局就地结束`);
           continue;
         }
+        // 上次终局播报没送出去：先重试播报，送达了才收尾（2026-10-10 审查 C1）
+        if (g.pendingEnd) {
+          const name = PLUGINS.get(g.gameId)?.meta.name || '游戏';
+          try {
+            await this.sender.sendTextBatch(chatKey, [`${name}结束：${g.pendingEnd}`.slice(0, 500)], {});
+          } catch (error) {
+            this.log(`[group-game] ${chatKey} 终局播报重试失败（下个 tick 再试）:`, error);
+            continue;
+          }
+          delete g.pendingEnd;
+          this.games.delete(chatKey);
+          this.#save();
+          continue;
+        }
         if (this.now() >= g.deadlineAt) {
           await this.#applyEffects(chatKey, [{ type: 'end', result: '时间到了，这局就先到这里。' }]);
+          if (this.games.get(chatKey)?.pendingEnd) {
+            this.#save();   // pendingEnd 要落盘，重启后也能续上重试
+            this.log(`[group-game] ${chatKey} 终局播报未送达，下个 tick 重试`);
+            continue;
+          }
           this.games.delete(chatKey);
           this.#save();
           continue;
@@ -631,6 +660,8 @@ export class GroupGameManager {
         await this.handleNewMessages(chatKey);
         const cur = this.games.get(chatKey);
         if (!cur) continue;
+        // 终局挂起（播报未送达）：不再推进 onTick / 私聊兜底，等下个 tick 的重试分支送达后收尾
+        if (cur.state.phase === 'ended') continue;
         // 私聊行动通道的兜底扫描（入口已接管过的不重复：按每人水位增量取）
         await this.#collectPrivateActions(chatKey);
         const cur2 = this.games.get(chatKey);
@@ -644,8 +675,13 @@ export class GroupGameManager {
         // 反过来"先存后发"则会让"天亮了"这类播报永久丢失（2026-09-29 审查 P1）
         this.#save();
         if (cur2.state.phase === 'ended') {
-          this.games.delete(chatKey);
-          this.#save();
+          if (cur2.pendingEnd) {
+            this.#save();
+            this.log(`[group-game] ${chatKey} 终局播报未送达，下个 tick 重试`);
+          } else {
+            this.games.delete(chatKey);
+            this.#save();
+          }
         }
       } catch (error) {
         this.log(`[group-game] ${chatKey} 推进出错（跳过这一轮）:`, error);
@@ -707,7 +743,14 @@ export class GroupGameManager {
         } else if (effect.type === 'end') {
           const g = this.games.get(chatKey);
           const name = PLUGINS.get(g?.gameId)?.meta.name || '游戏';
-          await this.sender.sendTextBatch(chatKey, [`${name}结束：${String(effect.result || '')}`.slice(0, 500)], {});
+          try {
+            await this.sender.sendTextBatch(chatKey, [`${name}结束：${String(effect.result || '')}`.slice(0, 500)], {});
+            if (g) delete g.pendingEnd;
+          } catch (error) {
+            // 终局播报发不出去不能把局就地删掉 —— 挂起 pendingEnd 下个 tick 重试（2026-10-10 审查 C1）
+            if (g) g.pendingEnd = String(effect.result || '');
+            throw error;
+          }
         }
       } catch (error) {
         if (effect.type === 'private') privateFailed += 1;

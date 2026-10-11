@@ -107,7 +107,7 @@ function proactiveWindowState(raw, now) {
 
 import { safeSlice } from './util.js';
 import { canRun } from './access.js';
-import { assertTimeAllowed, isTimeActive, TimeControlError, watchTimeWindow, withTimeScope } from './time-gate.js';
+import { assertTimeAllowed, isTimeActive, TimeControlError, timeUntilActive, watchTimeWindow, withTimeScope } from './time-gate.js';
 import { vendorOfConfig, vendorOfBaseUrl } from '../pricing/model-prices.js';
 import { budgetStatus } from './budget.js';
 import { readOwnerUin } from './notify-owner.js';
@@ -317,13 +317,15 @@ function mergeImpressionLists(base = [], extra = []) {
  * @returns {string} 拒绝原因；可以采纳时返回空串。
  */
 export function consolidationRejectionReason({ isNew = false, existing = [], next = [] } = {}) {
-  if (isNew) return '';
+  // 形状护栏先于 isNew：新建模式同样不能收坏结构 —— 否则对象条目会被 String() 成
+  // "[object Object]" 落进记忆（isNew 以前直接短路掉这两道检查，2026-10-10 审查 A1）。
   // 结果必须是数组：`{"result":[…]}` 这类坏结构以前会被就地当成 [] 处理，
   // 于是"模型答歪了"和"模型明说没有可保留的"长得一模一样 —— 前者会把印象全清空。
   if (!Array.isArray(next)) return '结果不是 impressions 数组（疑似坏结构）';
   // 非字符串条目（弱模型偶尔返回对象/数字）会把无意义的 `[object Object]` 写进记忆，
   // 而按 String() 计数的字数护栏又看不见它（对象只算 15 个字符），直接拒绝。
   if (next.some((item) => typeof item !== 'string')) return '结果里有非字符串条目（疑似坏结构）';
+  if (isNew) return '';
   const prev = Array.isArray(existing) ? existing : [];
   const list = next;
   const prevChars = prev.reduce((n, e) => n + String(e?.content ?? '').length, 0);
@@ -882,8 +884,10 @@ export class Orchestrator {
       this.emit('chat-update', chatKey);
       }
       } catch (error) {
-        // 预测/创建"等待中"会话途中失败：把排程痕迹与会话一起收掉，别留下半成品
+        // 预测/创建"等待中"会话途中失败：把排程痕迹与会话一起收掉，别留下半成品。
+        // 收完必须返回 —— 否则下面照常安装定时器，把刚收掉的排程原样装回去（2026-10-10 审查 A3）。
         this.#abortSchedule(chatKey, error);
+        return;
       }
     }
 
@@ -990,6 +994,12 @@ export class Orchestrator {
     }
     if (this.runningChats.has(chatKey)) {
       return { ok: false, reason: '该会话正在处理中' };
+    }
+    // 硬崩溃会留下未过期的 leased 残行：此时手动唤醒 → claimUnread 返回 null → 静默中止，
+    // 控制台却显示"已触发"。与自动路径（ticker/drainBacklog 的 hasLeasedRun 闸门）同一口径
+    //（2026-10-10 审查 A2）；正常情况下回收器几秒内清掉残行，稍后重试即可。
+    if (this.store.hasLeasedRun(chatKey)) {
+      return { ok: false, reason: '该会话有未回收的运行租约（上次运行可能硬崩溃），几秒后重试' };
     }
     if (this.runningChats.size >= Math.max(1, Number(getConfig().maxConcurrentRuns) || 2)) {
       return { ok: false, reason: '当前并发已满，请稍后重试' };
@@ -1382,6 +1392,11 @@ export class Orchestrator {
         else this.store.failLease(lease.id, session.error, {
           retryable: !timeClosed && (isRetryableError(error) || controller.signal.aborted)
         });
+      } else {
+        // 主动唤醒（无租约）失败也要收 outbox 的尾巴：成功路径会清掉 sent/failed 残行，
+        // 失败路径漏了这步 → 残行永远留在 outbox（只能手动 resolveHeld，2026-10-10 审查 A4）。
+        // unknown 行不动（本来就要人工核对）。
+        this.store.completeRun(session.leaseId);
       }
       const status = timeClosed ? 'aborted' : 'error';
       this.sessions.finish(session.id, status);
@@ -1667,6 +1682,10 @@ export class Orchestrator {
       if (cfg.reminders?.enabled === false && d.name === 'remind') return false;
       if (!searchEnabled && (d.name === 'web_search' || d.name === 'web_fetch')) return false;
       if (!selfWakeEnabled && d.name === 'schedule_wake') return false;
+      // 群游戏引擎关掉：group_game 工具一并摘掉 —— 提示词侧（prompt.js 玩法与工具箱）
+      // 只在开启时教"主持小游戏"，工具表却恒在，模型仍会去调一个必然报错的工具
+      //（group-game.js 对 enabled=false 直接拒），白花一轮（2026-10-10 审查 D3）。
+      if (cfg.groupGame?.enabled !== true && d.name === 'group_game') return false;
       // ASR 按量计费：开关关掉或没配 key 就不注入，避免模型调用必失败；也防误配置导致意外计费
       if (!asrEnabled && d.name === 'get_message_audio') return false;
       if (!imageGenEnabled && d.name === 'generate_image') return false;
@@ -2204,6 +2223,21 @@ export class Orchestrator {
         log.info(`[wake] ${chatKey} 跳过：${kind === 'followUp' ? '补话' : '自安排唤醒'}开关已关闭，这次安排作废`);
         continue;
       }
+      // 时间/模式维（2026-10-10 补，与 fireDueReminders 同款）：#wakePreflight 的 canRun 会
+      // 静默拒掉这次唤醒而安排已删 —— 静默段顺延到窗口恢复（留言原样保留）；观察模式无法
+      // 兑现，作废并记日志，避免留下每分钟重排的空转。
+      if (this.#wakeTimeBlocked(chatKey)) {
+        if (getConfig().runtime?.mode !== 'active') {
+          log.info(`[wake] ${chatKey} 观察模式下自安排唤醒无法兑现，留言作废（切回 active 后可重新安排）`);
+          continue;
+        }
+        const wait = timeUntilActive(chatKey);
+        const at = Date.now() + Math.min(Math.max(wait, 60 * 1000), 24 * 60 * 60 * 1000);
+        const timer = setTimeout(() => { try { this.fireDueScheduledWakes(); } catch { /* 忽略 */ } }, (at - Date.now()) + 50);
+        if (timer.unref) timer.unref();
+        this.scheduledWakes.set(chatKey, { ...item, at, timer });
+        continue;
+      }
       // 系统提醒的补话：等待期间有人说话了（正常流程已经在处理），这次就不必再唤一次
       if (String(item.note || '').startsWith('【系统提醒】') && this.store.unreadCount(chatKey) > 0) continue;
       if (!item.paced) {
@@ -2243,6 +2277,14 @@ export class Orchestrator {
     if (!this.#chatRuntimeDecision(chatKey).allowed) return true;
     if (!String(cfg.api?.model || '').trim()) return true;
     return this.runningChats.size >= Math.max(1, Number(cfg.maxConcurrentRuns) || 2);
+  }
+
+  // 派发预检的时间/模式维：#wakePreflight 的 canRun（src/core/access.js）还含
+  // runtime.mode==='active' 与 isTimeActive —— 预算维 2026-10-04 已对齐，时间/模式维
+  // 2026-10-10 补上同款：漏了就会出现"先 markFired/销毁安排、唤醒却被 canRun 静默拒掉"。
+  #wakeTimeBlocked(chatKey) {
+    if (getConfig().runtime?.mode !== 'active') return true;   // observe：派不出去
+    return !isTimeActive(chatKey);
   }
 
   /** 安排一次稍后的主动发言（模型调用 schedule_wake / 补话 / 自主节奏唤醒共用）。 */
@@ -2291,7 +2333,19 @@ export class Orchestrator {
     // 逐条排会互相覆盖：先排的被顶掉，却已经标记 fired，内容就永久丢了（2026-09-28 审查 P2）。
     const byChat = new Map();
     for (const item of this.reminders.due(now)) {
-      if (this.aborted || !canRun(item.chatKey)) continue;
+      if (this.aborted) continue;
+      if (!canRun(item.chatKey)) {
+        // canRun 含 isTimeActive 与 runtime.mode（access.js）：静默段/观察模式下派不出去。
+        // 这里必须顺延而不是干等 —— 干等的话，持续静默超过 12 小时会被上面的 expired()
+        // 静默作废（deferTo 重置作废时钟；2026-10-10 审查）。白名单被清空等其它原因不值得
+        // 动到点时间，保持原样每 tick 重试。只在"新到点时间确实更晚"时才写，避免每 tick 落盘。
+        if (this.#wakeTimeBlocked(item.chatKey)) {
+          const wait = timeUntilActive(item.chatKey);
+          const later = now + (wait > 0 ? Math.min(wait, 24 * 60 * 60 * 1000) : 30 * 60 * 1000);
+          if (later > item.at + 60 * 1000) this.reminders.deferTo(item.id, later);
+        }
+        continue;
+      }
       if (!byChat.has(item.chatKey)) byChat.set(item.chatKey, []);
       byChat.get(item.chatKey).push(item);
     }
