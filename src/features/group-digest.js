@@ -4,7 +4,7 @@ import { getConfig } from '../core/config.js';
 import { canRun } from '../core/access.js';
 import { chatCompletion, addUsage, emptyUsage } from '../llm/llm.js';
 import { nextAtFromHHMM } from '../core/reminders.js';
-import { sanitizeUserText } from '../core/util.js';
+import { displayNameOf } from '../core/display-name.js';
 import { newTraceId, withTrace } from '../core/logger.js';
 
 const MIN_MESSAGES = 5;          // 少于这个数不生成（"昨天没人说话"没必要日报）
@@ -112,7 +112,8 @@ export class GroupDigestManager {
     for (const m of rows) {
       const uid = String(m?.senderId || '');
       if (!uid) continue;
-      const cur = byUser.get(uid) || { name: sanitizeUserText(String(m?.senderName || uid)), count: 0 };
+      // 称呼统一（2026-10-11 反馈：日报还喊群名片）——备注/代号优先，与聊天提示词同一口径
+      const cur = byUser.get(uid) || { name: displayNameOf(uid, String(m?.senderName || '')), count: 0 };
       cur.count += 1;
       byUser.set(uid, cur);
     }
@@ -121,7 +122,7 @@ export class GroupDigestManager {
     const sample = [];
     let used = 0;
     for (const m of [...speakable].reverse()) {
-      const line = `${m.self ? '我' : sanitizeUserText(String(m?.senderName || ''))}: ${String(m.text).replace(/\s+/g, ' ').slice(0, 120)}`;
+      const line = `${m.self ? '我' : displayNameOf(String(m?.senderId || ''), String(m?.senderName || ''))}: ${String(m.text).replace(/\s+/g, ' ').slice(0, 120)}`;
       if (used + line.length > SAMPLE_CHARS) break;
       sample.push(line);
       used += line.length;

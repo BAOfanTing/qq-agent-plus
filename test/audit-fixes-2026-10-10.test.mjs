@@ -164,3 +164,12 @@ test('C5/D1 锚点：狼人杀毒药解析最长前缀优先；好友列表失�
   assert.match(src('src/identity/identity-pilot-core.js'), /friends = db\.listKnownFriends\(\);/,
     'D1：#start 拉不到好友列表时沿用旧库，不再拿空表清零 is_friend');
 });
+
+test('称呼统一：日报与每日动态的材料都走 displayNameOf（2026-10-11 反馈）', () => {
+  const digest = src('src/features/group-digest.js');
+  assert.equal((digest.match(/displayNameOf\(/g) || []).length >= 2, true,
+    'digest 的参与者统计与样本行两个入口都要接（卸掉任何一个这条就红）');
+  assert.match(src('src/features/daily-moments.js'),
+    /displayNameOf\(String\(message\.senderId \|\| ''\)/,
+    '每日动态材料（图片 label 与 sender 字段）要接');
+});

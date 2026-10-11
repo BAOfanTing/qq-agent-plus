@@ -13,6 +13,7 @@ import {
 import { safeFetchBinary, validateImageUrl } from '../llm/safe-fetch.js';
 import { convertGifToStillStrip } from '../tools/image-downsample.js';
 import { sanitizeUserText } from '../core/util.js';
+import { displayNameOf } from '../core/display-name.js';
 import { webFetch, webSearch } from '../llm/web-search.js';
 import { buildMomentSystemPrompt, momentPersonaHash, MOMENT_PROMPT_VERSION } from '../llm/moment-prompt.js';
 import { assertTimeAllowed, isTimeActive, watchTimeWindow, withTimeScope } from '../core/time-gate.js';
@@ -987,14 +988,16 @@ export class DailyMomentsManager {
             mid: message.mid,
             mediaIndex: imageIndex++,
             fallbackUrl: String(item.url),
-            label: `${group.groupName} / ${message.self ? '我' : message.senderName || '群友'} / ${cleanText(message.text, 100)}`
+            label: `${group.groupName} / ${message.self ? '我' : displayNameOf(String(message.senderId || ''), message.senderName || '群友')} / ${cleanText(message.text, 100)}`
           });
           media.push(id);
         }
         return {
           at: formatShortTime(message.ts),
           self: message.self === true,
-          sender: message.self ? (rootConfig.persona?.botName || '我') : cleanText(message.senderName || '群友', 60),
+          sender: message.self
+            ? (rootConfig.persona?.botName || '我')
+            : cleanText(displayNameOf(String(message.senderId || ''), message.senderName || '群友'), 60),
           text: cleanText(message.text, 260),
           images: media
         };
