@@ -111,16 +111,24 @@ OneBot WebSocket
 
 ### 全栈部署
 
-全新 Linux 机器推荐使用交互式安装器 `deploy-all.sh`。安装器会询问部署目录与端口，自动安装 Docker
-（需确认 sudo）、下载 SnowLuma、配置 OneBot、部署 QQ Agent，并生成和同步全部服务凭据。
+全新 Linux 机器推荐使用一键安装脚本 `install.sh`：全程零提问，自动安装 Docker（需 sudo）、
+下载 SnowLuma、配置 OneBot、部署 QQ Agent，并生成和同步全部服务凭据；装完打印"接下来三步"
+（带登录令牌的控制台链接、扫码登录入口、白名单），模型 Key 与群号在网页控制台里填即可。
 SnowLuma 已包含 OneBot，无需另行安装 NapCat 或 Lagrange。
 
-安装与运行都不使用 root：`deploy-all.sh` 会直接拒绝 root 身份，请以普通用户执行（脚本只在安装
-Docker 与开启 linger 时按需调用 `sudo`）。
+安装与运行都不使用 root：脚本会直接拒绝 root 身份，请以普通用户执行（只在安装 Docker 与
+开启 linger 时按需调用 `sudo`）。
 
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
+bash install.sh
+```
+
+需要边装边选（部署目录/端口/凭据/模型）时用交互式安装器 `deploy-all.sh`——它与 `install.sh`
+是同一个安装器，只是把问题问出来而不是走默认值：
+
+```bash
 bash deploy-all.sh
 ```
 
@@ -135,7 +143,8 @@ OneBot HTTP `3000` 与 WebSocket `3001` 默认仅绑定 `127.0.0.1`，不暴露�
 权限为 `0600`。脚本不修改 UFW、firewalld 或云安全组；需要跨主机访问时，仅应向可信局域网或 VPN
 放行上述三个入口，不得将 noVNC 或 OneBot 暴露到公网。
 
-首次安装会同时询问模型 Base URL、API Key、模型名与 QQ 白名单。基础设施启动后，打开脚本输出的
+交互式安装会询问模型 Base URL、模型名、API Key 与 QQ 白名单（**Key 留空＝跳过**，之后在网页
+控制台「设置 → 模型 API」里配——一键安装默认走的就是这条）。基础设施启动后，打开脚本输出的
 noVNC 地址并扫码登录 QQ，返回终端按 Enter；脚本会校验 OneBot 登录状态并询问是否激活。确认旧机器人
 已停止或已排除相同群聊后，也可手动执行：
 
