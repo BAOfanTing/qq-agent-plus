@@ -18,8 +18,29 @@ const { ChatStore } = await import('../src/core/store.js');
 const { SessionRegistry } = await import('../src/core/sessions.js');
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
 const { ReminderStore } = await import('../src/core/reminders.js');
+const { timeControlState } = await import('../src/core/time-control.js');
 const { todayKey } = await import('../src/core/util.js');
 const { currentTraceId, lastTraceId } = await import('../src/core/logger.js');
+
+/**
+ * 测试用的"远景时间窗"：放在"不是今天"的星期几、用**传进来那一刻的时钟分钟**做 1 分钟窗口。
+ * 任何时刻跑，下一个窗口都至少在 ~24 小时后，不会出现"窗口只剩一分钟就开"的临界态。
+ * 为什么不用写死的 '00:01'：固定凌晨窗口在每天 23:57–00:01 之间只剩不到 4 分钟就开，
+ * 顺延到"即将打开的窗口"本身是正确行为，但用例里"必须晚于 now+4min"的断言会误报
+ *（2026-10-13 凌晨实测踩中；边界时刻的回归见本文件末尾那条用例）。
+ */
+function farWindowFor(date = new Date()) {
+  const today = ((date.getDay() + 6) % 7) + 1;
+  const otherDay = today === 7 ? 1 : today + 1;
+  const pad = (n) => String(n).padStart(2, '0');
+  const startMin = date.getHours() * 60 + date.getMinutes();
+  const endMin = (startMin + 1) % (24 * 60);
+  return {
+    days: [otherDay],
+    start: `${pad(Math.floor(startMin / 60))}:${pad(startMin % 60)}`,
+    end: `${pad(Math.floor(endMin / 60))}:${pad(endMin % 60)}`
+  };
+}
 
 describe('Orchestrator', () => {
   it('draws the debounce delay inside the configured range', () => {
@@ -1591,6 +1612,27 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
     assert.equal(runner.reminders.items.find((x) => x.id === 'r-budget').status, 'fired');
   });
 
+  it('测试用远景时间窗在任何时刻都成立：下一个窗口至少 4 分钟外（跨午夜回归）', () => {
+    // 覆盖跨午夜前后与周日→周一（otherDay 走 7→1 分支）的边界时刻。
+    // 老写法（写死 '00:01'）在每天 23:57–00:01 之间只剩不到 4 分钟就开窗，
+    // 顺延到"即将打开的窗口"本身正确，但用例断言"必须晚于 now+4min"会误报（2026-10-13 凌晨实测）。
+    const moments = [
+      '2026-10-12T15:57:30Z',   // 周一 23:57:30（老写法：窗口 3.5 分钟后开）
+      '2026-10-12T15:59:59Z',   // 周一 23:59:59（老写法：1 分钟后开）
+      '2026-10-12T16:00:00Z',   // 周二 00:00:00
+      '2026-10-12T16:30:00Z',   // 周二 00:30:00
+      '2026-10-17T16:00:00Z'    // 周日 00:00（otherDay 的 7→1 分支）
+    ].map((iso) => new Date(iso));
+    for (const d of moments) {
+      const tc = { enabled: true, schedule: { mode: 'custom', windows: [farWindowFor(d)] }, overrides: {} };
+      const st = timeControlState(tc, 'group:1', d.getTime());
+      assert.equal(st.active, false, `${d.toISOString()}：远景窗不能把当前时刻算成活跃`);
+      const ahead = st.nextActiveAt - d.getTime();
+      assert.ok(ahead >= 4 * 60 * 1000,
+        `${d.toISOString()}：下一个窗口应当至少在 4 分钟以外，实际 ${ahead}ms`);
+    }
+  });
+
   it('定时提醒：时间控制静默段顺延到窗口恢复而不是标成已触发', async (t) => {
     const { runner, cfg, append } = fixture(t, { reminders: new ReminderStore(path.join(root, 'reminders-time.json')) });
     append(1);
@@ -1598,13 +1640,11 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
     runner.reminders.items.push(item);
     let woke = 0;
     runner.wake = async () => { woke++; };
-    // 时间控制开着、当前落在静默段（把窗口放到"不是今天"的那天，任何时刻跑都成立）：
+    // 时间控制开着、当前落在静默段（farWindowFor：窗口在"不是今天"的星期几，任何时刻跑都成立）：
     // #wakePreflight 的 canRun 会拒掉这次唤醒 —— 派发侧必须先接住并顺延，不能 markFired。
-    const today = ((new Date().getDay() + 6) % 7) + 1;               // 1=周一
-    const otherDay = today === 7 ? 1 : today + 1;
     setRuntimeConfig({
       ...cfg,
-      timeControl: { enabled: true, schedule: { mode: 'custom', windows: [{ days: [otherDay], start: '00:01', end: '00:02' }] }, overrides: {} }
+      timeControl: { enabled: true, schedule: { mode: 'custom', windows: [farWindowFor()] }, overrides: {} }
     });
     runner.fireDueReminders();
     assert.equal(woke, 0, '静默段派不出去：不能唤醒');
@@ -1641,11 +1681,9 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
 
   it('自安排唤醒：静默段顺延并保留留言而不是销毁；观察模式作废；恢复后正常唤醒', async (t) => {
     const { runner, cfg } = fixture(t, {});
-    const today = ((new Date().getDay() + 6) % 7) + 1;
-    const otherDay = today === 7 ? 1 : today + 1;
     setRuntimeConfig({
       ...cfg,
-      timeControl: { enabled: true, schedule: { mode: 'custom', windows: [{ days: [otherDay], start: '00:01', end: '00:02' }] }, overrides: {} }
+      timeControl: { enabled: true, schedule: { mode: 'custom', windows: [farWindowFor()] }, overrides: {} }
     });
     const note = '【自安排】过会儿回来看看';
     runner.scheduledWakes.set('group:1', { at: Date.now() - 1000, note, kind: 'selfWake' });
