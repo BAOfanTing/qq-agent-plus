@@ -1145,7 +1145,10 @@ function runTarCreate(outFile, dataDir) {
     : [['-czf', outFile, '-C', parent, base]];
   let last = { ok: false, code: null, stderr: '' };
   for (const tarArgs of attempts) {
-    const result = run('tar', tarArgs, { timeout: 0 });
+    // 有界超时：备份在 systemctl stop 之后跑，tar 卡住 = 机器人一直停着等人
+    //（2026-10-12 审查：这里原来是 timeout: 0 = 永不超时）。30 分钟对数据目录足够宽裕；
+    // 超时会连进程一起杀掉，失败路径会清掉半成品并照常拉起服务。
+    const result = run('tar', tarArgs, { timeout: 30 * 60 * 1000 });
     if (result.ok) return result;
     last = result;
     try { fs.rmSync(outFile, { force: true }); } catch { /* 忽略 */ }
@@ -1909,6 +1912,7 @@ async function cmdSnowlumaUpdate(args) {
   }
   if (!st.outdated && !to) {
     okWarn(`协议端已经是最新（${st.currentVersion}），无需更新。要强制重建就带 --to ${st.currentImage}`);
+    return 0;
   }
   infoWarn(`开始更新协议端：${st.currentVersion || st.currentImage} → ${to || st.targetVersion || st.targetImage}`);
   const res = await updater.update({ to });
@@ -2021,9 +2025,13 @@ Description=QQ Agent health probe
 
 [Service]
 Type=oneshot
-# 显式带路径：ops.js 的默认值可能与本机部署不一致（本单元要在无人值守下自足）
+# 显式带路径：ops.js 的默认值可能与本机部署不一致（本单元要在无人值守下自足）。
+# QQ_AGENT_SERVICE 决定加固探测（NoNewPrivileges / umask）检查的是哪个 unit —— 自定义
+# 部署下漏了这个变量会去探测默认 unit 名，巡检把错误的 unit 判成"未加固"（2026-10-12 审查）。
+Environment="QQ_AGENT_DIR=${cfg.rootDir}"
 Environment="QQ_AGENT_DATA_DIR=${cfg.dataDir}"
 Environment="QQ_AGENT_ONEBOT_HTTP_PORT=${cfg.onebotPort}"
+Environment="QQ_AGENT_SERVICE=${serviceName}"
 ExecStart=${nodeBin} ${opsPath} health-check --confirm
 `;
   const healthTimer = `[Unit]

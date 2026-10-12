@@ -65,7 +65,11 @@ export function followUpPlan({
 
 function writeProactiveLastAttempt(ts) {
   try {
-    fs.writeFileSync(PROACTIVE_STATE_FILE, JSON.stringify({ lastAttemptAt: Number(ts) || Date.now() }));
+    // 原子写：tmp 写完再 rename（与 config/sessions 同一口径），避免半个 JSON 落盘让
+    // 下次读取静默回退成"从没开过话题"（2026-10-12 审查）。
+    const tmp = `${PROACTIVE_STATE_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ lastAttemptAt: Number(ts) || Date.now() }), { mode: 0o600 });
+    fs.renameSync(tmp, PROACTIVE_STATE_FILE);
   } catch { /* 写不进去也不影响正常发言 */ }
 }
 
@@ -106,7 +110,7 @@ function proactiveWindowState(raw, now) {
 
 
 import { safeSlice } from './util.js';
-import { canRun } from './access.js';
+import { canRun, chatAllowed } from './access.js';
 import { assertTimeAllowed, isTimeActive, TimeControlError, timeUntilActive, watchTimeWindow, withTimeScope } from './time-gate.js';
 import { vendorOfConfig, vendorOfBaseUrl } from '../pricing/model-prices.js';
 import { budgetStatus } from './budget.js';
@@ -2223,6 +2227,13 @@ export class Orchestrator {
         log.info(`[wake] ${chatKey} 跳过：${kind === 'followUp' ? '补话' : '自安排唤醒'}开关已关闭，这次安排作废`);
         continue;
       }
+      // 会话被移出允许列表（allow.groups/private 改动）后不该再唤醒：显式作废并记日志，
+      // 不能放任它走到 #wake 被 canRun 静默拒掉 —— 那时安排已删、留言无声消失（2026-10-12 审查）。
+      // 与静默时段不同：白名单不会自己恢复，顺延只会无限重排，所以直接作废。
+      if (!item.paced && !chatAllowed(chatKey)) {
+        log.info(`[wake] ${chatKey} 不在允许列表里，这次唤醒作废（留言不再保留）：${String(item.note || '').slice(0, 60)}`);
+        continue;
+      }
       // 时间/模式维（2026-10-10 补，与 fireDueReminders 同款）：#wakePreflight 的 canRun 会
       // 静默拒掉这次唤醒而安排已删 —— 静默段顺延到窗口恢复（留言原样保留）；观察模式无法
       // 兑现，作废并记日志，避免留下每分钟重排的空转。
@@ -2397,7 +2408,9 @@ export class Orchestrator {
         .catch((error) => log.error('[reminder] 唤醒出错:', error?.message ?? error));
       for (const it of chosen) this.reminders.markFired(it.id, now);
       const deferred = items.length - chosen.length;
-      log.info(`[reminder] 到点派发 ${chosen.length} 条：${chatKey} ${chosen.map((x) => String(x.text).slice(0, 20)).join(' / ')}`
+      // 全文进日志（单条正文 ≤200 字）：派发后若整轮运行最终失败，提醒内容至少还在这条日志
+      // 和会话留档里可查、可人工重试 —— 别只留 20 字（2026-10-12 审查）。
+      log.info(`[reminder] 到点派发 ${chosen.length} 条：${chatKey} ${chosen.map((x) => String(x.text)).join(' / ')}`
         + (deferred > 0 ? `（另有 ${deferred} 条本轮装不进提示词，30 秒后继续派发）` : ''));
     }
   }
@@ -3021,6 +3034,13 @@ export class Orchestrator {
     for (const sessionId of this.pendingSessions.values()) this.#finishWaiting(sessionId, 'aborted');
     this.pendingSessions.clear();
     this.stopProactiveLoop();
+    // 提醒循环与自安排唤醒 ticker 也是常驻 interval：不停掉的话 abortAll 之后它们还在跑
+    //（测试里表现为进程被定时器吊着、状态被悄悄推进；2026-10-12 审查）。
+    this.stopReminderLoop();
+    if (this.scheduledWakeTicker) clearInterval(this.scheduledWakeTicker);
+    this.scheduledWakeTicker = null;
+    for (const item of this.scheduledWakes.values()) item?.timer && clearTimeout(item.timer);
+    this.scheduledWakes.clear();
     await Promise.allSettled([...this.runTasks]);
   }
 

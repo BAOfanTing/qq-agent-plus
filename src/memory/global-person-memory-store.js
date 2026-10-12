@@ -29,7 +29,16 @@ function readJson(file, fallback = null) {
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     const value = JSON.parse(text);
     return value && typeof value === 'object' ? value : fallback;
-  } catch { return fallback; }
+  } catch (error) {
+    // 文件在但读不了（坏 JSON 等）：静默返回 fallback 的话，随后同路径的写入会把它直接
+    // 覆盖掉，用户再也查不出人物印象为什么没了。留档成 .broken-<时间戳>（与 reminders /
+    // group-game 同口径；2026-10-12 审查）。ENOENT（首次运行没有文件）是正常的。
+    if (error?.code !== 'ENOENT') {
+      console.error(`[memory-global] 读取 ${file} 失败，本次跳过，原文件已备份为 .broken-<时间戳>：`, error?.message ?? error);
+      try { fs.renameSync(file, `${file}.broken-${Date.now()}`); } catch { /* 备份失败就留在原处，至少不覆盖 */ }
+    }
+    return fallback;
+  }
 }
 function writeJson(file, value) {
   // 人物印象是隐私正文：目录 0700 / 文件 0600（与 consolidation-backup、identity 库同一口径）。

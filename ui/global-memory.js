@@ -3,7 +3,7 @@
 
 import { api } from './core/api.js';
 import { esc } from './core/dom.js';
-import { setHtmlIfChanged } from './core/dom-util.js';
+import { setBoxError, setHtmlIfChanged } from './core/dom-util.js';
 import { state } from './core/state.js';
 import { saveMemberNote } from './pages/memory.js';
 (function globalPersonMemoryConsole() {
@@ -156,7 +156,7 @@ import { saveMemberNote } from './pages/memory.js';
     }
     // setHtmlIfChanged：内容没变就不碰 DOM。这个页面每 15s 轮询一次（还有一个 focus 监听），
     // 无条件 innerHTML 会把正在读长印象的人每 15 秒弹回顶部一次（2026-10-08 审查）。
-    setHtmlIfChanged(box, people.map((person) => {
+    const rendered = setHtmlIfChanged(box, people.map((person) => {
       const sources = person.sourceChatKeys || [];
       const title = person.name || person.userId || '未知人物';
       const subtitle = person.userId
@@ -167,6 +167,9 @@ import { saveMemberNote } from './pages/memory.js';
         <div class="gm-sub">${esc(subtitle)}</div>
       </button>`;
     }).join(''));
+    // 只有真的重画了才重挂监听：内容没变时 DOM 是原样复用的，再 addEventListener 会让 15s
+    // 轮询把监听叠成多份——点一次等于点 N 次（2026-10-10 审查 P1；写法与 ui/pages/features.js 一致）。
+    if (!rendered) return;
     box.querySelectorAll('[data-gm-key]').forEach((button) => {
       button.addEventListener('click', () => {
         selectedKey = button.dataset.gmKey || '';
@@ -249,7 +252,7 @@ import { saveMemberNote } from './pages/memory.js';
         <div class="gm-status">备注用于聊天记录、记忆与提示词里的称呼（与“会话记忆”页共用同一份数据）；在群里让机器人"以后叫他 X"，它记的也是这一份。</div>
       </div>` : '';
 
-    setHtmlIfChanged(box, `
+    const rendered = setHtmlIfChanged(box, `
       <div class="detail-header">
         <h2>${esc(person.name || person.userId || '未知人物')}</h2>
         <div class="sub">${person.userId ? `QQ ${esc(person.userId)} · ` : ''}${memories.length} 条全局长期印象</div>
@@ -266,6 +269,8 @@ import { saveMemberNote } from './pages/memory.js';
       ${noteHtml}
       <div class="gm-section"><h3>来源会话</h3><div>${sourceHtml}</div></div>
       <div class="gm-section"><h3>长期印象</h3>${memoryHtml}</div>`);
+    // 同 renderList：内容没变就别重挂监听（备注保存/整理/删除点一次会变成 N 次）。
+    if (!rendered) return;
 
     const status = box.querySelector('#gm-action-status');
     const noteInput = box.querySelector('#gm-note-input');
@@ -321,7 +326,11 @@ import { saveMemberNote } from './pages/memory.js';
     if (!ui) return;
     const seq = ++loadSeq;
     if (force || !people.length) {
-      ui.items.innerHTML = '<div class="gm-empty">正在读取全局人物记忆…</div>';
+      // 占位符必须走 setBoxError：它会把 __renderedHtml 清掉。直接写 innerHTML 的话，
+      // 强制刷新时数据若没变，setHtmlIfChanged 会判成"没变化"跳过重画 —— 占位符就永远
+      // 留在列表里（点「刷新」后卡在"正在读取…"，只有 F5 能救；dom-util 的注释里写过
+      // 同一个坑，2026-10-12 复审）。
+      setBoxError(ui.items, '<div class="gm-empty">正在读取全局人物记忆…</div>');
     }
     try {
       const next = await fetchPeople();
@@ -332,7 +341,7 @@ import { saveMemberNote } from './pages/memory.js';
       renderDetail();
     } catch (error) {
       if (seq !== loadSeq) return;
-      ui.items.innerHTML = `<div class="gm-empty">加载失败：${esc(error?.message || error)}</div>`;
+      setBoxError(ui.items, `<div class="gm-empty">加载失败：${esc(error?.message || error)}</div>`);
     }
   }
 

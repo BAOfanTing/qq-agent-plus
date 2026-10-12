@@ -46,7 +46,13 @@ function cleanText(value, max = 1000) {
 function readJson(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
+  } catch (error) {
+    // 同 daily-moments：状态文件坏掉先留档 .broken-<时间戳>（丢失的 'unknown' 标记会让
+    // 未确认结果被当成没做过、可能重复互动 —— 留证据便于人工核对；2026-10-12 审查）。
+    if (error?.code !== 'ENOENT') {
+      console.error(`[qzone] 读取 ${file} 失败，按默认状态处理，原文件已备份为 .broken-<时间戳>：`, error?.message ?? error);
+      try { fs.renameSync(file, `${file}.broken-${Date.now()}`); } catch { /* 备份失败就留在原处 */ }
+    }
     return fallback;
   }
 }

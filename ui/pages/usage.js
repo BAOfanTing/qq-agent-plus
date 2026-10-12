@@ -1040,6 +1040,9 @@ async function loadUsageView({ force = false } = {}) {
 
   // ── 轮询刷新：只更新数值，不重建 DOM ──
   if (!force) {
+    // 首载失败过的话，错误页里没有 [data-field] 骨架：轮询只改数值会永远停在"加载失败"
+    // （切走再回来才自愈）。发现没有骨架就直接走一次强制重建（2026-10-12 审查）。
+    if (!$('#usage-page [data-field="runs"]')) return loadUsageView({ force: true });
     try {
       const [stats, st] = await Promise.all([
         api(`/api/usage/stats?range=${state.usageRange}`),

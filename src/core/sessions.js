@@ -231,14 +231,24 @@ export class SessionRegistry {
     this.#persist(s);
     const idx = this.index.findIndex((e) => e.id === id);
     if (idx >= 0) this.index[idx] = this.#summary(s);
-    // 清理超出保留数的旧文件
+    // 清理超出保留数的旧文件：与 pruneSessions 同一保护口径 —— 正在跑/等待中的会话不删
+    //（长线程会话可能是最"旧"的文件，运行到一半被删会让本轮记录与用量消失），
+    // 删掉的同步从内存索引收缩，避免"列表里点开却是空文件"（2026-10-12 审查）。
     try {
       if (this.keepFiles > 0) {
         const files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json')).sort();
         if (files.length > this.keepFiles) {
+          const dropped = new Set();
           for (const f of files.slice(0, files.length - this.keepFiles)) {
-            try { fs.unlinkSync(path.join(SESSIONS_DIR, f)); } catch { /* ignore */ }
+            const file = path.join(SESSIONS_DIR, f);
+            try {
+              const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+              if (data?.status === 'running' || data?.status === 'waiting') continue;
+              fs.unlinkSync(file);
+              dropped.add(String(data?.id ?? f.replace(/\.json$/, '')));
+            } catch { /* 坏文件不动（与 pruneSessions 同） */ }
           }
+          if (dropped.size) this.index = this.index.filter((e) => !dropped.has(String(e.id)));
         }
       }
     } catch { /* ignore */ }
@@ -432,7 +442,7 @@ export class SessionRegistry {
       data.estimatedYuan = (Number(data.estimatedYuan) || 0) + cost;
       if (delta.totalTokens > 0 && !(cost > 0)) data.unpricedRuns = (Number(data.unpricedRuns) || 0) + 1;
     } catch { /* 估价失败不影响用量累加（最坏情况＝这项当天少算） */ }
-    const tmp = path.join(DATA_DIR, 'usage-today.json.tmp');
+    const tmp = path.join(DATA_DIR, `usage-today.json.${process.pid}.tmp`);
     try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
     fs.writeFileSync(tmp, JSON.stringify(data), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, path.join(DATA_DIR, 'usage-today.json'));

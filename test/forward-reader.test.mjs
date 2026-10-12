@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import { readForwardMessages } from '../src/onebot/forward-reader.js';
-import { buildToolDefs } from '../src/tools/tools-core.js';
+
+// tools-core 在定义期就会读配置（buildToolDefs → getConfig，persist 会回写 data/config.json）：
+// 必须先把数据目录指到临时目录，再用动态 import 载入 —— 静态 import 先于任何代码执行，
+// env 来不及生效（2026-10-12 审查：本文件曾回写真实仓库的 data/config.json）。
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-forward-reader-'));
+process.env.QQ_AGENT_DATA_DIR = dataDir;
+const { buildToolDefs } = await import('../src/tools/tools-core.js');
 
 const card = [{ type: 'forward', data: { id: 'fresh-resource' } }];
 const messages = [{ sender: { nickname: 'test' }, message: [{ type: 'text', data: { text: 'forward content' } }] }];

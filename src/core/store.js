@@ -7,10 +7,13 @@ import { safeSlice } from './util.js';
 
 function entry(row) {
   if (!row) return null;
+  let reply = null;
+  // reply 是历史里写入的 JSON 文本：一行坏数据不应该让整个会话读取抛错（threadEntry 同款护栏）
+  if (row.reply) { try { reply = JSON.parse(row.reply); } catch { reply = null; } }
   return {
     ...row, senderId: row.sender_id, senderName: row.sender_name,
     self: !!row.self, read: row.state === 'acked',
-    reply: row.reply ? JSON.parse(row.reply) : null,
+    reply,
     media: JSON.parse(row.media || '[]'),
     mentionsSelf: Boolean(row.mentions_self),
     targetUserId: String(row.target_user_id || ''),
@@ -163,15 +166,21 @@ export class ChatStore {
     if (this.transactionDepth > 0) return fn();
     this.db.exec('BEGIN IMMEDIATE');
     this.transactionDepth += 1;
+    let committed = false;
     try {
       const result = fn();
       this.db.exec('COMMIT');
+      committed = true;
       return result;
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      // 回滚失败（COMMIT 已抛出 / 连接坏了）不能把原始错误吞掉：附在 cause 上再抛原错误
+      //（2026-10-12 审查：原先裸 ROLLBACK 抛出会顶替掉真正的失败原因）。
+      if (!committed) {
+        try { this.db.exec('ROLLBACK'); } catch (rollbackError) { error.cause ??= rollbackError; }
+      }
       throw error;
     } finally {
-      this.transactionDepth = 0;
+      this.transactionDepth -= 1;
     }
   }
 

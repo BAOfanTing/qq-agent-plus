@@ -555,6 +555,9 @@ async function loadDailyMomentsStatus() {
     // 按钮必须跟着未决记录走，否则入口藏在旧记录里、面板上看不到，阻断却仍在。
     const unresolvedRecord = records.find((record) => record.status === 'publish-unknown');
     const blockingRecord = records.find((record) => ['publishing', 'publish-unknown'].includes(record.status));
+    // 15s 状态轮询每次都把这块 innerHTML 整个重建：`<details>` 的展开态不在 HTML 里，
+    // 重建即折叠 —— 正在读"内部群摘要"的人每 15 秒被收起一次。记住并恢复（2026-10-12 审查）。
+    const summariesOpen = Boolean(box.querySelector('.moment-summaries')?.open);
     box.innerHTML = `
       <div class="field-row">
         <div class="field"><label>任务状态</label><div>${status.running ? '运行中' : (status.enabled ? '等待中' : '已关闭')}</div></div>
@@ -589,6 +592,10 @@ async function loadDailyMomentsStatus() {
           <td><button type="button" class="btn btn-small" data-moment-select="${esc(record.id)}">查看</button></td>
         </tr>`).join('')}</tbody>
       </table></div>` : ''}`;
+    if (summariesOpen) {
+      const details = box.querySelector('.moment-summaries');
+      if (details) details.open = true;
+    }
     $$('[data-moment-select]', box).forEach((button) => button.addEventListener('click', () => {
       state.currentMomentId = button.dataset.momentSelect;
       loadDailyMomentsStatus();

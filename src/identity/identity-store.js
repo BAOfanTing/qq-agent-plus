@@ -15,12 +15,13 @@ const OPEN_FRIEND_PROPOSAL_STATES = new Set([
 ]);
 // 入站好友请求里"还没了结"的状态：与触发闸门、friend_add 收尾用的集合一致
 // （identity-store.js 里那两处 `status IN (...)`）。保留期清理不能删这些。
+// failed 是终态（决策入口只接受 pending，不会重试）——列在这里等于永远不清、表只涨不缩
+//（2026-10-12 审查）。
 const OPEN_INCOMING_REQUEST_STATES = new Set([
   'pending',
   'deciding',
   'approved',
-  'held_unknown',
-  'failed'
+  'held_unknown'
 ]);
 
 function ensureColumn(db, table, name, definition) {

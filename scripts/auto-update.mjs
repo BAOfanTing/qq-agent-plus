@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import {
@@ -434,7 +435,11 @@ async function fetchReleaseTag(tag) {
    取回之后的流程（npm ci → 单元测试 → deploy.sh）与 git 通道完全一致。
 
    安全性：两条通道都是 HTTPS、都以 GitHub 给出的 commit sha 为锚点；tarball 的
-   地址里带的就是 API 解析出来的那个 sha，信任级别与 git fetch 一致。
+   地址里带的就是 API 解析出来的那个 sha。注意**不要**把 codeload 通道当成与 git
+   等价的强校验：git 对对象做 sha1 内容寻址，而 tar.gz 之外没有可对照的官方摘要
+   （GitHub 不公布 tar 的校验和），这里只有"HTTPS + sha 定位的 URL"这一层信任 ——
+   所以下载后把 sha256 记进日志，供需要时与 GitHub 页面上的产物对照审计
+   （2026-10-12 审查：原注释自称"信任级别与 git fetch 一致"属于过度承诺）。
    压缩包大小设上限，避免异常地址把内存吃满。
 */
 
@@ -607,6 +612,8 @@ async function materializeFromApi(workDir, revision) {
     onRetry: retryLog('codeload download')
   });
   const archive = path.join(path.dirname(workDir), `source-${revision.slice(0, 12)}.tar.gz`);
+  // 摘要落日志（见文件头"安全性"段）：没有可对照的官方摘要，至少留一条审计线索
+  console.log(`[auto-update] 源码包 sha256=${crypto.createHash('sha256').update(downloaded.value).digest('hex')}（${downloaded.value.length} 字节，revision ${revision.slice(0, 12)}）`);
   fs.writeFileSync(archive, downloaded.value, { mode: 0o600 });
   try {
     command('tar', ['-xzf', archive, '-C', workDir, '--strip-components=1'], {
@@ -870,6 +877,8 @@ async function run() {
       targetRevision: '',
       targetVersion: '',
       transport,
+      // 原因进 state（此前只在日志里，控制台/接口看不到"为什么没更新"；2026-10-12 审查）
+      reason: String(notice?.reason || 'unknown'),
       error: '',
       autoDisabled: false
     });
@@ -891,6 +900,7 @@ async function run() {
       targetRevision,
       targetVersion,
       transport,
+      reason: 'revision-already-current',
       error: '',
       autoDisabled: false
     });
@@ -1049,7 +1059,7 @@ async function run() {
     });
   } catch (error) {
     const output = `${error?.stdout || ''}${error?.stderr || ''}`;
-    if (/Another deployment is running|Another deployment is taking over a stale lock/.test(output)) {
+    if (/Another deployment is running|Another deployment may be running|Another deployment is taking over a stale lock/.test(output)) {
       // 有人（多为手动部署）正持锁：这是正常碰撞，不是失败 —— 按 busy 结清
       //（不自停、不发告警，等下个周期再来）。此前会误判成部署失败并触发 disableOnFailure
       // + 给管理员发告警（2026-10-07 复审 P3）。

@@ -184,6 +184,10 @@ console.log('\n=== 数值填充（真实数据）===');
 // 所以显式再调一次 updateUsagePage，确保读到的是刚填入的值。
 const freshStats = await realFetch('/api/usage/stats?range=7').then((r) => r.json());
 const freshSt = await realFetch('/api/status').then((r) => r.json());
+// 「全部」档（2026-10-12 审查）：此前 Number('all')||7 → 标签与数据都变成"最近 7 天"
+const allStats = await realFetch('/api/usage/stats?range=all').then((r) => r.json());
+check('「全部」档真的给全部（label/mode）', allStats.rangeLabel === '全部' && allStats.mode === 'all',
+  `label=${allStats.rangeLabel} mode=${allStats.mode}`);
 ctx.updateUsagePage(freshStats, freshSt, priceData || {});
 const f = (n) => String(usageBox.querySelector(`[data-field="${n}"]`)?.textContent || '');
 const cost = f('cost'), runs = f('runs'), search = f('search'), prompt = f('prompt');

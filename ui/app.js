@@ -1297,6 +1297,13 @@ async function init() {
       try { localStorage.setItem('qqa-theme-server', t); } catch { /* 忽略 */ }
     }
     else if (cfg0 && !('ui' in cfg0)) { /* 后端还没这个字段，保持本地值 */ }
+    // 其余外观轴也要在首屏就以后端为准（2026-10-12 审查）：此前只有打开设置页
+    // （loadSettings → applyAppearance(cfg.ui)）才会套用，换设备首屏一直是默认外观。
+    // 主题不由这里决定：把上面那块已经定下的有效值钉进 mode，让本次覆盖只动其余轴。
+    if (cfg0 && 'ui' in cfg0 && cfg0.ui) {
+      const effectiveTheme = THEME_VALUES.includes(t) ? t : getThemePref();
+      applyAppearance({ ...cfg0.ui, mode: effectiveTheme, theme: undefined });
+    }
   } catch { /* 接口不可用就用本地的 */ }
 
   // 发现新版本提示：打开控制台时查一次（后端缓存 30 分钟），失败静默

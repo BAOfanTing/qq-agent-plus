@@ -1879,7 +1879,10 @@ export function updateConfig(patch) {
   };
 
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  const tmp = `${CONFIG_FILE}.tmp`;
+  // tmp 带 pid：与下面的防抖保存同口径 —— 两条路径可能同时触发保存，同名 tmp 会互相截断，
+  // 且对方先 rename 走之后本方 rename 会 ENOENT 把保存直接抛出去（控制台保存报 500）
+  //（2026-10-12 复审 P3：防抖那条加了 pid，这条主路径漏了）。
+  const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
   // flush：rename 之前先把数据落盘，否则断电后可能拿到"改名成功、内容为空"的 config.json
   // （进程被杀不受影响，只有真断电会中招；2026-09-29 审查 P2）
   fs.writeFileSync(tmp, JSON.stringify(currentConfig, null, 2), { mode: 0o600, flush: true });
@@ -1938,7 +1941,9 @@ export function scheduleConfigSave() {
   saveTimers.set('cfg', setTimeout(() => {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-      const tmp = `${CONFIG_FILE}.tmp`;
+      // tmp 带 pid：控制台与主进程可能同时触发保存，同名 tmp 会互相截断
+      //（另一处的用法是 rename 前被对方写坏；2026-10-12 审查）
+      const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
       // config.json 含模型 Key 与控制台 Token，防抖路径也必须锁 0600，
       // 否则 rename 会把 updateConfig 落好的 0600 打回 umask 默认（0664）
       fs.writeFileSync(tmp, JSON.stringify(getConfig(), null, 2), { mode: 0o600, flush: true });

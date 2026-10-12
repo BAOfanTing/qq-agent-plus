@@ -62,7 +62,13 @@ const STYLE_SEEDS = [
 function readJson(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
+  } catch (error) {
+    // 状态文件坏掉时留档 .broken-<时间戳> 再回默认：直接回默认会让下一次落盘把损坏文件
+    // 覆盖掉，事后无从排查（与 reminders / group-game 同口径；2026-10-12 审查）。
+    if (error?.code !== 'ENOENT') {
+      console.error(`[daily-moments] 读取 ${file} 失败，按默认状态处理，原文件已备份为 .broken-<时间戳>：`, error?.message ?? error);
+      try { fs.renameSync(file, `${file}.broken-${Date.now()}`); } catch { /* 备份失败就留在原处 */ }
+    }
     return fallback;
   }
 }

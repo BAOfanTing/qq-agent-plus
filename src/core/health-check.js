@@ -74,6 +74,7 @@ function saveState(dataDir, state) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
+  fs.chmodSync(file, 0o600); // btrfs 兜底（Issue #11：mode 参数在该文件系统上会丢失；2026-10-12 审查）
 }
 
 /** Agent 是否处于暂停态（runtime.paused 持久化在 config.json；读不到按未暂停）。 */

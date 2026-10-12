@@ -21,11 +21,10 @@ test/test-prompt.mjs    # 提示词自检：拼装结果与各段是否齐全
 test/render-test.mjs    # 控制台各设置分区渲染（在 vm + DOM 桩里跑真实 ui/app.js）
 test/scroll-test.mjs    # 会话列表滚动与节流
 test/usage-e2e.mjs      # 用量页端到端（真起服务 + 真接口，无 mock）
-test/selftest.mjs       # 端到端审计：mock OneBot + mock 模型，跑一遍核心流程
 ```
 
-- 命令：`npm run test:prompt` / `test:render` / `test:scroll` / `test:usage` / `test:legacy-selftest`
-- 前四个也在 `npm test` 里串起来跑。
+- 命令：`npm run test:prompt` / `test:render` / `test:scroll` / `test:usage`
+- 四个都在 `npm test` 里串起来跑。
 - ⚠️ `render-test.mjs` 与 `usage-e2e.mjs` 会占用 `127.0.0.1:3210`（控制台默认端口）。
   本机开着控制台隧道（`console-tunnel.bat`）时它们会报 `EADDRINUSE`，关掉隧道再跑。
 

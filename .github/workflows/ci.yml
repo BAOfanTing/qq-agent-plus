@@ -78,7 +78,7 @@ jobs:
       # 此时 ops-health 里断言"全绿"的用例会因直连真实套接字失败而全红（issue #30 实测恰好
       # 3 条必挂、门禁拒绝升级）—— 所以这里同时把 DOCKER_HOST 指向 000 权限的假套接字，
       # 把"套接字不可访问"也作为门禁环境的一个维度复跑。
-      - name: 更新器门禁全清单（按 unit 的加固环境复跑：NoNewPrivileges + umask 0077 + 无 docker 访问）
+      - name: 更新器门禁全清单（按 unit 的加固环境复跑：NoNewPrivileges + umask 0077 + 无 docker 访问 + 无 devDeps）
         run: |
           command -v setpriv >/dev/null || { echo "缺少 setpriv"; exit 1; }
           umask 0077
@@ -86,10 +86,16 @@ jobs:
           : > "$NO_DOCKER_SOCK"
           chmod 000 "$NO_DOCKER_SOCK"
           export DOCKER_HOST="unix://$NO_DOCKER_SOCK"
+          # 第四条维度（2026-10-12 审查）：真门禁是 `npm ci --omit=dev` 的依赖面（没有
+          # happy-dom/espree 等 devDeps），CI 此前只跑"全量依赖"环境 —— 某个用例把 devDep
+          # 写成裸 import 时 CI 全绿、到了真门禁才 ERR_MODULE_NOT_FOUND。剔掉 devDeps 复跑
+          # 全清单；跑完恢复（后面的步骤还要用 eslint 等）。
+          npm prune --omit=dev --no-audit --no-fund
           setpriv --no-new-privs npm run test:unit
           setpriv --no-new-privs npm run test:local
           setpriv --no-new-privs npm run test:regression
           setpriv --no-new-privs node src/ops.js scan --strict
+          npm ci --no-audit --no-fund
 
       - name: 本地回归测试
         run: npm run test:local

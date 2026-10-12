@@ -510,7 +510,7 @@ export function buildToolDefs() {
           });
           afterSent(() => {
             ctx.stickers.markUsed(sticker.id, String(ctx.session.triggerText || '').slice(0, 100));
-            ctx.session.sent.push({ type: 'sticker', text: `[表情包:${sticker.desc || sticker.localNote || sticker.id}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
+            ctx.session.sent.push({ type: 'sticker', text: `[表情包:${sanitizeUserText(String(sticker.desc || sticker.localNote || sticker.id))}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
             ctx.emit('session-update', ctx.session.id);
           });
           return ok({ sent: true, messageId: result?.message_id ?? null, note: '表情已发送。' });
@@ -554,7 +554,8 @@ export function buildToolDefs() {
           if (!sticker) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`);
           if (!sticker.url) return err('该表情没有图片地址');
           const dataUrl = await downloadImageAsDataUrl(sticker.url, ctx.signal);
-          return { content: imageParts(`表情 ${sticker.id}（你的备注：${sticker.localNote || sticker.desc || '无'}）（先判断情绪/态度再回应）：`, [dataUrl]) };
+          // 备注是"图里文字经视觉判定入库"的内容，可能是别人画的图自带段头（2026-10-12 审查）
+          return { content: imageParts(`表情 ${sticker.id}（你的备注：${sanitizeUserText(String(sticker.localNote || sticker.desc || '无'))}）（先判断情绪/态度再回应）：`, [dataUrl]) };
         } catch (error) {
           return err(error?.message ?? error);
         }
@@ -622,7 +623,7 @@ export function buildToolDefs() {
           if (verdict.save !== true) {
             // 判定标准可配置（sticker.collectCriteria），这里不再复述默认标准 —— 否则用户改了标准，
             // 这句给模型看的理由会跟配置打架；结论与理由按判定结果走。
-            return err(`这张不收（${verdict.reason || '不像表情包'}）：按当前的收藏标准判定`);
+            return err(`这张不收（${sanitizeUserText(String(verdict.reason || '不像表情包'))}）：按当前的收藏标准判定`);
           }
           // 与 send_message/send_sticker 一样归一化：模型常传 "#123"，直接当 id 会生成
           // collected_#123，而刷新逻辑只认 collected_123，收藏的表情链接就永远不刷新。
@@ -637,7 +638,8 @@ export function buildToolDefs() {
           return ok({
             collected: true,
             id: saved.id,
-            note: saved.localNote,
+            // 判定备注来自视觉模型对图的转述（图里可以有段头伪装），出口统一弱化（2026-10-12 审查）
+            note: sanitizeUserText(String(saved.localNote || '')),
             kind: saved.localFile ? '本地图库（发出去是图片）' : 'QQ收藏表情'
           });
         } catch (error) {
@@ -1016,24 +1018,27 @@ export function buildToolDefs() {
           if (want('detail')) {
             try {
               const d = await ctx.onebot.call('get_group_detail_info', { group_id: groupId }, 15000, ctx.signal) || {};
-              out.detail = {
+              // 群名/群备注/群简介都是群可控内容（群管改群名就能改）：与 honors 分支同口径过
+              // 段头弱化（2026-10-12 审查：这里此前只 cleanHtmlText，与同函数的 honors 不一致）。
+              out.detail = sanitizeDeep({
                 name: d.group_name ?? d.groupName ?? '',
                 remark: d.group_remark ?? '',
                 // 实测（SnowLuma 1.14.22）：简介在 group_memo，描述在 group_description
                 intro: safeSlice(cleanHtmlText(d.group_memo ?? d.group_desc ?? d.group_description ?? d.description ?? d.intro ?? ''), 300),
                 memberCount: d.member_count ?? d.memberCount ?? null,
                 maxMembers: d.max_member_count ?? null
-              };
+              });
             } catch (error) { failures.push(`群详情：${error?.message ?? error}`); }
           }
           if (want('notice')) {
             try {
               const notices = await ctx.onebot.call('_get_group_notice', { group_id: groupId }, 15000, ctx.signal);
-              out.notices = (Array.isArray(notices) ? notices : []).slice(0, 3).map((n) => ({
+              // 群公告同理（公告正文是群管可写内容）
+              out.notices = sanitizeDeep((Array.isArray(notices) ? notices : []).slice(0, 3).map((n) => ({
                 time: n?.publish_time ?? n?.time ?? null,
                 forNewMembers: n?.send_to_new_members === true,
                 text: safeSlice(cleanHtmlText(n?.message?.text ?? n?.text ?? n?.content ?? ''), 500)
-              })).filter((n) => n.text);
+              })).filter((n) => n.text));
               if (!out.notices.length) out.notices = [];
             } catch (error) { failures.push(`群公告：${error?.message ?? error}`); }
           }
@@ -1983,9 +1988,10 @@ export function buildToolDefs() {
           time: new Date(entry.ts).toLocaleString('zh-CN', { hour12: false }),
           sender: entry.self ? '我' : displayNameOf(entry.senderId, entry.senderName),
           senderId: entry.senderId,
-          // 正文与【过去状态】同形（缺引用块就补）；reply 仍是结构化原字段，供取 id 用
+          // 正文与【过去状态】同形（缺引用块就补）；reply 是结构化原字段（供取 id/发送者用），
+          // 但 sender/text 是别人可控文本：与其他出口同口径过段头弱化（2026-10-12 审查）
           text: textWithQuote(entry),
-          reply: entry.reply
+          reply: entry.reply ? sanitizeDeep(entry.reply) : entry.reply
         });
       }
     },
@@ -2030,7 +2036,8 @@ export function buildToolDefs() {
               const hit = (file ? await ctx.stickers.find(file) : null)
                 || (bare ? await ctx.stickers.find(bare) : null)
                 || (m.url ? await ctx.stickers.find(String(m.url)) : null);
-              const label = hit ? String(hit.localNote || hit.desc || '').trim() : '';
+              // 备注/描述来自"图里文字经视觉判定入库"的内容，出口统一弱化（2026-10-12 审查）
+              const label = hit ? sanitizeUserText(String(hit.localNote || hit.desc || '').trim()) : '';
               if (label && !known.includes(label)) known.push(label);
             } catch { /* 查库失败不影响看图 */ }
           }
@@ -2277,7 +2284,7 @@ export function buildToolDefs() {
     },
     {
       name: 'web_search',
-      description: '联网搜索（搜索引擎按配置，默认 Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、自己不确定的事实。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
+      description: '联网搜索（搜索引擎按配置，默认 Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、看不懂或拿不准的词/说法（新梗、缩写、黑话、谐音、圈内叫法、不认识的专有名词）、自己不确定的事实 —— 先搜含义再回，别靠猜。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
       parameters: {
         type: 'object',
         properties: { query: { type: 'string', description: '搜索词' } },

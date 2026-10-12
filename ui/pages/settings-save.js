@@ -144,8 +144,13 @@ async function saveConfig({ quiet = false } = {}) {
       maxPlayers: clampInt(val('#cfg-game-maxplayers', c.groupGame?.maxPlayers ?? 10), 2, 30, 10),
       roundSeconds: clampInt(val('#cfg-game-round', c.groupGame?.roundSeconds ?? 0), 0, 600, 0),
       discussSeconds: clampInt(val('#cfg-game-discuss', c.groupGame?.discussSeconds ?? 0), 0, 600, 0),
-      // 清空输入框 = 回到默认 45（与引擎"键缺失按 45"一致）；写 0 才是关闭报名
-      recruitSeconds: clampInt(val('#cfg-game-recruit', c.groupGame?.recruitSeconds ?? 45) || 45, 0, 300, 45),
+      // 清空输入框 = 回到默认 45（与引擎"键缺失按 45"一致）；写 0 才是关闭报名。
+      // ⚠️ 不能写 `val(...) || 45`：控件缺失时回退值本身是数字，存过 0（关闭报名）会被
+      // || 抬回 45（2026-10-12 审查）。空串单独判，数字 0 原样进 clampInt。
+      recruitSeconds: (() => {
+        const raw = val('#cfg-game-recruit', c.groupGame?.recruitSeconds ?? 45);
+        return clampInt(String(raw).trim() === '' ? 45 : raw, 0, 300, 45);
+      })(),
       revealWords: chk('#cfg-game-reveal', c.groupGame?.revealWords !== false),
       games: [
         ['number-bomb', '#cfg-game-bomb'],
@@ -292,11 +297,12 @@ async function saveConfig({ quiet = false } = {}) {
     const priceCached = priceEditable ? (Number(val('#cfg-price-cached', 0)) || 0) : (Number(c.api.priceCachedPerM) || 0);
     patch.api = {
       vision: chk('#cfg-vision', c.api.vision !== false),
-      // 每日花费上限（改进方案 #8）：金额 0/非法 = 永不超限（宁可不拦，也不把 0 当"零预算即封锁"）
+      // 每日花费上限（改进方案 #8）：金额 0/非法 = 永不超限（宁可不拦，也不把 0 当"零预算即封锁"）；
+      // 控件缺失时回退已存值，而不是写死的 20（2026-10-12 审查）
       budget: {
         ...(c.api?.budget || {}),
         enabled: chk('#cfg-budget-enabled', c.api?.budget?.enabled === true),
-        dailyYuan: Number(val('#cfg-budget-daily', 20)) || 0,
+        dailyYuan: Number(val('#cfg-budget-daily', c.api?.budget?.dailyYuan ?? 20)) || 0,
         onExceed: val('#cfg-budget-onexceed', 'degrade') === 'block' ? 'block' : 'degrade'
       },
       // 思考模式：每供应商独立（thinkingByService[主机]）。只有用户真的动过控件才写，
@@ -564,8 +570,10 @@ async function saveConfig({ quiet = false } = {}) {
         ...(enteredTavilyKey && enteredTavilyKey !== '******' ? { apiKey: enteredTavilyKey } : {})
       },
       aggregate: {
-        sources: val('#cfg-aggregate-sources', '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).slice(0, 4),
-        count: Math.min(6, Math.max(2, Number(val('#cfg-aggregate-count', '')) || 4))
+        // 控件缺失时回退已存列表（原来回退空串 → 存出空数组，把用户配好的聚合源静默清空；
+        // 2026-10-12 审查）
+        sources: val('#cfg-aggregate-sources', (c.webSearch?.aggregate?.sources || []).join(',')).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).slice(0, 4),
+        count: Math.min(6, Math.max(2, Number(val('#cfg-aggregate-count', c.webSearch?.aggregate?.count ?? '')) || 4))
       },
       // ⚠️ 这里**故意不带** webSearch.providers（自定义搜索服务列表）：它由「添加自定义搜索服务」
       // 按钮单独管理（POST /api/search-providers），且每家的 Key 存在 providers[].apiKey。
@@ -771,9 +779,10 @@ async function saveConfig({ quiet = false } = {}) {
         __replace__: (() => { try { return JSON.parse($('#tier-group-json')?.value || '{}'); } catch { return {}; } })()
       }
     };
-    // 清掉已废弃的两个字段，避免残留配置误导后来读代码的人
-    delete patch.store.pastStateLimit;
-    delete patch.store.pastStateMaxChars;
+    // 注：老字段 pastStateLimit 已无读取方；pastStateMaxChars 仍在用（prompt.js 读它夹"过去
+    // 状态"上限）—— 别误删。这里不再做 delete：patch 只是发给服务端的合并片段，
+    // updateConfig 是深合并，删 patch 里的字段清不掉已存值（2026-10-12 审查：原来的两行
+    // delete 就是这种无效代码）
   }
 
   // 「平台能力」页的保存块（2026-10-07 复审 P1）：这些控件只由这个分区渲染，

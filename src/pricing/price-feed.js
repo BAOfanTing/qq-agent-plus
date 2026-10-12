@@ -205,7 +205,8 @@ function writeDiskCache(tag, url, prices, aliases = null) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     const tmp = `${CACHE_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ tag, url, fetchedAt: Date.now(), prices, aliases: aliases || {} }), 'utf8');
+    // 与其他落盘同口径锁 0600（缓存本身不敏感，但避免 umask 波动带来的文件权限漂移）
+    fs.writeFileSync(tmp, JSON.stringify({ tag, url, fetchedAt: Date.now(), prices, aliases: aliases || {} }), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, CACHE_FILE);
   } catch { /* 缓存写不进去不影响使用 */ }
 }

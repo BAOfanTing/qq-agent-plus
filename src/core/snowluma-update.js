@@ -572,14 +572,24 @@ export function createSnowlumaUpdater(options = {}) {
     const lines = [];
     const push = (s) => { const line = String(s).trim(); if (line) { lines.push(line); log(`[snowluma] ${line}`); } };
 
+    // .env 原子写（2026-10-12 审查）：直接写目标文件时，更新器被超时/重启打断会留下半个
+    // .env，compose 直接起不来。tmp 写完再 rename；权限沿用原文件的（rename 会换 inode，
+    // 不带 mode 会把原来的 0600 打回 umask 默认）。
+    const envMode = (() => { try { return fs.statSync(envFile).mode & 0o777; } catch { return 0o600; } })();
+    const writeEnvAtomic = (content) => {
+      const tmp = `${envFile}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, content, { encoding: 'utf8', mode: envMode });
+      fs.renameSync(tmp, envFile);
+    };
+
     try {
-      fs.writeFileSync(envFile, renderEnvWithImage(originalEnv, target), 'utf8');
+      writeEnvAtomic(renderEnvWithImage(originalEnv, target));
       push(`镜像写入 ${IMAGE_KEY}=${target}（备份在 ${backup.dir}）`);
 
       const pull = await compose('pull');
       push(`pull ${pull.ok ? 'ok' : `失败(code=${pull.code})`}`);
       if (!pull.ok) {
-        fs.writeFileSync(envFile, originalEnv, 'utf8');
+        writeEnvAtomic(originalEnv);
         const result = { ok: false, stage: 'pull', error: describeDockerFailure(pull.stderr || pull.stdout, '拉取镜像失败'), from, to: target, restored: true, viaSudo: usedSudoDocker, backupDir: backup.dir, log: lines };
         lastResult = result;
         return result;
@@ -601,7 +611,7 @@ export function createSnowlumaUpdater(options = {}) {
       push(`失败：${error?.message ?? error} —— 开始回滚到 ${from}`);
       let rolledBack = false;
       try {
-        fs.writeFileSync(envFile, originalEnv, 'utf8');
+        writeEnvAtomic(originalEnv);
         const back = await compose('up', '-d');
         const ready = await waitReady();
         rolledBack = back.ok && ready.ok;

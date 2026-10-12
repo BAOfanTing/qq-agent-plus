@@ -415,22 +415,29 @@ async function openUnknownOperations(chatKey) {
     closeModelModal(overlay));
   overlay.querySelectorAll('[data-unknown-result]').forEach((button) => {
     button.addEventListener('click', async () => {
-      const sent = button.dataset.unknownResult === 'sent';
-      if (!await askForConfirmation(sent
-        ? '确认已在 QQ 中看到这次操作成功？不会再次发送。'
-        : '确认这次操作未成功？系统也不会自动重试。')) return;
-      await api(
-        `/api/chats/${chatKey.replace(':', '_')}/unknown-operations/${encodeURIComponent(button.dataset.operationId)}/reconcile`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            result: button.dataset.unknownResult,
-            confirm: true
-          })
-        }
-      );
-      closeModelModal(overlay);
-      await loadChats();
+      try {
+        const sent = button.dataset.unknownResult === 'sent';
+        if (!await askForConfirmation(sent
+          ? '确认已在 QQ 中看到这次操作成功？不会再次发送。'
+          : '确认这次操作未成功？系统也不会自动重试。')) return;
+        button.disabled = true;
+        await api(
+          `/api/chats/${chatKey.replace(':', '_')}/unknown-operations/${encodeURIComponent(button.dataset.operationId)}/reconcile`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              result: button.dataset.unknownResult,
+              confirm: true
+            })
+          }
+        );
+        closeModelModal(overlay);
+        await loadChats();
+      } catch (error) {
+        // 失败时保留弹窗（用户可以再试或关掉），并给出明确反馈
+        button.disabled = false;
+        alert(`核对写入失败：${error.message}`);
+      }
     });
   });
 }
@@ -624,42 +631,62 @@ function renderChatMessages() {
   $('#chat-runtime-control')?.addEventListener('click', () =>
     openChatRuntimeControl(key).catch((error) => alert(error.message)));
   $('#chat-read-btn').addEventListener('click', async () => {
-    await api(`/api/chats/${key.replace(':', '_')}/mark-read`, { method: 'POST', body: '{}' });
-    loadChats();
-    // 保持视图：用户可能已经滚到中间了，别把他弹回顶部
-    loadChatMessages(key, { keepView: true });
+    try {
+      await api(`/api/chats/${key.replace(':', '_')}/mark-read`, { method: 'POST', body: '{}' });
+      loadChats();
+      // 保持视图：用户可能已经滚到中间了，别把他弹回顶部
+      loadChatMessages(key, { keepView: true });
+    } catch (error) {
+      alert(`标记已读失败：${error.message}`);
+    }
   });
   $('#chat-retry-btn')?.addEventListener('click', async () => {
-    if (!await askForConfirmation('重新处理确定未发送成功的失败批次？')) return;
-    await api(`/api/chats/${key.replace(':', '_')}/retry-failed`, { method: 'POST', body: '{"confirm":true}' });
-    loadChats();
+    try {
+      if (!await askForConfirmation('重新处理确定未发送成功的失败批次？')) return;
+      await api(`/api/chats/${key.replace(':', '_')}/retry-failed`, { method: 'POST', body: '{"confirm":true}' });
+      loadChats();
+    } catch (error) {
+      alert(`重试失败：${error.message}`);
+    }
   });
   $('#chat-resolve-btn')?.addEventListener('click', async () => {
-    if (state.config?.incidentPilot?.enabled === true) {
-      await openUnknownOperations(key);
-      return;
+    try {
+      if (state.config?.incidentPilot?.enabled === true) {
+        await openUnknownOperations(key);
+        return;
+      }
+      if (!await askForConfirmation('已核对 QQ 中的实际发送结果？确认后将结束待确认批次，不会重发。')) return;
+      await api(`/api/chats/${key.replace(':', '_')}/resolve-held`, {
+        method: 'POST', body: '{"confirm":true}'
+      });
+      loadChats();
+    } catch (error) {
+      alert(`核对失败：${error.message}`);
     }
-    if (!await askForConfirmation('已核对 QQ 中的实际发送结果？确认后将结束待确认批次，不会重发。')) return;
-    await api(`/api/chats/${key.replace(':', '_')}/resolve-held`, {
-      method: 'POST', body: '{"confirm":true}'
-    });
-    loadChats();
   });
   $('#chat-thread-close-btn')?.addEventListener('click', async () => {
-    if (!await askForConfirmation('结束当前对话线程？后续普通消息将重新遵循响应档位。')) return;
-    await api(`/api/chats/${key.replace(':', '_')}/thread`, { method: 'DELETE', body: '{}' });
-    await loadChats();
+    try {
+      if (!await askForConfirmation('结束当前对话线程？后续普通消息将重新遵循响应档位。')) return;
+      await api(`/api/chats/${key.replace(':', '_')}/thread`, { method: 'DELETE', body: '{}' });
+      await loadChats();
+    } catch (error) {
+      alert(`结束线程失败：${error.message}`);
+    }
   });
   $('#chat-testsend-btn').addEventListener('click', async () => {
     const input = $('#test-send-text');
     const text = input.value.trim();
     if (!text) return;
-    await api(`/api/chats/${key.replace(':', '_')}/test-send`, {
-      method: 'POST', body: JSON.stringify({ text })
-    });
-    input.value = '';
-    // 同理，保持当前分页与滚动位置
-    loadChatMessages(key, { keepView: true });
+    try {
+      await api(`/api/chats/${key.replace(':', '_')}/test-send`, {
+        method: 'POST', body: JSON.stringify({ text })
+      });
+      input.value = '';
+      // 同理，保持当前分页与滚动位置
+      loadChatMessages(key, { keepView: true });
+    } catch (error) {
+      alert(`发送失败：${error.message}`);
+    }
   });
 
   updateChatMessagesBody();

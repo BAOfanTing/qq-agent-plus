@@ -1,13 +1,22 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
-import { buildToolDefs } from '../src/tools/tools-core.js';
 import {
   annotateExperimentalToolSchemas,
   experimentalToolClass,
   experimentalToolSchedulerConfig,
   ExperimentalToolBatch
 } from '../src/pilots/experimental-tool-scheduler.js';
+
+// tools-core 在定义期就会读配置（buildToolDefs → getConfig，persist 会回写 data/config.json）：
+// 必须先设 QQ_AGENT_DATA_DIR 再动态 import —— 静态 import 先于任何代码执行，env 来不及生效
+//（2026-10-12 审查：本文件曾回写真实仓库的 data/config.json）。
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-exp-scheduler-'));
+process.env.QQ_AGENT_DATA_DIR = dataDir;
+const { buildToolDefs } = await import('../src/tools/tools-core.js');
 
 function call(id, name, args = {}) {
   return {

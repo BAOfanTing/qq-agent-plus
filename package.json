@@ -19,7 +19,6 @@
     "test:render": "node test/render-test.mjs",
     "test:scroll": "node test/scroll-test.mjs",
     "test:usage": "node test/usage-e2e.mjs",
-    "test:legacy-selftest": "node test/selftest.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },

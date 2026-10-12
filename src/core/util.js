@@ -181,6 +181,8 @@ function buildQuoteRef(reply, { withId = true, labelSelf = true } = {}) {
  * 提示词渲染与工具/控制台返回都走它，同一个模型在两个窗口看到的形状才一致。
  */
 export function quotePrefixFor(entry) {
+  // reply.sender / reply.text 是群友可控内容：buildQuoteRef 内部有两遍 sanitizeUserText
+  //（见它的注释），这里重建出的前缀天然是弱化形态、比较也用同一形态 —— 不必再洗一遍。
   const prefix = formatQuoteRef(entry?.reply);
   if (!prefix) return '';
   const text = String(entry?.text || '');

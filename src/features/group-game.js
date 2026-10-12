@@ -31,6 +31,10 @@ export class GroupGameManager {
     this.games = new Map();     // chatKey -> { gameId, state, startedAt, lastSeenId, deadlineAt }
     this.daily = new Map();     // chatKey -> { dayKey, count }
     this.timer = null;
+    // 兜底扫描窗口内"入口路径已喂过引擎"的消息 id（防双喂的精确判据，见 #collectPrivateActions）：
+    // 只在扫描进行时生效，不进任何落盘状态。
+    this._privateScanActive = false;
+    this._privateScanFedIds = new Set();
     this.#load();
   }
 
@@ -234,9 +238,13 @@ export class GroupGameManager {
     const cfg = this.#cfg();
     if (!cfg.enabled) return false;
     const uid = String(message?.senderId || '').split(':').pop();
+    // 兜底扫描正在跑、且这条已被扫描喂过引擎：视为已消费，不重复喂（2026-10-12 复核 P3：
+    // 双喂护栏做成双向的 —— 扫描侧跳过入口喂过的，入口侧跳过扫描喂过的）。
+    if (this._privateScanActive && this._privateScanFedIds.has(`${chatKey}|${String(message?.id)}`)) return true;
     // 按"最近开局优先"逐个候选局试到有人认领；都没认领（非参与者/白天/已出局…）→ 交回普通链路。
     // 插件可以用 consume:true 表示"我认领了这条但不必回执"（重复提交、回执超配额）——静默消耗。
     const hit = this.#feedPrivate(chatKey, uid, String(message?.text || ''), Number(message?.ts) || this.now());
+    if (hit && this._privateScanActive) this._privateScanFedIds.add(`${chatKey}|${String(message?.id)}`);
     if (!hit) {
       // 没被认领 = 这条是聊天（白天闲聊/看不懂），交给模型；但水位要推——否则兜底扫描
       // 在阶段变成"可行动"之后会把这条旧消息当行动补执行（2026-09-29 第三轮审查 P1）
@@ -263,29 +271,43 @@ export class GroupGameManager {
     if (!players.length) return;
     g.privateSeen = g.privateSeen && typeof g.privateSeen === 'object' ? g.privateSeen : {};
     let dirty = false;
-    // 扫描"所有含这些玩家的局"的候选：兜底不只补这一局，也补"归属在别处"的那些消息
-    for (const uid of players) {
-      // 这一局在扫描过程中结束了就不再喂后续消息（同一批里"狼全退"之后，后面那条
-      // 「不玩了」还会再走一次结算，群里出现第二条身份表不同的终局播报；2026-09-29 对抗性验证 P2）
-      if (this.games.get(groupKey)?.state?.phase === 'ended') break;
-      const key = `private:${uid}`;
-      // 水位取"该玩家在哪个局里的最大值"（#notePrivateSeen 会同时推所有局）
-      const after = Math.max(...[...this.games.values()].map((x) => Number(x.privateSeen?.[uid] || 0)), 0);
-      // 不看 readOnly：行动消息可能是 pending（入口没接管到的情况），水位保证不重放
-      const rows = this.store.recent(key, { limit: 200, afterId: after });
-      for (const m of rows) {
+    // 防双喂标记（2026-10-12 审查，同日复核修正）：扫描窗口内"已被喂过引擎"的消息 id 记在
+    // 实例集合里，入口路径与扫描共用 —— 入口在扫描的 await 间隙消费了某条 → 扫描跳过它；
+    // 扫描喂了某条 → 入口跳过它。判据必须是"这条真的被喂过"（精确 id），不能用 max 水位：
+    // 入口消费更新的消息会把水位抬过中间还没处理的旧 id，那些会漏执行。
+    this._privateScanActive = true;
+    this._privateScanFedIds.clear();
+    try {
+      // 扫描"所有含这些玩家的局"的候选：兜底不只补这一局，也补"归属在别处"的那些消息
+      for (const uid of players) {
+        // 这一局在扫描过程中结束了就不再喂后续消息（同一批里"狼全退"之后，后面那条
+        // 「不玩了」还会再走一次结算，群里出现第二条身份表不同的终局播报；2026-09-29 对抗性验证 P2）
         if (this.games.get(groupKey)?.state?.phase === 'ended') break;
-        this.#notePrivateSeen(m.id, uid);
-        if (m.self) continue;
-        const hit = this.#feedPrivate(key, uid, String(m.text || ''), Number(m.ts) || this.now());
-        if (!hit) continue;   // 没有局认领（非行动消息/已出局…）→ 交给模型
-        dirty = true;
-        try { this.store.markRead(key, [Number(m.id)]); } catch { /* 忽略 */ }
-        if (hit.out.effects?.length) {
-          if (hit.out.effects.length) await this.#applyEffects(hit.groupKey, hit.out.effects);
+        const key = `private:${uid}`;
+        // 水位取"该玩家在哪个局里的最大值"（#notePrivateSeen 会同时推所有局）
+        const after = Math.max(...[...this.games.values()].map((x) => Number(x.privateSeen?.[uid] || 0)), 0);
+        // 不看 readOnly：行动消息可能是 pending（入口没接管到的情况），水位保证不重放
+        const rows = this.store.recent(key, { limit: 200, afterId: after });
+        for (const m of rows) {
+          if (this.games.get(groupKey)?.state?.phase === 'ended') break;
+          const fedKey = `${key}|${String(m.id)}`;   // 消息 id 是每会话各自的序列，跨会话会重号：key 必须带 chatKey
+          if (this._privateScanFedIds.has(fedKey)) continue;   // 扫描窗口内已被入口喂过
+          this.#notePrivateSeen(m.id, uid);
+          if (m.self) continue;
+          const hit = this.#feedPrivate(key, uid, String(m.text || ''), Number(m.ts) || this.now());
+          if (!hit) continue;   // 没有局认领（非行动消息/已出局…）→ 交给模型
+          this._privateScanFedIds.add(fedKey);
+          dirty = true;
+          try { this.store.markRead(key, [Number(m.id)]); } catch { /* 忽略 */ }
+          if (hit.out.effects?.length) {
+            if (hit.out.effects.length) await this.#applyEffects(hit.groupKey, hit.out.effects);
+          }
+          if (hit.out.state?.phase === 'ended') this.#finishIfEnded(hit.groupKey);
         }
-        if (hit.out.state?.phase === 'ended') this.#finishIfEnded(hit.groupKey);
       }
+    } finally {
+      this._privateScanActive = false;
+      this._privateScanFedIds.clear();
     }
     if (dirty) this.#save();
   }
@@ -634,14 +656,24 @@ export class GroupGameManager {
         }
         // 上次终局播报没送出去：先重试播报，送达了才收尾（2026-10-10 审查 C1）
         if (g.pendingEnd) {
+          // 退避（2026-10-12 审查）：原来每个 tick（20 秒）都试一次，协议端长时间发不出去时
+          // 反复打日志/重试。改成 20s→40s→…→10 分钟封顶；退避点在 g 上、随 #save() 落盘，
+          // 重启后不会立刻重打。
+          if (Number(g.pendingEndRetryAt) > this.now()) continue;
           const name = PLUGINS.get(g.gameId)?.meta.name || '游戏';
           try {
             await this.sender.sendTextBatch(chatKey, [`${name}结束：${g.pendingEnd}`.slice(0, 500)], {});
           } catch (error) {
-            this.log(`[group-game] ${chatKey} 终局播报重试失败（下个 tick 再试）:`, error);
+            const attempts = Math.min(20, (Number(g.pendingEndRetryAttempts) || 0) + 1);
+            g.pendingEndRetryAttempts = attempts;
+            g.pendingEndRetryAt = this.now() + Math.min(20000 * 2 ** (attempts - 1), 10 * 60 * 1000);
+            this.#save();
+            this.log(`[group-game] ${chatKey} 终局播报重试失败（第 ${attempts} 次，${Math.round((g.pendingEndRetryAt - this.now()) / 1000)}s 后再试）:`, error);
             continue;
           }
           delete g.pendingEnd;
+          delete g.pendingEndRetryAt;
+          delete g.pendingEndRetryAttempts;
           this.games.delete(chatKey);
           this.#save();
           continue;

@@ -4618,6 +4618,11 @@ function resolveRange(raw) {
   if (s === '24h') {
     return { mode: '24h', start: now - 24 * 60 * 60 * 1000, end: now, label: '最近 24 小时' };
   }
+  if (s === 'all') {
+    // 「全部」档：从最早记录算起（start=0 让文件预筛收下所有记录）。UI 的「全部」按钮
+    // 此前落进下面的 Number('all')||7，标签和数据都变成"最近 7 天"（2026-10-12 审查）。
+    return { mode: 'all', start: 0, end: now, label: '全部' };
+  }
   const n = Math.min(30, Math.max(1, Number(s) || 7));
   // 按上海自然日：从 N-1 天前的 00:00 算起。
   return {
@@ -5032,7 +5037,7 @@ function buildUsageStats({ range = '7' } = {}) {
   const totals = costOfRows(rows);
   // 按天分桶需要 dayKey 字段
   for (const r of rows) r.dayKey = dayKeyOf(r.at);
-  const byDay = win.mode === 'days'
+  const byDay = (win.mode === 'days' || win.mode === 'all')
     ? groupBy(rows, 'dayKey').map((x) => ({ day: x.key, ...x })).sort((a, b) => a.day.localeCompare(b.day))
     : [];
   const chats = groupBy(rows, 'chatKey', 0);
