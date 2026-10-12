@@ -47,6 +47,12 @@ function loadPage() {
     onebot: { wsUrl: 'ws://127.0.0.1:3391', httpUrl: 'http://127.0.0.1:3390', wsHeartbeat: 'auto', hasAccessToken: false, hasHttpAccessToken: false },
     identityPilot: {}, slangPilot: {}, incidentPilot: {}, memory: {},
     sticker: { enabled: false },
+    // 人设分区的渲染读 c.persona.*（不带可选链）——缺这段会让"人设"分区渲染抛
+    //（2026-10-12："没保存就清交接"的拦截用例第一次渲染这个分区时暴露）
+    persona: {
+      botName: '小鲸鱼', selfNickname: '', participation: 'medium',
+      behaviorProfile: 'legacy', roleText: '# 冒烟卡\n\n## 一、你是谁\n测试用的群友。', customRules: '', templateId: ''
+    },
     send: { minGapMs: 1000, maxGapMs: 3000, maxPerMinute: 80, maxPerHour: 500, byLengthMs: 20, hardSplitAt: 4000 },
     proactive: { enabled: false, probability: 0.25, checkIntervalMinMs: 1800000, checkIntervalMaxMs: 5400000 },
     conversation: {}, store: {}, wakeDelayMs: 8000
@@ -623,5 +629,273 @@ test('真实 DOM 冒烟：数字字段填 0 要存成 0（不被 `|| 默认值` 
     await settle(220);
     const last = cfgPosts().pop();
     assert.notEqual(last.drainDelayMs, 0, '留空不该被写成 0（那是"清空 = 恢复默认"的路子）');
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('真实 DOM 冒烟：人物记忆页 15s 轮询不叠监听（点一次「保存备注」只发一个请求）（2026-10-12 审查）', { skip: SKIP }, async () => {
+  // setHtmlIfChanged 不改 DOM 时不能重挂监听：这一页每 15s 轮询 + 每次 focus 都会重渲染，
+  // 旧代码（e1d20f7 把 innerHTML 换成 setHtmlIfChanged 时漏了守卫）会在每一轮给同一批按钮
+  // 再 addEventListener 一份 —— 开着一小时，点一次「保存备注」发约 240 个 POST。
+  const { window } = loadPage();
+  await settle();
+  try {
+    const doc = window.document;
+    const posts = [];
+    const orig = window.fetch;
+    const person = {
+      userId: '123456',
+      name: '叠监听受害案例',
+      updatedAt: 1700000000000,
+      sourceChatKeys: ['group:10001'],
+      impressions: [{ content: '喜欢猫', createdAt: 1700000000000, lastObservedAt: 1700000000000, sourceChatKeys: ['group:10001'] }]
+    };
+    window.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+      const method = (options?.method || 'GET').toUpperCase();
+      if (method === 'POST' && urlStr.includes('/api/config')) {
+        posts.push({ url: urlStr, body: options?.body });
+        return { ok: true, status: 200, json: async () => ({ config: {} }) };
+      }
+      if (urlStr.includes('/api/memory-files')) {
+        if (/\/api\/memory-files\/(group|private)_\d+/.test(urlStr)) {
+          return { ok: true, status: 200, json: async () => ({ members: [structuredClone(person)] }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ files: [{ chatKey: 'group:10001', impressionCount: 1 }] }) };
+      }
+      return orig(url, options);   // 其余照旧走原始桩（含设置页与状态轮询要的 /api/config GET）
+    };
+
+    window.switchTab('people-memory');
+    await settle(60);
+    window.dispatchEvent(new window.Event('focus'));   // 打开页面时的首次加载
+    await settle(120);
+    const personBtn = doc.querySelector('#global-memory-items [data-gm-key]');
+    assert.ok(personBtn, '人物列表要有条目（fetch 桩已给一份数据）');
+    personBtn.click();
+    await settle(60);
+    assert.ok(doc.getElementById('gm-note-save'), '选中人物后要有「保存备注」按钮');
+
+    // 模拟一轮 15s 轮询：内容没变 → setHtmlIfChanged 不动 DOM；此时**不能**再挂监听
+    window.dispatchEvent(new window.Event('focus'));
+    await settle(120);
+
+    doc.getElementById('gm-note-save').click();
+    await settle(150);
+    const saves = posts.filter((p) => p.url.includes('/api/config'));
+    assert.equal(saves.length, 1, `一次点击只能发一个保存请求，实发 ${saves.length} 个（每轮重渲染叠了一份监听）`);
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('真实 DOM 冒烟：每日动态状态块的群摘要展开态在轮询重建后保持（2026-10-12 审查）', { skip: SKIP }, async () => {
+  // loadDailyMomentsStatus 每次都把整块 innerHTML 重写：`<details>` 的展开态不在 HTML 里，
+  // 不记住就会每 15 秒折叠一次、正在读摘要的人被反复打断。
+  const { window } = loadPage();
+  await settle();
+  try {
+    const doc = window.document;
+    const orig = window.fetch;
+    const statusStub = {
+      enabled: true, running: false, nextRunAt: null, records: [],
+      latest: {
+        id: 'm1', dayKey: '2026-10-12', status: 'preview', decision: 'hold', content: '草稿',
+        groupSummaries: [{ groupName: '群A', summary: '聊了天气' }]
+      }
+    };
+    window.fetch = async (url, options = {}) => {
+      if (String(url).includes('/api/daily-moments/status')) {
+        return { ok: true, status: 200, json: async () => structuredClone(statusStub) };
+      }
+      return orig(url, options);
+    };
+    // 状态块在「设置 → 自动行为 → 每日动态」分区里，先把这个分区渲染出来
+    window.switchTab('settings');
+    await settle(80);
+    doc.querySelector('.settings-menu-item[data-section="moments"]').click();
+    await settle(160);
+    await window.loadDailyMomentsStatus();
+    const box = doc.getElementById('daily-moments-status');
+    assert.ok(box, '每日动态分区要有状态块');
+    const details = box.querySelector('.moment-summaries');
+    assert.ok(details, '有群摘要时要渲染 details');
+    details.open = true;
+    await window.loadDailyMomentsStatus();   // 模拟一轮状态轮询重建
+    const again = doc.getElementById('daily-moments-status').querySelector('.moment-summaries');
+    assert.equal(again?.open, true, '轮询重建后展开态要被恢复');
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('真实 DOM 冒烟：人设没保存时「换人设后清空交接」先拦下，保存后才照常清（2026-10-12 反馈）', { skip: SKIP }, async () => {
+  // 反馈："在设置人设清空交谈之后，机器人还是之前的人设" —— 交接清了、人设没保存，
+  // 按钮当时没有任何前置检查，看着像成功了。现在：草稿未保存 → 拦下并指路「保存设置」。
+  const { window, fetchLog } = loadPage();
+  await settle();
+  try {
+    const doc = window.document;
+    const alerts = [];
+    window.alert = (message) => alerts.push(String(message));
+    window.switchTab('settings');
+    await settle(80);
+    doc.querySelector('.settings-menu-item[data-section="persona"]').click();
+    await settle(160);
+    const btn = doc.getElementById('persona-reset-handoff-btn');
+    assert.ok(btn, '人设页要有「换人设后清空交接」按钮');
+    const role = doc.getElementById('cfg-roletext');
+    assert.ok(role, '人设页要有角色设定编辑框');
+    const saved = role.value;
+    const resetCalls = () => fetchLog.filter((u) => u.includes('/api/persona/reset-handoffs')).length;
+
+    // ① 草稿改了、没保存：点按钮要被拦，不发请求，提示先去保存
+    role.value = saved + '\n\n（临时加一句，还没保存）';
+    btn.click();
+    await settle(120);
+    assert.equal(resetCalls(), 0, '未保存时不该发清空请求（发了就是"交接清了、人设没换"）');
+    // 先转布尔再断言：失败时把 happy-dom 节点交给 assert 的 inspect 会炸（Array buffer allocation failed）
+    assert.equal(Boolean(doc.querySelector('.model-modal-overlay')), false, '未保存时应被直接拦下，不该走到确认框');
+    assert.ok(alerts.some((m) => m.includes('保存')), `要弹提示让人先去保存，实际弹了：${JSON.stringify(alerts)}`);
+    assert.match(doc.getElementById('persona-reset-handoff-hint').textContent, /保存/);
+
+    // ①b 逐节编辑是主路径：字只在分节框里、还没落回 #cfg-roletext 时也要算"没保存"
+    //（独立审查：漏这条路径时守卫读到旧正文，等于白做）
+    role.value = saved;
+    const secEdit = doc.querySelector('#persona-card-view .pd-sec-edit[data-sec="0"]');
+    assert.ok(secEdit, '分节视图要有「编辑」按钮');
+    secEdit.click();
+    await settle(80);
+    const secBox = doc.querySelector('#persona-card-view .pd-edit-text[data-sec="0"]');
+    assert.ok(secBox, '点「编辑」后要出现分节编辑框');
+    secBox.value = secBox.value + '\n（这条只在分节框里，还没落回草稿）';
+    btn.click();
+    await settle(120);
+    assert.equal(resetCalls(), 0, '分节框里的未保存改动也要算"没保存"');
+    assert.equal(Boolean(doc.querySelector('.model-modal-overlay')), false, '分节编辑未保存时也该被拦下');
+    doc.querySelector('#persona-card-view .pd-sec-cancel')?.click();   // 退出分节编辑，别影响下面
+    await settle(60);
+
+    // ② 改回已保存的样子：先弹确认框，确认后才发请求
+    role.value = saved;
+    btn.click();
+    await settle(80);
+    const overlay = doc.querySelector('.model-modal-overlay');
+    assert.ok(overlay, '草稿与配置一致时要走确认框流程');
+    overlay.querySelector('[data-confirm-accept]').click();
+    await settle(200);
+    assert.equal(resetCalls(), 1, '确认后要发一次清空请求');
+    assert.match(doc.getElementById('persona-reset-handoff-hint').textContent, /已清空/);
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('真实 DOM 冒烟：删掉正在用的自定义卡要说清"人设还没换"（2026-10-12 反馈）', { skip: SKIP }, async () => {
+  // 反馈里最常见的坑之一：自定义卡删了以为就换回默认了 —— 其实正文是拷进配置的快照，
+  // 删除只把卡从库里移走。现在：确认框先警告 + 删除后明确指路「保存设置」。
+  const { window } = loadPage();
+  await settle();
+  try {
+    const doc = window.document;
+    const customText = '# 毒舌卡\n\n## 一、你是谁\n你说话很毒。';
+    const defaultText = '# 小鲸鱼（默认）\n\n## 一、你是谁\n你是默认卡。';
+    const deleted = [];
+    let customPresent = true;
+    const orig = window.fetch;
+    const base = await (await orig('/api/config')).json();   // 基础桩：其余分区字段照旧
+    window.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+      const method = (options?.method || 'GET').toUpperCase();
+      if (urlStr.includes('/api/persona-templates') && method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            templates: [
+              { id: 'xiaojingyu', name: '小鲸鱼（默认）', text: defaultText, behaviorProfile: 'legacy', builtin: true },
+              ...(customPresent
+                ? [{ id: 'custom_0', name: '毒舌卡', text: customText, customRules: '', behaviorProfile: 'legacy', builtin: false }]
+                : [])
+            ]
+          })
+        };
+      }
+      if (urlStr.includes('/api/config') && method === 'GET') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ...structuredClone(base),
+            persona: {
+              botName: '小鲸鱼', selfNickname: '', participation: 'medium',
+              behaviorProfile: 'legacy', roleText: customText, customRules: '', templateId: ''
+            }
+          })
+        };
+      }
+      if (method === 'DELETE' && urlStr.includes('/api/persona-templates/custom_0')) {
+        deleted.push(urlStr);
+        customPresent = false;
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }
+      return orig(url, options);
+    };
+    await window.loadSettings();
+    window.switchTab('settings');
+    await settle(80);
+    doc.querySelector('.settings-menu-item[data-section="persona"]').click();
+    await settle(160);
+
+    const delBtn = doc.getElementById('del-persona-btn');
+    assert.ok(delBtn, '要有人设删除按钮');
+    assert.equal(delBtn.classList.contains('hidden'), false, '当前草稿是自定义卡时删除按钮要可见');
+    delBtn.click();
+    await settle(60);
+    const overlay = doc.querySelector('.model-modal-overlay');
+    assert.ok(overlay, '删除要弹确认框');
+    assert.match(overlay.textContent, /正在用的就是这张卡/, '用着的卡要先说破"删卡≠换人设"');
+    overlay.querySelector('[data-confirm-accept]').click();
+    await settle(260);
+    assert.deepEqual(deleted, ['/api/persona-templates/custom_0'], '确认后要发 DELETE');
+    const hint = doc.getElementById('persona-pick-hint').textContent;
+    assert.match(hint, /仍在用被删卡的那份正文/, '删除后要说明人设还没换');
+    assert.match(hint, /保存设置/, '要指路到「保存设置」');
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('真实 DOM 冒烟：人物记忆页点「刷新」不会把列表卡在占位符上（2026-10-12 复审 P2）', { skip: SKIP }, async () => {
+  // 强制刷新会先把列表换成"正在读取…"占位符。若这次直接写 innerHTML 而不清 __renderedHtml，
+  // 数据没变时 setHtmlIfChanged 会判成"没变化"跳过重画 —— 占位符就永远留着，只有 F5 能救。
+  // 占位符/错误提示必须走 setBoxError（它清缓存），与 dom-util 里写明的约定一致。
+  const { window } = loadPage();
+  await settle();
+  try {
+    const doc = window.document;
+    const orig = window.fetch;
+    const person = {
+      userId: '223456',
+      name: '刷新受害案例',
+      updatedAt: 1700000000000,
+      sourceChatKeys: ['group:10001'],
+      impressions: [{ content: '喜欢猫', createdAt: 1700000000000, lastObservedAt: 1700000000000, sourceChatKeys: ['group:10001'] }]
+    };
+    window.fetch = async (url, options = {}) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/api/memory-files')) {
+        if (/\/api\/memory-files\/(group|private)_\d+/.test(urlStr)) {
+          return { ok: true, status: 200, json: async () => ({ members: [structuredClone(person)] }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ files: [{ chatKey: 'group:10001', impressionCount: 1 }] }) };
+      }
+      return orig(url, options);
+    };
+
+    window.switchTab('people-memory');
+    await settle(60);
+    window.dispatchEvent(new window.Event('focus'));
+    await settle(120);
+    assert.ok(doc.querySelector('#global-memory-items [data-gm-key]'), '先要有列表（fetch 桩已给一份数据）');
+
+    const refresh = doc.getElementById('gm-refresh');
+    assert.ok(refresh, '列表上方要有「刷新」按钮');
+    refresh.click();
+    await settle(200);
+
+    assert.ok(!doc.querySelector('#global-memory-items .gm-empty'), '占位符不该留在 DOM 里');
+    assert.ok(doc.querySelector('#global-memory-items [data-gm-key]'), '刷新后列表要回来（数据没变也不能卡在"正在读取…"）');
   } finally { window.happyDOM?.abort?.(); }
 });

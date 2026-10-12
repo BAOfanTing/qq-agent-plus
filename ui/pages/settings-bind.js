@@ -23,7 +23,7 @@ import {
 } from './moments.js';
 import {
   applyPersonaDraft, currentPersonaId, defaultPersonaFold, openPersonaCreateModal, parsePersonaCard,
-  personaBaseCardId, personaSectionBody, syncPersonaButtons
+  personaBaseCardId, personaDraftDirty, personaSectionBody, savedPersonaId, syncPersonaButtons
 } from './persona.js';
 import { saveConfig } from './settings-save.js';
 import { bindImageGenPreset, bindTtsControls } from './settings-voice.js';
@@ -1702,6 +1702,19 @@ function bindSettingsPersonaAndVision() {
   // 换卡后"断奶"：清掉各群的会话交接与线程状态（不动聊天记录与记忆）
   const resetHandoffBtn = $('#persona-reset-handoff-btn');
   if (resetHandoffBtn) resetHandoffBtn.addEventListener('click', async () => {
+    // 分节编辑框里的字还没落回 #cfg-roletext，先冲一次 —— 逐节编辑是主路径，漏了它
+    // 下面这层判定读到的是旧正文，等于守卫白做（2026-10-12 独立审查）。
+    flushPersonaSectionEdit();
+    // 草稿还没保存就先拦：交接清了、人设没换，机器人还是原来的人设，看着像"清了个寂寞"
+    //（用户反馈的"清空之后还是之前的人设"多半就卡在这一步，2026-10-12）。
+    if (personaDraftDirty()) {
+      const text = '人设改动还没保存：先点页面最底下的「保存设置」，再点「换人设后清空交接」。'
+        + '现在清的话只会清掉它的工作备注，机器人还是原来的人设。';
+      const hint = $('#persona-reset-handoff-hint');
+      if (hint) hint.textContent = text;
+      alert(text);
+      return;
+    }
     const NL = String.fromCharCode(10);
     const confirmed = await askForConfirmation(
       '清空所有群的【上次会话交接】并关闭进行中的对话线程？' + NL + NL
@@ -1732,7 +1745,14 @@ function bindSettingsPersonaAndVision() {
     if (!id.startsWith('custom_')) return;
     const tpl = state.personaTemplates[id];
     if (!tpl) return;
-    if (!await askForConfirmation(`确定删除自定义人设「${tpl.name}」？`)) return;
+    // 正在用的正文是"拷进配置的快照"，删卡不会把它一起删掉 —— 用着这张卡时先把这层说破，
+    // 否则"删了卡以为就换人设了"（2026-10-12 用户反馈）。
+    const wasInUse = savedPersonaId() === id;
+    const NL = String.fromCharCode(10);
+    if (!await askForConfirmation(`确定删除自定义人设「${tpl.name}」？`
+      + (wasInUse
+        ? NL + NL + '注意：机器人正在用的就是这张卡 —— 删除只是把卡从库里移走，它还会继续用这份正文；要真正换掉，删完点最底下的「保存设置」。'
+        : ''))) return;
     try {
       await api(`/api/persona-templates/${id}`, { method: 'DELETE', body: '{}' });
     } catch (e) {
@@ -1746,6 +1766,10 @@ function bindSettingsPersonaAndVision() {
       await loadSettings();
       const fallback = state.personaTemplates.xiaojingyu;
       if (fallback) applyPersonaDraft(fallback, 'xiaojingyu');
+      if (wasInUse) {
+        $('#persona-pick-hint').textContent = '已删除。机器人仍在用被删卡的那份正文 —— 点最底下的「保存设置」'
+          + '换成默认卡（想用别的卡先在卡库点一张），换完建议再点一次「换人设后清空交接」。';
+      }
     } catch (e) {
       $('#persona-pick-hint').textContent = `已删除，但人设卡刷新失败：${e.message}`;
     }

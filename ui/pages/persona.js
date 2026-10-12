@@ -36,6 +36,30 @@ function personaDraftState() {
   };
 }
 
+/**
+ * 草稿里有没有还没保存的人设改动（只比决定口吻的三项：正文 / 交流策略 / 附加规则）。
+ * 「换人设后清空交接」据此先拦一下：那不保存的话交接清了、人设没换，机器人还是旧人设 ——
+ * 用户反馈的"清空之后还是之前的人设"多半就卡在这一步（2026-10-12）。
+ * 名字与参与度不算"旧人设残留"的来源（改名/调参与度不影响它沿用哪张卡的口气），不给它们挡路。
+ */
+function personaDraftDirty() {
+  const saved = state.config?.persona || {};
+  const draft = personaDraftState();
+  return String(draft.roleText || '').trim() !== String(saved.roleText || '').trim()
+    || String(draft.behaviorProfile || 'legacy') !== String(saved.behaviorProfile || 'legacy')
+    || String(draft.customRules || '').trim() !== String(saved.customRules || '').trim();
+}
+
+/** 已保存配置正对应卡库里的哪张卡（匹配不上 = 自定义正文，或卡库还没读出来）。 */
+function savedPersonaId() {
+  const saved = state.config?.persona || {};
+  return findPersonaTemplateId(
+    saved.roleText || '',
+    saved.behaviorProfile || 'legacy',
+    saved.customRules || ''
+  );
+}
+
 function syncPersonaButtons() {
   const draft = personaDraftState();
   refreshPersonaFold(draft.roleText);
@@ -523,5 +547,5 @@ function openPersonaCreateModal() {
 
 export {
   applyPersonaDraft, currentPersonaId, defaultPersonaFold, openPersonaCreateModal, parsePersonaCard,
-  personaBaseCardId, personaSectionBody, renderPersonaSection, syncPersonaButtons
+  personaBaseCardId, personaDraftDirty, personaSectionBody, renderPersonaSection, savedPersonaId, syncPersonaButtons
 };
