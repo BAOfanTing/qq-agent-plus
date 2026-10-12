@@ -40,6 +40,14 @@ ALLOW_GROUPS="${QQ_AGENT_ALLOW_GROUPS:-}"
 ALLOW_PRIVATE="${QQ_AGENT_ALLOW_PRIVATE:-}"
 SKIP_MODEL_CONFIG=false
 
+# 网页终端（宝塔等面板的终端）、su、sudo -u 这类非登录会话不设置 XDG_RUNTIME_DIR：
+# systemctl --user 会直接报 "Failed to connect to bus ... $XDG_RUNTIME_DIR not defined"，
+# 即使用户管理器好好地在跑（2026-10-12 报道复现：同一台机器只差这一个环境变量）。
+# 目录存在就按 systemd 的口径补上；用户自己设过的值不动。
+if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/$(id -u)" ]]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+
 usage() {
   cat <<'EOF'
 Usage: bash deploy-all.sh [options]
@@ -55,10 +63,11 @@ Options:
   --onebot-ws-port PORT       Local-only OneBot WebSocket port (default: 3001)
   --service NAME              systemd user service (default: qq-agent-linux)
   --image IMAGE               SnowLuma image (default: tested v1.14.22)
-  --image-mirror HOST         Retry the pull through a registry mirror when Docker
-                              Hub is unreachable (mainland China), e.g.
+  --image-mirror HOST         Try this registry mirror (yours first) when Docker Hub
+                              is unreachable (mainland China), e.g.
                               --image-mirror docker.m.daocloud.io
-                              (also: QQ_AGENT_IMAGE_MIRROR, comma-separated)
+                              (also: QQ_AGENT_IMAGE_MIRROR, comma-separated);
+                              built-in public mirrors are tried after yours
   --agent-token TOKEN         Set the QQ Agent console token
   --onebot-token TOKEN        Set the shared OneBot HTTP/WS token
   --snowluma-password VALUE   Set the initial SnowLuma WebUI password
@@ -339,7 +348,7 @@ check_host_ownership() {
   local docker_command=()
   command -v systemctl >/dev/null || die 'systemctl is required'
   systemctl --user show-environment >/dev/null \
-    || die 'The systemd user manager is unavailable; no deployment changes made'
+    || die "Cannot reach the systemd user manager from this shell; no deployment changes made. A web terminal (panel console) or other non-login shell does not set XDG_RUNTIME_DIR even when the manager is running: run 'export XDG_RUNTIME_DIR=/run/user/\$(id -u)' and retry; if that directory does not exist, run 'sudo loginctl enable-linger $(id -un)' first, then retry."
   if ! load_state="$(systemctl --user show "$SERVICE.service" --property=LoadState --value)"; then
     [[ "$load_state" == not-found ]] \
       || die 'Cannot inspect the selected systemd service; no deployment changes made'
@@ -482,13 +491,24 @@ fi
 [[ "$SNOWLUMA_SCREEN" =~ ^[0-9]+x[0-9]+x[0-9]+$ ]] \
   || die "Invalid SNOWLUMA_SCREEN, expected WIDTHxHEIGHTxDEPTH: $SNOWLUMA_SCREEN"
 [[ "$SNOWLUMA_LOG_LEVEL" =~ ^[A-Za-z]+$ ]] || die "Invalid SNOWLUMA_LOG_LEVEL: $SNOWLUMA_LOG_LEVEL"
-# 镜像站列表：QQ_AGENT_IMAGE_MIRROR（逗号分隔）+ --image-mirror 追加。
-# 刻意不给默认值 —— 镜像站由第三方提供，用哪家必须由用户自己决定。
+# 镜像站列表 = 用户指定的（QQ_AGENT_IMAGE_MIRROR 逗号分隔 + --image-mirror）在前，
+# 内置公共加速站兜底在后。直连 Docker Hub 能通时这些一个都用不到。
+# 为什么留内置兜底：国内/受限网络直连 registry-1.docker.io 必失败，兜底之前每个新部署
+# 都要先撞一次"拉取镜像失败"再手改参数重跑（2026-10-12 群友实测）。内置站是第三方、
+# 随时可能失效：要换成或补充自己的，用参数放在前面即可（重复的会去掉）。
+DEFAULT_IMAGE_MIRRORS=(docker.1panel.live docker.m.daocloud.io)
 IMAGE_MIRRORS=()
 if [[ -n "${QQ_AGENT_IMAGE_MIRROR:-}" ]]; then
   IFS=',' read -r -a IMAGE_MIRRORS <<<"$QQ_AGENT_IMAGE_MIRROR"
 fi
 [[ -z "$IMAGE_MIRROR_ARG" ]] || IMAGE_MIRRORS+=("$IMAGE_MIRROR_ARG")
+for mirror in "${DEFAULT_IMAGE_MIRRORS[@]}"; do
+  duplicate=false
+  for existing in "${IMAGE_MIRRORS[@]}"; do
+    [[ "$existing" == "$mirror" ]] && { duplicate=true; break; }
+  done
+  [[ "$duplicate" == true ]] || IMAGE_MIRRORS+=("$mirror")
+done
 for mirror in "${IMAGE_MIRRORS[@]}"; do
   [[ "$mirror" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || die "Invalid image mirror host: $mirror"
 done
@@ -561,15 +581,22 @@ fi
 
 if [[ "$EXISTING_STACK" != true && "$SKIP_MODEL_CONFIG" != true ]]; then
   if [[ "$ASSUME_YES" != true ]]; then
+    # 模型这一步做成"可以整段跳过"：Base URL / 模型名都回车即默认，Key 留空＝装完在网页
+    # 控制台里配（那边有服务预设与连通性测试，对新人反而更好填）。以前 Key 没默认值，
+    # 答不上来直接 die —— 这是小白卡得最多的一步（2026-10-12）。
+    printf 'Model setup (press Enter everywhere to skip; configure it later in the web console).\n' >/dev/tty
     MODEL_BASE_URL="$(prompt_value 'Model API base URL' "${MODEL_BASE_URL:-https://api.deepseek.com}")"
     MODEL_NAME="$(prompt_value 'Model name' "${MODEL_NAME:-deepseek-chat}")"
     if [[ -z "$MODEL_API_KEY" ]]; then
-      MODEL_API_KEY="$(prompt_secret 'Model API key')"
+      MODEL_API_KEY="$(prompt_secret 'Model API key (blank = configure in the console after install)')"
     fi
     ALLOW_GROUPS="$(prompt_value 'Allowed group IDs, comma-separated (blank to configure later)' "$ALLOW_GROUPS")"
     ALLOW_PRIVATE="$(prompt_value 'Allowed private QQ IDs, comma-separated (blank to configure later)' "$ALLOW_PRIVATE")"
+    # Key 留空 = 跳过模型配置（保留已填的 base URL/模型名，别把显式传来的值抹掉）：
+    # 走 SKIP_MODEL_CONFIG 会把"还缺模型"写进结尾清单，控制台里补 Key 即可。
+    [[ -n "$MODEL_API_KEY" ]] || SKIP_MODEL_CONFIG=true
   fi
-  [[ -n "$MODEL_BASE_URL" && -n "$MODEL_API_KEY" && -n "$MODEL_NAME" ]] \
+  [[ "$SKIP_MODEL_CONFIG" == true || ( -n "$MODEL_BASE_URL" && -n "$MODEL_API_KEY" && -n "$MODEL_NAME" ) ]] \
     || die 'Fresh non-interactive deployment requires --model-base-url, --model-api-key and --model, or --skip-model-config'
 fi
 if [[ -n "$MODEL_BASE_URL" && ! "$MODEL_BASE_URL" =~ ^https?:// ]] ; then
@@ -704,15 +731,17 @@ update_env_image() {
   mv "$tmp" "$ENV_FILE"
 }
 
-# 连不上 Docker Hub 时的落地方案（国内服务器常见；镜像站是第三方，脚本不替用户选）
+# 连不上 Docker Hub 时的落地方案（国内服务器常见；内置站已在上面自动试过一轮）
 image_pull_hint() {
   cat >&2 <<'HINT'
 
-拉取 SnowLuma 镜像失败。国内/受限网络连不上 Docker Hub（registry-1.docker.io）很常见，
+拉取 SnowLuma 镜像失败。国内/受限网络连不上 Docker Hub（registry-1.docker.io）很常见；
+内置的公共加速站已经自动试过一轮（docker.1panel.live、docker.m.daocloud.io），都没拉下来。
 下面三种办法任选一种，然后重跑 deploy-all.sh：
 
-  1) 换镜像站重跑（<mirror> 换成你信得过的加速器地址，例如云厂商给的那个）：
+  1) 换成你信得过的加速器地址重跑（云厂商给的那个通常最稳）：
        QQ_AGENT_IMAGE_MIRROR=<mirror> bash deploy-all.sh
+     可以给多个、逗号分隔；你自己的排在前面，内置的仍在其后兜底。
      或直接给完整地址：
        bash deploy-all.sh --image <mirror>/motricseven7/snowluma:v1.14.22
 
@@ -727,7 +756,7 @@ image_pull_hint() {
        docker save motricseven7/snowluma:v1.14.22 | gzip > snowluma.tgz
        gunzip -c snowluma.tgz | docker load     # 在目标机上执行
 
-镜像站由第三方提供，脚本不会替你默认选任何一家。
+镜像站由第三方提供：内置的两家只是兜底，不放心就用 --image-mirror 换成你自己的。
 HINT
 }
 
@@ -736,13 +765,25 @@ PULLED=false
 if pull_with_retry "$IMAGE"; then
   PULLED=true
 else
-  for mirror in "${IMAGE_MIRRORS[@]}"; do
-    # 只在 IMAGE 还没有 registry host 时加前缀：上一次走过镜像站之后 .env 里存的就是
-    # 带前缀的完整引用，再加一次会拼成 mirror/mirror/... 这种拉不到的地址。
-    case "$IMAGE" in
-      */*/*) candidate="$IMAGE" ;;
-      *) candidate="${mirror%/}/$IMAGE" ;;
+  # .env 里存的可能是"上次走通的镜像站前缀 + 基础引用"——默认走内置兜底之后，这是国内新装的
+  # 常态。不先把认得的前缀剥掉，换站重跑会把旧前缀原样拼给每个镜像站：旧站一挂就永远换不到
+  # 新站（2026-10-12 审查：hint 首推的 QQ_AGENT_IMAGE_MIRROR=<mirror> 同样会失效）。
+  # 只剥"当前列表里认得的"前缀——真正的自定义 registry 引用不猜、照旧原样重试。
+  BASE_IMAGE="$IMAGE"
+  for known in "${IMAGE_MIRRORS[@]}"; do
+    case "$BASE_IMAGE" in
+      "$known"/*) BASE_IMAGE="${BASE_IMAGE#"$known"/}"; break ;;
     esac
+  done
+  for mirror in "${IMAGE_MIRRORS[@]}"; do
+    # 只在基础引用还没有 registry host 时加前缀：≥2 个斜杠 = 真正的自定义 registry
+    #（或没剥掉的前缀），保持原样，不能拿第三方前缀去套别人的命名空间。
+    case "$BASE_IMAGE" in
+      */*/*) candidate="$BASE_IMAGE" ;;
+      *) candidate="${mirror%/}/$BASE_IMAGE" ;;
+    esac
+    # 直连那一步已经试过这个引用（剥离后重拼可能等于原值）就别再试一遍
+    [[ "$candidate" == "$IMAGE" ]] && continue
     step "Retrying through image mirror $mirror"
     if pull_with_retry "$candidate"; then
       IMAGE="$candidate"

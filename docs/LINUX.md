@@ -29,15 +29,26 @@ the old instance.
 
 ## Full-stack Installation
 
-Run `deploy-all.sh` on a new host when SnowLuma/OneBot is not installed yet.
-Run it as a regular user, not as root: the installer refuses root and calls
-`sudo` only for host dependencies such as Docker and linger.
+On a new host (SnowLuma/OneBot not installed yet) the recommended entry is the
+zero-question wrapper `install.sh`: it runs the same installer with every
+default answered, defers the model configuration to the web console, and ends
+with a three-step checklist (tokenized console link, QQ login page, allowlist).
+
+```bash
+bash install.sh
+```
+
+The interactive installer is the same engine with the questions asked instead
+of defaulted. Run it as a regular user, not as root: the installer refuses root
+and calls `sudo` only for host dependencies such as Docker and linger.
 
 ```bash
 bash deploy-all.sh
 ```
 
-The installer asks for the stack root and all five host ports. It does not ask
+The interactive installer asks for the stack root and all five host ports, plus
+the model fields — leaving the model API key blank skips model configuration
+(finish it in the console). It does not ask
 for a local/LAN IP. The Agent console, SnowLuma WebUI and noVNC bind all host
 interfaces; OneBot HTTP and WebSocket bind only `127.0.0.1`. If Docker is
 missing, the installer asks before installing Docker Engine and Compose through
@@ -98,11 +109,14 @@ that disable GPU compositing on headless hosts.
 ### Docker Hub is unreachable (mainland China)
 
 `registry-1.docker.io` is frequently blocked or DNS-poisoned from mainland
-hosts: the pull fails with `dial tcp …: i/o timeout` and the installer stops
-after printing a hint. Any of these three routes works:
+hosts: the pull fails with `dial tcp …: i/o timeout`. The installer retries
+through a built-in list of public mirrors automatically (`docker.1panel.live`,
+`docker.m.daocloud.io`) and records the one that worked in `snowluma/.env`, so a
+fresh install normally needs no extra flags; it stops with a hint only when
+those fail too. Any of these three routes works:
 
 ```bash
-# 1) Retry through a registry mirror you trust (e.g. your cloud vendor's)
+# 1) Add your own mirror (tried before the built-in list; comma-separated)
 QQ_AGENT_IMAGE_MIRROR=<mirror-host> bash deploy-all.sh
 bash deploy-all.sh --image-mirror <mirror-host>            # same thing
 bash deploy-all.sh --image <mirror-host>/motricseven7/snowluma:v1.14.22
@@ -119,9 +133,12 @@ docker save motricseven7/snowluma:v1.14.22 | gzip > snowluma.tgz
 gunzip -c snowluma.tgz | docker load      # on the target host
 ```
 
-Mirrors are third-party services: the installer never picks one for you, and
-`SNOWLUMA_IMAGE` / `--image` accept any full reference. The chosen reference is
-remembered in `snowluma/.env`, so later runs reuse it. Cloud-vendor internal
+Mirrors are third-party services: the installer automatically tries its
+built-in list when Docker Hub is unreachable, and any mirror you pass is tried
+first. `SNOWLUMA_IMAGE` / `--image` accept any full reference. The chosen
+reference is remembered in `snowluma/.env`, so later runs reuse it — and a
+later run strips a remembered mirror prefix before retrying through the
+current list, so you can switch mirrors at any time. Cloud-vendor internal
 accelerators such as `mirror.ccs.tencentyun.com` only work inside that vendor's
 network.
 

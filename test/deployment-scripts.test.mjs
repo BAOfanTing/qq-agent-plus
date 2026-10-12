@@ -154,15 +154,22 @@ test('deploy.sh：互斥有陈旧兜底、trap 先于抢锁、持有才清、抢
 });
 
 // Issue #5（2026-09-22）：国内服务器拉不到 Docker Hub，脚本只报「after 3 attempts」就退出，
-// 用户不知道还能换镜像站。这组断言守住三件事：认用户指定的镜像站、不替用户默认选第三方镜像站、
+// 用户不知道还能换镜像站。这组断言守住四件事：认用户指定的镜像站、用户的值排在前面、
+// 一个都没给时用内置兜底列表（2026-10-12 改：不兜底的话每个国内新部署都要先撞一次失败）、
 // 失败时给可操作的指引。
-test('deploy-all retries through a user-specified image mirror and never picks one itself', () => {
+test('deploy-all retries through a user-specified image mirror, then a built-in fallback list', () => {
   const source = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
 
-  // 默认必须是空列表：镜像站是第三方，用哪家只能由用户决定
+  // 列表先置空，之后按"用户给的 → 内置兜底"两段填充
   assert.match(source, /^IMAGE_MIRRORS=\(\)$/m, '镜像站列表要以空数组初始化');
   assert.match(source, /^IMAGE_MIRROR_ARG=""$/m, '--image-mirror 默认必须为空');
-  assert.doesNotMatch(source, /IMAGE_MIRRORS=\(\s*["']/, '不许把第三方镜像站写成默认值');
+  assert.match(source, /^DEFAULT_IMAGE_MIRRORS=\(docker\.1panel\.live docker\.m\.daocloud\.io\)$/m,
+    '内置兜底列表要显式定义：国内直连 Docker Hub 必失败，没兜底每个新部署都会先撞一次（2026-10-12）');
+  const userMirrorIdx = source.indexOf('IMAGE_MIRRORS+=("$IMAGE_MIRROR_ARG")');
+  const defaultsIdx = source.indexOf('for mirror in "${DEFAULT_IMAGE_MIRRORS[@]}"');
+  assert.ok(userMirrorIdx > 0 && defaultsIdx > userMirrorIdx, '内置兜底必须追加在用户指定的值之后（用户的优先）');
+  assert.match(source, /\[\[ "\$existing" == "\$mirror" \]\] && \{ duplicate=true; break; \}/,
+    '内置站与用户给的重名时不再追加（否则同一条地址要在失败路径上多试一遍）');
 
   // 两条入口：环境变量（逗号分隔）+ 命令行
   assert.match(source, /QQ_AGENT_IMAGE_MIRROR/);
@@ -173,7 +180,13 @@ test('deploy-all retries through a user-specified image mirror and never picks o
   // 回退顺序：直连（3 次退避）→ 逐个镜像站 → 仍失败才报错
   assert.match(source, /pull_with_retry\(\)/);
   assert.match(source, /if pull_with_retry "\$IMAGE"; then\n  PULLED=true/);
-  assert.match(source, /candidate="\$\{mirror%\/\}\/\$IMAGE"/);
+  // 候选引用从 BASE_IMAGE（剥掉**当前列表里认得**的前缀之后）拼，而不是原样拿 IMAGE ——
+  // .env 里存着旧镜像前缀时（默认走内置兜底后的常态），不剥就永远换不到新站；
+  // 认不出的自定义 registry 引用不猜，照旧原样重试（2026-10-12 审查）。
+  assert.match(source, /BASE_IMAGE="\$IMAGE"/);
+  assert.match(source, /BASE_IMAGE="\$\{BASE_IMAGE#"\$known"\/\}"/, '旧镜像前缀要先剥掉再重拼');
+  assert.match(source, /candidate="\$\{mirror%\/\}\/\$BASE_IMAGE"/);
+  assert.match(source, /\[\[ "\$candidate" == "\$IMAGE" \]\] && continue/, '直连那步试过的引用不再原样重试');
   assert.match(source, /if pull_with_retry "\$candidate"; then/);
   // 换了镜像站要把 .env 里的引用一起改掉（compose 走 --env-file），且保持权限
   // ⚠️ 锚**调用点**不是定义点：`update_env_image()` 这个写法只在 699 行的定义处命中，
@@ -182,9 +195,10 @@ test('deploy-all retries through a user-specified image mirror and never picks o
   assert.match(source, /^\s*update_env_image( \|\| true)?\s*$/m, '必须真的调用 update_env_image（不是只定义）');
   assert.match(source, /chmod --reference="\$ENV_FILE"/);
 
-  // 失败时的指引：三条路都写到，且明确"脚本不替你选镜像站"
+  // 失败时的指引：三条路都写到，并说明内置兜底已经自动试过一轮
   assert.match(source, /image_pull_hint\(\)/);
-  for (const needle of ['QQ_AGENT_IMAGE_MIRROR=<mirror>', 'registry-mirrors', 'docker save', '镜像站由第三方提供']) {
+  for (const needle of ['QQ_AGENT_IMAGE_MIRROR=<mirror>', 'registry-mirrors', 'docker save',
+    '镜像站由第三方提供', '内置的公共加速站已经自动试过一轮']) {
     assert.ok(source.includes(needle), `失败提示里应包含：${needle}`);
   }
   assert.match(source, /image_pull_hint\n  die /, '先打指引再退出');
