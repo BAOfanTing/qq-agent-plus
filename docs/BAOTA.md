@@ -53,7 +53,7 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 | 项目的假设 | 宝塔面板默认 | 处理方式 |
 | --- | --- | --- |
 | 以非 root 服务用户部署 | 全程以 root 操作 | 创建 `qqagent` 用户，通过 SSH 登录后执行脚本 |
-| `systemctl --user` 可用 | 网页终端通常不是登录会话 | 改用 SSH；或参见文末的 root 方案 |
+| `systemctl --user` 可用 | 网页终端/非登录会话缺 `XDG_RUNTIME_DIR`（用户管理器其实在跑） | 脚本会自动补该变量；`/run/user/<uid>` 不存在时先 `sudo loginctl enable-linger <user>`；SSH 或文末 root 方案同样可行 |
 | 依赖 `rsync`（硬检查）、`xz`（解压 Node） | 精简模板通常缺失 | 先执行 `apt install` |
 | 脚本不改动防火墙，仅绑定 `127.0.0.1` | 面板「安全」页管理 ufw/iptables | 默认使用 SSH 隧道，无需放行端口 |
 | 根目录默认 `/mnt/data/qq-agent` | 该路径通常不存在 | 使用 `--root-dir` 修改，优先选择 `.bat` 可识别的路径 |
@@ -62,9 +62,12 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 ## 一、前置检查
 
 ```bash
+# 网页终端 / su 这类非登录会话不设 XDG_RUNTIME_DIR，systemctl --user 会误报"连不上总线"——
+# 用户管理器其实在跑，缺的只是这一个环境变量（deploy.sh / deploy-all.sh 现在会自行补上）。
+[[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/$(id -u)" ]] && export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 systemctl --user show-environment >/dev/null 2>&1 \
   && echo "systemd 用户服务：可用" \
-  || echo "systemd 用户服务：不可用（别在宝塔网页终端跑，改用 SSH 登录）"
+  || echo "systemd 用户服务：不可用（先看上面的 XDG_RUNTIME_DIR；/run/user/<uid> 目录不存在就先 enable-linger，见常见问题）"
 
 for c in rsync curl tar xz sha256sum; do
   command -v "$c" >/dev/null && echo "OK  $c" || echo "缺  $c"
@@ -72,7 +75,9 @@ done
 ```
 
 `deploy.sh` 在执行部署前即要求 `systemctl`、`systemctl --user` 与 `rsync` 三者可用，
-缺少任何一项都会打印具体原因后退出；**本脚本不会安装系统包**。全栈安装额外需要 `realpath`
+缺少任何一项都会打印具体原因后退出；其中 `systemctl --user` 那条会先自动补
+`XDG_RUNTIME_DIR`（`/run/user/<uid>` 存在时），因此网页终端里通常不再需要手工处理。
+**本脚本不会安装系统包**。全栈安装额外需要 `realpath`
 与 `ss`（iproute2）。
 
 端口默认值如下：控制台 `3210`，SnowLuma WebUI `5099`，noVNC `6081`，协议端（OneBot）
@@ -245,8 +250,8 @@ bash manage.sh backup /path/to/backup-dir
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
-| `Failed to connect to bus` / 提到 `XDG_RUNTIME_DIR` | 在非登录会话（宝塔网页终端）中调用 `systemctl --user` | 改用 SSH 登录；或采用文末的 root 方案 |
-| `deploy.sh` 刚开始即退出 | `deploy.sh` 开头的 `systemctl` / `systemctl --user` / `rsync` 检查未通过（脚本会打印缺哪一项） | 按提示安装 `rsync`，或改用 SSH 登录会话 |
+| `Failed to connect to bus` / 提到 `XDG_RUNTIME_DIR` | 在非登录会话（宝塔网页终端）中调用 `systemctl --user`：缺环境变量，**不是**用户管理器不可用 | `export XDG_RUNTIME_DIR=/run/user/$(id -u)` 后重跑（脚本现已自动补）；`/run/user/<uid>` 不存在则先 `sudo loginctl enable-linger <user>`；SSH 或文末 root 方案亦可 |
+| `deploy.sh` 刚开始即退出 | `deploy.sh` 开头的 `systemctl` / `systemctl --user` / `rsync` 检查未通过（脚本会打印缺哪一项） | 按提示安装 `rsync`；若是 `systemctl --user` 那条，先按上一行处理（多半只是缺 `XDG_RUNTIME_DIR`） |
 | `Deployed Node.js runtime is unavailable` | 在源码目录而非安装目录执行了 `manage.sh`（该目录下没有 `.deployment-node`） | 切到安装目录执行；**不要**因此重跑 `deploy.sh` |
 | `Run as the service user, not root` | `deploy-all.sh` 的身份预检 | 执行 `su - qqagent` 后重新运行 |
 | 解压 Node 失败、提示 `xz` | 缺少 `xz-utils` | 执行 `apt install -y xz-utils` |

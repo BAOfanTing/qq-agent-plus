@@ -106,8 +106,14 @@ if [[ "$ROOT_CANON" != "$INSTALL_CANON" && "$ROOT_CANON" == "$INSTALL_CANON/"* ]
   printf 'The source repository must not be nested inside the installation path\n' >&2
   exit 2
 fi
+# 网页终端 / su / sudo -u 等非登录会话不设置 XDG_RUNTIME_DIR：systemctl --user 会报
+# "Failed to connect to bus"，哪怕用户管理器在跑（2026-10-12 报道在生产机复现：只差这一个
+# 环境变量）。目录存在就补上；用户自己的值不动。控制台触发的部署由 ops.js 注入，不受影响。
+if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/$(id -u)" ]]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
 command -v systemctl >/dev/null || { printf 'systemctl is required: deploy on a Linux host with systemd\n' >&2; exit 1; }
-systemctl --user show-environment >/dev/null || { printf 'The systemd user manager is unavailable for %s: run this script from a normal login session (for example over SSH), not from a non-login context\n' "$(id -un)" >&2; exit 1; }
+systemctl --user show-environment >/dev/null || { printf 'Cannot reach the systemd user manager for %s: non-login shells (web terminals, su) need XDG_RUNTIME_DIR — run this script from a normal login session (for example over SSH), or export XDG_RUNTIME_DIR=/run/user/$(id -u) and retry; if that directory does not exist, run "sudo loginctl enable-linger %s" first\n' "$(id -un)" "$(id -un)" >&2; exit 1; }
 command -v rsync >/dev/null || { printf 'rsync is required: install it first (Debian/Ubuntu: apt install -y rsync)\n' >&2; exit 1; }
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 
@@ -519,12 +525,14 @@ systemctl --user enable --now "$SERVICE.service"
 systemctl --user enable --now "$UPDATE_SERVICE.timer"
 if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || true)" != yes ]]; then
   # Issue #15：unit 带 NoNewPrivileges（docs/BAOTA.md 推荐的加固）时，重启后由
-  # systemd 拉起的进程跑不了 sudo，这一步曾让整个更新回滚。linger 只影响"下次
-  # 开机自启"，不该一票否决本次部署——预检 + 尽力而为，失败只警告。
+  # systemd 拉起的进程跑不了 sudo，这一步曾让整个更新回滚。linger 同时决定两件事：
+  # 会话结束后用户管理器是否存活（没开的话，本登录会话一断，logind 就连同服务一起停掉）
+  # 和开机是否自动拉起——后果比"不自启"大，但这一步仍不该一票否决本次部署：预检 + 尽力
+  # 而为，失败只警告（2026-10-12 修正文案：原说法只提了"下次开机不会自启"）。
   if grep -q 'NoNewPrivs:[[:space:]]*1' /proc/self/status 2>/dev/null; then
-    printf '警告：服务被 NoNewPrivileges 加固，无法代为开启 linger；本次部署不受影响，但服务下次开机不会自启。\n请在服务账号的交互终端执行一次：sudo loginctl enable-linger %s\n' "$USER" >&2
+    printf '警告：服务被 NoNewPrivileges 加固，无法代为开启 linger；本次部署不受影响，但当前登录会话一断开，systemd 就会连同用户管理器一起停掉服务（机器人掉线），服务下次开机也不会自启。\n请在服务账号的交互终端执行一次：sudo loginctl enable-linger %s（执行后立即生效，之后退出终端服务不受影响）\n' "$USER" >&2
   elif ! sudo loginctl enable-linger "$USER" 2>/dev/null; then
-    printf '警告：启用 linger 失败（sudo 不可用或被拒绝）；本次部署不受影响，但服务下次开机不会自启。\n请在服务账号的交互终端执行一次：sudo loginctl enable-linger %s\n' "$USER" >&2
+    printf '警告：启用 linger 失败（sudo 不可用或被拒绝）；本次部署不受影响，但当前登录会话一断开，systemd 就会连同用户管理器一起停掉服务（机器人掉线），服务下次开机也不会自启。\n请在服务账号的交互终端执行一次：sudo loginctl enable-linger %s（执行后立即生效，之后退出终端服务不受影响）\n' "$USER" >&2
   fi
 fi
 # 健康检查要拼 URL，IPv6 字面量必须加方括号（http://::1:3210 不是合法 URL，fetch 会直接 reject，
