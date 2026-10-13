@@ -133,17 +133,27 @@ duplicate replies.
 
 ### Full-stack installation
 
-A fresh Linux machine should use the interactive installer `deploy-all.sh`. The installer asks for
-the deployment directory and ports, installs Docker (with sudo confirmation), downloads SnowLuma,
-configures OneBot, deploys QQ Agent and generates or synchronises all service credentials.
-SnowLuma already contains OneBot; NapCat and Lagrange must not be installed on top of it.
+A fresh Linux machine should use the one-command installer `install.sh`: it runs with no questions,
+installs Docker (with sudo), downloads SnowLuma, configures OneBot, deploys QQ Agent and generates
+or synchronises all service credentials; on completion it prints a three-step checklist — a console
+link with the login token embedded, the QQ login page, and where to set the chat allowlist. The
+model key and group IDs are filled in later in the web console. SnowLuma already contains OneBot;
+NapCat and Lagrange must not be installed on top of it.
 
-Installation and runtime must not use root: `deploy-all.sh` refuses to run as root, so use a regular
-user (the script calls `sudo` only when installing Docker or enabling linger).
+Installation and runtime must not use root: the script refuses to run as root, so use a regular user
+(it calls `sudo` only when installing Docker or enabling linger).
 
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
+bash install.sh
+```
+
+When you prefer to answer the questions (deployment directory, ports, credentials, model), use the
+interactive installer instead — it is the same installer with the questions asked instead of
+defaulted:
+
+```bash
 bash deploy-all.sh
 ```
 
@@ -160,11 +170,13 @@ The script does not modify UFW, firewalld or cloud security groups. For cross-ho
 three entries above should be opened to a trusted LAN or VPN; noVNC and OneBot must never be
 exposed to the internet.
 
-The first installation also asks for the model base URL, API key, model name and the QQ allowlist.
-Once the infrastructure is running, open the printed noVNC address and scan the QQ login QR code,
-then return to the terminal and press Enter; the installer verifies the OneBot login and offers to
-activate. After confirming that the previous bot has stopped or excludes the same chats, the
-following command performs the same step manually:
+The interactive installer asks for the model base URL, model name, API key and the QQ allowlist.
+**Leaving the API key blank skips model configuration** — finish it later under Settings → Model API
+in the web console; this is what the one-command install does. Once the infrastructure is running,
+open the printed noVNC address and scan the QQ login QR code, then return to the terminal and press
+Enter; the installer verifies the OneBot login and offers to activate. After confirming that the
+previous bot has stopped or excludes the same chats, the following command performs the same step
+manually:
 
 ```bash
 /mnt/data/qq-agent/app/manage.sh activate --confirm-exclusive

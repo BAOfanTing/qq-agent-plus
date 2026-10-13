@@ -5,6 +5,16 @@
 
 ## 待修问题
 
+### 协议端一键更新不走镜像兜底（2026-10-13 登记）
+
+`deploy-all.sh` 拉镜像已有内置公共加速站兜底（`docs/LINUX.md`），但**控制台「一键更新协议端」
+与「随智能体版本对齐」**走的是 `src/core/snowluma-update.js`：它只把 `snowluma/.env` 的
+`SNOWLUMA_IMAGE` 改成目标 tag 再 `compose pull`，没有镜像站回退 —— 国内/受限网络直连
+Docker Hub 失败时，这条更新路径仍会报拉取失败（首次全栈安装不受影响）。临时办法：先把
+`snowluma/.env` 里的 `SNOWLUMA_IMAGE` 改成带可信镜像前缀的引用
+（如 `<mirror>/motricseven7/snowluma:<tag>`，重启容器后生效），再点控制台更新。根因修法
+（把部署脚本的兜底列表接进 `snowluma-update`）留下一批。
+
 ### 主动运行期间的「核对」会清掉在途 outbox 证据（2026-10-13 审查，窄竞态）
 
 `store.resolveHeld` 判断"哪些 run 还活跃"只看 `runs` 表；**主动唤醒没有 runs 行**
