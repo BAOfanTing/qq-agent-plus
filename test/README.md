@@ -25,8 +25,8 @@ test/usage-e2e.mjs      # 用量页端到端（真起服务 + 真接口，无 mo
 
 - 命令：`npm run test:prompt` / `test:render` / `test:scroll` / `test:usage`
 - 四个都在 `npm test` 里串起来跑。
-- ⚠️ `render-test.mjs` 与 `usage-e2e.mjs` 会占用 `127.0.0.1:3210`（控制台默认端口）。
-  本机开着控制台隧道（`console-tunnel.bat`）时它们会报 `EADDRINUSE`，关掉隧道再跑。
+- `render-test.mjs` 与 `usage-e2e.mjs` 会各自现拿一个空闲端口起服务，不再固定占用 `127.0.0.1:3210`
+  （开着控制台隧道也能跑）。
 
 ## 3. 本地回归（CI 跑）
 

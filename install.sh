@@ -72,6 +72,16 @@ if [[ "$status" -ne 0 ]]; then
   exit "$status"
 fi
 
+# ── --check-only 只预检、什么都不装：别把"预检通过"说成"安装完成"（2026-10-13 审查） ──
+CHECK_ONLY=false
+for arg in "$@"; do
+  if [[ "$arg" == "--check-only" ]]; then CHECK_ONLY=true; fi
+done
+if [[ "$CHECK_ONLY" == true ]]; then
+  printf '\n（--check-only：只做了预检、没有安装任何东西。去掉这个参数重跑即可正式安装。）\n'
+  exit 0
+fi
+
 # ── 装完的"接下来三步"：从凭据文件里取真实地址，别让新人去翻文档 ────────────
 ACCESS_FILE="$(sed -n 's/^Credentials: *//p' "$LOG_FILE" 2>/dev/null | tail -n 1 || true)"
 rm -f "$LOG_FILE"
@@ -90,6 +100,15 @@ VNC_URL="$(read_field 'QQ login/noVNC')"
 VNC_PASSWORD="$(read_field 'noVNC password')"
 MODE="$(read_field 'Mode')"
 ROOT_GUESS="$(dirname "$ACCESS_FILE")"
+# 安全组清单里的端口要从**实际地址**里取：端口可被 --agent-port 等参数改掉，重跑既有实例时
+# 还来自 .env —— 写死默认值会给小白指错端口（"打不开网页"的根因；2026-10-13 审查）。
+port_of() { sed -nE 's#^https?://[^:/]+:([0-9]+).*$#\1#p' <<<"$1"; }
+CONSOLE_PORT="$(port_of "$CONSOLE_URL")"
+[[ -n "$CONSOLE_PORT" ]] || CONSOLE_PORT=3210
+SNOWLUMA_PORT="$(port_of "$(read_field 'SnowLuma WebUI')")"
+[[ -n "$SNOWLUMA_PORT" ]] || SNOWLUMA_PORT=5099
+NOVNC_PORT="$(port_of "$VNC_URL")"
+[[ -n "$NOVNC_PORT" ]] || NOVNC_PORT=6081
 
 printf '\n============================================================\n'
 printf '安装完成。接下来三步（都在浏览器里做）：\n\n'
@@ -111,7 +130,7 @@ if [[ "$MODE" == "observe" ]]; then
   printf '   （机器人默认「观察」模式只看不说话；确认没问题后在控制台首页把运行模式切到「启用」。）\n'
 fi
 printf '\n打不开上面的地址？云服务器需要在安全组放行这几个端口（TCP）：\n'
-printf '   3210 控制台 / 5099 协议端后台 / 6081 扫码登录\n'
+printf '   %s 控制台 / %s 协议端后台 / %s 扫码登录\n' "$CONSOLE_PORT" "$SNOWLUMA_PORT" "$NOVNC_PORT"
 printf '   全套凭据也在：%s\n' "$ACCESS_FILE"
 printf '\n出问题先看日志：\n   bash %s/app/manage.sh logs\n' "$ROOT_GUESS"
 printf '============================================================\n'

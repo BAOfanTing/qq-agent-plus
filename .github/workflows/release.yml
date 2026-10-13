@@ -82,7 +82,10 @@ jobs:
       # 2026-10-10 同族第二个漏网：门禁单元的进程还可能没有 docker 组（用户管理器未继承），
       # ops-health 里断言"全绿"的用例会因直连真实套接字失败而全红（issue #30 实测 3 条必挂）
       # —— 这里同样把 DOCKER_HOST 指向 000 权限的假套接字，复刻"套接字不可访问"。
-      - name: 更新器门禁全清单（按 unit 的加固环境复跑：NoNewPrivileges + umask 0077 + 无 docker 访问）
+      # 2026-10-13 审查：与 ci.yml 对齐第四条维度（无 devDeps）—— tag 可以打在任何提交上、
+      # 不必然经过 main 的 CI，缺这一维则发布闸门对"裸 import devDep"是空的（release.yml 的
+      # 注释此前自称"与 ci.yml 同一步"，事实不符）。
+      - name: 更新器门禁全清单（按 unit 的加固环境复跑：NoNewPrivileges + umask 0077 + 无 docker 访问 + 无 devDeps）
         run: |
           command -v setpriv >/dev/null || { echo "缺少 setpriv"; exit 1; }
           umask 0077
@@ -90,10 +93,14 @@ jobs:
           : > "$NO_DOCKER_SOCK"
           chmod 000 "$NO_DOCKER_SOCK"
           export DOCKER_HOST="unix://$NO_DOCKER_SOCK"
+          npm prune --omit=dev --no-audit --no-fund
           setpriv --no-new-privs npm run test:unit
           setpriv --no-new-privs npm run test:local
           setpriv --no-new-privs npm run test:regression
           setpriv --no-new-privs node src/ops.js scan --strict
+      - name: 恢复开发依赖（上一步失败也要恢复：后面的回归步骤还要用）
+        if: always()
+        run: npm ci --no-audit --no-fund
       - run: npm run test:local
       - name: 提示词 / 渲染 / 滚动 / 用量端到端回归
         run: |

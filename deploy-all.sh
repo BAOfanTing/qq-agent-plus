@@ -504,12 +504,14 @@ fi
 [[ -z "$IMAGE_MIRROR_ARG" ]] || IMAGE_MIRRORS+=("$IMAGE_MIRROR_ARG")
 for mirror in "${DEFAULT_IMAGE_MIRRORS[@]}"; do
   duplicate=false
-  for existing in "${IMAGE_MIRRORS[@]}"; do
+  # 空数组展开用 + guard：bash 4.3 及更老（CentOS 7 / Amazon Linux 2）在 set -u 下
+  # `"${arr[@]}"` 展开空数组会直接 "unbound variable" 退出（2026-10-13 审查）。
+  for existing in ${IMAGE_MIRRORS[@]+"${IMAGE_MIRRORS[@]}"}; do
     [[ "$existing" == "$mirror" ]] && { duplicate=true; break; }
   done
   [[ "$duplicate" == true ]] || IMAGE_MIRRORS+=("$mirror")
 done
-for mirror in "${IMAGE_MIRRORS[@]}"; do
+for mirror in ${IMAGE_MIRRORS[@]+"${IMAGE_MIRRORS[@]}"}; do
   [[ "$mirror" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || die "Invalid image mirror host: $mirror"
 done
 

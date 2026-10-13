@@ -136,9 +136,15 @@ function scanFile(rel, text) {
 function main() {
   // --force 会对已存在的目录做递归删除：先挡住三类危险目标 —— 文件系统根目录、
   // 仓库本身或仓库的上级目录、以及**仓库内部的任意路径**（`--out=<repo>/src --force`
-  // 会把工作副本的源码删掉；2026-10-12 审查）。
-  const outResolved = path.resolve(OUT);
-  const rootResolved = path.resolve(ROOT);
+  // 会把工作副本的源码删掉；2026-10-12 审查）。比较用 realpath + Windows 下折算大小写：
+  // 只 resolve 的话，指向仓库内部的符号链接/junction、或盘符大小写变体（`c:\users\...`）
+  // 都能绕过守卫（2026-10-13 审查）。
+  const realOrResolve = (p) => {
+    try { return (fs.realpathSync.native ?? fs.realpathSync)(p); } catch { return path.resolve(p); }
+  };
+  const normCase = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const outResolved = normCase(realOrResolve(OUT));
+  const rootResolved = normCase(realOrResolve(ROOT));
   const outIsRootOrAncestor = outResolved === path.parse(outResolved).root
     || rootResolved === outResolved
     || rootResolved.startsWith(outResolved + path.sep);

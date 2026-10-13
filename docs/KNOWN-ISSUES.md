@@ -5,6 +5,15 @@
 
 ## 待修问题
 
+### 主动运行期间的「核对」会清掉在途 outbox 证据（2026-10-13 审查，窄竞态）
+
+`store.resolveHeld` 判断"哪些 run 还活跃"只看 `runs` 表；**主动唤醒没有 runs 行**
+（`session.leaseId = lease?.id || session.id`，工具发送用 leaseId 当 runId）。于是管理员恰好
+在某会话的主动唤醒**正在运行**时点「核对」，会把该次在途的 `sending/unknown` 行一并清掉，
+`hasUncertainEffects(session.leaseId)` 的兜底不再触发 —— 一次结果未知的发送可能被当干净收尾
+（后续轮次理论上可重发）。触发需人工操作与运行同刻，影响面小。修法方向：把活跃主动会话的
+id 集合（`activeRuns` 的 sessionId）传入 store，清理时排除。留待下一批处理。
+
 ### 2026-09-22 全量审查确认、本轮不修的问题
 
 **5 秒兜底重试 ticker 不检查自主节奏（pacing）开关。** `orchestrator.js` 的 5 秒 ticker

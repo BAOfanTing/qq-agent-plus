@@ -20,8 +20,9 @@ const skip = hasBash ? false : '需要 bash';
 
 const STUB = `#!/usr/bin/env bash
 printf '%s\\n' "$@" > "$QQ_STUB_ARGS"
-printf 'Agent console: http://10.0.0.5:3210\\nAgent token: tok-123\\n' > ./deployment-access.txt
-printf 'SnowLuma WebUI: http://10.0.0.5:5099\\nQQ login/noVNC: http://10.0.0.5:6081\\nnoVNC password: 12345678\\n' >> ./deployment-access.txt
+# 端口故意用非默认值：钉住 install.sh 的"安全组清单从实际地址取端口"（写死默认值即红）
+printf 'Agent console: http://10.0.0.5:43210\\nAgent token: tok-123\\n' > ./deployment-access.txt
+printf 'SnowLuma WebUI: http://10.0.0.5:45099\\nQQ login/noVNC: http://10.0.0.5:46081\\nnoVNC password: 12345678\\n' >> ./deployment-access.txt
 printf 'Mode: observe\\n' >> ./deployment-access.txt
 # 用 $PWD 的 POSIX 形态（MSYS 下 Windows 盘符路径会读不到）；真实脚本打的也是绝对路径
 printf 'Credentials: %s\\n' "$PWD/deployment-access.txt"
@@ -63,13 +64,33 @@ test('零问答装配：--yes + 默认跳过模型配置，装完打印接下来
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.deepEqual(stubArgs(f), ['--yes', '--skip-model-config'], '默认应当零问答且把模型配置留到控制台');
   // 三步清单里的真实值：带令牌的控制台链接、扫码入口与密码、白名单、安全组、日志命令
-  assert.match(r.stdout, /http:\/\/10\.0\.0\.5:3210\/\?token=tok-123/, '控制台链接要带令牌（点开即进）');
-  assert.match(r.stdout, /http:\/\/10\.0\.0\.5:6081/);
+  assert.match(r.stdout, /http:\/\/10\.0\.0\.5:43210\/\?token=tok-123/, '控制台链接要带令牌（点开即进）');
+  assert.match(r.stdout, /http:\/\/10\.0\.0\.5:46081/);
   assert.match(r.stdout, /12345678/);
   assert.match(r.stdout, /聊天白名单/);
-  assert.match(r.stdout, /3210 控制台 \/ 5099 协议端后台 \/ 6081 扫码登录/);
+  assert.match(r.stdout, /43210 控制台 \/ 45099 协议端后台 \/ 46081 扫码登录/,
+    '安全组清单里的端口要从实际地址取（非默认端口时要跟着走）');
   assert.match(r.stdout, /manage\.sh logs/);
   assert.match(r.stdout, /观察/, 'observe 模式要提示去控制台切「启用」');
+});
+
+test('--check-only：只预检就把"预检通过"说成"安装完成"是错的（2026-10-13 审查）', { skip }, (t) => {
+  const f = fixture(t);
+  const r = run(f, ['--check-only']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(stubArgs(f), ['--yes', '--skip-model-config', '--check-only'], '预检参数原样透传');
+  assert.doesNotMatch(r.stdout, /安装完成/, '什么都没装就不能打印安装完成清单');
+  assert.match(r.stdout, /只做了预检/);
+});
+
+test('install.sh 依赖的输出标签仍在 deploy-all.sh 里（改标签即红，别静默取空）', { skip }, () => {
+  // install.sh 的 read_field 按这些标签从安装输出/凭据文件取值；deploy-all.sh 改名后
+  // install.sh 会静默取到空串（最坏打出 ?token= 的空令牌链接），这里把契约钉死。
+  const src = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
+  for (const needle of ["printf 'Credentials: %s\\n'", 'Agent console:', 'Agent token:',
+    'SnowLuma WebUI:', 'QQ login/noVNC:', 'noVNC password:', 'Mode: ']) {
+    assert.ok(src.includes(needle), `deploy-all.sh 里应仍输出「${needle}」`);
+  }
 });
 
 test('显式模型参数/环境变量会透传且不再跳过模型配置', { skip }, (t) => {

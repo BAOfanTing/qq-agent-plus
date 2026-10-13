@@ -48,6 +48,36 @@
 | 省 Token 模式 | `src/core/token-saver.js`（新增）、`src/core/config-legacy.js`、`src/llm/prompt.js`、`src/core/orchestrator.js`、`src/memory/memory-global.js`、`src/features/daily-moments.js`、`src/features/qzone-interactions.js`、`ui/app.js`、`src/console/app.js` | 「设置 -> 省 Token」三档，只给上下文档位条数、单次运行轮数与预算、交接/印象注入字符数、表情清单条数**夹上限**，不改写用户设置；关掉即恢复原样 | 本仓库新增 |
 | 关闭上游调试探针 | `src/*.js`、`ui/*.js` | 上游作者留在源码里的调试上报（指向其开发机私网地址）全部关掉 | `apply-disable-upstream-debug.sh` |
 
+## 未发布 · 推送前独立审查的小修（2026-10-13）
+
+**尚未发版**。本批提交推送前过了两路独立把关（核心运行时 / UI+脚本+测试），结论均为可以推；
+顺手把查出的问题一次修掉：
+
+- **grounded 档提示词自相矛盾**（`src/llm/prompt.js`）：同一份提示词里既教 `remind` /
+  `schedule_wake` 的用法，又写着"当前没有…安排定时承诺的工具"，模型可能照句子拒设提醒。
+  改成该说的边界："不能在后台持续运行：remind / schedule_wake 只是让系统到点唤醒你一次…"；
+  `persona-behavior` 补不变量用例（教了工具就不许否认它存在，退回旧句子即红）。
+- **巡检预算豁免不看日期**（`src/core/health-check.js`）：昨天超限后、今天第一笔会话还没重写
+  `usage-today.json` 之前，旧实现拿昨天那份继续豁免"到期未处理"告警 —— 真正的管道停滞会被
+  静默一整天。改为只认当天（与 `sessions.todayUsage` 同口径）；`ops-health` 补用例
+  （昨天的文件不豁免今天的告警），并修正既有夹具的 `dayKey`。
+- **`sanitize-release.mjs` 输出目录守卫**：只做 `path.resolve` 时，指向仓库内部的符号链接/
+  junction 或 Windows 盘符大小写变体都能绕过（`--force` 会删到工作副本）。改为 realpath +
+  大小写折算后比较。
+- **`install.sh` 两处**：`--check-only` 只预检也打印"安装完成"清单 → 改为"预检通过"；安全组
+  端口清单写死默认值 → 从实际地址取（自定义端口/重跑既有实例时不再指错端口）。测试同步：
+  桩改用非默认端口、新增 `--check-only` 用例与"deploy-all 标签契约"锚点。
+- **文档残留**：`docs/BAOTA.md` 的 linger 旧结论（"只影响下次开机自启"）与 `deploy.sh` 的新
+  文案对齐（会话断开即停服务）；`test/README.md` 的 3210 端口警告过期（两个 harness 早已现拿
+  空闲端口）删除。
+- **CI/发布闸门**：`release.yml` 补上 ci.yml 的第四维度（无 devDeps）——tag 可不经 main 的 CI，
+  缺这维则发布闸门对"裸 import devDep"是空的；两处"恢复依赖"改为独立 `if: always()` 步骤
+  （中途失败也恢复，避免后续步骤以 ERR_MODULE_NOT_FOUND 再红一次、误导排查）。
+- **`deploy-all.sh` 空数组展开**：镜像去重/校验两处补 bash 4.3 及更老（CentOS 7 等）在
+  `set -u` 下空数组直接退出的 guard。
+- 审查另报一条**窄竞态**转入 `docs/KNOWN-ISSUES.md`（主动运行期间点「核对」会清掉在途
+  outbox 证据；修法方向已记，留待下一批）。
+
 ## 未发布 · 人设重置的防误操作（换卡清残留的三处补丁）
 
 **尚未发版**。2026-10-12 反馈："机器人人设有没有办法重置，在设置人设清空交谈之后，机器人一样

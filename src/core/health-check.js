@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { openDatabase } from './sqlite.js';
 import { budgetStatus } from './budget.js';
+import { todayKey } from './util.js';
 import { readJsonBounded } from './http-body.js';
 import {
   SNOWLUMA_BASELINE_IMAGE, SNOWLUMA_MIN_RECOMMENDED, readComposeEnv, parseImage, compareVersions
@@ -96,7 +97,10 @@ function readBudgetKeepPending(dataDir) {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
     const usage = JSON.parse(fs.readFileSync(path.join(dataDir, 'usage-today.json'), 'utf8'));
-    const status = budgetStatus(cfg, usage);
+    // 只认"今天"的用量文件（与 sessions.todayUsage 同一口径，2026-10-13 审查）：昨天超限后、
+    // 今天第一笔会话还没把文件重写之前，不能拿昨天那份豁免今天的停滞告警 —— 否则真正的
+    // 管道停滞会被"预算已用尽"的豁免一整天地静默掉。
+    const status = budgetStatus(cfg, usage && usage.dayKey === todayKey() ? usage : {});
     return status.exceeded && ['degrade', 'block'].includes(status.onExceed);
   } catch {
     return false;

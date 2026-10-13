@@ -9,6 +9,7 @@ import { after, test } from 'node:test';
 const { runHealthCheck } = await import('../src/core/health-check.js');
 const { openDatabase } = await import('../src/core/sqlite.js');
 const { readOwnerUin } = await import('../src/core/notify-owner.js');
+const { todayKey } = await import('../src/core/util.js');
 
 // docker-socket 探针会读真实 /var/run/docker.sock，而本文件多条用例断言的是"全绿 / healthy"。
 // 2026-10-10 实测（issue #30）：更新器的部署前门禁跑在加固 unit 里，若该单元继承的用户管理器
@@ -31,7 +32,7 @@ function makeDataDir({ withDb = true, withUpdaterState = false, withMarker = fal
     }));
   }
   if (budgetDegraded) {
-    fs.writeFileSync(path.join(dir, 'usage-today.json'), JSON.stringify({ dayKey: 'test', estimatedYuan: 2, unpricedRuns: 0 }));
+    fs.writeFileSync(path.join(dir, 'usage-today.json'), JSON.stringify({ dayKey: todayKey(), estimatedYuan: 2, unpricedRuns: 0 }));
   }
   if (withDb) {
     const db = openDatabase(path.join(dir, 'messages.sqlite'));
@@ -484,4 +485,22 @@ test('预算策略 block 时同样豁免"到期未处理"（保留未读是设�
     outboundStaleMs: 6 * 60 * 60 * 1000
   });
   assert.equal(normalRun.checks.find((c) => c.name === 'outbound-freshness').ok, false);
+});
+
+test('预算豁免只认"今天"的用量文件：昨天的超限不豁免今天的停滞告警（2026-10-13 审查）', async () => {
+  // 昨天超限（degrade）后、今天第一笔会话还没把 usage-today.json 重写之前，旧实现会拿昨天
+  // 那份继续豁免 —— 真正的管道停滞被静默一整天（文件不重写 ⇒ 豁免自我延续）。
+  const dir = makeDataDir({ outboundAgoMs: 7 * 60 * 60 * 1000, inboundAgoMs: 70 * 60 * 1000 });
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  const yKey = `${yesterday.getFullYear()}-${pad(yesterday.getMonth() + 1)}-${pad(yesterday.getDate())}`;
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
+    runtime: { mode: 'active', paused: false },
+    api: { budget: { enabled: true, dailyYuan: 1, onExceed: 'degrade' } }
+  }));
+  fs.writeFileSync(path.join(dir, 'usage-today.json'), JSON.stringify({ dayKey: yKey, estimatedYuan: 2, unpricedRuns: 0 }));
+  const r = await runHealthCheck({ dataDir: dir, fetchImpl: okFetch, statfs: okStatfs, notify: null, outboundStaleMs: 6 * 60 * 60 * 1000 });
+  const item = r.checks.find((c) => c.name === 'outbound-freshness');
+  assert.equal(item.ok, false, `昨天的用量文件不该豁免今天的停滞告警：${item.detail}`);
+  assert.doesNotMatch(item.detail, /预算/, '这条不是"预算豁免"分支');
 });

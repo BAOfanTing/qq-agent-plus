@@ -46,7 +46,7 @@ test('内置卡单一来源，默认人设不受影响', () => {
 test('grounded 档替换冲突的风格规则，但保留权限与工具', () => {
   setRuntimeConfig(structuredClone(DEFAULT_CONFIG));
   const prompt = buildSystemPrompt({ persona: groundedPersona() });
-  for (const text of ['【自然交流与可靠边界】', '不受闲聊字数限制', 'finish 的交接不是定时任务',
+  for (const text of ['【自然交流与可靠边界】', '不受闲聊字数限制', '不能在后台持续运行',
     '不能执行命令', '发言必须', 'send_message', 'memory_append', '不按轮数凑配额']) {
     assert.ok(prompt.includes(text), text);
   }
@@ -61,6 +61,19 @@ test('grounded 档替换冲突的风格规则，但保留权限与工具', () =>
   assert.ok(legacy.includes('【反 AI 味：拒绝有求必应】'));
   assert.notEqual(legacy, prompt);
   assert.equal(prompt, buildSystemPrompt({ persona: groundedPersona() }));
+});
+
+test('grounded 档不否认定时工具：教了 remind / schedule_wake 就不说"没有安排定时承诺的工具"（2026-10-13 审查）', () => {
+  setRuntimeConfig(structuredClone(DEFAULT_CONFIG));
+  const prompt = buildSystemPrompt({ persona: groundedPersona() });
+  // 同一份提示词里既教 remind / schedule_wake 的用法、又说"没有安排定时承诺的工具"，
+  // 模型会照句子拒设提醒 —— 与本批修的"提醒归属"反馈面直接冲突（独立审查抓到）。
+  assert.ok(prompt.includes('schedule_wake'), 'grounded 提示词里应有 schedule_wake 的用法');
+  assert.ok(prompt.includes('remind'), 'grounded 提示词里应有 remind 的用法');
+  assert.match(prompt, /remind \/ schedule_wake 只是让系统到点唤醒你一次/,
+    '该说的边界是"只是到点唤醒一次"，不是"没有这类工具"');
+  assert.doesNotMatch(prompt, /没有执行代码、操作引擎或安排定时承诺的工具/,
+    '这句与同文的 remind / schedule_wake 教学矛盾');
 });
 
 test('所有社交场景都带上同一份角色与附加规则，人设哈希随之失效', () => {

@@ -89,13 +89,16 @@ jobs:
           # 第四条维度（2026-10-12 审查）：真门禁是 `npm ci --omit=dev` 的依赖面（没有
           # happy-dom/espree 等 devDeps），CI 此前只跑"全量依赖"环境 —— 某个用例把 devDep
           # 写成裸 import 时 CI 全绿、到了真门禁才 ERR_MODULE_NOT_FOUND。剔掉 devDeps 复跑
-          # 全清单；跑完恢复（后面的步骤还要用 eslint 等）。
+          # 全清单；恢复放在**独立的 always 步骤**里 —— 这一步中途失败时也要把依赖装回来，
+          # 否则后面的步骤会以 ERR_MODULE_NOT_FOUND 的形式再红一次（信息重复、误导向）。
           npm prune --omit=dev --no-audit --no-fund
           setpriv --no-new-privs npm run test:unit
           setpriv --no-new-privs npm run test:local
           setpriv --no-new-privs npm run test:regression
           setpriv --no-new-privs node src/ops.js scan --strict
-          npm ci --no-audit --no-fund
+      - name: 恢复开发依赖（上一步失败也要恢复：后面的 eslint / 回归步骤还要用）
+        if: always()
+        run: npm ci --no-audit --no-fund
 
       - name: 本地回归测试
         run: npm run test:local
