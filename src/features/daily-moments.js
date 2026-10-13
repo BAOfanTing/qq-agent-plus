@@ -222,7 +222,41 @@ function auditMessages(messages) {
   });
 }
 
-function sanitizeDecision(raw, snapshot, cfg) {
+/**
+ * 「我的一天」式纪事判断（启发式，只拦最明显的形态）。
+ *
+ * 素材是当天的**完整日志**，模型很容易把它复述成按时间线走的纪要 —— 线上实测过
+ * 「九点、十一点半、两点、四点、七点、十点，一格一格敲过去」「回我的总共三句」
+ * 「全天最长的一条是两个字的」这类正文。提示词已经写了禁令但压不干净（实测过：
+ * 加了禁令后仍有一半样本在数次数），所以这里再加一道硬闸。
+ *
+ * 判断错一次的代价只是让模型重写一次（调用方把重写上限设为一次、第二次照收），
+ * 不会因为风格判断把当天的发布卡死。
+ */
+export function dayRecapReason(text) {
+  const t = String(text || '');
+  if (!t.trim()) return '';
+  // 「N 点」类时间点：裸的「一点」不算（快一点 / 简单一点 / 差一点 / 多留一点 都是口语，
+  // 一篇正常动态里出现三次一点很常见）；带时间前缀的（下午一点）才算。
+  const all = t.match(/(?:凌晨|早上|上午|中午|下午|傍晚|晚上|半夜|清晨|夜里)?\s*[零〇一二三四五六七八九十百两]{1,3}\s*点(?:半|整|\d{1,2}\s*分?)?/g) || [];
+  // 只滤掉口语里的**裸「一点」**（快一点 / 简单一点 / 差一点 / 多留一点，一篇正常动态出现三次很常见）；
+  // 「一点半/一点整」是真时间，不能一起滤掉，否则"一点半、三点、五点"这种时间线会漏过去。
+  const clocks = all.filter((token) => !/^一点$/.test(token.replace(/\s+/g, '')))
+    .concat(t.match(/\d{1,2}\s*[:：]\s*\d{2}/g) || []);
+  // 三处以上、且有至少两种写法，才算"按时间线讲当天"
+  if (clocks.length >= 3 && new Set(clocks.map((s) => s.replace(/\s+/g, ''))).size >= 2) {
+    return '出现了三处以上具体时间点';
+  }
+  // 统计口径：必须紧挨"次/回"这类计数才算（"一共就这点事""一共三个人搭话"不算）
+  if (/(回我的?总共|总共\s*[^。！？\n]{0,6}?(?:次|回)|一共\s*[^。！？\n]{0,6}?(?:次|回)|全天最长|全天最短|一天里我)/.test(t)) {
+    return '出现了“总共 / 全天最长”这类统计口径';
+  }
+  const counts = t.match(/(?:回了|报了|发了|念了|数了)\s*[零一二三四五六七八九十两\d]{1,3}\s*(?:次|回|句|条)/g) || [];
+  if (counts.length >= 2) return '在两处数自己说了几次、别人回了几句';
+  return '';
+}
+
+function sanitizeDecision(raw, snapshot, cfg, { allowRecap = false } = {}) {
   const fail = (message) => { throw momentError('MOMENT_DECISION_INVALID', message, 422); };
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('提交参数必须为 JSON 对象');
   const source = raw;
@@ -256,10 +290,20 @@ function sanitizeDecision(raw, snapshot, cfg) {
   if (source.imageIds.some((id) => !knownImages.has(id))) fail('只能选择本次候选图片 ID');
   if (!cfg.allowImages && source.imageIds.length) fail('配图已关闭，请使用空 imageIds');
   const imageIds = [...new Set(source.imageIds)];
+  const content = decision === 'publish' ? redactPublicContent(source.content, snapshot) : '';
+  if (decision === 'publish' && !allowRecap) {
+    const recap = dayRecapReason(content);
+    if (recap) {
+      const error = momentError('MOMENT_DECISION_INVALID',
+        `正文${recap}，读起来像在给当天做纪要。请压成一件事重写：不排时间线、不做统计、不逐条引用群友，只写你此刻最想说的那一点，其余素材丢掉。`, 422);
+      error.recapRejected = true;
+      throw error;
+    }
+  }
   return {
     decision,
     reason: cleanText(source.reason, 500),
-    content: decision === 'publish' ? redactPublicContent(source.content, snapshot) : '',
+    content,
     imageIds: cfg.allowImages ? imageIds : [],
     groupSummaries
   };
@@ -649,7 +693,7 @@ export class DailyMomentsManager {
       session = this.sessions?.create({
         chatKey: 'system:daily-moments',
         trigger: 'daily-moments',
-        triggerSummary: `${dayKey} 每日群聊总结`
+        triggerSummary: `${dayKey} 每日动态`
       }) || null;
       if (session) {
         record.sessionId = session.id;
@@ -1085,7 +1129,7 @@ export class DailyMomentsManager {
       `【预算】最多研究 ${cfg.maxResearchCalls} 次；最多配图 ${cfg.maxImages} 张。`,
       '【最近已发动态】',
       JSON.stringify(recentPosts),
-      '【群聊材料】',
+      '【群聊材料】（今天的见闻素材：从中挑一件自己在意的事来写，不需要转述或汇总）',
       JSON.stringify(snapshot.groups),
       '【可选配图】',
       JSON.stringify(snapshot.imageCandidates)
@@ -1099,7 +1143,9 @@ export class DailyMomentsManager {
       inspectedImages: new Set(),
       visionEnabled: rootConfig.api?.vision !== false,
       searchEnabled: rootConfig.webSearch?.enabled !== false,
-      finalDecision: null
+      finalDecision: null,
+      recapRetryUsed: false,    // 「纪事体」只强制重写一次，见 dayRecapReason
+      extraRounds: 0            // 退回重写给的那一轮预算：不能让重写落在最后一轮上，否则当天直接失败
     };
     const defs = this.#toolDefs(context);
     const tools = openAiTools(defs);
@@ -1122,7 +1168,7 @@ export class DailyMomentsManager {
       this.emit('session-update', { sessionId: session.id });
     }
 
-    for (let round = 0; round < cfg.maxRounds && !finalDecision; round++) {
+    for (let round = 0; round < cfg.maxRounds + (context.extraRounds || 0) && !finalDecision; round++) {
       signal.throwIfAborted();
       assertTimeAllowed();
       // DeepSeek thinking mode rejects named/required tool choices, including
@@ -1354,13 +1400,13 @@ export class DailyMomentsManager {
       },
       {
         name: 'submit_daily_moment',
-        description: '提交每日群聊总结，并最终决定发布说说或跳过。只能在完成必要研究和看图后调用。',
+        description: '提交今天这条动态的最终决定：要发就给出公开正文，不发就 skip，并把内部群摘要一并附上。摘要是给系统留档的内部记录（不会公开），正文才是别人看到的那条动态——不要把摘要的写法用来写正文，也不要把正文写成当天的纪事（时间线、次数统计）。只能在完成必要研究和看图后调用。',
         parameters: {
           type: 'object',
           properties: {
             decision: { type: 'string', enum: ['publish', 'skip'] },
             reason: { type: 'string', minLength: 1, description: '一句非空的决定理由，不输出推理过程' },
-            content: { type: 'string', description: 'publish 时填写最终公开正文；skip 时为字符串 ""' },
+            content: { type: 'string', description: 'publish 时填写最终公开正文（就是别人看到的那条动态本身，不是群摘要/总结）；skip 时为字符串 ""' },
             imageIds: {
               type: 'array',
               items: { type: 'string' },
@@ -1373,7 +1419,7 @@ export class DailyMomentsManager {
                 type: 'object',
                 properties: {
                   chatKey: { type: 'string' },
-                  summary: { type: 'string', minLength: 1, description: '一至两句内部摘要，避免逐字引用带引号的长对话' }
+                  summary: { type: 'string', minLength: 1, description: '一至两句内部摘要（只给系统留档，不进公开正文），避免逐字引用带引号的长对话' }
                 },
                 required: ['chatKey', 'summary']
               }
@@ -1382,10 +1428,22 @@ export class DailyMomentsManager {
           required: ['decision', 'reason', 'content', 'imageIds', 'groupSummaries']
         },
         execute: async (args) => {
-          const decision = sanitizeDecision(args, context.snapshot, context.cfg);
-          if (decision.imageIds.some((imageId) => !context.inspectedImages.has(imageId))) {
+          // 确定性的校验先做（图片没看过这种改一次就能过），别让风格闸门抢在前面多绕一轮。
+          const requested = Array.isArray(args?.imageIds) ? args.imageIds : [];
+          if (requested.some((imageId) => !context.inspectedImages.has(imageId))) {
             throw momentError('MOMENT_DECISION_INVALID', '所选图片尚未成功查看，请先看图，或使用空 imageIds', 422);
           }
+          let decision;
+          try {
+            decision = sanitizeDecision(args, context.snapshot, context.cfg, { allowRecap: context.recapRetryUsed === true });
+          } catch (error) {
+            if (error?.recapRejected && !context.recapRetryUsed) {
+              context.recapRetryUsed = true;
+              context.extraRounds = 1;   // 给这次重写单独一轮，避免"提交正好落在最后一轮"时当天发布失败
+            }
+            throw error;
+          }
+          // 图片"看过没有"已经在上面（调 sanitizeDecision 之前）查过，这里不再重复。
           context.finalDecision = decision;
           return { content: JSON.stringify({ accepted: true, decision: context.finalDecision.decision }) };
         }
