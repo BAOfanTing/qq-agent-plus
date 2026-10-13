@@ -2583,7 +2583,8 @@ export function createApp({
       const member = memory.editMemberImpression(chatKey, {
         userId: params[3],
         name: String(body.name ?? ''),
-        note: body.note ?? '',
+        // 只在显式传了 note 时才动备注：缺席＝保留现值（省略即删除会把称呼静默清掉，2026-10-13 审查）
+        ...(Object.prototype.hasOwnProperty.call(body, 'note') ? { note: body.note ?? '' } : {}),
         impressions: body.impressions ?? []
       });
       emit('memory-update', { chatKey });

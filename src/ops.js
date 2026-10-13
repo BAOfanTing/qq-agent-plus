@@ -1911,7 +1911,8 @@ async function cmdSnowlumaUpdate(args) {
     return 0;
   }
   if (!st.outdated && !to) {
-    okWarn(`协议端已经是最新（${st.currentVersion}），无需更新。要强制重建就带 --to ${st.currentImage}`);
+    okWarn(`协议端已经是最新（${st.currentVersion}），无需更新。`
+      + `要重建容器请手工执行：docker compose --project-directory <协议端目录> up -d --force-recreate`);
     return 0;
   }
   infoWarn(`开始更新协议端：${st.currentVersion || st.currentImage} → ${to || st.targetVersion || st.targetImage}`);

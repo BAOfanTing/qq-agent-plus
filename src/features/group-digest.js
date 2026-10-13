@@ -53,18 +53,30 @@ export class GroupDigestManager {
   }
 
   /** 持久化的"最近一次真正跑完的日期"（内存里那份重启就没了，补跑判断要靠它）。 */
-  #ranToday() {
+  /**
+   * 今天已经发过哪些群：{ any, done }。
+   *  - done = 今天已完成的群（新状态逐群记）；
+   *  - 老状态只有 lastRanDay（历史版本 / 外部写入）→ 视为「今天已跑过」，保持旧口径；
+   *  - any = 今天跑没跑过（补跑判断用）。
+   */
+  #todayDone() {
     try {
       const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      return state?.lastRanDay === todayKey(this.now());
-    } catch { return false; }
+      if (state?.lastRanDay !== todayKey(this.now())) return { any: false, done: new Set() };
+      if (Array.isArray(state.doneChats)) return { any: state.doneChats.length > 0, done: new Set(state.doneChats) };
+      return { any: true, done: new Set() };
+    } catch { return { any: false, done: new Set() }; }
   }
 
-  #markRanToday() {
+  #ranToday() { return this.#todayDone().any; }
+
+  // 每群发完就落盘「已完成的群」：只在整轮结束时写的话，多群串行发到一半被重启（每次部署都会重启）
+  // 会让下一次启动把已经收到日报的群再发一遍（2026-10-13 全项目审查 P2-3）。
+  #writeProgress(done) {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
       const tmp = `${STATE_FILE}.${process.pid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ lastRanDay: todayKey(this.now()) }), { mode: 0o600 });
+      fs.writeFileSync(tmp, JSON.stringify({ lastRanDay: todayKey(this.now()), doneChats: [...done] }), { mode: 0o600 });
       fs.renameSync(tmp, STATE_FILE);
     } catch { /* 状态写不进去只影响重启后的补跑判断 */ }
   }
@@ -75,7 +87,7 @@ export class GroupDigestManager {
     this.deferAttempts += 1;
     this.deferTimer = setTimeout(() => {
       this.deferTimer = null;
-      withTrace(newTraceId(), () => this.runOnce()).catch((error) => this.log('[group-digest] 补跑出错:', error));
+      withTrace(newTraceId(), () => this.runOnce({ skipDone: true })).catch((error) => this.log('[group-digest] 补跑出错:', error));
     }, DEFER_MS);
     if (this.deferTimer.unref) this.deferTimer.unref();
     this.log(`[group-digest] 当前不可运行，${DEFER_MS / 60000} 分钟后重试（第 ${this.deferAttempts} 次）`);
@@ -97,11 +109,11 @@ export class GroupDigestManager {
     const todayOccurrence = todayKey(at) === todayKey(this.now()) ? at : at - 24 * 60 * 60 * 1000;
     if (this.now() >= todayOccurrence && !this.#ranToday()) {
       this.log('[group-digest] 今天的计划时刻已过且尚未运行，立即补跑一次');
-      withTrace(newTraceId(), () => this.runOnce()).catch((error) => this.log('[group-digest] 补跑出错:', error));
+      withTrace(newTraceId(), () => this.runOnce({ skipDone: true })).catch((error) => this.log('[group-digest] 补跑出错:', error));
     }
     const wait = Math.max(1000, at - this.now());
     this.timer = setTimeout(() => {
-      withTrace(newTraceId(), () => this.runOnce()).catch((error) => this.log('[group-digest] 运行出错:', error));
+      withTrace(newTraceId(), () => this.runOnce({ skipDone: true })).catch((error) => this.log('[group-digest] 运行出错:', error));
       this.reconfigure();   // 排下一天
     }, wait);
     if (this.timer.unref) this.timer.unref();
@@ -120,17 +132,22 @@ export class GroupDigestManager {
   }
 
   /** 立即跑一轮（控制台手动触发/测试用）。返回每个群的执行结果。 */
-  async runOnce() {
+  async runOnce({ skipDone = false } = {}) {
     if (this.running) return { skipped: 'already-running' };
     const cfg = this.#cfg();
     if (!cfg.chats.length) return { skipped: 'no-chats' };
     this.running = true;
     const results = [];
     try {
+      const done = this.#todayDone().done;
       for (const chatKey of cfg.chats) {
+        // 只对**自动**路径跳过：控制台手点重跑是明确意图，不该被「今天发过」挡下。
+        if (skipDone && done.has(chatKey)) { results.push({ chatKey, ok: true, skipped: 'already-sent-today' }); continue; }
         try {
           const r = await this.#digestOne(chatKey, cfg);
           results.push({ chatKey, ...r });
+          done.add(chatKey);
+          this.#writeProgress(done);
         } catch (error) {
           const msg = String(error?.message ?? error).slice(0, 200);
           results.push({ chatKey, ok: false, error: msg });
@@ -146,7 +163,7 @@ export class GroupDigestManager {
         this.#scheduleDefer();
       } else {
         this.deferAttempts = 0;
-        this.#markRanToday();
+        this.#writeProgress(done);
       }
       return { ok: true, results };
     } finally {

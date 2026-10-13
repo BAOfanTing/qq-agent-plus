@@ -146,14 +146,15 @@ export class MemoryStore {
     memberImpression.sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt));
     return { memberImpression };
   }
-  editMemberImpression(chatKey, { userId, name = '', note = '', impressions = [] }) {
-    // 控制台手动改的：来源标成 manual，跟模型自动记的/整理改写的区分开。
+  editMemberImpression(chatKey, { userId, name = '', note, impressions = [] }) {    // 控制台手动改的：来源标成 manual，跟模型自动记的/整理改写的区分开。
     // 走 replaceMember（子类 override 会先打快照）—— 直接调 this.people.replace 会绕过快照，
     // 让"记忆页手工改写"成为唯一不可恢复的破坏性写入。
     const member = this.replaceMember(chatKey, userId, name, impressions, { origin: 'manual' });
     // 备注的写入口径收敛在 setMemberNote（与模型工具 set_member_note 共用）
-    const n = setMemberNote(userId, note);
-    return { ...member, note: n };
+    // note **缺席**（undefined）= 不动备注；显式空串才是"删备注"。
+    // 原来默认空串 + 路由写 `body.note ?? ''`，任何不带 note 的调用都会静默清掉称呼（2026-10-13 全项目审查 P3）。
+    if (note === undefined) return { ...member };
+    return { ...member, note: setMemberNote(userId, note) };
   }
   // options 要透传：memory.js 的子类会传 { origin }（整理=consolidated / 控制台手动=manual），
   // 少写这个形参会让调用方传的来源被静默丢掉，只剩存储层默认值恰好对得上（整理那条）。

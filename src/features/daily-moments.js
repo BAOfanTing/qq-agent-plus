@@ -170,7 +170,8 @@ function momentError(code, message, httpStatus = 409) {
 }
 
 function redactPublicContent(value, snapshot) {
-  let text = cleanText(value, 1000).replace(/\b[1-9]\d{4,14}\b/g, '[号码已隐藏]');
+  // 用**数字边界**而不是 \b：`QQ12345678`、`id1234567` 这类紧贴字母的号码，\b 匹配不到会原样外发（2026-10-13 审查 P3）。
+  let text = cleanText(value, 1000).replace(/(?<!\d)[1-9]\d{4,14}(?!\d)/g, '[号码已隐藏]');
   for (const group of snapshot.groups) {
     const groupName = cleanText(group.groupName, 100);
     if (groupName.length >= 2) text = text.split(groupName).join('某个群');
@@ -446,7 +447,9 @@ export class DailyMomentsManager {
 
   async #exclusive(task, execute) {
     if (this.running) throw momentError('MOMENT_BUSY', '已有动态任务正在执行，请等待完成');
-    assertTimeAllowed('');
+    // 「核对 / 确认结果」是消除 publish-unknown 阻断的唯一出口，且只读+写本地记录：
+    // 非活跃时段把它们拦下，管理员点不动、窗口模式会一直卡在 pending（2026-10-13 全项目审查 P3-4）。
+    if (task !== 'reconcile' && task !== 'resolve-record') assertTimeAllowed('');
     this.setProactiveSuppressed(true);
     this.task = task;
     this.running = Promise.resolve().then(execute).finally(() => {
@@ -582,7 +585,11 @@ export class DailyMomentsManager {
           slot.reason = result.record.error || result.record.reason || '';
         } catch (error) {
           const record = this.state.records.find((item) => item.scheduleSlotId === slot.id);
-          slot.status = record?.status || (['MOMENT_BUSY', 'TIME_CONTROL_INACTIVE'].includes(error.code) ? 'pending' : 'failed');
+          // 错误码优先于记录状态：被时间控制/忙碌打断时必须回 pending（窗口还开着就该再试），
+          // 而 #run 已经把记录写成 'deferred' —— 那个值不在任何恢复分支里，计划会被静默吞掉（2026-10-13 全项目审查 P2-2）。
+          slot.status = ['MOMENT_BUSY', 'TIME_CONTROL_INACTIVE'].includes(error.code)
+            ? 'pending'
+            : (record?.status || 'failed');
           slot.recordId = record?.id || '';
           slot.reason = cleanText(error?.message ?? error, 1000);
         }

@@ -388,6 +388,9 @@ export class GlobalPersonMemoryStore {
           x.content !== content || (scope && !sourceKeys(x.sourceChatKeys).includes(scope)));
         removed ||= member.impressions.length !== n;
       } else { member.impressions = []; removed = true; }
+      // 摘掉印象后要重算成员级来源：否则这个人还会声称"来自 A 群"，而他在 A 群已经没有印象了
+      //（members(chatKey) / consolidationState 会把他算进 A 群；2026-10-13 全项目审查 P3）。
+      member.sourceChatKeys = sourceKeys(member.impressions.flatMap((x) => x.sourceChatKeys || []));
       // 只要真删掉了东西就留快照，不限于"整条被删空"：这个人还有别的来源时，
       // 被摘掉的那几条同样再也回不来 —— 而控制台文案承诺的是"服务端会留可回滚快照"。
       // before 是动手前的克隆；它本来就是空列表时，备份函数自己会返回 null 不落盘。

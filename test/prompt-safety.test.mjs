@@ -162,7 +162,13 @@ test('提示词里的每个段头都能被弱化（清洗白名单不许落后�
     // 漏扫一个，新段头就可能在白名单之外被群友伪造
     'src/core/orchestrator.js',
     'src/features/group-game.js',
-    'src/features/group-digest.js'
+    'src/features/group-digest.js',
+    // 2026-10-13 全项目审查：这几个也在往提示词塞段头，漏扫＝白名单落后于现实
+    'src/features/qzone-interactions.js',
+    'src/features/games/werewolf.js',
+    'src/features/games/undercover.js',
+    'src/llm/relationship-pilot-prompt.js',
+    'src/onebot/qzone-feed.js'
   ];
   // 只豁免"我们自己生成、且不授予任何权限"的普通标记
   const ALLOW = new Set(['【拍一拍】', '【图片】', '【合并转发聊天记录】']);

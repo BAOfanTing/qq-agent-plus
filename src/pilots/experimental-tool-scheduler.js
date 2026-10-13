@@ -235,7 +235,10 @@ export class ExperimentalToolBatch {
       let resolve;
       let reject;
       const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-      deferred.set(index, { resolve, reject });
+      // 挂一个空 catch：宿主是逐个 await 的，靠后的那格被 reject 时可能还没有人接 handler，
+      // 裸 reject 会变成 unhandledRejection，被 server.js 记成进程级 critical 异常（2026-10-13 全项目审查）。
+      promise.catch(() => {});
+      deferred.set(index, { resolve, reject, promise });
       this.pending.set(index, promise);
     }
 

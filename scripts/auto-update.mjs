@@ -801,12 +801,16 @@ async function run() {
     // 每次运行显式清空：状态是浅合并的，不清会残留上一次成功的通道值
     transport: '',
     error: '',
-    notification: {
-      pending: false,
-      ownerUin: autoUpdateOwner(cfg),
-      sentAt: 0,
-      error: ''
-    },
+    // 上一轮还没送出去的失败/结果未知通知（disableOnFailure=false 时会留 pending）不能被这次写入清掉，
+    // 否则管理员永远收不到那条告警（docs/AUTO_UPDATE.md 承诺"保留 pending 等重连"；2026-10-13 全项目审查 P3）。
+    notification: (previous?.notification && (previous.notification.pending || previous.notification.deliveryUnknown))
+      ? { ...previous.notification }
+      : {
+        pending: false,
+        ownerUin: autoUpdateOwner(cfg),
+        sentAt: 0,
+        error: ''
+      },
     connectivity: {
       status: 'testing',
       transport: '',

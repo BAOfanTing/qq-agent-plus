@@ -1275,7 +1275,7 @@ export class Orchestrator {
       // 触发摘要
       const first = triggerEntries[0];
       const triggerSummary = manual
-        ? '控制台主动唤醒'
+        ? (paced ? '到点唤醒' : '控制台主动唤醒')
         : proactive
         ? '主动机会（冷场开话题）'
         : (first ? `${first.senderName || first.senderId}：${String(first.text || '').slice(0, 40)}` : '');
@@ -1386,21 +1386,28 @@ export class Orchestrator {
           details: { rounds: session.rounds, sentCount: session.sent.length }
         });
       }
-      if (lease) {
-        // 时间窗口关闭打断在途批次：无效果（模型没说话、无发送）时直接归档（ack）——
-        // 这是文档化的刻意设计（README："非活跃期消息仅归档，不积压自动补回复"，
-        // test/time-control-integration.test.mjs "prevents retry" 钉住了该语义），
-        // 管理员可见性由上面的 info 级 incident 记录兜底。有发送效果时走 failLease
-        // 进 held/failed 人工核对，不自动重试。
-        if (timeClosed && !this.store.hasEffects(lease.id)) this.store.ackLease(lease.id);
-        else this.store.failLease(lease.id, session.error, {
-          retryable: !timeClosed && (isRetryableError(error) || controller.signal.aborted)
-        });
-      } else {
-        // 主动唤醒（无租约）失败也要收 outbox 的尾巴：成功路径会清掉 sent/failed 残行，
-        // 失败路径漏了这步 → 残行永远留在 outbox（只能手动 resolveHeld，2026-10-10 审查 A4）。
-        // unknown 行不动（本来就要人工核对）。
-        this.store.completeRun(session.leaseId);
+      // 租约/outbox 收尾单独包一层：sqlite 忙、磁盘满这类错误不能让下面的 sessions.finish
+      // 被跳过 —— 否则会话会永久停在 running（控制台一直"运行中"，用量也不计账，2026-10-13 全项目审查 P2）。
+      try {
+        if (lease) {
+
+          // 时间窗口关闭打断在途批次：无效果（模型没说话、无发送）时直接归档（ack）——
+          // 这是文档化的刻意设计（README："非活跃期消息仅归档，不积压自动补回复"，
+          // test/time-control-integration.test.mjs "prevents retry" 钉住了该语义），
+          // 管理员可见性由上面的 info 级 incident 记录兜底。有发送效果时走 failLease
+          // 进 held/failed 人工核对，不自动重试。
+          if (timeClosed && !this.store.hasEffects(lease.id)) this.store.ackLease(lease.id);
+          else this.store.failLease(lease.id, session.error, {
+            retryable: !timeClosed && (isRetryableError(error) || controller.signal.aborted)
+          });
+        } else {
+          // 主动唤醒（无租约）失败也要收 outbox 的尾巴：成功路径会清掉 sent/failed 残行，
+          // 失败路径漏了这步 → 残行永远留在 outbox（只能手动 resolveHeld，2026-10-10 审查 A4）。
+          // unknown 行不动（本来就要人工核对）。
+          this.store.completeRun(session.leaseId);
+        }
+      } catch (cleanupError) {
+        log.warn('[orchestrator] 收尾失败（会话仍会正常收口）:', cleanupError?.message ?? cleanupError);
       }
       const status = timeClosed ? 'aborted' : 'error';
       this.sessions.finish(session.id, status);

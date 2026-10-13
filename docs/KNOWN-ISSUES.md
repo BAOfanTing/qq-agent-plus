@@ -165,3 +165,20 @@ regression 集），在部署机上执行 `npm test` 时也在其中。
 > 接管走 `.takeover` 互斥文件（互斥本身也带 5 分钟陈旧兜底）、拿到互斥后**再判一次**
 > 才删锁，errno 非 ESRCH 一律按"进程还在"处理（busy 按 0 退出，不会连累 `disableOnFailure`）。
 > 即：**"两个进程同时读改写同一个 json"未修，"两个 updater 同时部署"已加固**。
+
+## 2026-10-13 全项目审查：未修的几条（需产品口径 / 上游前提）
+
+- **反向代理部署下，`POST /api/config` 的 `server` 整节替换会把令牌清成空**（守卫只看"绑定是否回环"）。
+  需两个条件同时成立：持令牌者主动整节替换 + 反代不注入 `x-forwarded-for/x-real-ip/forwarded`；属"管理员
+  自伤"而非越权提升。最小改法：把守卫从"绑定非回环"改成"当前存在令牌就一律 409"。
+- **`get_group_profile` 的 honors 没有显式体积上限**：同一函数里 files/albums/notices/messages 都有截断。
+  上游 `get_group_honor_info` 各 list 通常自带上限，故未实测到爆量；换适配器时建议按字段截断。
+- **群游戏在观察/暂停、非活跃时段仍推进状态机**（`#tickOnce` 只看 `cfg.enabled`）：播报被 `assertCanSend`
+  挡下只记日志，恢复时局已悄悄结束，中间播报（天亮了/投票结果）永久丢失。修法是加 `canRun(chatKey)` 闸门；
+  **若产品口径是"暂停也继续推"，请把该行为写进文档**并让丢掉的播报可见，在此之前维持现状。
+- **`ops scan --strict` 的覆盖边界**：只覆盖"同行裸标识符调用"，`this.store.missingMethod()` 这类属性调用
+  不扫，且行首的裸调用会被误当成"定义"（见 `docs/OPS.md`）。
+- **好友管理页缺页内序号守卫**（`loadFriendFeaturePageImpl`）：该页无筛选/搜索状态，乱序到达通常覆盖成同
+  内容，可观测影响极小。
+- **部署脚本收尾段的 `"$USER"`**：`set -u` 下若环境未注入 `USER`，会在**部署成功之后**报 unbound variable
+  并被更新器记成失败；标准路径（systemd 用户服务）应已注入，未构造出复现。建议统一改成 `"$(id -un)"`。

@@ -432,7 +432,9 @@ rollback_deployment() {
   ((status != 0)) || status=1
   trap - ERR INT TERM
   set +e
-  clear_deploy_marker          # 回滚完成即视为"这次部署已收尾"，别留下会让启动告警的标记
+  # 注意：清标记必须放在**恢复动作之后**（原来放在这里）：
+  # 恢复过程中再失败（磁盘满正是常见原因）或被 SIGKILL 时，标记已经没了，
+  # 机器停在"半新半旧"却不再报 deploy-interrupted（2026-10-13 全项目审查）。
   printf '\nDeployment failed; restoring the previous installation...\n' >&2
   systemctl --user stop "$SERVICE.service" >/dev/null 2>&1
   systemctl --user disable --now "$UPDATE_SERVICE.timer" >/dev/null 2>&1
@@ -486,6 +488,8 @@ rollback_deployment() {
   else
     systemctl --user disable --now "$SERVICE.service" >/dev/null 2>&1
   fi
+  # 恢复与重启都做完，才算这次部署收尾
+  clear_deploy_marker
   exit "$status"
 }
 trap rollback_deployment ERR INT TERM

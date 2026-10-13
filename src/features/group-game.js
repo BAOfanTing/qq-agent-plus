@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, getConfig } from '../core/config.js';
+import { displayNameOf } from '../core/display-name.js';
 import { sanitizeUserText, ZONE_OFFSET_MS } from '../core/util.js';
 import * as numberBomb from './games/number-bomb.js';
 import * as undercover from './games/undercover.js';
@@ -428,7 +429,12 @@ export class GroupGameManager {
 
     const active = this.store.activeMembers(chatKey, 50).map((m) => ({ userId: String(m.userId), name: m.name }));
     const activeIds = new Set(active.map((p) => p.userId));
-    const idByName = new Map(active.map((p) => [String(p.name || '').trim(), p.userId]).filter(([k]) => k));
+    // 模型看到的成员名是 displayNameOf（备注/代号优先），只索引群名片会让"设过备注的人"解析不到、
+    // 名单被静默丢掉（2026-10-13 全项目审查 P3-2）。两种写法都索引。
+    const idByName = new Map(active.flatMap((p) => {
+      const display = String(displayNameOf(p.userId, p.name) || '').trim();
+      return [String(p.name || '').trim(), display].filter(Boolean).map((key) => [key, p.userId]);
+    }));
     const requested = Array.isArray(players) && players.length ? players : null;
     // 模型给的 players 必须先与本群已知成员求交集：只发给"报名者"这条不变量不能被
     // 一次提示注入绕过成"发给任意 QQ"（2026-09-28 审查 P3）。

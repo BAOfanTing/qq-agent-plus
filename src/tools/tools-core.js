@@ -578,7 +578,7 @@ export function buildToolDefs() {
         try {
           const entry = ctx.stickers.note(String(args.stickerId), { note: args.note, tags: args.tags, usage: args.usage });
           if (!entry) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`);
-          return ok({ updated: true, id: entry.id, localNote: entry.localNote, tags: entry.tags });
+          return ok({ updated: true, id: entry.id, localNote: sanitizeUserText(String(entry.localNote || '')), tags: (Array.isArray(entry.tags) ? entry.tags : []).map((t) => sanitizeUserText(String(t))) });
         } catch (error) {
           return err(error?.message ?? error);
         }
@@ -770,7 +770,7 @@ export function buildToolDefs() {
           // "emoji reactions are not supported on private messages"）——在工具层先说清楚。
           if (ctx.kind !== 'group') return err('表情回应只能贴在群聊消息上（QQ 私聊不支持）。私聊里想表达态度就回一句话或发个表情。');
           const mid = normalizeMid(args.messageId);
-          if (!mid) return err('messageId 不能为空，用聊天记录里那条消息前的 #数字');
+          if (!/^\d+$/.test(mid)) return err(`messageId 要是消息 id（收到的是 ${mid}）。${midHint(ctx)}`);
           const emojiId = String(args.emojiId ?? '').trim();
           if (!/^\d+$/.test(emojiId)) return err('emojiId 要是 QQ 系统表情编号（数字），如 14 微笑、128077 👍');
           const cfg = getConfig();
@@ -2142,12 +2142,12 @@ export function buildToolDefs() {
         const total = userId
           ? mem.memberImpression.filter((e) => String(e.userId) === userId).length
           : mem.memberImpression.length;
-        return ok({
+        return ok(sanitizeDeep({
           memberImpression: list.map(stripMemorySources),
           note: total > list.length
             ? `共 ${total} 条，已按最近观察排序取前 ${list.length} 条；要看某人全部请传 userId`
             : `共 ${total} 条`
-        });
+        }));
       }
     },
     {

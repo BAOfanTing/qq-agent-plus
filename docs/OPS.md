@@ -233,3 +233,8 @@ scp user@host:/data/qq-agent/data/messages.sqlite ./messages.sqlite
   - `scan` 默认带项目已知误报忽略表（等价于原 `check-undefined-calls.sh`），`--ignore=` 可
     关闭；`--log=文件` 等价于原启动自检的日志行为；
   - `audit` 的第 4 节会打印每个文件的未定义调用明细，并在结论中重复计数。
+
+## `ops scan --strict` 的覆盖边界
+
+只覆盖**同行裸标识符调用**（"调用点有、定义没有"那类历史事故）。不覆盖 `this.x.y()` 之类的属性调用，
+且行首的裸调用会被误当成"定义" —— 它是一道粗筛，不是类型检查。

@@ -497,6 +497,11 @@ export class QzoneInteractionManager {
     // 且下面"成功清零"的分支不能吃掉这次失败（否则退避失效、退回 1Hz 空转，P1-2）
     const runSelfId = String(this.onebot?.selfId || '');
     const accountMismatch = Boolean(this.state.accountId) && this.state.accountId !== runSelfId;
+    if (accountMismatch) {
+      // 账号不一致是**持久**状态：不进 #exclusive 就等于连失败都不记 → failStreak 恒 0、
+      // 退避失效、每 1 秒重排一次，功能静默停摆（2026-10-13 全项目审查 P2-1）。
+      this.#recordFailure(`QQ 登录账号与 qzone-interactions 状态文件不一致（状态里是 ${this.state.accountId}，当前是 ${runSelfId}），本轮跳过`);
+    }
     if ((feedDue || replyDue) && !accountMismatch) {
       try {
         const result = await this.#exclusive('scheduled', () => this.#run({
