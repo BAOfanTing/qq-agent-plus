@@ -108,6 +108,7 @@
   删掉刚生成的干净副本 ⇒ 恒假的闸门）；更新器不再在每次运行开头清掉还没投递的失败通知；协议端"强制重建"的
   提示改成实际可用的命令；实验工具调度器的 deferred promise 补兜底 catch（靠后的格子被 reject 时可能还没有
   handler，会变成进程级 critical 异常）。
+- **配置自愈**：当前选中的 provider 在 `providerKeys` 里有 Key 时，保存动作会清掉顶层遗留的 `api.apiKey`（手动模式字段）—— 此前它没人清理，「换过主模型 API，config.json 里却还躺着旧 Key」（2026-10-13 用户反馈；界面看不到、运行时也不读它，但会误导排查，且一旦目录 Key 被删就会拿旧 Key 去发请求）。
 - **文档**：`docs/OPS.md` 说明 `ops scan --strict` 只覆盖同行裸调用；`docs/KNOWN-ISSUES.md` 登记本次未修、
   需产品口径或上游前提的几条。
 

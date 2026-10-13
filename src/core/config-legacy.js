@@ -1495,6 +1495,14 @@ export function updateConfig(patch) {
     if (sec in safePatch && !isPlainObject(safePatch[sec])) delete safePatch[sec];
   }
   const next = migrateConfig(deepMerge(getConfig(), safePatch));
+  // 目录优先：当前选中的 provider 在 providerKeys 里有 Key 时，顶层 api.apiKey（手动模式遗留字段）
+  // 已经没有任何用处 —— 留着它就是"换过主模型 API，config.json 里却还躺着旧 Key"的来源
+  //（2026-10-13 用户反馈：换过 API 之后仍能读到那把没额度的旧 Key）。任何一次保存都会走这里，于是自愈。
+  // 只有当**没有**目录 Key 时才保留它（手动模式 / 老配置的真实凭据）。
+  const pidNow = String(next.api?.provider || '');
+  if (pidNow && String(next.providerKeys?.[pidNow] || '').trim() && String(next.api?.apiKey || '').trim()) {
+    next.api.apiKey = '';
+  }
   const oldTimeControl = JSON.stringify(getConfig().timeControl);
   // 人设绑定与正文的优先级，只在配置保存这一层定：
   //   1) patch 里写了 roleText 但没给 templateId = 手写正文 → 自动解绑，正文按你写的来；

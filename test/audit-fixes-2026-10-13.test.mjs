@@ -53,3 +53,25 @@ test('P3：按内容删印象后会重算成员级来源（不再声称来自已
   assert.equal(memory.members('group:200').length, 0, '200 群里不该再有他');
   assert.equal(memory.members('group:201').length, 1);
 });
+
+test('P2：目录里有 Key 时，顶层遗留 api.apiKey 会被保存动作清掉', async () => {
+  const { updateConfig } = await import('../src/core/config.js');
+  // 复现线上状态：当前选中 provider 的目录里有能用的 Key，顶层还躺着换之前的旧 Key
+  setRuntimeConfig({
+    ...structuredClone(DEFAULT_CONFIG),
+    api: { ...DEFAULT_CONFIG.api, provider: 'p1', apiKey: 'old-dead-key' },
+    providerKeys: { p1: 'live-key' }
+  });
+  updateConfig({});
+  assert.equal(getConfig().api.apiKey, '', '目录有 Key 时不该再留着顶层旧 Key');
+  assert.equal(getConfig().providerKeys.p1, 'live-key', '目录里的 Key 不能被碰');
+
+  // 手动模式（没有选中 provider）：顶层字段是真实凭据，必须保留
+  setRuntimeConfig({
+    ...structuredClone(DEFAULT_CONFIG),
+    api: { ...DEFAULT_CONFIG.api, provider: '', apiKey: 'manual-key' },
+    providerKeys: {}
+  });
+  updateConfig({});
+  assert.equal(getConfig().api.apiKey, 'manual-key', '没有目录 Key 时顶层字段就是唯一凭据');
+});
