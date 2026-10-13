@@ -424,10 +424,13 @@ async function saveMemberNote(userId, note) {
   state.config = await api('/api/config') || state.config;
   const nextNotes = { ...(state.config?.memberNotes || {}) };
   const text = String(note ?? '').trim();
+  // 「这次写入前有没有备注」只能在这里判断：上面刚取的就是服务端现值，写完之后
+  // state.config 只剩新值，调用方再读就晚了（人物记忆页的"本来就没有备注"要用它）。
+  const hadNote = Boolean(String(nextNotes[key] || '').trim());
   if (text) nextNotes[key] = text; else delete nextNotes[key];
   const data = await api('/api/config', { method: 'POST', body: JSON.stringify({ memberNotes: { __replace__: nextNotes } }) });
   if (data?.config) state.config = data.config;
-  return data;
+  return { ...data, hadNote };
 }
 
 async function openMemberNoteModal(qq, chatKey) {

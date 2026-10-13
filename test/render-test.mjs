@@ -3614,11 +3614,18 @@ try {
   {
     const originalFetch = sandbox.fetch;
     const posts = [];
+    // 迷你服务端：GET /api/config 返回配置本身（控制台就是这么用的），POST 按 __replace__ 真回写。
+    // 不回写的话，"清空一个已存在的备注"这条分支永远走不到。
+    let serverNotes = {};
     sandbox.fetch = async (url, options = {}) => {
       const method = String(options.method || 'GET').toUpperCase();
-      posts.push({ url: String(url), method, body: options.body ? JSON.parse(options.body) : null });
-      if (method === 'GET') return { ok: true, status: 200, json: async () => ({ files: [], memberNotes: {} }) };
-      return { ok: true, status: 200, json: async () => ({ ok: true, config: { memberNotes: {} } }) };
+      const body = options.body ? JSON.parse(options.body) : null;
+      posts.push({ url: String(url), method, body });
+      if (method === 'GET') {
+        return { ok: true, status: 200, json: async () => ({ files: [], memberNotes: { ...serverNotes } }) };
+      }
+      if (body?.memberNotes?.__replace__) serverNotes = { ...body.memberNotes.__replace__ };
+      return { ok: true, status: 200, json: async () => ({ ok: true, config: { memberNotes: { ...serverNotes } } }) };
     };
     // 这个页面脚本在真实控制台里随 index.html 加载；这里在同一个 vm 里执行它，
     // 然后直接触发"保存"按钮绑定的那个处理器。
@@ -3635,16 +3642,208 @@ try {
     if (handler) await handler({ currentTarget: saveBtn });
     const body = posts.find((p) => p.method === 'POST')?.body;   // 之后还会跟一次 GET（刷新名单）
     const statusText = String(document.getElementById('gm-anynote-status')?.textContent || '');
-    sandbox.fetch = originalFetch;
 
     const ok = Boolean(handler)
       && body?.memberNotes?.__replace__?.['12345'] === '沉默群友'
-      && statusText.includes('已保存')
+      && statusText.includes('备注已保存')
+      // 只查"已保存"不够：这次修复的要点就是把它和"名单里没有这个 QQ"分开说，
+      // 断言不钉住后半句的话，把区分删掉用例照样绿（2026-10-13）。
+      && statusText.includes('上面的名单里没有这个 QQ')
       && noteInput.value === '';
     ok ? pass++ : fail++;
     console.log('  ' + (ok ? 'OK   ' : 'FAIL ')
       + `按 QQ 设备注：走 __replace__ 写入口并回报状态（状态="${statusText}"）`
       + (ok ? '' : ' -> ' + JSON.stringify(body) + ' handler=' + Boolean(handler)));
+
+    // 清空备注走的是删除分支，状态必须说"已删除"，不能混进上面那两句里的任何一句。
+    // ⚠️ 这几段都要跑在**本段自己装的假服务端**上：早先这里把 fetch 提前还原了，
+    //    后面补的删除/空备注断言就全跑在空桩上（hadNote 恒 false，删除分支永远绿）。
+    noteInput.value = '';
+    posts.length = 0;
+    if (handler) await handler({ currentTarget: saveBtn });
+    const clearedStatus = String(document.getElementById('gm-anynote-status')?.textContent || '');
+    const clearedOk = clearedStatus.includes('已删除：12345');
+    clearedOk ? pass++ : fail++;
+    console.log('  ' + (clearedOk ? 'OK   ' : 'FAIL ')
+      + `按 QQ 设备注：清空备注走删除分支（状态="${clearedStatus}"）`);
+
+    // 本来就没有备注时不该回"已删除"（审查提的：什么都没删就别报删除）。
+    qqInput.value = '99999';
+    posts.length = 0;
+    if (handler) await handler({ currentTarget: saveBtn });
+    const emptyStatus = String(document.getElementById('gm-anynote-status')?.textContent || '');
+    const emptyOk = emptyStatus.includes('本来就没有备注：99999');
+    emptyOk ? pass++ : fail++;
+    console.log('  ' + (emptyOk ? 'OK   ' : 'FAIL ')
+      + `按 QQ 设备注：本来没有备注时不说"已删除"（状态="${emptyStatus}"）`);
+
+    // 非法 QQ：只提示、不发请求（改了那个正则而没人挡，这里要红）
+    qqInput.value = 'abc';
+    posts.length = 0;
+    if (handler) await handler({ currentTarget: saveBtn });
+    const badStatus = String(document.getElementById('gm-anynote-status')?.textContent || '');
+    const badOk = badStatus.includes('QQ 号要填纯数字') && !posts.some((p) => p.method === 'POST');
+    badOk ? pass++ : fail++;
+    console.log('  ' + (badOk ? 'OK   ' : 'FAIL ')
+      + `按 QQ 设备注：非法 QQ 只提示、不发请求（状态="${badStatus}"）`);
+    sandbox.fetch = originalFetch;   // 本段的所有场景都跑完了，最后再还原
+  }
+
+  // ── 人物记忆页「按 QQ 设备注」：名单里已经有印象的人，不该再提示"不在名单里"（2026-10-13）──
+  //    与上一条配对：两条一起才钉住"两种情况说法不同"。只留一条的话，把判断反了也不会红。
+  {
+    const originalFetch = sandbox.fetch;
+    const posts = [];
+    sandbox.fetch = async (url, options = {}) => {
+      const method = String(options.method || 'GET').toUpperCase();
+      posts.push({ url: String(url), method, body: options.body ? JSON.parse(options.body) : null });
+      const target = String(url);
+      if (method === 'GET' && target.includes('/api/memory-files/group_1')) {
+        return { ok: true, status: 200, json: async () => ({
+          members: [{
+            userId: '54321', name: '老张', updatedAt: 1, sourceChatKeys: ['group:1'],
+            impressions: [{ content: '爱钓鱼', createdAt: 1, lastObservedAt: 1, sourceChatKeys: ['group:1'] }]
+          }],
+          handoff: null
+        }) };
+      }
+      if (method === 'GET') {
+        return { ok: true, status: 200, json: async () => ({
+          files: [{ chatKey: 'group:1', impressionCount: 1, memberCount: 1, hasHandoff: false, handoffExpiresAt: 0, updatedAt: 1 }],
+          memberNotes: {}
+        }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, config: { memberNotes: { '54321': '老张' } } }) };
+    };
+    // 页面脚本是 IIFE，外面拿不到它的 loadGlobalMemory：点「刷新」来让它自己把名单读进来。
+    const refreshBtn = document.getElementById('gm-refresh');
+    const refreshHandler = (refreshBtn?._listeners?.click || [])[0];
+    if (refreshHandler) await refreshHandler({ currentTarget: refreshBtn });
+    const qqInput = document.getElementById('gm-anynote-qq');
+    const noteInput = document.getElementById('gm-anynote-text');
+    const saveBtn = document.getElementById('gm-anynote-save');
+    qqInput.value = '54321';
+    noteInput.value = '老张';
+    const handler = (saveBtn?._listeners?.click || [])[0];
+    if (handler) await handler({ currentTarget: saveBtn });
+    const body = posts.find((p) => p.method === 'POST')?.body;
+    const statusText = String(document.getElementById('gm-anynote-status')?.textContent || '');
+    sandbox.fetch = originalFetch;
+
+    const ok = Boolean(refreshHandler) && Boolean(handler)
+      && body?.memberNotes?.__replace__?.['54321'] === '老张'
+      // 前半句要**从头匹配**：另一条分支的文案「备注已保存：54321（…）」里也含 "已保存：54321"，
+      // 用 includes 会把两条分支混成一条（2026-10-13 审查）。
+      && statusText.startsWith('已保存：54321')
+      && !statusText.includes('上面的名单里没有这个 QQ');
+    ok ? pass++ : fail++;
+    console.log('  ' + (ok ? 'OK   ' : 'FAIL ')
+      + `按 QQ 设备注：名单已有此人时不再提示"不在名单里"（状态="${statusText}"）`
+      + (ok ? '' : ' -> ' + JSON.stringify(body) + ' refresh=' + Boolean(refreshHandler)));
+  }
+
+  // ── 人物记忆页「新建人物印象」（2026-10-13）──
+  //   名单只列有印象的人，还没有印象的人从这儿补 —— 控制台别处没有可用的建印象入口
+  //   （会话记忆页那两个按钮按上游设计被 CSS 隐藏）。这条写入必须真能建人：
+  //   PUT 到所选来源会话、正文一行一条、且不能把已有备注顺手删掉。
+  {
+    const originalFetch = sandbox.fetch;
+    const posts = [];
+    sandbox.fetch = async (url, options = {}) => {
+      const method = String(options.method || 'GET').toUpperCase();
+      const body = options.body ? JSON.parse(options.body) : null;
+      posts.push({ url: String(url), method, body });
+      const target = String(url);
+      if (target.includes('/api/config') && method === 'GET') {
+        return { ok: true, status: 200, json: async () => ({ memberNotes: { '77777': '代号老王' }, allow: { groups: ['1'], private: [] } }) };
+      }
+      if (method === 'GET' && target.includes('/api/memory-files/group_1')) {
+        // 名单里已经有这个人（带一条既有印象）：用来钉"整体替换前会把已有印象带上"
+        return { ok: true, status: 200, json: async () => ({ members: [{ userId: '77777', name: '老王', updatedAt: 1, sourceChatKeys: ['group:1'], impressions: [{ content: '爱钓鱼', createdAt: 1, lastObservedAt: 1, sourceChatKeys: ['group:1'] }] }], handoff: null }) };
+      }
+      if (method === 'GET' && target.includes('/api/memory-files')) {
+        return { ok: true, status: 200, json: async () => ({ files: [{ chatKey: 'group:1', impressionCount: 1, memberCount: 1, hasHandoff: false, handoffExpiresAt: 0, updatedAt: 1 }], memberNotes: {} }) };
+      }
+      if (method === 'GET') return { ok: true, status: 200, json: async () => ({ files: [], memberNotes: {} }) };
+      return { ok: true, status: 200, json: async () => ({ ok: true, member: { userId: '77777' }, config: { memberNotes: { '77777': '代号老王' } } }) };
+    };
+    // 本地缓存**故意不含**备注（模拟"群里刚 set_member_note 改过、控制台还没刷新"）：
+    // 保存时若从这里读备注，就会拿空串把服务端那条删掉。
+    vm.runInContext("state.config = { memberNotes: {}, allow: { groups: ['1'], private: [] } };", ctx);
+    // 先把名单读进来（页面脚本是 IIFE，只能靠「刷新」按钮触发它自己的加载）——
+    // 这样"保存时要把已知印象带上"才有得可并。
+    const refreshBtn = document.getElementById('gm-refresh');
+    const refreshHandler = (refreshBtn?._listeners?.click || [])[0];
+    if (refreshHandler) await refreshHandler({ currentTarget: refreshBtn });
+
+    const toggleHandler = (document.getElementById('gm-newimp')?._listeners?.toggle || [])[0];
+    if (toggleHandler) await toggleHandler({ target: { open: true } });
+    const qqInput = document.getElementById('gm-newimp-qq');
+    const chatSelect = document.getElementById('gm-newimp-chat');
+    const textInput = document.getElementById('gm-newimp-text');
+    const saveBtn = document.getElementById('gm-newimp-save');
+    const saveHandler = (saveBtn?._listeners?.click || [])[0];
+    // 下拉必须真的被填上（否则"选了来源会话"这条链是断的，而用例照样绿）
+    const filledOk = Boolean(toggleHandler)
+      && String(chatSelect.innerHTML || '').includes('group:1')
+      && chatSelect.dataset.filled === '1';
+    qqInput.value = '77777';
+    chatSelect.value = 'group:1';
+
+    // ① 没选来源会话 / 非法 QQ / 内容为空：只提示，不发请求
+    chatSelect.value = '';
+    textInput.value = '爱钓鱼';
+    posts.length = 0;
+    if (saveHandler) await saveHandler({ currentTarget: saveBtn });
+    const noChat = String(document.getElementById('gm-newimp-status')?.textContent || '');
+    chatSelect.value = 'group:1';
+    qqInput.value = 'abc';
+    posts.length = 0;
+    if (saveHandler) await saveHandler({ currentTarget: saveBtn });
+    const badQq = String(document.getElementById('gm-newimp-status')?.textContent || '');
+    qqInput.value = '77777';
+    textInput.value = '   ';
+    posts.length = 0;
+    if (saveHandler) await saveHandler({ currentTarget: saveBtn });
+    const emptyStatus = String(document.getElementById('gm-newimp-status')?.textContent || '');
+    const guardOk = noChat.includes('先选一个来源会话')
+      && badQq.includes('QQ 号要填纯数字')
+      && emptyStatus.includes('印象内容不能为空')
+      && !posts.some((p) => p.method === 'PUT');
+
+    // ② 正常保存：PUT 到来源会话；备注取**服务端现值**（本地缓存里没有）；已知印象要带上
+    textInput.value = '周末常不在';
+    posts.length = 0;
+    if (saveHandler) await saveHandler({ currentTarget: saveBtn });
+    const put = posts.find((p) => p.method === 'PUT');
+    const savedStatus = String(document.getElementById('gm-newimp-status')?.textContent || '');
+    const savedOk = Boolean(put)
+      && put.url.includes('/api/memory-files/group_1/members/77777')
+      && JSON.stringify(put.body?.impressions) === JSON.stringify(['爱钓鱼', '周末常不在'])
+      && put.body?.note === '代号老王'
+      && put.body?.name === ''
+      && savedStatus.includes('已保存：77777');
+
+    // ③ 读不到服务端配置时中止，不许拿空备注去写（会删掉别人的备注）
+    //    （注意先补回内容：上一步保存成功后输入框会被清空，否则会先被"内容为空"挡下）
+    textInput.value = '再写一条';
+    sandbox.fetch = async (url, options = {}) => {
+      const method = String(options.method || 'GET').toUpperCase();
+      posts.push({ url: String(url), method, body: options.body ? JSON.parse(options.body) : null });
+      if (method === 'GET') return { ok: false, status: 500, json: async () => ({ error: 'boom' }) };
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+    posts.length = 0;
+    if (saveHandler) await saveHandler({ currentTarget: saveBtn });
+    const abortStatus = String(document.getElementById('gm-newimp-status')?.textContent || '');
+    const abortOk = abortStatus.includes('已中止') && !posts.some((p) => p.method === 'PUT');
+
+    sandbox.fetch = originalFetch;
+    const ok = filledOk && guardOk && savedOk && abortOk;
+    ok ? pass++ : fail++;
+    console.log('  ' + (ok ? 'OK   ' : 'FAIL ')
+      + `人物记忆：新建人物印象（下拉已填=${filledOk}，三种早退=${guardOk}，备注取服务端现值+带上已知印象=${savedOk}，读不到配置中止=${abortOk}）`
+      + (ok ? '' : ' -> put=' + JSON.stringify(put?.body) + ' status=' + savedStatus + ' abort=' + abortStatus));
   }
 
   // ── 设置分区的"菜单 id ↔ 路由 key"一致性（2026-09-29）──

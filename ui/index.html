@@ -235,13 +235,31 @@
         </div>
         <!-- 按 QQ 直接设备注：名单里只有"进过记忆库的人"（说过话的），
              没说过话的群友在这里补一个入口，否则备注就永远写不上。 -->
+        <!-- 新建印象：长期印象按 QQ 全局存，但每条都要挂在某个来源会话上 —— 没有来源会话就写不进去。
+             名单只列"有印象的人"，还没有印象的人在这里补；下一行的「设备注」只写称呼、不建印象。 -->
+        <details class="gm-anynote" id="gm-newimp">
+          <summary>新建人物印象（先选来源会话）</summary>
+          <div class="gm-note-field">
+            <input type="text" id="gm-newimp-qq" inputmode="numeric" placeholder="QQ 号" />
+            <select id="gm-newimp-chat" aria-label="来源会话"></select>
+          </div>
+          <div class="gm-note-field">
+            <textarea id="gm-newimp-text" rows="3" placeholder="一行一条印象（如：爱钓鱼，周末常不在）"></textarea>
+          </div>
+          <div class="gm-note-field">
+            <button class="btn btn-small" type="button" id="gm-newimp-save">保存</button>
+            <span class="gm-status" id="gm-newimp-status"></span>
+          </div>
+          <div class="gm-status">保存会「整体替换」这个 QQ 的长期印象（名单里已知的会一并带上，不会丢）；想让机器人自己从聊天记录补，可以把设置 → 记忆里「发现新人的最少发言条数」调小后再整理。</div>
+        </details>
         <details class="gm-anynote">
-          <summary>按 QQ 设备注（称呼/代号）</summary>
+          <summary>按 QQ 设备注（只改称呼，不会建印象）</summary>
           <div class="gm-note-field">
             <input type="text" id="gm-anynote-qq" inputmode="numeric" placeholder="QQ 号" />
             <input type="text" id="gm-anynote-text" maxlength="200" placeholder="称呼/备注名（留空 = 删除）" />
             <button class="btn btn-small" type="button" id="gm-anynote-save">保存</button>
           </div>
+          <div class="gm-status">这里只保存“以后叫他什么”。要给他建印象（让他出现在上面的名单里）：用上面的「新建人物印象」。</div>
           <div class="gm-status" id="gm-anynote-status"></div>
         </details>
         <div id="global-memory-items"></div>
