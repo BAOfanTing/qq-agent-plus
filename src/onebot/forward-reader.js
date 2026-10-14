@@ -69,5 +69,9 @@ export async function readForwardNodesById(onebot, resId) {
     const messages = nodes(await onebot.call('get_forward_msg', { id }));
     if (messages.length) return messages;
   } catch { /* 老适配器只认 message_id */ }
+  // 这个入参是**资源 id，不是消息 id**：resid 常是非数字串，Number() 会得到 NaN 并以 null
+  // 上 wire（等于白发一次请求，还把"取到但为空"误当失败）。只有纯数字时才值得当 message_id 再试
+  //（2026-10-14 复审 P3）。
+  if (!/^\d+$/.test(id)) return [];
   return nodes(await onebot.call('get_forward_msg', { message_id: Number(id) }));
 }

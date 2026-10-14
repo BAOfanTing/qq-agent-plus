@@ -770,7 +770,7 @@ export function buildToolDefs() {
           // "emoji reactions are not supported on private messages"）——在工具层先说清楚。
           if (ctx.kind !== 'group') return err('表情回应只能贴在群聊消息上（QQ 私聊不支持）。私聊里想表达态度就回一句话或发个表情。');
           const mid = normalizeMid(args.messageId);
-          if (!/^\d+$/.test(mid)) return err(`messageId 要是消息 id（收到的是 ${mid}）。${midHint(ctx)}`);
+          if (!/^-?\d+$/.test(mid)) return err(`messageId 要是消息 id（收到的是 ${mid}）。${midHint(ctx)}`);
           const emojiId = String(args.emojiId ?? '').trim();
           if (!/^\d+$/.test(emojiId)) return err('emojiId 要是 QQ 系统表情编号（数字），如 14 微笑、128077 👍');
           const cfg = getConfig();
@@ -809,7 +809,7 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           const mid = normalizeMid(args.messageId);
-          if (!/^\d+$/.test(mid)) return err('messageId 要是消息 id（聊天记录里那条消息前的 #数字）');
+          if (!/^-?\d+$/.test(mid)) return err('messageId 要是消息 id（聊天记录里那条消息前的 #数字）');
           const res = await ctx.onebot.call('get_msg_emoji_likes', { message_id: Number(mid) }, 15000, ctx.signal);
           const list = Array.isArray(res) ? res : [];
           if (!list.length) return ok({ messageId: mid, reactions: [], note: '这条消息还没有表情回应。' });
@@ -1090,8 +1090,10 @@ export function buildToolDefs() {
           if (ctx.kind !== 'group') return err('群待办只能在群聊里设');
           const mid = normalizeMid(args.messageId);
           // 非数字 mid 会以 NaN 上wire（JSON 序列化成 null）：与 react_to_message 同口径先拦下
-          // （2026-10-07 复审 P3）。
-          if (!/^\d+$/.test(mid)) return err('messageId 要是消息 id（聊天记录里那条消息前的 #数字）');
+          // （2026-10-07 复审 P3）。**允许负号**：QQ 的消息 id 有负数形态（引用就渲染成
+          // `[引用#-102·甲：…]`，replyToMessageId 也一直用 `/^-?[1-9]\d*$/`），一律要求
+          // 纯数字会把这类合法 id 挡在门外（2026-10-14 复审 P3）。
+          if (!/^-?\d+$/.test(mid)) return err('messageId 要是消息 id（聊天记录里那条消息前的 #数字）');
           // 两层兜底（2026-10-07 审计：此前既不走队列也没有任何闸门）：
           // ① 同一条消息今天设过就不再调（重复设没有任何效果）；
           // ② 每个群每天最多 TODO_PER_GROUP_PER_DAY 条，防一轮里连设不同消息刷屏。

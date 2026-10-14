@@ -431,10 +431,20 @@ export class GroupGameManager {
     const activeIds = new Set(active.map((p) => p.userId));
     // 模型看到的成员名是 displayNameOf（备注/代号优先），只索引群名片会让"设过备注的人"解析不到、
     // 名单被静默丢掉（2026-10-13 全项目审查 P3-2）。两种写法都索引。
-    const idByName = new Map(active.flatMap((p) => {
+    // 别名撞车（两个人同群名片，或某人的备注正好是别人的名片）时**宁缺勿错**：Map 后写覆盖
+    // 会让人被静默解析成另一个人（身份/查验结果发错对象），与"重名不敢猜"的既有口径一致
+    //（2026-10-14 复审 P3）。
+    const idByName = new Map();
+    const ambiguousNames = new Set();
+    for (const p of active) {
       const display = String(displayNameOf(p.userId, p.name) || '').trim();
-      return [String(p.name || '').trim(), display].filter(Boolean).map((key) => [key, p.userId]);
-    }));
+      for (const key of [String(p.name || '').trim(), display]) {
+        if (!key) continue;
+        if (idByName.has(key) && idByName.get(key) !== p.userId) { ambiguousNames.add(key); continue; }
+        idByName.set(key, p.userId);
+      }
+    }
+    for (const key of ambiguousNames) idByName.delete(key);
     const requested = Array.isArray(players) && players.length ? players : null;
     // 模型给的 players 必须先与本群已知成员求交集：只发给"报名者"这条不变量不能被
     // 一次提示注入绕过成"发给任意 QQ"（2026-09-28 审查 P3）。

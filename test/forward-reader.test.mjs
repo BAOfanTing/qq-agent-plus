@@ -151,3 +151,34 @@ test('聊天记录卡片：能从卡片里取到资源 id（取不到就是 null
   assert.equal(forwardResIdFromSegment({ type: 'forward', data: { res_id: 'rid-1' } }), 'rid-1');
   assert.equal(forwardResIdFromSegment({ type: 'text', data: { text: 'x' } }), null);
 });
+
+test('按资源 id 取节点：非数字 resid 不再回落成 message_id:NaN', async () => {
+  const { readForwardNodesById } = await import('../src/onebot/forward-reader.js');
+  const calls = [];
+  const onebot = { call: async (action, args) => { calls.push([action, args]); return { messages: [] }; } };
+  // 取到空也算失败 → 但 resid 不是数字，拿它当 message_id 只会发一次 NaN 请求
+  assert.deepEqual(await readForwardNodesById(onebot, 'abcDEFgh123456'), []);
+  assert.deepEqual(calls, [['get_forward_msg', { id: 'abcDEFgh123456' }]],
+    '非数字 resid 不该再拿 Number() 的结果去当 message_id');
+
+  // 纯数字才值得再试一次（老适配器只认 message_id 的那条兼容路径）
+  calls.length = 0;
+  await readForwardNodesById(onebot, '12345');
+  assert.deepEqual(calls, [
+    ['get_forward_msg', { id: '12345' }],
+    ['get_forward_msg', { message_id: 12345 }]
+  ], '数字 id 仍要保留兼容回落');
+});
+
+test('聊天记录卡片单独标成 [卡片聊天记录 …]：提示词里的锚点必须真的出现在正文里', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  const multimsg = JSON.stringify({
+    app: 'com.tencent.multimsg', prompt: '[聊天记录]',
+    meta: { detail_1: { resid: 'abcdefgh12345', title: '群聊的聊天记录' } }
+  });
+  // 模型按提示词找的就是这几个字；原来一律渲染成「[卡片…]」，那个锚点从来不存在
+  assert.match(cardToText({ type: 'json', data: { data: multimsg } }), /^\[卡片聊天记录/);
+  const news = JSON.stringify({ app: 'com.tencent.structmsg', prompt: '[分享]', meta: { news: { title: '标题', desc: '摘要' } } });
+  assert.match(cardToText({ type: 'json', data: { data: news } }), /^\[卡片 /, '普通分享卡片不该跟着改名字');
+  assert.equal(cardToText({ type: 'json', data: {} }), '[卡片消息]');
+});

@@ -3838,12 +3838,57 @@ try {
     const abortStatus = String(document.getElementById('gm-newimp-status')?.textContent || '');
     const abortOk = abortStatus.includes('已中止') && !posts.some((p) => p.method === 'PUT');
 
+    // ④ 写入前**重取服务端现值**：用户填表这几秒里机器人刚记了一条新印象（页面缓存里没有），
+    //    拿缓存的名单当基线会把那条静默删掉 —— 只有真去读服务端才拿得到它
+    textInput.value = '刚加的';
+    sandbox.fetch = async (url, options = {}) => {
+      const method = String(options.method || 'GET').toUpperCase();
+      const target = String(url);
+      posts.push({ url: target, method, body: options.body ? JSON.parse(options.body) : null });
+      if (method === 'GET' && target.includes('/api/config')) {
+        return { ok: true, status: 200, json: async () => ({ memberNotes: { '77777': '代号老王' }, allow: { groups: ['1'], private: [] } }) };
+      }
+      if (method === 'GET' && target.includes('/api/memory-files/group_1')) {
+        // 服务端此刻比页面缓存多一条（机器人刚写进去的）
+        return { ok: true, status: 200, json: async () => ({ members: [{ userId: '77777', name: '老王', impressions: [{ content: '爱钓鱼', createdAt: 1 }, { content: '刚记的', createdAt: 2 }] }] }) };
+      }
+      if (method === 'GET') return { ok: true, status: 200, json: async () => ({ files: [] }) };
+      return { ok: true, status: 200, json: async () => ({ ok: true, member: { userId: '77777', impressions: [{ content: '爱钓鱼' }, { content: '刚记的' }, { content: '刚加的' }] } }) };
+    };
+    posts.length = 0;
+    if (saveHandler) await saveHandler({ currentTarget: saveBtn });
+    const putFresh = posts.find((p) => p.method === 'PUT');
+    const freshOk = JSON.stringify(putFresh?.body?.impressions) === JSON.stringify(['爱钓鱼', '刚记的', '刚加的']);
+
+    // ⑤ 服务端截断（每位最多 20 条，截的是尾部 → 新加的排最后）：要说清没写进去，
+    //    并且**输入框保留内容**（原来无条件清空，用户以为写进去了）
+    textInput.value = '第二十一条';
+    sandbox.fetch = async (url, options = {}) => {
+      const method = String(options.method || 'GET').toUpperCase();
+      const target = String(url);
+      posts.push({ url: target, method, body: options.body ? JSON.parse(options.body) : null });
+      if (method === 'GET' && target.includes('/api/config')) {
+        return { ok: true, status: 200, json: async () => ({ memberNotes: {}, allow: { groups: ['1'], private: [] } }) };
+      }
+      if (method === 'GET' && target.includes('/api/memory-files/group_1')) {
+        return { ok: true, status: 200, json: async () => ({ members: [{ userId: '77777', name: '老王', impressions: [{ content: '爱钓鱼' }] }] }) };
+      }
+      if (method === 'GET') return { ok: true, status: 200, json: async () => ({ files: [] }) };
+      // 服务端只留下 1 条（模拟截到上限）→ 与提交的 2 条不一致
+      return { ok: true, status: 200, json: async () => ({ ok: true, member: { userId: '77777', impressions: [{ content: '爱钓鱼' }] } }) };
+    };
+    posts.length = 0;
+    if (saveHandler) await saveHandler({ currentTarget: saveBtn });
+    const capStatus = String(document.getElementById('gm-newimp-status')?.textContent || '');
+    const capOk = capStatus.includes('只写进去') && String(textInput.value) === '第二十一条';
+
     sandbox.fetch = originalFetch;
-    const ok = filledOk && guardOk && savedOk && abortOk;
+    const ok = filledOk && guardOk && savedOk && abortOk && freshOk && capOk;
     ok ? pass++ : fail++;
     console.log('  ' + (ok ? 'OK   ' : 'FAIL ')
-      + `人物记忆：新建人物印象（下拉已填=${filledOk}，三种早退=${guardOk}，备注取服务端现值+带上已知印象=${savedOk}，读不到配置中止=${abortOk}）`
-      + (ok ? '' : ' -> put=' + JSON.stringify(put?.body) + ' status=' + savedStatus + ' abort=' + abortStatus));
+      + `人物记忆：新建人物印象（下拉已填=${filledOk}，三种早退=${guardOk}，备注取服务端现值+带上已知印象=${savedOk}，读不到配置中止=${abortOk}，写前重取服务端印象=${freshOk}，截断要如实说=${capOk}）`
+      + (ok ? '' : ' -> put=' + JSON.stringify(put?.body) + ' status=' + savedStatus + ' abort=' + abortStatus
+        + ' fresh=' + JSON.stringify(putFresh?.body?.impressions) + ' cap=' + capStatus));
   }
 
   // ── 设置分区的"菜单 id ↔ 路由 key"一致性（2026-09-29）──

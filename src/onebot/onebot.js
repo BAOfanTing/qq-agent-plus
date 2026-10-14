@@ -789,12 +789,19 @@ export function cardToText(seg, selfId = '') {
   const body = [title, desc].filter(Boolean).join(' — ');
   const mine = selfId && uin && String(uin) === String(selfId);
   const tags = [prompt, mine ? '你自己的动态' : (nick ? `来自 ${nick}` : '')].filter(Boolean).join(' · ');
+  // 聊天记录卡片（app=com.tencent.multimsg，资源 id 在 detail_1.resid）单独标成「卡片聊天记录」：
+  // 提示词里给模型的锚点就是这几个字（看见就用 read_forward 展开），而原来一律渲染成「[卡片…]」，
+  // 那个锚点在消息正文里从来不存在 —— 模型既不会去展开，控制台的"卡片读不到"诊断也永远不触发
+  //（2026-10-14 复审 P2）。判定与 forward-reader 取 resid 的口径一致（那里是唯一真源，这里只做标记）。
+  const chatRecord = /com\.tencent\.multimsg/i.test(source)
+    || /["']?resid["']?\s*[:=]\s*["']?[A-Za-z0-9_-]{8,}/i.test(source);
+  const kind = chatRecord ? '卡片聊天记录' : '卡片';
   if (!body && !tags) {
     // 认不出的卡片结构留一条样本（卡片少见，不会刷屏），以后按真实结构扩展解析
     try { console.log('[onebot] 未能解析的卡片样本：', source.slice(0, 240)); } catch { /* 忽略 */ }
-    return '[卡片消息]';
+    return chatRecord ? '[卡片聊天记录]' : '[卡片消息]';
   }
-  return `[卡片${tags ? ' ' + tags : ''}${body ? '：' + body : ''}]`;
+  return `[${kind}${tags ? ' ' + tags : ''}${body ? '：' + body : ''}]`;
 }
 
 export async function segmentsToText(segments, { resolveReply = null, resolveAtName = null, includeReply = true, selfId = '' } = {}) {

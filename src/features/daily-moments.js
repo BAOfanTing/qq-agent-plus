@@ -171,7 +171,12 @@ function momentError(code, message, httpStatus = 409) {
 
 function redactPublicContent(value, snapshot) {
   // 用**数字边界**而不是 \b：`QQ12345678`、`id1234567` 这类紧贴字母的号码，\b 匹配不到会原样外发（2026-10-13 审查 P3）。
-  let text = cleanText(value, 1000).replace(/(?<!\d)[1-9]\d{4,14}(?!\d)/g, '[号码已隐藏]');
+  // 先把链接摘出来：源头链接里带一串数字很常见（`/p/12345`），连它一起换掉会把正文里唯一
+  // 可核实的东西弄成 `[号码已隐藏]`（2026-10-14 复审）。占位符用 \0 包住，号码替换必然穿不过去。
+  const urls = [];
+  let text = cleanText(value, 1000).replace(/https?:\/\/[^\s，。！？；、"'”）)】]+/g, (url) => `\0${urls.push(url) - 1}\0`);
+  text = text.replace(/(?<!\d)[1-9]\d{4,14}(?!\d)/g, '[号码已隐藏]');
+  text = text.replace(/\0(\d+)\0/g, (_m, index) => urls[Number(index)] ?? '');
   for (const group of snapshot.groups) {
     const groupName = cleanText(group.groupName, 100);
     if (groupName.length >= 2) text = text.split(groupName).join('某个群');
@@ -238,14 +243,20 @@ export function dayRecapReason(text) {
   const t = String(text || '');
   if (!t.trim()) return '';
   // 「N 点」类时间点：裸的「一点」不算（快一点 / 简单一点 / 差一点 / 多留一点 都是口语，
-  // 一篇正常动态里出现三次一点很常见）；带时间前缀的（下午一点）才算。
-  const all = t.match(/(?:凌晨|早上|上午|中午|下午|傍晚|晚上|半夜|清晨|夜里)?\s*[零〇一二三四五六七八九十百两]{1,3}\s*点(?:半|整|\d{1,2}\s*分?)?/g) || [];
+  // 一篇正常动态里出现三次很常见）；带时间前缀的（下午一点）才算。
+  // 比较前先把"时间前缀"归一掉：同一个时刻写成「凌晨三点」+「三点」+「三点」时，那本是
+  // 同一件事说了三遍，原来会被算成"两种写法"而误判成时间线（2026-10-14 复审）。
+  // 后缀 `(?!式)` 放行「三点式支架 / 五点式安全带」这类不含时间的用法。
+  // 阿拉伯数字也收（3点起床 / 5点跑步）：提示词的反例是中文数字，模型混用时闸门不能等于不存在。
+  const clockPrefix = /^(?:凌晨|早上|上午|中午|下午|傍晚|晚上|半夜|清晨|夜里)/;
+  const clockOf = (token) => token.replace(/\s+/g, '').replace(clockPrefix, '');
+  const all = t.match(/(?:凌晨|早上|上午|中午|下午|傍晚|晚上|半夜|清晨|夜里)?\s*[零〇一二三四五六七八九十百两\d]{1,3}\s*点(?:半|整|\d{1,2}\s*分?)?(?!式)/g) || [];
   // 只滤掉口语里的**裸「一点」**（快一点 / 简单一点 / 差一点 / 多留一点，一篇正常动态出现三次很常见）；
   // 「一点半/一点整」是真时间，不能一起滤掉，否则"一点半、三点、五点"这种时间线会漏过去。
-  const clocks = all.filter((token) => !/^一点$/.test(token.replace(/\s+/g, '')))
+  const clocks = all.map(clockOf).filter((token) => !/^一点$/.test(token))
     .concat(t.match(/\d{1,2}\s*[:：]\s*\d{2}/g) || []);
   // 三处以上、且有至少两种写法，才算"按时间线讲当天"
-  if (clocks.length >= 3 && new Set(clocks.map((s) => s.replace(/\s+/g, ''))).size >= 2) {
+  if (clocks.length >= 3 && new Set(clocks).size >= 2) {
     return '出现了三处以上具体时间点';
   }
   // 统计口径：必须紧挨"次/回"这类计数才算（"一共就这点事""一共三个人搭话"不算）

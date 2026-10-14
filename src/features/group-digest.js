@@ -54,21 +54,19 @@ export class GroupDigestManager {
 
   /** 持久化的"最近一次真正跑完的日期"（内存里那份重启就没了，补跑判断要靠它）。 */
   /**
-   * 今天已经发过哪些群：{ any, done }。
+   * 今天已经发过哪些群：{ any, done, legacy }。
    *  - done = 今天已完成的群（新状态逐群记）；
-   *  - 老状态只有 lastRanDay（历史版本 / 外部写入）→ 视为「今天已跑过」，保持旧口径；
-   *  - any = 今天跑没跑过（补跑判断用）。
+   *  - 老状态只有 lastRanDay（历史版本 / 外部写入）→ legacy=true，视为「今天整体跑过了」，保持旧口径；
+   *  - any = 今天跑没跑过（单独判断"一个群都没发出去"时用）。
    */
   #todayDone() {
     try {
       const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      if (state?.lastRanDay !== todayKey(this.now())) return { any: false, done: new Set() };
-      if (Array.isArray(state.doneChats)) return { any: state.doneChats.length > 0, done: new Set(state.doneChats) };
-      return { any: true, done: new Set() };
-    } catch { return { any: false, done: new Set() }; }
+      if (state?.lastRanDay !== todayKey(this.now())) return { any: false, done: new Set(), legacy: false };
+      if (Array.isArray(state.doneChats)) return { any: state.doneChats.length > 0, done: new Set(state.doneChats), legacy: false };
+      return { any: true, done: new Set(), legacy: true };
+    } catch { return { any: false, done: new Set(), legacy: false }; }
   }
-
-  #ranToday() { return this.#todayDone().any; }
 
   // 每群发完就落盘「已完成的群」：只在整轮结束时写的话，多群串行发到一半被重启（每次部署都会重启）
   // 会让下一次启动把已经收到日报的群再发一遍（2026-10-13 全项目审查 P2-3）。
@@ -106,9 +104,14 @@ export class GroupDigestManager {
     // 补跑（2026-10-12 审查）：进程在计划时刻之后才启动（或计划时刻整段关机）时，
     // 原先直接排到下一天 —— 当天整日跳过、无任何记录。当天这个时刻已过且今天没跑过
     // → 立即补一次（与 daily-moments 的 startupCatchup 同一语义）。
+    // 判定看的是**还有哪些群没发**，不是"今天有没有跑过"：多群串行发到一半被重启（部署即重启）时，
+    // 用后者的口径会把剩下的群整天咽掉 —— 既没有日报也没有任何记录（2026-10-14 复审 P3）。
+    // legacy 状态（老文件只有 lastRanDay）例外：不知道跑了哪些群，按旧口径整体当已跑过。
     const todayOccurrence = todayKey(at) === todayKey(this.now()) ? at : at - 24 * 60 * 60 * 1000;
-    if (this.now() >= todayOccurrence && !this.#ranToday()) {
-      this.log('[group-digest] 今天的计划时刻已过且尚未运行，立即补跑一次');
+    const doneToday = this.#todayDone();
+    const pending = doneToday.legacy ? [] : cfg.chats.filter((chatKey) => !doneToday.done.has(chatKey));
+    if (this.now() >= todayOccurrence && pending.length) {
+      this.log(`[group-digest] 今天的计划时刻已过，还有 ${pending.length} 个群没发，立即补跑一次`);
       withTrace(newTraceId(), () => this.runOnce({ skipDone: true })).catch((error) => this.log('[group-digest] 补跑出错:', error));
     }
     const wait = Math.max(1000, at - this.now());

@@ -74,12 +74,15 @@ const SCANNERS = [
     // GitHub Actions 的 action 固定版本（uses: owner/action@<40 位 SHA>）与测试里的 sha256 基准值
     // 都是**非敏感**的十六进制串。不豁免它们，工具每次都以"发现 6 处"退出 1 并删掉刚生成的副本 ——
     // 恒假的闸门等于没有闸门（2026-10-13 全项目审查 P2）。
-    allow: (raw, text) => {
+    allow: (raw, text, rel) => {
       const lines = text.split('\n').filter((line) => line.includes(raw));
       return lines.length > 0 && lines.every((line) => /uses:\s*[^\s@]+@[0-9a-f]{40}/i.test(line)
         // 固定版本/哈希常量（const WHISPER_COMMIT = '<40 位 hex>' 这类）：变量名自证不是秘密
         || /(?:COMMIT|SHA|HASH|CHECKSUM|DIGEST|REVISION)\w*\s*=\s*['"`][0-9a-f]{40,}['"`]/i.test(line)
-        || /^[\s'"`\[]*[0-9a-f]{64}[\s'"`,;\]]*$/i.test(line.trim()));
+        // 测试里整行就是一个 sha256 基准值（fixture 的哈希常量）：**只在 test/ 下**豁免。
+        // 不加文件限定的话，任何"一行就是一个 64 位十六进制"的地方 —— 比如 JSON 数组里的真实
+        // 32 字节密钥 —— 会跟着一起放行，闸门等于漏了（2026-10-14 复审 P3）。
+        || (/^test[\\/]/.test(rel) && /^[\s'"`\[]*[0-9a-f]{64}[\s'"`,;\]]*$/i.test(line.trim())));
     }
   },
   { name: '本机真实用户目录', re: /(?:\/(?:home|Users)\/[A-Za-z0-9._-]{2,}|[A-Za-z]:\\Users\\[^\\\s"']{2,})/g , filter: (hit) => !EXAMPLE_USER_PATH.test(hit) },
@@ -117,7 +120,7 @@ function scanFile(rel, text) {
         for (const raw of new Set(matches.map((m) => m.trim()))) {
           if (BINARY_MAGIC.test(raw) || LOW_ENTROPY(raw)) continue;
           if (scanner.filter && !scanner.filter(raw)) continue;
-          if (scanner.allow && scanner.allow(raw, text)) continue;
+          if (scanner.allow && scanner.allow(raw, text, rel)) continue;
           findings.push(`${rel}: ${scanner.name} -> ${raw.slice(0, 80)}`);
         }
       }

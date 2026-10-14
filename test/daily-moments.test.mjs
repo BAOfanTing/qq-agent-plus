@@ -92,7 +92,7 @@ test('summarizes once, publishes an optional refreshed image, and prevents dupli
       args: {
         decision: 'publish',
         reason: '有一条值得记录',
-        content: '测试群的群友说 QQ 12345678，认真追一个小问题比刷十个结论有意思。',
+        content: '测试群的群友说 QQ 12345678，认真追一个小问题比刷十个结论有意思，出处：https://example.com/p/12345 。',
         imageIds: ['image-1'],
         groupSummaries: [{ chatKey: 'group:1', summary: '从闲聊延伸出一个研究问题' }]
       }
@@ -208,6 +208,8 @@ test('summarizes once, publishes an optional refreshed image, and prevents dupli
   assert.doesNotMatch(published[0].content, /测试群|群友|12345678/);
   assert.match(published[0].content, /某个群|有人/);
   assert.match(published[0].content, /号码已隐藏/);
+  // 链接里的数字不是号码：源头链接被换成 [号码已隐藏] 会让正文里唯一可核实的东西失效
+  assert.match(published[0].content, /https:\/\/example\.com\/p\/12345\b/, '源头链接要原样保留');
   assert.equal(published[0].options.images.length, 1);
   assert.match(published[0].options.images[0], /^base64:\/\//);
   assert.equal(published[0].options.ugc_right, 4);

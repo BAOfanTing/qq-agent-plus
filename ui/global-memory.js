@@ -450,14 +450,29 @@ import { saveMemberNote } from './pages/memory.js';
         return;
       }
       const note = String(cfgNow?.memberNotes?.[qq] || '');
-      // 这条接口是"整体替换"语义：把名单里已知的印象并进来，免得手滑把旧印象覆盖掉。
-      const known = (people.find((person) => String(person.userId || '') === qq)?.impressions || [])
-        .map((entry) => String(entry?.content || '').trim()).filter(Boolean);
+      // 这条接口是"整体替换"语义，基线必须取**服务端此刻**的印象 —— 不能只信页面上那份名单：
+      // 用户填表这几秒里，机器人（memory_append）或自动整理都可能刚写进新印象，拿缓存的名单当基线
+      // 会把那条静默删掉，页面还回报"已保存"。与 orchestrator 写回前重读现值是同一口径。
+      // 详情接口给的是**该人物的全局印象**（members(chatKey) 返回的是整份成员，不只是本会话的来源）。
+      const detail = await api(`/api/memory-files/${chatKey.replace(':', '_')}`).catch(() => null);
+      const serverNow = (Array.isArray(detail?.members) ? detail.members : [])
+        .find((member) => String(member.userId || '') === qq);
+      // 读不到就退回页面缓存那份（比一条都不带强，也与改动前一致）
+      const base = serverNow ? serverNow.impressions
+        : people.find((person) => String(person.userId || '') === qq)?.impressions;
+      const known = (base || []).map((entry) => String(entry?.content || '').trim()).filter(Boolean);
       const merged = [...new Set([...known, ...lines])];
-      await api(`/api/memory-files/${chatKey.replace(':', '_')}/members/${qq}`, {
+      const result = await api(`/api/memory-files/${chatKey.replace(':', '_')}/members/${qq}`, {
         method: 'PUT',
         body: JSON.stringify({ name: '', note, impressions: merged })
       });
+      // 服务端会截到上限（每位最多 20 条）且**截的是尾部**（新加的行排在最后）：不回读就会
+      // "输入框清空了 + 提示已保存"，用户以为写进去了（2026-10-14 复审 P2）。
+      const kept = Array.isArray(result?.member?.impressions) ? result.member.impressions.length : merged.length;
+      if (kept < merged.length) {
+        if (status) status.textContent = `只写进去 ${kept} 条（服务端上限 20 条）：这次要加的排在末尾被截掉了，先删几条旧的再试；输入框里还留着`;
+        return;
+      }
       if (status) status.textContent = `已保存：${qq}（来源 ${chatKey}）`;
       const input = document.getElementById('gm-newimp-text');
       if (input) input.value = '';
