@@ -157,7 +157,7 @@ import { repairUnescapedStringQuotes } from '../core/json-repair.js';
 import { assertPublicUrlLiteral, validateImageUrl } from '../llm/safe-fetch.js';
 import { webSearch, webFetch } from '../llm/web-search.js';
 import { expandForwardNodes, extractMediaFromSegments } from '../onebot/onebot.js';
-import { readForwardMessages } from '../onebot/forward-reader.js';
+import { readForwardMessages, readForwardNodesById } from '../onebot/forward-reader.js';
 import { convertGifToStillStrip, convertVideoToFrameStrip, fetchOversizedImageAsJpeg } from './image-downsample.js';
 import { transcribeMessageAudio } from './audio-transcribe.js';
 import { memoryVisibilityOf } from '../core/memory-visibility.js';
@@ -1704,7 +1704,7 @@ export function buildToolDefs() {
     },
     {
       name: 'read_forward',
-      description: '展开查看合并转发的聊天记录。消息文本出现 [合并转发聊天记录] 或 [转发消息 …] 占位符时用。参数填那条转发消息前的 #数字（千万别用方括号里那串长 id，会过期报错）。展开结果会写回存档，以后再看就是展开的文本，不用重复调。',
+      description: '展开查看合并转发的聊天记录。消息文本出现 [合并转发聊天记录] / [转发消息 …] / [卡片聊天记录 …] 占位符时用。参数填那条转发消息前的 #数字（千万别用方括号里那串长 id，会过期报错）。展开结果会写回存档，以后再看就是展开的文本，不用重复调。',
       parameters: {
         type: 'object',
         properties: {
@@ -1721,7 +1721,7 @@ export function buildToolDefs() {
             return ok({ messageId: entry.mid, text: entry.text, note: '该转发已展开（读的是存档）' });
           }
           const nodes = await readForwardMessages(ctx.onebot, entry.mid);
-          const ex = await expandForwardNodes(nodes);
+          const ex = await expandForwardNodes(nodes, { fetchNested: (rid) => readForwardNodesById(ctx.onebot, rid) });
           if (!ex || !ex.text) return err('转发内容为空或已被 QQ 服务端丢弃（发送时间太久）');
           // 写回存档：一次展开，永久升级这条记录（模型/存档页/金句墙都受益）
           ctx.store.updateByMid(ctx.chatKey, entry.mid, { text: ex.text, appendMedia: ex.media || [] });

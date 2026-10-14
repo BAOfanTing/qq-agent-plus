@@ -887,14 +887,25 @@ export function extractMediaFromSegments(segments) {
  *
  * 规则：
  *   - 每个节点一行「昵称: 内容」，内容复用 segmentsToText（@/图片/表情等占位一致）
- *   - 嵌套转发不再展开（深度 1 封顶，套娃截断）
+ *   - 嵌套转发展开**一层**（深度 2 封顶；再深写占位），取数上限 maxNestedFetches（默认 3），
+ *     取不到/超预算都写成占位，让模型知道自己没看全
  *   - 封顶：maxNodes 条 / maxChars 字符，超出注明"还有 N 条未展开"
  *   - 节点里的图片段同时提取到 media（url 新鲜，可用于取图/金句）
  *
  * @param {Array} nodes get_forward_msg 返回的 messages 数组
  * @returns {{ text: string, media: Array } | null} 无可用节点返回 null
  */
-export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000 } = {}) {
+export async function expandForwardNodes(nodes, options = {}) {
+  const state = {
+    fetchNested: typeof options.fetchNested === 'function' ? options.fetchNested : null,
+    // 一次展开最多为"记录里的记录"取几次：防一条记录里塞十几个嵌套把协议端打满
+    maxNestedFetches: Math.max(0, Math.min(10, Number(options.maxNestedFetches ?? 3) || 0)),
+    nestedFetches: 0
+  };
+  return expandNodesOnce(nodes, { ...options, depth: 0 }, state);
+}
+
+async function expandNodesOnce(nodes, { maxNodes = 30, maxChars = 3000, depth = 0 } = {}, state) {
   if (!Array.isArray(nodes) || !nodes.length) return null;
   const lines = [];
   const media = [];
@@ -907,18 +918,25 @@ export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000
     const name = sanitizeUserText(String(n.sender?.card || n.sender?.nickname || n.user_id || '?'));
     const nm = n.message ?? n.content;
     let body = '';
+    const nestedBlocks = [];
     if (typeof nm === 'string') {
       // 字符串形态一般是 CQ 码原文，剥掉 [CQ:xxx] 段保留纯文本
       body = nm.replace(/\[CQ:[^\]]*\]/g, '').trim();
     } else if (Array.isArray(nm)) {
-      // 嵌套 forward 段清空 data → segmentsToText 输出 [转发消息] 占位（深度 1 封顶）
-      const segs = nm.map((s) => (s?.type === 'forward' ? { type: 'forward', data: {} } : s));
-      body = await segmentsToText(segs, {});
-      media.push(...extractMediaFromSegments(segs));
+      const plain = nm.filter((s) => s?.type !== 'forward');
+      body = await segmentsToText(plain, {});
+      media.push(...extractMediaFromSegments(plain));
+      for (const seg of nm.filter((s) => s?.type === 'forward')) {
+        nestedBlocks.push(await nestedForwardBlock(seg, depth, state));
+      }
     }
     body = sanitizeUserText(body.replace(/\s+/g, ' ').trim().slice(0, 200));
-    if (!body) continue;
-    lines.push(`${name}: ${body}`);
+    if (body) lines.push(`${name}: ${body}`);
+    // 内层记录单独成行（不受上面 200 字截断），缩进 + ↳ 让"记录里的记录"一眼看出来
+    for (const block of nestedBlocks) {
+      if (!block) continue;
+      lines.push(block);
+    }
     if (lines.join('\n').length > maxChars) { truncated = nodes.length - i - 1; break; }
   }
 
@@ -926,4 +944,22 @@ export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000
   if (!lines.length) return { text: head, media };
   const tail = truncated > 0 ? `\n…（还有 ${truncated} 条未展开）` : '';
   return { text: `${head}\n${lines.join('\n')}${tail}`, media };
+}
+
+/**
+ * 记录里的记录：有资源 id 且还有取数预算时现取一层并展开（深度 2 封顶）。
+ * 取不到 / 超预算 / 更深一层 —— 都如实写成占位，别让模型以为看全了。
+ */
+async function nestedForwardBlock(seg, depth, state) {
+  const rid = forwardIdFromData(seg?.data);
+  if (!rid) return '    [嵌套转发（没有资源 id）]';
+  if (!state.fetchNested || depth >= 1) return '    [嵌套转发（未展开）]';
+  if (state.nestedFetches >= state.maxNestedFetches) return '    [嵌套转发（超出取数上限，未展开）]';
+  state.nestedFetches += 1;
+  let nodes = null;
+  try { nodes = await state.fetchNested(rid); } catch { nodes = null; }
+  if (!nodes?.length) return '    [嵌套转发（取回失败，未展开）]';
+  const sub = await expandNodesOnce(nodes, { maxNodes: 8, maxChars: 900, depth: depth + 1 }, state);
+  if (!sub?.text) return '    [嵌套转发（内容为空）]';
+  return sub.text.split('\n').map((line, index) => (index === 0 ? `    ↳ ${line}` : `    ${line}`)).join('\n');
 }

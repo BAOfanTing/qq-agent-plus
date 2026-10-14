@@ -96,3 +96,58 @@ test('transport or authentication failures are not hidden by fallback', async ()
   await assert.rejects(readForwardMessages(onebot, -123, card), /HTTP 401/);
   assert.equal(calls, 2);
 });
+
+test('嵌套转发多读一层（深度 2 封顶），再深写占位', async () => {
+  const { expandForwardNodes } = await import('../src/onebot/onebot.js');
+  const outer = [{ sender: { nickname: '外层' }, message: [
+    { type: 'text', data: { text: '先说一句' } },
+    { type: 'forward', data: { id: 'inner-rid' } }
+  ] }];
+
+  // 第一层嵌套：取一次并展开
+  const calls = [];
+  const ex = await expandForwardNodes(outer, {
+    fetchNested: async (rid) => { calls.push(rid); return [{ sender: { nickname: '内层' }, message: [{ type: 'text', data: { text: '记录里的记录' } }] }]; }
+  });
+  assert.deepEqual(calls, ['inner-rid']);
+  assert.match(ex.text, /↳ \[合并转发 共1条\]/, '内层要带 ↳ 与自己的条数');
+  assert.match(ex.text, /内层: 记录里的记录/);
+
+  // 内层再嵌一层：不再取数，写占位
+  const calls2 = [];
+  const ex2 = await expandForwardNodes(outer, {
+    fetchNested: async (rid) => {
+      calls2.push(rid);
+      return [{ sender: { nickname: 'X' }, message: [{ type: 'text', data: { text: 'a' } }, { type: 'forward', data: { id: 'deep' } }] }];
+    }
+  });
+  assert.equal(calls2.length, 1, '只取一层，不再往下钻');
+  assert.match(ex2.text, /\[嵌套转发（未展开）\]/);
+});
+
+test('嵌套取数有上限；取不到与没有取数器都如实写占位', async () => {
+  const { expandForwardNodes } = await import('../src/onebot/onebot.js');
+  const mk = (id) => ({ sender: { nickname: 'A' }, message: [{ type: 'text', data: { text: '外壳' } }, { type: 'forward', data: { id } }] });
+
+  const calls = [];
+  const ex = await expandForwardNodes([mk('r1'), mk('r2'), mk('r3'), mk('r4')], {
+    maxNestedFetches: 3,
+    fetchNested: async (rid) => { calls.push(rid); return []; }   // 取回空 = 取不到
+  });
+  assert.equal(calls.length, 3, '最多为嵌套取三次');
+  assert.equal((ex.text.match(/取回失败，未展开/g) || []).length, 3);
+  assert.match(ex.text, /\[嵌套转发（超出取数上限，未展开）\]/);
+
+  const ex2 = await expandForwardNodes([mk('r9')]);   // 没有 fetchNested（老调用点）
+  assert.match(ex2.text, /\[嵌套转发（未展开）\]/);
+});
+
+test('聊天记录卡片：能从卡片里取到资源 id（取不到就是 null）', async () => {
+  const { forwardResIdFromSegment } = await import('../src/onebot/forward-reader.js');
+  const multimsg = JSON.stringify({ app: 'com.tencent.multimsg', meta: { detail_1: { resid: 'abcDEF123456xyz' } } });
+  assert.equal(forwardResIdFromSegment({ type: 'json', data: { data: multimsg } }), 'abcDEF123456xyz');
+  assert.equal(forwardResIdFromSegment({ type: 'json', data: { data: JSON.stringify({ app: 'com.tencent.tuwen' }) } }), null);
+  assert.equal(forwardResIdFromSegment({ type: 'xml', data: { data: '<msg resid="xmlRid1234567" />' } }), 'xmlRid1234567');
+  assert.equal(forwardResIdFromSegment({ type: 'forward', data: { res_id: 'rid-1' } }), 'rid-1');
+  assert.equal(forwardResIdFromSegment({ type: 'text', data: { text: 'x' } }), null);
+});

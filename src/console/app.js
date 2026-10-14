@@ -19,7 +19,7 @@ import { lastTraceId } from '../core/logger.js';
 import { customSearch } from '../llm/web-search.js';
 import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes } from '../onebot/onebot.js';
 import { faceNameOf } from '../onebot/face-catalog.js';
-import { readForwardMessages } from '../onebot/forward-reader.js';
+import { readForwardMessages, readForwardNodesById, forwardResIdFromSegment } from '../onebot/forward-reader.js';
 import { ChatStore } from '../core/store.js';
 import { MemoryStore } from '../memory/memory.js';
 import { StickerManager } from '../onebot/sticker-manager.js';
@@ -1125,16 +1125,27 @@ export function createApp({
     // 优先使用当前转发卡片的资源 id，兼容仅支持 message_id 的旧适配器。
     // 媒体里的 url 此时是新鲜的，一并收进 media（取图/金句都能用）。
     // 展开失败时占位符留在存档里，模型可用 read_forward 工具稍后重试。
-    if (segments && (text.includes('[合并转发') || text.includes('[转发消息')) && event.message_id != null) {
+    // 卡片（json 段里的 multimsg）也走同一条路：先从卡片里取资源 id，取不到就只剩摘要
+    //（那是协议端给不给的问题，不是深度问题）。
+    const forwardResId = Array.isArray(segments) ? segments.map(forwardResIdFromSegment).find(Boolean) : null;
+    const looksForward = Boolean(forwardResId)
+      || text.includes('[合并转发') || text.includes('[转发消息') || text.includes('[卡片聊天记录');
+    if (segments && looksForward && event.message_id != null) {
+      const isCard = !text.includes('[合并转发') && !text.includes('[转发消息');
       try {
         const nodes = await readForwardMessages(onebot, event.message_id, segments);
-        const ex = await expandForwardNodes(nodes);
+        const ex = await expandForwardNodes(nodes, {
+          fetchNested: (rid) => readForwardNodesById(onebot, rid)
+        });
         if (ex && ex.text) {
           text = ex.text;
           if (ex.media?.length) media.push(...ex.media);
         }
+        // 诊断（每张卡片一行，低噪音）：卡片能不能读，靠这行下结论
+        if (isCard) log(`[ingest] 聊天记录卡片：resid ${forwardResId ? '有' : '无'}，取回 ${nodes?.length ?? 0} 条`);
       } catch (e) {
-        log(`[ingest] 展开合并转发失败（保留占位符）: ${e?.message ?? e}`);
+        if (isCard) log(`[ingest] 聊天记录卡片展开失败（resid ${forwardResId ? '有' : '无'}）: ${e?.message ?? e}`);
+        else log(`[ingest] 展开合并转发失败（保留占位符）: ${e?.message ?? e}`);
       }
     }
 
