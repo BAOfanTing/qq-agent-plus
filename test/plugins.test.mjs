@@ -415,3 +415,26 @@ test('控制台接线：路由的守卫与设置页的分区都在（锚点）',
   const html = fs.readFileSync(path.join(process.cwd(), 'ui', 'index.html'), 'utf8');
   assert.ok(html.includes('/pages/plugins.js'), '新页面模块要在 index.html 里加载');
 });
+
+test('示例插件（examples/plugins/mc-status）真能跑：manifest 合法、工具能调、网络走宿主那道守卫', async (t) => {
+  const dir = path.join(process.cwd(), 'examples', 'plugins', 'mc-status');
+  const parsed = parsePluginManifest(JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8')), { dir });
+  assert.equal(parsed.ok, true, `示例插件的 manifest 必须合法：${parsed.error}`);
+  // 把状态接口指到内网地址：宿主侧的 safe-fetch 会拦下 —— 这同时证明了"插件不是自己发请求"，
+  // 也避免了用例去碰真网络（本仓的测试纪律：不打真实网络）
+  const host = new PluginHost({
+    manifest: parsed.manifest,
+    dataDir,
+    log: () => {},
+    getSettings: () => ({ statusUrl: 'http://127.0.0.1:9/{host}' })
+  });
+  t.after(() => host.stop());
+  assert.equal(await host.start(), true, host.lastError);
+  await assert.rejects(
+    () => host.callTool('players', { host: 'play.example.com' }),
+    /内网|本机/,
+    '内网地址必须被宿主侧的网络守卫拦下（插件拿不到裸 fetch 能力）'
+  );
+  const missing = await host.callTool('players', {});
+  assert.match(String(missing?.error ?? ''), /服务器地址/, '参数缺失要给可读的错误（别把它当成模型的问题）');
+});

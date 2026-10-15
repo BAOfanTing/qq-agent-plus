@@ -4,7 +4,7 @@
 > manifest 校验、独立进程宿主（隔离 / 心跳 / 超时 / 崩溃重启）、能力鉴权与宿主侧实现、
 > 注册表与默认拒门控、插件工具挂进模型工具表、入站消息投递、周期任务驱动、巡检项、
 > 控制台「设置 → 插件」页（列表 / 一键安装 / 启停 / 重载 / 卸载 / 隔离说明）。
-> 还没接的：示例插件与作者向 quickstart。分期见文末。
+> v1 四段已齐：示例插件在 `examples/plugins/mc-status/`，作者向 quickstart 见下。
 
 ## 怎么装（控制台，不用碰命令行）
 
@@ -174,6 +174,60 @@ process.stdin.on('data', (chunk) => {
 });
 ```
 
+## 写一个插件（作者向）
+
+**先看活例子**：`examples/plugins/mc-status/` —— 查 Minecraft 服务器在线玩家（issue #37 那个诉求的
+完整实现），不依赖任何 npm 包、不 import 宿主内部模块，一个文件一百多行，照着改最快。
+它的 README 里有"拷目录 / 打包分发"两条安装路径。
+
+骨架就是"读 stdin 的一行行 JSON、按方法名回一行行 JSON"（完整形状见上面的协议表）：
+
+```js
+const send = (m) => process.stdout.write(`${JSON.stringify(m)}\n`);
+let buffer = '';
+process.stdin.on('data', (chunk) => {
+  buffer += chunk.toString('utf8');
+  let i = buffer.indexOf('\n');
+  while (i !== -1) {
+    const line = buffer.slice(0, i).trim(); buffer = buffer.slice(i + 1);
+    if (line) {
+      const m = JSON.parse(line);
+      if (m.method === 'init') send({ id: m.id, result: { ok: true } });
+      else if (m.method === 'ping') send({ id: m.id, result: {} });
+      else if (m.method === 'shutdown') process.exit(0);
+      else if (m.method === 'schedule') send({ id: m.id, result: {} });
+      else if (m.method === 'callTool') send({ id: m.id, result: { echo: m.params.args } });
+    }
+    i = buffer.indexOf('\n');
+  }
+});
+```
+
+几条容易踩的：
+
+- **能力要声明才能用**：调 `cap.storage.set` 之前 `capabilities` 里得有 `storage`，否则宿主拒掉
+  并记一次越权（控制台看得到次数）。`cap.*` 的入参出参见上面的协议表。
+- **网络走 `cap.http.request`**：宿主那条路有内网拦截、体积上限、超时与审计。
+  （这是"更规矩的那条路"，不是安全边界 —— 插件进程自己能联网，见信任声明。）
+- **状态走 `cap.storage`**：主机落在 `plugin-data/<id>/`，卸载不删、重装还在。
+  插件进程只有读权限，自己写文件会 `ERR_ACCESS_DENIED`。
+- **定时器交给宿主**：manifest 里声明 `schedule`（`everyMs` 下限 1 分钟），宿主到点调你的
+  `schedule` 方法 —— 自己起 setInterval 的话，插件崩了定时器还在跑，而且重启就丢。
+- **处理不了就如实报错**：工具结果里带 `error` 字段（或回 `{error:{code,message}}`），
+  别静默返回空 —— 模型和用户都靠它判断，空结果会被当成"查到了但没有"。
+
+**打包与分发**：
+
+```bash
+tar --format=ustar -czf <id>-<version>.tar.gz -C <插件父目录> <id>   # 5MB 以内；不支持 pax 长路径头
+sha256sum <id>-<version>.tar.gz
+```
+
+然后把 `{ id, name, version, description, capabilities, tarball, sha256 }` 加进一份索引 JSON
+（形状见"怎么装"），或直接把 `{ url, sha256 }` 给使用者走 `POST /api/plugins/install`。
+**装你的插件 = 让你的代码跑在他的服务器上**：把 `capabilities` 写准 —— 安装界面会原样展示，
+这也是使用者判断"要不要信你"的主要依据。
+
 ## 宿主侧纪律（写插件时可以直接依赖的事实）
 
 - 工具名给模型时是 **`<插件id>.<工具名>`**，撞不了名。
@@ -211,7 +265,7 @@ process.stdin.on('data', (chunk) => {
 | v1 第一段 | 目录/manifest/协议/宿主/能力/注册表与门控 + 测试 | **已完成** |
 | v1 第二段 | 挂进模型工具表（默认拒）、入站投递、周期任务驱动、巡检项 | **已完成** |
 | v1 第三段 | 控制台「插件」页 + 官方索引一键安装（sha256 校验 / 解包防护 / 回滚） | **已完成** |
-| v1 第四段 | 示例插件（`examples/plugins/mc-status`）、作者向 quickstart、索引模板 | 待做 |
+| v1 第四段 | 示例插件（`examples/plugins/mc-status`）、作者向 quickstart、索引模板 | **已完成** |
 | v1.1 | `send` 能力（出站发言，强制走发送队列与配额）、插件工具按需挂载（工具预算） | 待定 |
 | v2 | 插件自带 `node_modules`、索引分级、控制台 UI 扩展 | 待定 |
 

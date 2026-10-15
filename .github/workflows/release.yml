@@ -49,7 +49,7 @@ jobs:
           for d in src scripts test ui; do
             [ -d "$d" ] || { echo "缺少目录：$d"; exit 1; }
           done
-          mapfile -t files < <(find src scripts test ui -type f \( -name '*.js' -o -name '*.mjs' \) | sort)
+          mapfile -t files < <(find src scripts test ui examples -type f \( -name '*.js' -o -name '*.mjs' \) | sort)
           [[ ${#files[@]} -gt 0 ]] || { echo "没有找到任何待检查文件"; exit 1; }
           for f in "${files[@]}"; do node --check "$f"; done
           echo "语法检查通过（${#files[@]} 个文件）"
