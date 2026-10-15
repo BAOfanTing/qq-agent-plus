@@ -112,6 +112,11 @@ test('安装：装成功、重复装＝升级并留下旧版备份、staging 不
   assert.equal(second.upgraded, true, '第二次装同一个 id 是升级');
   assert.ok(second.backupDir && fs.existsSync(second.backupDir), '旧版要留在备份目录里（可回滚）');
   assert.ok(fs.existsSync(path.join(second.backupDir, 'plugin.json')));
+  // 备份轮转：连装几次只留最近 3 份（不留的话每次升级堆一份代码）
+  for (let i = 0; i < 4; i += 1) await installPlugin({ tarball: packPlugin('demo'), dataDir });
+  const backups = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo-'));
+  assert.equal(backups.length, 3, `备份应只留最近 3 份，实际 ${backups.length}`);
+  assert.deepEqual(strays().filter((name) => !name.startsWith('.backup-')), [], '除了备份不该有别的东西');
 });
 
 test('安装：id 与预期不符要拒装，且不留下任何东西（staging 清干净）', async () => {

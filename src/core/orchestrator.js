@@ -1716,6 +1716,7 @@ export class Orchestrator {
     // 授权由注册表自己收口（总开关 / enabledIds / 进程状态 / manifest 声明，默认拒）——
     // 内置工具的默认是"放行"（platformToolAllowed 对未登记工具返回 true），插件绝不能沿用那个默认。
     const pluginToolDefs = this.getPlugins?.()?.toolDefsFor?.() ?? [];
+    const builtinToolDefs = toolDefs;   // 前缀哈希用它（见下），插件工具只按名字参与
     if (pluginToolDefs.length) toolDefs.push(...pluginToolDefs);
     const openAiTools = toOpenAiTools(toolDefs);
     const systemPrompt = buildSystemPrompt({
@@ -1739,7 +1740,12 @@ export class Orchestrator {
       .update('\0')
       .update(systemPrompt)
       .update('\0')
-      .update(JSON.stringify(openAiTools))
+      // 前缀哈希：内置工具算完整 schema；插件工具**只算名字**（排序后）。
+      // 插件跑起来/崩掉重启会让"当前有哪些插件工具"抖动，但工具集其实没变 ——
+      // 那种抖动不该被当成"前缀变了"去关掉在途的对话线程（2026-10-15 复审 P3-3）。
+      .update(JSON.stringify(toOpenAiTools(builtinToolDefs)))
+      .update('\0')
+      .update(pluginToolDefs.map((def) => def.name).sort().join(','))
       .digest('hex');
 
     let priorProviderMessages = [];

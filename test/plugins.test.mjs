@@ -103,16 +103,17 @@ test('协议：跨块的多字节字符不被切坏，坏行与超长行都不�
 });
 
 test('隔离参数：只给插件自己目录的读权限，网络拦不住这件事要如实标出', () => {
-  assert.equal(permissionFlagSupported(), process.allowedNodeEnvironmentFlags.has('--permission'));
+  // 只断言"实现的口径"（例如 summary.net === false 这种写死的常量）是恒真的，改坏了也发现不了；
+  // 这里只留真能失败的两条：参数形状 + 本机探测结论（2026-10-15 复审 P3-9）
   const args = pluginNodeArgs({ pluginDir: '/tmp/plug' });
   assert.ok(args.includes('--permission'));
   assert.ok(args.includes('--allow-fs-read=/tmp/plug'));
   assert.ok(!args.some((a) => a.startsWith('--allow-fs-write')), '插件不需要写权限：状态走 cap.storage');
   assert.ok(!args.some((a) => a.startsWith('--allow-child-process')), '子进程必须继续被拒');
-  const summary = isolationSummary();
-  assert.equal(summary.fs, true);
-  assert.equal(summary.childProcess, true);
-  assert.equal(summary.net, false, 'Node 权限模型不管网络 —— 口径里必须写 false，不能假装拦住了');
+  // 口径说明（控制台用）：支持的机器上 fs/子进程是真拦；网络一律 false（Node 没有 --allow-net，
+  // 本机 v24 与生产 v22.23.2 上都实测过"bad option"）
+  assert.equal(isolationSummary().net, false);
+  assert.equal(isolationSummary().supported, permissionFlagSupported());
   if (permissionFlagSupported()) {
     assert.equal(probeIsolation().ok, true, '本机应能跑起隔离参数（否则下面的用例全都无意义）');
   }
@@ -268,11 +269,11 @@ test('注册表：工具名带插件前缀、作者文本过洗、结果过洗�
 
   const defs = registry.toolDefsFor();
   assert.deepEqual(defs.map((d) => d.name).sort(),
-    ['good.counters', 'good.echo', 'good.log_probe', 'good.probe_isolation', 'good.remember', 'good.settings'],
+    ['good__counters', 'good__echo', 'good__log_probe', 'good__probe_isolation', 'good__remember', 'good__settings'],
     '插件工具必须带 <插件id>. 前缀（防撞名）');
   assert.ok(!defs.some((d) => d.pluginId !== 'good'), '没启用的插件一个工具都不该出现');
 
-  const echo = defs.find((d) => d.name === 'good.echo');
+  const echo = defs.find((d) => d.name === 'good__echo');
   assert.match(echo.description, /来自插件「示例插件（测试用）」/, '要让模型知道这是第三方插件给的');
   assert.match(echo.description, /第三方代码/);
 
@@ -396,8 +397,10 @@ test('控制台接线：路由的守卫与设置页的分区都在（锚点）',
   }
   // 卸载是破坏性操作：必须有 confirm 门槛（与全站口径一致）
   assert.match(app, /卸载插件需要 body\.confirm === true/);
-  // enabledIds 是数组：清空/删除必须 __replace__，否则深合并删不掉键（"停用不掉"）
-  assert.match(app, /enabledIds: \{ __replace__: next \}/);
+  // enabledIds 是**数组**：deepMerge 对数组本来就是整体替换 —— 写成 { __replace__: [...] } 会被
+  // 静默忽略（那个约定只认对象），于是"启用"永远写不进去（2026-10-15 复审 P1-1，实测复现过）
+  assert.match(app, /updateConfig\(\{ plugins: \{ enabledIds: next \} \}\)/);
+  assert.ok(!app.includes('enabledIds: { __replace__'), '授权清单不该再用 __replace__（数组是整体替换）');
   // 从索引装时以索引里的 tarball/sha256 为准（不信请求体里那份）
   assert.match(app, /url = hit\.tarball;/);
   assert.match(app, /sha256 = hit\.sha256;/);
@@ -437,4 +440,83 @@ test('示例插件（examples/plugins/mc-status）真能跑：manifest 合法、
   );
   const missing = await host.callTool('players', {});
   assert.match(String(missing?.error ?? ''), /服务器地址/, '参数缺失要给可读的错误（别把它当成模型的问题）');
+});
+
+test('P1-1 回归：授权清单能真的存下去（数组直接传，不走 __replace__）', async () => {
+  const { updateConfig, getConfig } = await import('../src/core/config.js');
+  updateConfig({ plugins: { enabledIds: ['demo'] } });
+  assert.deepEqual(getConfig().plugins.enabledIds, ['demo'], '启用要能写进配置（此前 __replace__ 数组被静默忽略）');
+  updateConfig({ plugins: { enabledIds: ['other'] } });
+  assert.deepEqual(getConfig().plugins.enabledIds, ['other'], '数组是整体替换（停用要能删掉）');
+  updateConfig({ plugins: { enabledIds: [] } });
+});
+
+test('P1-2 回归：宿主内部目录（.staging-/.backup-/.removed-）不算插件，也不该让巡检报红', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-plugin-internal-'));
+  const root = path.join(dir, 'plugins');
+  fs.mkdirSync(path.join(root, '.backup-demo-123'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.backup-demo-123', 'plugin.json'), JSON.stringify({
+    id: 'demo', apiVersion: 1, name: '旧版', version: '0.9.0', capabilities: ['tools']
+  }));
+  fs.mkdirSync(path.join(root, 'demo'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'demo', 'plugin.json'), JSON.stringify({
+    id: 'demo', apiVersion: 1, name: '演示', version: '1.0.0', capabilities: ['tools']
+  }));
+  const registry = new PluginRegistry({ root, dataDir: dir, log: () => {}, getConfig: () => ({ plugins: { enabled: true, enabledIds: [] } }) });
+  assert.deepEqual(registry.discover().map((item) => item.id), ['demo'], '内部目录不该出现在插件清单里');
+  assert.deepEqual(registry.list().plugins.map((item) => item.id), ['demo'], '控制台列表里也不该有幽灵行');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('P2-2 回归：带路径穿越的 id 在写盘之前就被拒（staging 目录名不能带出插件目录）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-plugin-evil-id-'));
+  const { buildTar } = await import('./helpers/tar.mjs');
+  const { installPlugin } = await import('../src/plugins/install.js');
+  const tar = buildTar([
+    { name: 'plugin.json', data: JSON.stringify({ id: 'demo', apiVersion: 1, name: '演示', version: '1.0.0', capabilities: ['tools'] }) },
+    { name: 'index.mjs', data: 'export const ok = 1;' }
+  ]);
+  for (const evil of [['..', '..', 'evil'].join('/'), 'demo/../evil', 'DEMO']) {
+    await assert.rejects(
+      () => installPlugin({ tarball: tar, id: evil, dataDir: dir }),
+      // 认**错误码**而不是文案：E_BAD_ID 只在"写盘之前"那条分支上；用文案会让"校验被挪到解包之后"
+      // 这种改动照样绿（后面那条 id 不一致的检查文案相同，但它已经发生在解包之后了）
+      (error) => error?.code === 'E_BAD_ID',
+      `id=${evil} 必须在建目录之前被拒`
+    );
+  }
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'plugins')), [], '拒装之后插件目录里不该多出任何东西');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('P2-3 回归：requireIsolation 是**真**开关（配置关掉时能起，且状态里如实标 unconfined）', async (t) => {
+  if (permissionFlagSupported()) return;   // 有权限模型的机器上这条不成立（那种情况永远走隔离路径）
+  const host = new PluginHost({
+    manifest: fixtureManifest('good'), dataDir, log: () => {},
+    requireIsolation: false,
+    getSettings: () => ({})
+  });
+  t.after(() => host.stop());
+  assert.equal(await host.start(), true, host.lastError);
+  assert.equal(host.unconfined, true, '降级运行时状态里必须标出来（控制台要显示给用户）');
+});
+
+test('P2-4 回归：隔离探测按**插件目录**分别做（缓存不许把一个目录的结论套给另一个）', async () => {
+  const { probeIsolation, resetIsolationProbe, permissionFlagSupported } = await import('../src/plugins/isolation.js');
+  if (!permissionFlagSupported()) return;   // 没有权限模型的机器上探测直接返回"不支持"，这条不成立
+  resetIsolationProbe();
+  const calls = [];
+  // 注入一个"只对坏目录失败"的假 spawn：这样"缓存是否带目录键"就变成了可观测的行为差异
+  const fakeSpawn = (_node, args) => {
+    calls.push(args.join(' '));
+    const bad = args.some((arg) => arg.includes('bad-dir'));
+    return { status: bad ? 1 : 0, stderr: bad ? 'bad option' : '', error: null };
+  };
+  assert.equal(probeIsolation({ pluginDir: 'good-dir', spawn: fakeSpawn }).ok, true);
+  assert.equal(calls.length, 1, '第一个目录要真的探一次');
+  const second = probeIsolation({ pluginDir: 'bad-dir', spawn: fakeSpawn });
+  assert.ok(calls.some((line) => line.includes('bad-dir')), '换了目录必须真的重新探（共用缓存会把好目录的结论套给坏目录）');
+  assert.equal(second.ok, false, '坏目录要如实报不可用');
+  assert.match(second.error, /bad option/, '要把子进程的原话带出来，不然排查只能靠猜');
+  resetIsolationProbe();
 });

@@ -1978,7 +1978,7 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
     let defs = [];
     const seen = [];
     defs = [{
-      name: 'demo.echo',
+      name: 'demo__echo',
       description: '第三方插件给的只读工具（来自插件「demo」）',
       parameters: { type: 'object', properties: { text: { type: 'string' } } },
       pluginId: 'demo',
@@ -1990,14 +1990,14 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
       const body = JSON.parse(options.body);
       bodies.push(body);
       if (bodies.length === 1) {
-        assert.ok(body.tools.some((tool) => tool.function.name === 'demo.echo'),
+        assert.ok(body.tools.some((tool) => tool.function.name === 'demo__echo'),
           '注册表提供了插件工具，工具表里就该有它');
         return Response.json({
           choices: [{
             message: {
               tool_calls: [{
                 id: 'plug-1', type: 'function',
-                function: { name: 'demo.echo', arguments: JSON.stringify({ text: '来自群里的输入' }) }
+                function: { name: 'demo__echo', arguments: JSON.stringify({ text: '来自群里的输入' }) }
               }]
             }
           }],
@@ -2009,13 +2009,13 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
     append(1, '在吗');
     await runner.wake('group:1');
     assert.deepEqual(seen, [{ text: '来自群里的输入' }], '插件工具必须真的被执行到');
-    assert.match(JSON.stringify(bodies[1].messages), /demo\.echo/, '执行结果要回到模型那一轮');
+    assert.match(JSON.stringify(bodies[1].messages), /demo__echo/, '执行结果要回到模型那一轮');
 
     // 注册表收回授权（未启用 / 进程没跑 / 未声明）→ 下一轮就不该再出现
     defs = [];
     append(2, '还在吗');
     await runner.wake('group:1');
-    assert.ok(!bodies[2].tools.some((tool) => tool.function.name === 'demo.echo'),
+    assert.ok(!bodies[2].tools.some((tool) => tool.function.name === 'demo__echo'),
       '注册表不给的时候，插件工具一个都不该出现');
   });
 });

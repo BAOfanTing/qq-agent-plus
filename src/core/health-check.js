@@ -359,7 +359,12 @@ export async function runHealthCheck(opts = {}) {
     else {
       const root = path.join(dataDir, 'plugins');
       let entries = [];
-      try { entries = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()); }
+      // 跳过宿主自己的中间目录（.staging-/.backup-/.removed-）：它们里面有 plugin.json，
+      // 但目录名与 id 不一致 —— 不跳过就是"每次升级后巡检永久报红"（2026-10-15 复审 P1）
+      try {
+        entries = fs.readdirSync(root, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.'));
+      }
       catch { entries = []; }
       const broken = [];
       for (const entry of entries) {

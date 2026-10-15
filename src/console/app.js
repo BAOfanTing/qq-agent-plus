@@ -2543,8 +2543,9 @@ export function createApp({
       const next = body.enabled === true
         ? [...new Set([...current, id])]
         : current.filter((value) => value !== id);
-      // enabledIds 是数组：必须 __replace__，否则普通深合并删不掉键（清不干净就"停用不掉"）
-      updateConfig({ plugins: { enabledIds: { __replace__: next } } });
+      // enabledIds 是**数组**：deepMerge 对数组本来就是整体替换（不需要 __replace__）；
+      // 反过来说 { __replace__: [...] } 会被静默忽略（那个约定只认对象）—— 那样"启用"就永远写不进去
+      updateConfig({ plugins: { enabledIds: next } });
       // 单独启一个插件时把总开关一起打开：否则用户点了"启用"却什么都没发生（默认全关）
       if (body.enabled === true && getConfig().plugins?.enabled !== true) {
         updateConfig({ plugins: { enabled: true } });

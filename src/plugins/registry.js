@@ -56,6 +56,7 @@ export class PluginRegistry {
     this.probe = probe;          // 注入点：测试用它验"隔离不可用时 fail-closed"
     this.hosts = new Map();      // id -> PluginHost
     this.discovered = [];        // [{ id, dir, manifest, error }]
+    this.opChain = Promise.resolve(); // 起停/重载/安装的串行队列（见 #serialize）
     this.scheduleState = new Map();   // "<id>:<任务名>" -> 上次触发时间（内存态：重启后重新计时）
     this.scheduleTimer = null;
     this.started = false;
@@ -68,6 +69,10 @@ export class PluginRegistry {
     try { names = fs.readdirSync(this.root, { withFileTypes: true }); } catch { names = []; }
     for (const entry of names) {
       if (!entry.isDirectory()) continue;
+      // 宿主自己的中间目录（安装时的 .staging-*、升级的 .backup-*、卸载的 .removed-*）
+      // 不是插件：不跳过就会在控制台冒出一行"装不了：目录名只能是…"，巡检也会把它算成坏插件
+      //（2026-10-15 复审 P1：升级一次就必现）。
+      if (entry.name.startsWith('.')) continue;
       const dir = path.join(this.root, entry.name);
       if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(entry.name)) {
         out.push({ id: entry.name, dir, error: '目录名只能是「小写字母/数字/连字符」' });
@@ -108,7 +113,9 @@ export class PluginRegistry {
    * 按配置起插件进程。**fail-closed**：隔离不可用（本机 Node 不支持权限模型）时，
    * 装了 requireIsolation 就一个都不加载 —— 宁可插件跑不起来，也不假装隔离生效。
    */
-  async start() {
+  start() { return this.#serialize(() => this.#startImpl()); }
+
+  async #startImpl() {
     this.started = true;
     const cfg = this.#config();
     if (!cfg.enabled) return { started: [], skipped: 'disabled' };
@@ -136,13 +143,15 @@ export class PluginRegistry {
         dataDir: this.dataDir,
         log: this.log,
         timeouts: this.timeouts,
+        requireIsolation: cfg.requireIsolation,
         getSettings: () => this.#config().settings[item.id] ?? {}
       });
     this.hosts.set(item.id, host);
     const ok = await host.start();
     if (!ok) {
       this.log(`插件 ${item.id} 启动失败：${host.lastError || '未知原因'}`);
-      this.hosts.delete(item.id);
+      // 只在"表里还是我自己"时才删：并发路径下别人可能刚换了新 host 进去，删错人就是"在跑但不在表里"
+      if (this.hosts.get(item.id) === host) this.hosts.delete(item.id);
       return false;
     }
     this.log(`插件 ${item.id}（${item.manifest.name} v${item.manifest.version}）已加载：`
@@ -150,7 +159,21 @@ export class PluginRegistry {
     return true;
   }
 
-  async stop() {
+  /**
+   * 起停/重载这类操作必须**串行**：并发跑会出现两种坏结果 ——
+   * ① 两个 start 交错时后一个把前一个的 host 覆盖出表，前一个的子进程成了没人收的孤儿；
+   * ② 先到的 start 失败时 hosts.delete 删掉的是后到者刚放进去的 host（在跑但不在表里）。
+   * 触发很现实：连点两次启用、或"点启用后立刻点保存设置"（保存分支的 reconfigure 是 fire-and-forget）。
+   */
+  #serialize(task) {
+    const next = this.opChain.then(task, task);
+    this.opChain = next.then(() => {}, () => {});   // 失败不阻塞后续操作
+    return next;
+  }
+
+  stop() { return this.#serialize(() => this.#stopImpl()); }
+
+  async #stopImpl() {
     this.started = false;
     this.#stopScheduleLoop();
     const hosts = [...this.hosts.values()];
@@ -160,8 +183,8 @@ export class PluginRegistry {
 
   /** 配置改了（开/关总开关、增删 enabledIds、改插件配置）之后重排：停掉再按新配置起。 */
   async reconfigure() {
-    await this.stop();
-    return this.start();
+    await this.#stopImpl();
+    return this.#startImpl();
   }
 
   /**
@@ -194,7 +217,9 @@ export class PluginRegistry {
   }
 
   /** 单个插件重载（改完代码/配置后不必重启整个机器人）。 */
-  async reload(id) {
+  reload(id) { return this.#serialize(() => this.#reloadImpl(id)); }
+
+  async #reloadImpl(id) {
     const item = this.discover().find((v) => v.id === id);
     if (!item?.manifest) return { ok: false, error: item?.error || '找不到这个插件' };
     const cfg = this.#config();
@@ -267,7 +292,8 @@ export class PluginRegistry {
   /** 控制台与巡检用：每个插件为什么在跑/为什么没跑，都要能答上来。 */
   list() {
     const cfg = this.#config();
-    if (!this.discovered.length) this.discover();
+    // 每次现扫：用户按文档"把目录拷进 plugins/"之后，控制台刷新一下就该看得见（此前要重启）
+    this.discover();
     const isolation = isolationSummary();
     return {
       isolation,

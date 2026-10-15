@@ -39,7 +39,9 @@ export function pluginNodeArgs({ pluginDir = '' } = {}) {
   return args;
 }
 
-let cachedProbe = null;
+// 按插件目录缓存：--allow-fs-read 的值是探测输入之一，缓存成单一变量会让第一个目录的结论
+// （甚至"没带 --allow-fs-read"的结论）冒充所有插件的结论（2026-10-15 复审 P2-4）。
+const probeCache = new Map();
 
 /**
  * 真起一次子进程验证参数可用（`allowedNodeEnvironmentFlags` 只说明"认这个 flag"，
@@ -50,21 +52,24 @@ let cachedProbe = null;
  * @returns {{ok:boolean, error?:string}}
  */
 export function probeIsolation({ pluginDir, spawn = spawnSync, nodePath = process.execPath, force = false } = {}) {
-  if (!force && cachedProbe) return cachedProbe;
+  const cacheKey = String(pluginDir || '');
+  if (!force && probeCache.has(cacheKey)) return probeCache.get(cacheKey);
   if (!permissionFlagSupported()) {
-    cachedProbe = { ok: false, error: '本机 Node 不支持 --permission（权限模型），插件进程无法与宿主隔开' };
-    return cachedProbe;
+    const verdict = { ok: false, error: '本机 Node 不支持 --permission（权限模型），插件进程无法与宿主隔开' };
+    probeCache.set(cacheKey, verdict);
+    return verdict;
   }
   const runNode = spawn;
   const attempt = (args) => runNode(nodePath, [...args, '-e', ''], { encoding: 'utf8', timeout: 20000 });
   const first = attempt(pluginNodeArgs({ pluginDir }));
-  if (first?.status === 0) { cachedProbe = { ok: true }; return cachedProbe; }
+  if (first?.status === 0) { probeCache.set(cacheKey, { ok: true }); return probeCache.get(cacheKey); }
   // 某些老版本的 --disable-warning 写法不同 → 去掉它再试一次，别因为一条警告就判定隔离不可用
   const fallback = pluginNodeArgs({ pluginDir }).filter((a) => !a.startsWith('--disable-warning'));
-  if (attempt(fallback)?.status === 0) { cachedProbe = { ok: true }; return cachedProbe; }
+  if (attempt(fallback)?.status === 0) { probeCache.set(cacheKey, { ok: true }); return probeCache.get(cacheKey); }
   const detail = String(first?.stderr || first?.error?.message || '').trim().split('\n').slice(-1)[0];
-  cachedProbe = { ok: false, error: `隔离参数跑不起来：${detail || '未知原因'}` };
-  return cachedProbe;
+  const verdict = { ok: false, error: `隔离参数跑不起来：${detail || '未知原因'}` };
+  probeCache.set(cacheKey, verdict);
+  return verdict;
 }
 
 /** 给控制台/巡检用的口径说明：哪些拦得住、哪些拦不住。 */
@@ -81,4 +86,4 @@ export function isolationSummary() {
 }
 
 /** 只测一次用：重置缓存（测试用）。 */
-export function resetIsolationProbe() { cachedProbe = null; }
+export function resetIsolationProbe() { probeCache.clear(); }

@@ -38,8 +38,9 @@ sha256sum mc-status-1.0.0.tar.gz        # 把这个值连同下载地址一起�
 ## 你可以照着改什么
 
 - **换接口**：配置 `plugins.settings.mc-status.statusUrl` 指到你自己的状态页（`{host}` 是占位符）。
-  这样连内网的服务器也能查（前提是那个地址从机器人这台机器上可达，并且不是内网地址 ——
-  宿主侧的网络守卫会拦内网，见 `docs/PLUGINS.md` 的信任声明）。
+  **注意内网地址会被拦**：`cap.http.request` 走宿主的网络守卫（禁内网/本机地址），
+  所以想查内网服务器得让那个接口从公网可达（或自己在公网放个转发），
+  见 `docs/PLUGINS.md` 的信任声明。
 - **加工具**：在 `plugin.json` 的 `tools` 里加一条声明，再在 `index.mjs` 的 `tools` 里加一个函数。
   manifest 里声明了才会给模型看；没声明的调用会被宿主拒。
 - **加周期任务**：manifest 里加 `schedule`，宿主会按 `everyMs` 到点触发 `schedule` 方法 ——

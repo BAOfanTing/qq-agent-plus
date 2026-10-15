@@ -3338,6 +3338,9 @@ try {
       ['moments', ['groupDigest']],
       ['reminders', ['reminders']],
       ['messageTypes', ['messageTypes']],
+      // 插件页：动作全走 /api/plugins/*（点了就生效），所以这一页**一个配置键都不该写**。
+      // 空数组 = 只跑"越界检查"那一半：别的页保存时也不许把 plugins 带上。
+      ['plugins', []],
       // 闲聊页（chat）是"控件最多的那页"：新加的收藏三件套就走这一段构造，
       // 列全它写出的键，顺手把"贴纸键从 chat 段写出去"钉住。
       ['chat', ['wakeDelayMinMs', 'wakeDelayMaxMs', 'wakeDelayMs', 'drainDelayMs', 'maxConcurrentRuns',

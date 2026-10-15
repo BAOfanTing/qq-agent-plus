@@ -528,6 +528,15 @@ test('插件：总开关关着跳过；开着且 manifest 合法为绿；manifes
   assert.equal(good.ok, true, good.detail);
   assert.match(good.detail, /已装 1 个，授权 1 个/);
 
+  // 升级留下的 .backup-* 里有 plugin.json 且目录名与 id 不符 —— 它不该让巡检报红
+  fs.mkdirSync(path.join(dir, 'plugins', '.backup-demo-123'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'plugins', '.backup-demo-123', 'plugin.json'), JSON.stringify({
+    id: 'demo', apiVersion: 1, name: '旧版', version: '0.9.0', capabilities: ['tools']
+  }));
+  const withBackup = itemOf(await run());
+  assert.equal(withBackup.ok, true, withBackup.detail);
+  assert.match(withBackup.detail, /已装 1 个/, '内部目录不该被算成一个插件');
+
   writeManifest({ id: 'demo', apiVersion: 99, name: '演示', version: '1.0.0', capabilities: ['tools'] });
   const bad = itemOf(await run());
   assert.equal(bad.ok, false, 'manifest 不合法必须报出来（宿主会拒载，巡检不能装作没事）');

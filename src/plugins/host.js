@@ -45,7 +45,7 @@ export class PluginHost {
   constructor({
     manifest, dataDir, log = () => {}, getSettings = () => ({}),
     spawn = spawnChild, spawnSyncImpl = spawnSync, nodePath = process.execPath,
-    timeouts = {}, capabilities = null, now = () => Date.now()
+    timeouts = {}, capabilities = null, now = () => Date.now(), requireIsolation = true
   } = {}) {
     this.manifest = manifest;
     this.id = manifest.id;
@@ -57,6 +57,10 @@ export class PluginHost {
     this.spawnSyncImpl = spawnSyncImpl;
     this.nodePath = nodePath;
     this.timeouts = { ...HOST_DEFAULTS, ...timeouts };
+    // 隔离不可用时是否拒绝加载（默认拒绝）。置 false 是"我明确接受没有隔离"——
+    // 那种情况下插件进程读得到 config.json，所以状态里会带 unconfined:true，控制台如实显示。
+    this.requireIsolation = requireIsolation !== false;
+    this.unconfined = false;
     this.caps = capabilities ?? createCapabilities({
       pluginId: this.id, dataDir, getSettings, log, now
     });
@@ -97,6 +101,7 @@ export class PluginHost {
       schedule: this.manifest.schedule.map((s) => s.name),
       state: this.state,
       running: this.state === 'running',
+      unconfined: this.unconfined,   // true = 本机没隔离且配置允许降级（控制台要显示出来）
       restarts: this.restarts,
       startedAt: this.startedAt,
       lastError: this.lastError,
@@ -133,16 +138,23 @@ export class PluginHost {
     }
 
     const probe = probeIsolation({ pluginDir: this.#pluginDir(), spawn: this.spawnSyncImpl, nodePath: this.nodePath });
-    if (!probe.ok) {
-      // 隔离不可用时**不假装**：宁可插件跑不起来，也不能在没有隔离的机器上执行第三方代码
+    this.unconfined = !probe.ok;
+    if (!probe.ok && this.requireIsolation) {
+      // 隔离不可用时**不假装**：默认宁可插件跑不起来，也不能在没有隔离的机器上执行第三方代码
       this.#fail(`隔离不可用：${probe.error}`);
       return false;
+    }
+    if (!probe.ok) {
+      // 配置里明确关掉了 requireIsolation：照常起，但这件事必须吵闹地说出来（日志 + 状态 + 控制台）
+      this.log(`[plugin:${this.id}] ⚠️ 未隔离运行（${probe.error}）：该插件进程读得到 config.json，风险自负`);
     }
 
     try {
       // 隔离参数按**本插件自己的目录**现算（probeIsolation 只返回"能不能用"的结论，
       // 不缓存参数 —— 缓存一份会把第一个插件的目录发给所有插件）
-      this.child = this.spawnImpl(this.nodePath, [...pluginNodeArgs({ pluginDir: this.#pluginDir() }), entry], {
+      // 未隔离时用最朴素的参数起（不加 --permission —— 那组参数在本机跑不起来）
+      const spawnArgs = this.unconfined ? [] : pluginNodeArgs({ pluginDir: this.#pluginDir() });
+      this.child = this.spawnImpl(this.nodePath, [...spawnArgs, entry], {
         cwd: this.#pluginDir(),
         env: childEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -155,8 +167,9 @@ export class PluginHost {
 
     this.child.stdout.on('data', (chunk) => this.decoder.push(chunk));
     this.child.stderr.on('data', (chunk) => {
+      // 与 stdout 同一条限流：插件刷 stderr（或循环打印错误）不该把宿主日志/journal 灌满
       const text = previewLine(String(chunk), 400);
-      if (text) this.log(`[plugin:${this.id}] stderr: ${text}`);
+      if (text) this.#raw(`stderr: ${text}`);
     });
     this.child.on('error', (error) => this.#fail(`进程错误：${error?.message ?? error}`));
     this.child.on('exit', (code, signal) => this.#onExit(code, signal));

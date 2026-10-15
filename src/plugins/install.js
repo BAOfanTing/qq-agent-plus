@@ -40,6 +40,14 @@ export function verifySha256(buffer, expected) {
 
 const TAR_BLOCK = 512;
 
+/** tar 头校验和：把 checksum 字段当空格求和，与头里写的八进制值比对。 */
+function verifyTarChecksum(header) {
+  const declared = readOctal(header.subarray(148, 156));
+  let sum = 0;
+  for (let i = 0; i < TAR_BLOCK; i += 1) sum += i >= 148 && i < 156 ? 0x20 : header[i];
+  if (declared !== sum) throw fail('E_ARCHIVE', '归档头校验和不匹配（文件损坏，或根本不是 tar）');
+}
+
 /** 解一段八进制字段（tar 里都是 "\0" 结尾的八进制串）。 */
 function readOctal(buffer) {
   const text = buffer.toString('utf8').replace(/\0.*$/, '').trim();
@@ -65,6 +73,9 @@ export function parseTarGz(buffer) {
     const header = raw.subarray(offset, offset + TAR_BLOCK);
     // 全零块 = 归档结束（正常有两个）
     if (header.every((byte) => byte === 0)) break;
+    // 校验和：tar 头自带的完整性判据。不验的话，坏掉的归档会被"按字段解出另一份内容"，
+    // 而 sha256 校的是整个包 —— 两者本该一致，坏就坏在解析层（2026-10-15 复审 P3-8）
+    verifyTarChecksum(header);
     const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
     const prefix = header.subarray(345, 500).toString('utf8').replace(/\0.*$/, '');
     const size = readOctal(header.subarray(124, 136));
@@ -149,6 +160,14 @@ export async function installPlugin({
   const download = fetchBinary;
   const pluginsRoot = path.join(dataDir, 'plugins');
   fs.mkdirSync(pluginsRoot, { recursive: true });
+  // id 会进 staging 的目录名：**必须先校验**，否则 '../../x' 之类的 id 会把解包写到插件目录之外
+  //（2026-10-15 复审 P2；最终换入那一步本来就有校验，这里只是把它提前到"写盘之前"）
+  const requestedId = String(id ?? '').trim();
+  if (requestedId && !/^[a-z0-9][a-z0-9-]{1,31}$/.test(requestedId)) {
+    // 独立错误码：与下面那条"包里的 id 与预期不符"区分开 —— 这一条发生在**任何写盘之前**，
+    // 混用同一个 code/文案的话，用例咬不出"校验被挪到写盘之后"这种改动（2026-10-15 复审）
+    throw fail('E_BAD_ID', '插件 id 不合法（只允许小写字母/数字/连字符，2-32 位）');
+  }
 
   let buffer = tarball;
   if (!buffer) {
@@ -167,7 +186,7 @@ export async function installPlugin({
   if (isSha256(sha256)) verifySha256(buffer, sha256);
 
   const entries = unwrapSingleRoot(parseTarGz(buffer));
-  const staging = path.join(pluginsRoot, `.staging-${id || 'plugin'}-${process.pid}-${now()}`);
+  const staging = path.join(pluginsRoot, `.staging-${requestedId || 'plugin'}-${process.pid}-${now()}`);
   fs.mkdirSync(staging, { recursive: true });
   try {
     extractEntries(entries, staging);
@@ -194,6 +213,7 @@ export async function installPlugin({
       if (upgrading && backupDir && !fs.existsSync(target)) fs.renameSync(backupDir, target);   // 失败原样放回
       throw fail('E_SWAP', `换入失败，已回滚：${error?.message ?? error}`);
     }
+    pruneBackups(pluginsRoot, finalId, now);
     log(`[plugins] ${upgrading ? '升级' : '安装'} ${finalId} v${parsed.manifest.version} 完成`
       + `${upgrading ? `（旧版备份在 ${path.basename(backupDir)}）` : ''}`);
     return { ok: true, id: finalId, version: parsed.manifest.version, upgraded: upgrading, backupDir };
@@ -202,6 +222,21 @@ export async function installPlugin({
     try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* 清不掉就留在那儿，巡检会报出来 */ }
     throw error;
   }
+}
+
+/** 升级备份只保留最近 N 份（与 deploy.sh 的快照保留同口径）：不留的话每次升级都堆一份代码。 */
+const MAX_BACKUPS = 3;
+export function pruneBackups(pluginsRoot, id, now = () => Date.now()) {
+  let names = [];
+  try { names = fs.readdirSync(pluginsRoot); } catch { return 0; }
+  const mine = names.filter((name) => name.startsWith(`.backup-${id}-`)).sort();
+  let removed = 0;
+  for (const name of mine.slice(0, Math.max(0, mine.length - MAX_BACKUPS))) {
+    try { fs.rmSync(path.join(pluginsRoot, name), { recursive: true, force: true }); removed += 1; }
+    catch { /* 删不掉就留着：巡检与控制台都已经会跳过它 */ }
+  }
+  void now;
+  return removed;
 }
 
 /**

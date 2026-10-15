@@ -168,7 +168,12 @@ export function parsePluginManifest(raw, { dir = '' } = {}) {
   };
 }
 
-/** 模型看到的工具名：`<插件id>.<工具名>` —— 插件之间、插件与内置工具之间都不许撞名。 */
+/**
+ * 模型看到的工具名：`<插件id>__<工具名>` —— 插件之间、插件与内置工具之间都不许撞名。
+ * 用双下划线而不是点号：OpenAI 的 function name 只允许 [a-zA-Z0-9_-]，点号在**严格校验**的
+ * 兼容端点上会让整个请求 400 —— 那就不只是"这个工具用不了"，而是这一轮对话全挂
+ *（2026-10-15 复审 P3-4）。id 里只可能有 `-`，工具名里只可能有 `_`，所以分隔符不会歧义。
+ */
 export function qualifiedToolName(pluginId, toolName) {
-  return `${pluginId}.${toolName}`;
+  return `${pluginId}__${toolName}`;
 }
