@@ -119,6 +119,18 @@ test('安装：装成功、重复装＝升级并留下旧版备份、staging 不
   assert.deepEqual(strays().filter((name) => !name.startsWith('.backup-')), [], '除了备份不该有别的东西');
 });
 
+test('同一毫秒内连装也不撞名（时钟不前进时升级照样留档、轮转照样生效）', async () => {
+  // 这条钉的是服务器实测到的 ENOTEMPTY：备份目录名只用时间戳时，同一毫秒连做两次升级会撞名，
+  // 而 rename 到非空目录在 POSIX 上直接失败。把时钟钉住就能在任何机器上稳定复现这个竞态。
+  slate();
+  const fixed = () => 1_700_000_000_000;
+  await installPlugin({ tarball: packPlugin('demo'), dataDir, now: fixed });
+  for (let i = 0; i < 3; i += 1) await installPlugin({ tarball: packPlugin('demo'), dataDir, now: fixed });
+  const backups = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo-'));
+  assert.equal(backups.length, 3, `同一毫秒连装也要各自留档并轮转到 3 份，实际 ${backups.length}`);
+  assert.ok(fs.existsSync(path.join(pluginsRoot, 'demo', 'plugin.json')), '升级后新版本要在位');
+});
+
 test('安装：id 与预期不符要拒装，且不留下任何东西（staging 清干净）', async () => {
   slate();
   await assert.rejects(

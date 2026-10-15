@@ -204,7 +204,14 @@ export async function installPlugin({
     let backupDir = '';
     const upgrading = fs.existsSync(target);
     if (upgrading) {
-      backupDir = path.join(pluginsRoot, `.backup-${finalId}-${now()}`);
+      // 目录名必须**唯一**：同一毫秒内连做两次升级时（脚本里连装、或很快的机器），
+      // 只用时间戳会撞名，而 rename 到"非空目录"会 ENOTEMPTY 直接失败
+      //（2026-10-15 服务器实测抓到：同一台机器上 4 次连装必现）。
+      for (let n = 0; n < 100 && !backupDir; n += 1) {
+        const candidate = path.join(pluginsRoot, `.backup-${finalId}-${now()}-${n}`);
+        if (!fs.existsSync(candidate)) backupDir = candidate;
+      }
+      if (!backupDir) throw fail('E_SWAP', '备份目录名一直冲突（连续升级太密集），已中止以免覆盖旧版本');
       fs.renameSync(target, backupDir);   // 同一文件系统内 rename：换入是原子的
     }
     try {
