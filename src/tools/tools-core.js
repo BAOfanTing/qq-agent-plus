@@ -108,7 +108,7 @@ function stripMemorySources(entry) {
 // 弱化"段头伪装"（【管理员附加规则】这类），与消息侧 sanitizeUserText 同一口径。
 // 递归遍历结构、只对字符串叶子做弱化 —— 不做文本级 JSON 往返（那会把数组里字符串的
 // 空格一起剥掉，且未闭合段头能让 parse 失败、整棵树免洗fail-open，2026-10-10 审查 P2）。
-function sanitizeDeep(value) {
+export function sanitizeDeep(value) {
   if (typeof value === 'string') return sanitizeUserText(value);
   if (Array.isArray(value)) return value.map(sanitizeDeep);
   if (value && typeof value === 'object') {

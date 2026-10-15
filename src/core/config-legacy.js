@@ -574,6 +574,19 @@ export const DEFAULT_CONFIG = {
     // 提示词同步改成"你只能拿到声音"，不再教它调一个对视频什么都不给的工具。
     videoFrames: true
   },
+  // 插件（第三方扩展，默认全关；契约与信任声明见 docs/PLUGINS.md）
+  plugins: {
+    // 总开关。关着 = 一个插件都不加载（装了但不开也是这样，落地没有任何副作用）。
+    enabled: false,
+    // 允许运行的插件 id。**默认空 = 一个都不跑**：装上 ≠ 授权，授权是这份显式清单。
+    // 插件目录约定 $DATA_DIR/plugins/<id>/（数据目录不会被版本更新覆盖，见 deploy.sh 的保留清单）。
+    enabledIds: [],
+    // 本机 Node 不支持权限模型（--permission）时是否拒绝加载插件。默认 true = fail-closed：
+    // 没有隔离就不执行第三方代码 —— 至于"没有隔离"这件事本身会在控制台与巡检里说明白。
+    requireIsolation: true,
+    // 每个插件自己的配置段：{ "<插件id>": { … } }（插件通过 cap.config.get 只能读自己这段）
+    settings: {}
+  },
   // 存储
   store: {
     // 单群 JSON 最大保留条数。**0 = 不限制**。

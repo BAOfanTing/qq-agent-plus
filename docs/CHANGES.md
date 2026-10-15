@@ -48,6 +48,39 @@
 | 省 Token 模式 | `src/core/token-saver.js`（新增）、`src/core/config-legacy.js`、`src/llm/prompt.js`、`src/core/orchestrator.js`、`src/memory/memory-global.js`、`src/features/daily-moments.js`、`src/features/qzone-interactions.js`、`ui/app.js`、`src/console/app.js` | 「设置 -> 省 Token」三档，只给上下文档位条数、单次运行轮数与预算、交接/印象注入字符数、表情清单条数**夹上限**，不改写用户设置；关掉即恢复原样 | 本仓库新增 |
 | 关闭上游调试探针 | `src/*.js`、`ui/*.js` | 上游作者留在源码里的调试上报（指向其开发机私网地址）全部关掉 | `apply-disable-upstream-debug.sh` |
 
+## 未发布 · 插件机制（v1 第一段：宿主骨架）（2026-10-15，issue #37）
+
+**尚未发版**。社区反馈（Orange-hash，issue #37）希望能接入自己的功能插件。这一版先落**宿主骨架**：
+目录与 manifest 契约、独立进程宿主、能力鉴权与宿主侧实现、注册表与默认拒门控。工具挂载、入站投递、
+周期驱动、控制台页面与一键安装见 `docs/PLUGINS.md` 的分期表。
+
+**为什么是独立进程而不是同进程加载**（这是这一段的全部理由）：
+
+- 同进程里插件就是普通 JS，可以 `import('node:fs')` 读走 `config.json`（API Key / 控制台 Token /
+  OneBot Token），manifest 声明在那时只是君子协定。只有另起进程才能用 Node 的权限模型真正关上这扇门。
+- **实测（生产 Node v22.23.2 与本机 v24 都跑过）**：`node --permission --allow-fs-read=<插件目录>`
+  下，读 `data/config.json`、读目录外文件、`spawn`/`execSync`、`worker_threads`、写文件全部
+  `ERR_ACCESS_DENIED`；多文件插件加载正常。**网络拦不住**（`--allow-net` 在 Node 22/24 上都不存在，
+  权限模型不覆盖网络），`process.env` 默认可见（所以宿主剥到只留 PATH/TZ 等白名单）。
+  这两条如实写进 `docs/PLUGINS.md` 的信任声明，不假装拦住了。
+- 插件面固定成**版本化协议**（NDJSON，`apiVersion: 1`）：宿主内部随便重构，插件只依赖协议。
+- 插件的唯一出口是宿主 RPC（没有 `ctx`、没有 `onebot`），于是出站/网络/配额这些守卫是**强制复用**
+  而不是靠自觉 —— 现成的反面教训是 `ctx.onebot` 直接暴露给工具（仓库自己 30+ 处直呼协议端）。
+- 崩溃隔离：`uncaughtException` 会让主进程 `exit(1)`，第三方代码一个漏 catch 就能把机器人带走；
+  子进程里崩的是插件，宿主按看门狗处理（心跳 / 超时 / 退避重启 / 连续 3 次后停用）。
+
+落地内容：`src/plugins/{manifest,protocol,isolation,capabilities,host,registry}.js`、
+配置段 `plugins`（默认全关、`enabledIds` 空 = 一个都不跑、`requireIsolation` 默认 fail-closed）、
+`docs/PLUGINS.md`。插件目录约定 `$DATA_DIR/plugins/<id>/` —— 数据目录在部署脚本的保留清单里，
+**零部署改动**即不会被版本更新抹掉。
+
+验证：单测 11 条（manifest fail-closed 各坏形状 / 协议跨块多字节与坏行超长行 / 隔离参数口径 /
+宿主端到端含 storage 落盘与 observe+schedule 投递 / 隔离真实性 / 越权拒绝并记账 / 超时结清 /
+崩溃重启与停用 / 发现与默认拒 / 隔离不可用时 fail-closed / 工具名前缀与第三方文本过洗），
+**全部跑真实子进程**（不 mock `child_process`）；9 条变异全部咬住（"默认拒"是两层防线，需复合变异
+才咬得住 —— 那正是纵深防御）。全量单元 1565 项 / 43 红 / 12 跳过（失败文件集合与既定 Windows 基线
+逐条一致）、local 11/11、渲染 223、回归 38、eslint 0、`ops scan --strict` 0。
+
 ## 未发布 · 消息类型开关：合并转发自动展开 / 视频画面（2026-10-15，issue #34）
 
 **尚未发版**。社区反馈（shoujiaobingliang）：视频、图片、表情、合并转发希望能分别配置"看不看"，
