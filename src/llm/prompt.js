@@ -224,6 +224,10 @@ function runGuidance() {
 function qqSceneRules(grounded = false, platform = null, chatKey = '') {
   const cfg = getConfig();
   const vision = visionEnabled(cfg);
+  // 视频画面还能再被「消息类型」页单独关掉（省一次抽帧 + 一次视觉调用）。
+  // 提前算好：下面**每一处**提到"视频画面能看"的地方都要用它，漏一处就是"教了但工具不给"。
+  const videoFrames = cfg.messageTypes?.videoFrames !== false;
+  const canSeeVideo = vision && videoFrames;
   const search = cfg.webSearch?.enabled !== false;
   const lines = [
     '【QQ 场景规则】',
@@ -241,7 +245,8 @@ function qqSceneRules(grounded = false, platform = null, chatKey = '') {
     const stickerOn = getConfig().sticker?.enabled !== false;
     const collectOn = stickerOn && getConfig().sticker?.collectEnabled !== false;
     const stickerBits = [
-      '- 消息里出现 [图片] / [表情包] / [视频]，或要用某个没备注的收藏表情时，可以用 get_message_images'
+      '- 消息里出现 [图片] / [表情包]' + (canSeeVideo ? ' / [视频]' : '')
+        + '，或要用某个没备注的收藏表情时，可以用 get_message_images'
         + (stickerOn ? ' / get_sticker_image' : '') + ' 看图（你能直接看懂图片内容），再自然回应；不要假装看不到图，也不要编造图片内容；工具获取失败就老实说看不到。',
       '- 【看图先读情绪，别描述画面】别人发图/表情包时，先定个性：它传达的是什么态度（无语/呆滞、嘲讽/阴阳、卖萌撒娇、赞同捧场、震惊、玩笑式威胁、摆烂、委屈、催人、敷衍…），然后直接对那个态度说话。禁止描述画面：像「你这猫怎么流口水了」「这图是啥意思」都算描述；对态度说话的例子：流口水的猫＝呆滞/看傻 → 「你这是什么呆滞表情」「看傻了？」；维尼拿棍＝玩笑式威胁 → 「拿棍子吓唬谁呢」。拿不准就轻描淡写回一句，别硬编情绪、也别逐帧解释。'
     ];
@@ -368,11 +373,13 @@ function qqSceneRules(grounded = false, platform = null, chatKey = '') {
     // 只提"能听声音"会让模型以为看不到画面（用户 2026-09-26 反馈：发视频回"视频只能听声"）。
     // ⚠️ 画面这条要挂在 vision 上：关掉图片输入时 get_message_images 不在工具表里，
     // 教它调不存在的工具会白烧一轮（2026-09-26 审查）。
-    lines.push(vision
+    lines.push(canSeeVideo
       ? '- 别人发视频时两样都能拿到：画面用 get_message_images（2×2 四宫格＝按时间顺序抽的 4 帧，左上→右上→左下→右下），声音用上面那条转写。先看画面再听声音，别只回一句"视频只能听声音"。'
-      : '- 别人发视频时你只能拿到声音（画面看不到，别猜也别编画面内容）：用上面那条转写，然后照实回应听到的内容。');
+      : (vision
+        ? '- 别人发视频时你只能拿到声音：画面查看在设置里关掉了（别猜也别编画面内容），用上面那条转写，然后照实回应听到的内容。'
+        : '- 别人发视频时你只能拿到声音（画面看不到，别猜也别编画面内容）：用上面那条转写，然后照实回应听到的内容。'));
   } else {
-    lines.push(vision
+    lines.push(canSeeVideo
       ? '- 你听不了语音：消息里的 [语音] [文件…m4a|mp3 等] 只是占位提示，如实话一句"这边听不了语音"即可，不要编造声音内容；但 [视频] 的**画面**可以用 get_message_images 看（2×2 四宫格＝4 帧），看完照常说画面内容。'
       : '- 你无法处理语音/视频/音频文件：消息里的 [语音] [视频] [文件…m4a|mp3|mp4 等] 只是占位提示，如实话一句"这边听不了语音"即可，不要编造音频内容。');
   }

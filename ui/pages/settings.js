@@ -70,7 +70,7 @@ function renderSettingsSidebar() {
   // 系统"五组归位，每组一个小标题。分组只影响侧栏观感，分区 id 与行为一个都没动
   // （ui-smoke 断言 .settings-menu-item[data-section=...] 仍在，锚点不受影响）。
   const menu = [
-    ['对话与人格', [['persona', '人设'], ['chat', '聊天设置'], ['allow', '聊天白名单'], ['memory', '记忆']]],
+    ['对话与人格', [['persona', '人设'], ['chat', '聊天设置'], ['messageTypes', '消息类型'], ['allow', '聊天白名单'], ['memory', '记忆']]],
     ['模型与服务', [['api', '模型 API'], ['search', '搜索服务'], ['asr', '语音转文字'], ['token-saver', '省 Token']]],
     ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
     ['平台', [['platform', '平台能力'], ['onebot', 'OneBot']]],
@@ -200,6 +200,7 @@ function renderSettingsSection(c) {
     persona: () => renderPersonaSection(c),
     allow: () => renderAllowSection(c),
     chat: () => renderChatSection(c),
+    messageTypes: () => renderMessageTypesSection(c),
     platform: () => renderPlatformSection(c),
     appearance: () => renderAppearanceBlock(c),
     desktop: () => renderDesktopSection(c),
@@ -787,6 +788,29 @@ function thinkingHintText(c) {
     bits.push('未实测：点右侧「测试思考能力」按真实请求探明。');
   }
   return bits.join(' ');
+}
+
+// 消息类型：按类型决定机器人读不读这类内容。关掉只是不让内容进提示词/不进模型 ——
+// 消息本身照常进聊天记录，存档、检索、金句墙都不受影响（2026-10-15 issue #34）。
+function renderMessageTypesSection(c) {
+  const mt = c.messageTypes || {};
+  const visionOn = c.api?.vision !== false;
+  return `
+    <h3 id="settings-message-types">消息类型</h3>
+    <div class="hint" style="margin-bottom:8px">按类型决定机器人<b>读不读</b>这类内容。关掉不影响消息进聊天记录，
+      只是不让它进提示词、不进模型 —— 省的是 token 与上下文窗口。
+      （合并转发那条要注意：<b>展开后的文本就是存档里的那一行</b>，关掉后存档与控制台里留的是占位符，
+      等内容被按需读取时才补上。）</div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-expand-forward" ${mt.expandForward !== false ? 'checked' : ''} />
+      <label for="cfg-expand-forward">自动展开合并转发 / 聊天记录卡片</label></div>
+    <div class="hint" style="margin-left:26px">关掉后正文只留一行占位符，模型需要时自己调 read_forward 展开；
+      <b>被 @ 的那条仍会自动展开</b>。一条 20 条的记录展开后是几千字符，还会跟着进存档和之后每一轮的上下文。</div>
+    <div class="hint" style="margin-top:8px">图片与表情：由「模型 API」页的「图片输入」开关统一控制，当前<b>${visionOn ? '开' : '关'}</b>
+      （关掉时看图工具会从工具表里摘掉）。</div>
+    <div class="checkbox-row" style="margin-top:8px"><input type="checkbox" id="cfg-video-frames" ${mt.videoFrames !== false ? 'checked' : ''} />
+      <label for="cfg-video-frames">查看视频画面（抽 4 帧拼 2×2）</label></div>
+    <div class="hint" style="margin-left:26px">关掉后视频只剩声音（get_message_audio 转写），
+      省一次抽帧和一次视觉调用；提示词会同步改成"你只能拿到声音"。</div>`;
 }
 
 function renderTokenSaverSection(c) {

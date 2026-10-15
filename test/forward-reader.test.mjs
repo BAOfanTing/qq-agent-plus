@@ -182,3 +182,34 @@ test('聊天记录卡片单独标成 [卡片聊天记录 …]：提示词里的�
   assert.match(cardToText({ type: 'json', data: { data: news } }), /^\[卡片 /, '普通分享卡片不该跟着改名字');
   assert.equal(cardToText({ type: 'json', data: {} }), '[卡片消息]');
 });
+
+// 「消息类型」关掉自动展开后（issue #34），**按需展开这条路必须还在** ——
+// 关的是"入站顺手展开"，不是"模型想看时看不到"。哪天有人把同一个闸门也加到工具上，
+// 这条用例会红。
+test('关掉自动展开后，read_forward 按需展开照旧可用', async () => {
+  const { updateConfig } = await import('../src/core/config.js');
+  const calls = [];
+  const entry = { mid: '-123', text: '[合并转发聊天记录]' };
+  const ctx = {
+    chatKey: 'group:1',
+    store: {
+      findByMid: () => entry,
+      updateByMid: (_chat, _mid, patch) => { entry.text = patch.text; }
+    },
+    onebot: { call: async (action, args) => {
+      calls.push([action, args]);
+      if (action === 'get_msg') return { message: card };
+      if (args.id === 'fresh-resource') return { messages };
+      throw new Error('wrong lookup');
+    } }
+  };
+  const tool = buildToolDefs().find((t) => t.name === 'read_forward');
+  updateConfig({ messageTypes: { expandForward: false } });
+  try {
+    const result = await tool.execute(ctx, { messageId: '-123' });
+    assert.equal(result.isError, undefined);
+    assert.match(entry.text, /forward content/, '按需展开仍要写回存档');
+  } finally {
+    updateConfig({ messageTypes: { expandForward: true } });
+  }
+});

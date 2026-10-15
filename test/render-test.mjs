@@ -3267,6 +3267,7 @@ try {
       ['groupGame', ['groupGame']],
       ['moments', ['groupDigest']],
       ['reminders', ['reminders']],
+      ['messageTypes', ['messageTypes']],
       // 闲聊页（chat）是"控件最多的那页"：新加的收藏三件套就走这一段构造，
       // 列全它写出的键，顺手把"贴纸键从 chat 段写出去"钉住。
       ['chat', ['wakeDelayMinMs', 'wakeDelayMaxMs', 'wakeDelayMs', 'drainDelayMs', 'maxConcurrentRuns',

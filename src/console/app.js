@@ -1130,7 +1130,11 @@ export function createApp({
     const forwardResId = Array.isArray(segments) ? segments.map(forwardResIdFromSegment).find(Boolean) : null;
     const looksForward = Boolean(forwardResId)
       || text.includes('[合并转发') || text.includes('[转发消息') || text.includes('[卡片聊天记录');
-    if (segments && looksForward && event.message_id != null) {
+    // 「消息类型」页可以关掉自动展开（一条 20 条的记录展开后是几千字符，还要跟着进存档与
+    // 后续每一轮的上下文）。**被 @ 的那条仍然展开** —— 用户点名要看的东西不该再多花一轮
+    // 工具调用；关掉后正文留占位符，模型需要时自己调 read_forward。
+    const autoExpand = cfgNow.messageTypes?.expandForward !== false || mentionsSelf;
+    if (segments && looksForward && event.message_id != null && autoExpand) {
       const isCard = !text.includes('[合并转发') && !text.includes('[转发消息');
       try {
         const nodes = await readForwardMessages(onebot, event.message_id, segments);
@@ -1147,6 +1151,8 @@ export function createApp({
         if (isCard) log(`[ingest] 聊天记录卡片展开失败（resid ${forwardResId ? '有' : '无'}）: ${e?.message ?? e}`);
         else log(`[ingest] 展开合并转发失败（保留占位符）: ${e?.message ?? e}`);
       }
+    } else if (segments && looksForward && event.message_id != null) {
+      log('[ingest] 合并转发未自动展开（「消息类型」页关着）：占位符已存档，需要时模型可调 read_forward');
     }
 
     if (!text && !media.length) return;

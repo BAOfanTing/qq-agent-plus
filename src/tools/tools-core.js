@@ -411,6 +411,15 @@ function imageParts(text, dataUrls) {
  * }
  */
 /** #13：memory_query 的描述必须与 memory.visibility 策略一致（默认 global 时与历史文案逐字一致）。 */
+/** get_message_images 的描述随「消息类型 → 视频画面」变：教它调一个对视频什么都不给的工具
+ *  只会白烧一轮（与 memoryQueryDescription 同一个口径：描述跟着配置走）。 */
+function getMessageImagesDescription() {
+  const videoFrames = getConfig().messageTypes?.videoFrames !== false;
+  return videoFrames
+    ? '查看某条消息里的图片/表情/**视频画面**（视觉模型可以直接看懂）。消息文本出现 [图片] / [表情包] / [视频] 时可用；视频会抽 4 帧拼成 2×2 帧条，配 get_message_audio 听声音就能把视频"看+听"齐。id 用聊天记录里每条消息前的 #数字。'
+    : '查看某条消息里的图片/表情（视觉模型可以直接看懂）。消息文本出现 [图片] / [表情包] 时可用。**这条消息里的视频画面看不到**（「消息类型」页关掉了视频画面），视频只有声音，用 get_message_audio 转写。id 用聊天记录里每条消息前的 #数字。';
+}
+
 function memoryQueryDescription() {
   const vis = memoryVisibilityOf(getConfig());
   if (vis.mode === 'perChat') {
@@ -1999,7 +2008,7 @@ export function buildToolDefs() {
     },
     {
       name: 'get_message_images',
-      description: '查看某条消息里的图片/表情/**视频画面**（视觉模型可以直接看懂）。消息文本出现 [图片] / [表情包] / [视频] 时可用；视频会抽 4 帧拼成 2×2 帧条，配 get_message_audio 听声音就能把视频"看+听"齐。id 用聊天记录里每条消息前的 #数字。',
+      description: getMessageImagesDescription(),
       parameters: {
         type: 'object',
         properties: { messageId: { type: ['integer', 'string'], description: 'QQ 消息 id（聊天记录里的 #数字，可能为负数）' } },
@@ -2011,11 +2020,16 @@ export function buildToolDefs() {
           if (!modelVisible(entry)) return err(`当前会话找不到消息 ${args.messageId}。${midHint(ctx)}`);
           const viewables = await currentMessageImageUrls(ctx, entry);
           if (!viewables.length) return ok(`消息 ${args.messageId} 没有可查看的图片`);
+          // 「消息类型」页可以关掉视频画面（省一次抽帧 + 一次视觉调用）：关了就跳过视频帧条，
+          // 不下载也不进模型；图片/表情照常。视频的声音仍在 get_message_audio 那条路上。
+          const videoFrames = getConfig().messageTypes?.videoFrames !== false;
           const dataUrls = [];
           const failed = [];
           let videoCount = 0;
+          let skippedVideo = 0;
           for (const item of viewables) {
             ctx.signal?.throwIfAborted();
+            if (item.kind === 'video' && !videoFrames) { skippedVideo += 1; continue; }
             try {
               if (item.kind === 'video') {
                 dataUrls.push(await downloadVideoAsFrameStrip(item.url, ctx.signal));
@@ -2025,8 +2039,21 @@ export function buildToolDefs() {
               }
             } catch (e) { failed.push(String(e?.message ?? e)); }
           }
-          if (!dataUrls.length) return err(`图片获取失败：${failed.join('；')}`);
-          const note = failed.length ? `（另有 ${failed.length} 张获取失败）` : '';
+          if (!dataUrls.length) {
+            // 全部被"关掉视频画面"挡下：这不是错误，说清为什么看不到（别再让它换 id 重试）；
+            // 但如果本来有图片且下载失败，也要一并说出来 —— 否则模型会以为这条消息里只有视频。
+            if (skippedVideo) {
+              const failedText = failed.length ? `；另有 ${failed.length} 张图片获取失败` : '';
+              return ok(`视频画面查看在设置里关着（消息类型 → 视频画面）：这条消息有 ${skippedVideo} 条视频没看${failedText}。要听里面的声音用 get_message_audio。`);
+            }
+            return err(`图片获取失败：${failed.join('；')}`);
+          }
+          // 有图看着、但视频被设置挡下时也要说清（否则模型以为这条消息只有这些图）
+          const note = [
+            failed.length ? `另有 ${failed.length} 张获取失败` : '',
+            skippedVideo ? `${skippedVideo} 条视频未看（消息类型页关着视频画面）` : ''
+          ].filter(Boolean).join('；');
+          const noteText = note ? `（${note}）` : '';
           // 这张图它之前收藏时已经理解过（库里有备注）→ 直接给出当时的理解，别让它重新描述画面
           const known = [];
           for (const m of (Array.isArray(entry.media) ? entry.media : [])) {
@@ -2049,7 +2076,7 @@ export function buildToolDefs() {
           const kindHint = videoCount
             ? `其中 ${videoCount} 条是视频：2×2 四宫格按时间顺序抽的 4 帧，阅读顺序左上→右上→左下→右下，黑格是填充不是画面内容。要听视频里说了什么再调 get_message_audio。`
             : '若是 2×2 四宫格：那是动图 GIF 按时间顺序抽的 4 帧，阅读顺序左上→右上→左下→右下，黑格是填充不是画面内容。先判断它想表达的情绪/态度：无语呆滞、嘲讽、卖萌、赞同、挑衅、摆烂、委屈…再针对态度回话，不要复述画面。';
-          return { content: imageParts(`消息 ${args.messageId} 的图片内容${note}${knownHint}（${kindHint}）：`, dataUrls) };
+          return { content: imageParts(`消息 ${args.messageId} 的图片内容${noteText}${knownHint}（${kindHint}）：`, dataUrls) };
         } catch (error) {
           return err(error?.message ?? error);
         }
