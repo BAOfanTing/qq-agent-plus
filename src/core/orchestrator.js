@@ -362,7 +362,8 @@ export class Orchestrator {
     emit = null,
     random = Math.random,
     getIdentityPilot = null,
-    getIncidentPilot = null
+    getIncidentPilot = null,
+    getPlugins = null
   }) {
     this.store = store;
     this.memory = memory;
@@ -371,6 +372,7 @@ export class Orchestrator {
     this.sessions = sessions;
     this.onebot = onebot;
     this.reminders = reminders;
+    this.getPlugins = typeof getPlugins === 'function' ? getPlugins : null;
     this.getGames = typeof getGames === 'function' ? getGames : null;
     this.random = random;
     this.getIdentityPilot = typeof getIdentityPilot === 'function' ? getIdentityPilot : (() => null);
@@ -1709,6 +1711,12 @@ export class Orchestrator {
       if (d.feature === 'friendProposal' && !friendProposalAvailable) return false;
       return true;
     });
+    // 插件工具：**不放进 buildToolDefs()**（那份是内置工具表，另有"每个工具都要有调度分类"
+    // 的契约，见 test/experimental-tool-scheduler.test.mjs），而是每轮现取现追加。
+    // 授权由注册表自己收口（总开关 / enabledIds / 进程状态 / manifest 声明，默认拒）——
+    // 内置工具的默认是"放行"（platformToolAllowed 对未登记工具返回 true），插件绝不能沿用那个默认。
+    const pluginToolDefs = this.getPlugins?.()?.toolDefsFor?.() ?? [];
+    if (pluginToolDefs.length) toolDefs.push(...pluginToolDefs);
     const openAiTools = toOpenAiTools(toolDefs);
     const systemPrompt = buildSystemPrompt({
       // 与【此刻状态】用同一个名字（群名片优先），否则同一次请求里会出现两个"你在群里的名字"

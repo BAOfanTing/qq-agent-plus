@@ -31,6 +31,7 @@ import { QzoneInteractionManager } from '../features/qzone-interactions.js';
 import { GroupDigestManager } from '../features/group-digest.js';
 import { GroupGameManager } from '../features/group-game.js';
 import { ReminderStore } from '../core/reminders.js';
+import { PluginRegistry } from '../plugins/registry.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from '../llm/llm.js';
 import { synthesizeSpeech } from '../llm/tts.js';
 import { generateImage, imageGenEffectiveHost, imageGenKeyStale, resolveImageGenAuth } from '../llm/image-gen.js';
@@ -577,6 +578,12 @@ export function createApp({
   let identityPilotError = '';
   // 定时提醒：落盘持久化（重启不丢），到点由编排器走主动唤醒让模型说出来
   const reminders = new ReminderStore();
+  const pluginRegistry = new PluginRegistry({
+    root: path.join(DATA_DIR, 'plugins'),   // 约定目录：数据目录不会被版本更新覆盖（见 docs/PLUGINS.md）
+    dataDir: DATA_DIR,
+    log: moduleLog('plugins'),
+    getConfig
+  });
   const orchestrator = new Orchestrator({
     store,
     memory,
@@ -586,6 +593,7 @@ export function createApp({
     onebot,
     reminders,
     getGames: () => groupGame,
+    getPlugins: () => pluginRegistry,
     emit,
     getIdentityPilot: () => identityPilot,
     getIncidentPilot: () => incidentPilot
@@ -1177,6 +1185,17 @@ export function createApp({
     if (stored.duplicate) return;
     if (!isSelf) identityPilot?.observeMessage(chatKey, stored);
     if (!isSelf) slangPilot?.observeMessage(chatKey, stored);
+    // 插件只读观察：给的是**已去重、已过 sanitizeUserText** 的正文与最小元信息（不给 media 等内部字段），
+    // 插件改不了内容、也拦不住消息（它没有回执通道）。只投非自己发的消息：v1 插件发不了言，
+    // 但等 `send` 能力开了之后，"自己发的也投"会变成自问自答的环。
+    if (!isSelf) {
+      pluginRegistry.observe({
+        chatKey, group: kind === 'group',
+        mid: stored.mid, ts: stored.ts,
+        senderId: stored.senderId, senderName: stored.senderName,
+        text: stored.text
+      });
+    }
     if (!isSelf) {
       Promise.resolve(stickers.autoCollect?.(chatKey, stored)).catch((error) =>
         log('[sticker] 自动收藏失败:', error?.message ?? error));
@@ -3739,6 +3758,7 @@ export function createApp({
     const previousDailyMoments = JSON.stringify(cfgNow.dailyMoments || {});
     const previousQzoneInteractions = JSON.stringify(cfgNow.qzoneInteractions || {});
     const previousIdentityPilot = JSON.stringify(cfgNow.identityPilot || {});
+    const previousPlugins = JSON.stringify(cfgNow.plugins || {});
     const previousPersona = JSON.stringify(cfgNow.persona || {});
     const previousSlangPilot = JSON.stringify(cfgNow.slangPilot || {});
     const previousIncidentPilot = JSON.stringify(cfgNow.incidentPilot || {});
@@ -3827,6 +3847,12 @@ export function createApp({
     }
     if (JSON.stringify(next.groupDigest || {}) !== JSON.stringify(cfgNow.groupDigest || {})) {
       groupDigest.reconfigure();
+    }
+    // 插件配置动了（总开关 / enabledIds / 插件自己的 settings）→ 重排：停掉再按新配置起。
+    // 不 await：控制台保存不该等插件起进程（宿主内部自己 try/catch 并记日志）。
+    if (JSON.stringify(next.plugins || {}) !== previousPlugins) {
+      Promise.resolve(pluginRegistry.reconfigure())
+        .catch((error) => log('[plugins] 重排失败：', error?.message ?? error));
     }
     if (JSON.stringify(next.incidentPilot || {}) !== previousIncidentPilot) {
       try {
@@ -4506,6 +4532,13 @@ export function createApp({
     groupGame.startLoop();   // 内部按配置判断是否推进；重启后从磁盘恢复进行中的局
     if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
     orchestrator.startScheduledWakeTicker();
+    // 插件宿主：起插件子进程（隔离不可用时按配置**拒绝加载**，理由写进日志与巡检）。
+    // 放在最后、且失败只记日志：插件是第三方扩展，它起不来不该影响控制台与机器人本体。
+    try {
+      await pluginRegistry.start();
+    } catch (error) {
+      log('[plugins] 插件宿主启动失败：', error);
+    }
     autoUpdate.start();
     log(`控制台已就绪：http://${serverCfg.host}:${port} (${getConfig().runtime.mode})`);
     // 协议端自动更新：首检延迟 2 分钟（别跟启动抢 IO），之后每 6 小时一轮；开关默认关
@@ -4541,6 +4574,8 @@ export function createApp({
     // 且群游戏 tick 会把 games.json 再写一遍（2026-10-07 复审 P3）。
     groupGame.stopLoop();
     groupDigest.stop();
+    // 插件子进程要在 onebot 关闭之前停掉：停机后不该再有插件在读消息
+    await pluginRegistry.stop();
     await qzoneInteractions.abort();
     autoUpdate.stop();
     identityPilot?.stop();

@@ -504,3 +504,33 @@ test('预算豁免只认"今天"的用量文件：昨天的超限不豁免今天
   assert.equal(item.ok, false, `昨天的用量文件不该豁免今天的停滞告警：${item.detail}`);
   assert.doesNotMatch(item.detail, /预算/, '这条不是"预算豁免"分支');
 });
+
+// 插件（v1）：巡检是**独立进程**，拿不到运行中注册表的状态 —— 它只查磁盘与配置：
+// 装了几个、授权几个、manifest 是否合法、这台机器能不能隔离。这条用例钉住其中三态。
+test('插件：总开关关着跳过；开着且 manifest 合法为绿；manifest 坏掉要报红并点名', async () => {
+  const dir = makeDataDir({});
+  const writeCfg = (plugins) => fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ plugins }));
+  const writeManifest = (body) => {
+    fs.mkdirSync(path.join(dir, 'plugins', 'demo'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'plugins', 'demo', 'plugin.json'), JSON.stringify(body));
+  };
+  const run = () => runHealthCheck({ dataDir: dir, fetchImpl: okFetch, statfs: okStatfs, notify: null });
+  const itemOf = (result) => result.checks.find((c) => c.name === 'plugins');
+
+  writeCfg({ enabled: false });
+  writeManifest({ id: 'demo', apiVersion: 1, name: '演示', version: '1.0.0', capabilities: ['tools'] });
+  const off = itemOf(await run());
+  assert.equal(off.ok, true, off.detail);
+  assert.match(off.detail, /总开关关着/);
+
+  writeCfg({ enabled: true, enabledIds: ['demo'], settings: {} });
+  const good = itemOf(await run());
+  assert.equal(good.ok, true, good.detail);
+  assert.match(good.detail, /已装 1 个，授权 1 个/);
+
+  writeManifest({ id: 'demo', apiVersion: 99, name: '演示', version: '1.0.0', capabilities: ['tools'] });
+  const bad = itemOf(await run());
+  assert.equal(bad.ok, false, 'manifest 不合法必须报出来（宿主会拒载，巡检不能装作没事）');
+  assert.match(bad.detail, /apiVersion 不匹配/);
+  assert.match(bad.detail, /demo/);
+});

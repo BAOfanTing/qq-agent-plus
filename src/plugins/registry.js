@@ -21,6 +21,23 @@ export const PLUGIN_TOOL_TIMEOUT_MS = 20000;
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
 
+/**
+ * 哪些周期任务到点了（纯函数，便于测"该不该触发"而不依赖定时器）。
+ * state 里存的是 `"<插件id>:<任务名>" -> 上次触发时间`；没有记录＝从没跑过＝该跑。
+ */
+export function dueSchedules(entries, state, now) {
+  const due = [];
+  for (const { id, schedule, running } of entries) {
+    if (!running) continue;
+    for (const item of schedule) {
+      const key = `${id}:${item.name}`;
+      if (now - (state.get(key) || 0) < item.everyMs) continue;
+      due.push({ id, key, name: item.name });
+    }
+  }
+  return due;
+}
+
 export class PluginRegistry {
   /**
    * @param root       插件根目录（约定 $DATA_DIR/plugins）
@@ -28,16 +45,19 @@ export class PluginRegistry {
    * @param log        宿主日志（与各 manager 同约定）
    * @param getConfig  取当前配置（测试可注入）
    */
-  constructor({ root, dataDir, log = () => {}, getConfig = () => ({}), hostFactory = null, timeouts = {}, probe = probeIsolation } = {}) {
+  constructor({ root, dataDir, log = () => {}, getConfig = () => ({}), hostFactory = null, timeouts = {}, probe = probeIsolation, scheduleIntervalMs = 15000 } = {}) {
     this.root = root;
     this.dataDir = dataDir;
     this.log = log;
     this.getConfig = getConfig;
     this.hostFactory = hostFactory;
     this.timeouts = timeouts;
+    this.scheduleIntervalMs = scheduleIntervalMs;   // 测试会调小；manifest 里 everyMs 下限是 1 分钟
     this.probe = probe;          // 注入点：测试用它验"隔离不可用时 fail-closed"
     this.hosts = new Map();      // id -> PluginHost
     this.discovered = [];        // [{ id, dir, manifest, error }]
+    this.scheduleState = new Map();   // "<id>:<任务名>" -> 上次触发时间（内存态：重启后重新计时）
+    this.scheduleTimer = null;
     this.started = false;
   }
 
@@ -104,6 +124,7 @@ export class PluginRegistry {
       const ok = await this.#startOne(item, cfg);
       if (ok) started.push(item.id);
     }
+    if (started.length) this.#startScheduleLoop();
     return { started, skipped: '' };
   }
 
@@ -131,9 +152,45 @@ export class PluginRegistry {
 
   async stop() {
     this.started = false;
+    this.#stopScheduleLoop();
     const hosts = [...this.hosts.values()];
     this.hosts.clear();
     await Promise.all(hosts.map((host) => host.stop().catch(() => {})));
+  }
+
+  /** 配置改了（开/关总开关、增删 enabledIds、改插件配置）之后重排：停掉再按新配置起。 */
+  async reconfigure() {
+    await this.stop();
+    return this.start();
+  }
+
+  /**
+   * 周期任务由**宿主**驱动（不是插件自己起定时器）：这样插件重启后周期不会丢，
+   * 也不会出现"插件崩了但定时器还在跑"。每 15 秒看一遍，到点的按 manifest 声明的 everyMs 触发。
+   */
+  #startScheduleLoop() {
+    this.#stopScheduleLoop();
+    this.scheduleTimer = setInterval(() => this.#runDueSchedules(), this.scheduleIntervalMs);
+    this.scheduleTimer.unref?.();
+  }
+
+  #stopScheduleLoop() {
+    if (this.scheduleTimer) clearInterval(this.scheduleTimer);
+    this.scheduleTimer = null;
+  }
+
+  #runDueSchedules() {
+    const cfg = this.#config();
+    if (!cfg.enabled) return;
+    const now = Date.now();
+    const entries = [...this.hosts]
+      .filter(([id]) => this.#shouldRun(id, cfg))
+      .map(([id, host]) => ({ id, running: host.state === 'running', schedule: host.manifest.schedule }));
+    for (const item of dueSchedules(entries, this.scheduleState, now)) {
+      const host = this.hosts.get(item.id);
+      this.scheduleState.set(item.key, now);   // 先记时间：任务的异步执行不该让下一个 tick 重复触发
+      void host.runSchedule(item.name);
+    }
   }
 
   /** 单个插件重载（改完代码/配置后不必重启整个机器人）。 */
@@ -229,7 +286,11 @@ export class PluginRegistry {
               description: item.manifest.description,
               capabilities: item.manifest.capabilities,
               tools: item.manifest.tools.map((t) => t.name),
-              schedule: item.manifest.schedule.map((s) => `${s.name}（每 ${Math.round(s.everyMs / 60000)} 分钟）`)
+              schedule: item.manifest.schedule.map((s) => ({
+                name: s.name,
+                everyMs: s.everyMs,
+                lastRunAt: this.scheduleState.get(`${item.id}:${s.name}`) || 0
+              }))
             }
             : null,
           error: item.error || '',

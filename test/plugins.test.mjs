@@ -294,3 +294,95 @@ test('注册表：工具名带插件前缀、作者文本过洗、结果过洗�
   cfg = { plugins: { enabled: false, enabledIds: ['good'], settings: {} } };
   assert.deepEqual(registry.toolDefsFor(), []);
 });
+
+test('周期任务：到点才触发（纯函数口径：从没跑过＝该跑，跑过要等够 everyMs）', async () => {
+  const { dueSchedules } = await import('../src/plugins/registry.js');
+  const entries = [
+    { id: 'good', running: true, schedule: [{ name: 'tick', everyMs: 60000 }] },
+    { id: 'down', running: false, schedule: [{ name: 'tick', everyMs: 60000 }] }
+  ];
+  const state = new Map();
+  const now = 1_000_000_000;
+  assert.deepEqual(dueSchedules(entries, state, now).map((d) => d.key), ['good:tick'],
+    '从没跑过 → 该跑；没在运行的插件不触发');
+  state.set('good:tick', now);
+  assert.deepEqual(dueSchedules(entries, state, now + 30_000), [], '没到周期不重复触发');
+  assert.deepEqual(dueSchedules(entries, state, now + 60_000).map((d) => d.key), ['good:tick'], '到点再触发');
+});
+
+test('注册表：观察消息真的投给了声明 observe 的插件，停用后立刻不投', async (t) => {
+  let cfg = { plugins: { enabled: true, enabledIds: ['good'], settings: {} } };
+  const registry = new PluginRegistry({ root: FIXTURES, dataDir, log: () => {}, getConfig: () => cfg });
+  t.after(() => registry.stop());
+  assert.deepEqual((await registry.start()).started, ['good']);
+  assert.equal(registry.observe({ chatKey: 'group:1', group: true, mid: 'm1', text: '喂' }), 1);
+  const host = registry.hosts.get('good');
+  assert.deepEqual(await host.callTool('counters', {}), { seen: 1, ticks: 0 },
+    '观察要真的送到插件里（不是只记了个数）');
+  cfg = { plugins: { enabled: true, enabledIds: [], settings: {} } };
+  assert.equal(registry.observe({ chatKey: 'group:1', group: true, mid: 'm2', text: '喂' }), 0);
+  assert.deepEqual(await host.callTool('counters', {}), { seen: 1, ticks: 0 }, '停用后不该再投递');
+});
+
+test('注册表：reconfigure 按新配置重排（改 enabledIds 后工具跟着变）', async (t) => {
+  let cfg = { plugins: { enabled: true, enabledIds: [], settings: {} } };
+  const registry = new PluginRegistry({ root: FIXTURES, dataDir, log: () => {}, getConfig: () => cfg });
+  t.after(() => registry.stop());
+  assert.deepEqual((await registry.start()).started, []);
+  assert.equal(registry.toolDefsFor().length, 0);
+  cfg = { plugins: { enabled: true, enabledIds: ['good'], settings: {} } };
+  assert.deepEqual((await registry.reconfigure()).started, ['good'], '重排后按新授权清单起插件');
+  assert.ok(registry.toolDefsFor().length > 0);
+  cfg = { plugins: { enabled: false, enabledIds: ['good'], settings: {} } };
+  await registry.reconfigure();
+  assert.equal(registry.toolDefsFor().length, 0, '总开关关掉后重排应把插件也停掉');
+});
+
+/** 等一个**异步**条件成立（上面的 waitFor 只认同步谓词：把 async 函数传进去它会立刻返回 true）。 */
+async function waitForAsync(predicate, timeoutMs = 5000, stepMs = 25) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+  return false;
+}
+
+test('周期任务：宿主定时器真的会把到点的任务推给插件，且不会重复推', async (t) => {
+  // 把检查间隔压到 40ms 才好在测试里观察；manifest 的 everyMs 下限仍是 1 分钟，
+  // 所以"第一次该触发、之后一分钟内不该再来一次"正好可以在这里钉住。
+  const registry = new PluginRegistry({
+    root: FIXTURES, dataDir, log: () => {},
+    getConfig: () => ({ plugins: { enabled: true, enabledIds: ['good'], settings: {} } }),
+    scheduleIntervalMs: 40
+  });
+  t.after(() => registry.stop());
+  assert.deepEqual((await registry.start()).started, ['good']);
+  const host = registry.hosts.get('good');
+  assert.equal(await waitForAsync(async () => (await host.callTool('counters', {})).ticks >= 1, 3000), true,
+    '到点后宿主该把 schedule 推下去（从没跑过＝立即算到点）');
+  const after = await host.callTool('counters', {});
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const later = await host.callTool('counters', {});
+  assert.equal(later.ticks, after.ticks, '一分钟内不该重复触发（先记时间再执行，防重入）');
+  assert.ok(registry.list().plugins.find((p) => p.id === 'good').manifest.schedule[0].lastRunAt > 0,
+    '控制台要能看到"上次跑是什么时候"');
+});
+
+// 入站投递点接在 **落库之后、唤醒之前**（锚点：这段在 console 的事件处理里，单测拿不到 ——
+// 与 settings 那批接线用例同一套做法：能锚的锚住，别让"接线掉了"全靠人眼）。
+test('入站投递的接线：位置在唤醒之前、只投别人的消息、内容是最小集', () => {
+  const app = fs.readFileSync(path.join(process.cwd(), 'src', 'console', 'app.js'), 'utf8');
+  const observeAt = app.indexOf('pluginRegistry.observe({');
+  assert.ok(observeAt > 0, '入站要把消息投给插件');
+  const wakeAt = app.indexOf('orchestrator.onIncoming(chatKey)');
+  assert.ok(wakeAt > 0 && observeAt < wakeAt, '投递要在唤醒之前（否则插件看到的消息已经进过模型了）');
+  // 只投别人发的：自己发的不投（v1 插件发不了言，但 send 能力开了之后会形成自问自答的环）
+  assert.match(app.slice(Math.max(0, observeAt - 200), observeAt), /if \(!isSelf\)/,
+    '投递点要在 if (!isSelf) 里');
+  // 内容是"已去重、已洗过"的最小集：内部字段（media/reply 等）不外发
+  for (const field of ['mid: stored.mid', 'senderId: stored.senderId', 'text: stored.text']) {
+    assert.ok(app.includes(field), `投递内容要包含 ${field}`);
+  }
+  assert.ok(!/pluginRegistry\.observe\(\{[^}]{0,400}media/.test(app), '不该把 media 等内部字段递给插件');
+});

@@ -28,11 +28,13 @@ node src/ops.js health-check            # 只巡检并输出 JSON（退出码 0=
 node src/ops.js health-check --confirm  # 允许在"连续 3 次失败"或"恢复"时私聊 admin.ownerUin
 ```
 
-9 项检查：控制台 `/healthz`、OneBot `get_status`、协议端版本（`protocol-version`：落后基线不算
+10 项检查：控制台 `/healthz`、OneBot `get_status`、协议端版本（`protocol-version`：落后基线不算
 不健康，明细里提示去控制台一键升级）、Docker 套接字可读写性（`docker-socket`，Issue #30）、
 入站处理水位（到期未处理或重试耗尽的入站消息；
 `runtime.mode=observe`、Agent 暂停、当日预算降级时自动跳过）、磁盘余量（< 1GB 报警）、
-`auto-update.json` 的 `status=failed`、部署中断标记 `.deploy-in-progress`、`messages.sqlite` 完整性检查。
+`auto-update.json` 的 `status=failed`、部署中断标记 `.deploy-in-progress`、`messages.sqlite` 完整性检查、
+插件（`plugins`：总开关关着就跳过；开着时报"装了几个/授权几个"，manifest 有问题逐条给原因；
+本机 Node 不支持权限隔离时也报红 —— 那种情况下插件不会被加载，见 docs/PLUGINS.md）。
 
 - 结果落在 `data/health.json`：`streaks` 记每类检查的连续失败数，`lastResults` 是最近一次明细。
 - **抑制抖动**：同一检查连续失败到**第 3 次**才发一条 QQ 私聊告警；恢复正常时补发一条"已恢复"。

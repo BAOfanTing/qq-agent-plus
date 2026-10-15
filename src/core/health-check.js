@@ -9,6 +9,8 @@ import { openDatabase } from './sqlite.js';
 import { budgetStatus } from './budget.js';
 import { todayKey } from './util.js';
 import { readJsonBounded } from './http-body.js';
+import { parsePluginManifest } from '../plugins/manifest.js';
+import { permissionFlagSupported } from '../plugins/isolation.js';
 import {
   SNOWLUMA_BASELINE_IMAGE, SNOWLUMA_MIN_RECOMMENDED, readComposeEnv, parseImage, compareVersions
 } from './snowluma-update.js';
@@ -85,6 +87,17 @@ function readRuntimePaused(dataDir) {
     return cfg?.runtime?.paused === true;
   } catch {
     return false;
+  }
+}
+
+/** 读插件段（只看开关与授权清单；此处不加载插件、不碰任何插件代码）。 */
+function readPluginConfig(dataDir) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+    const plugins = cfg?.plugins && typeof cfg.plugins === 'object' ? cfg.plugins : {};
+    return { enabled: plugins.enabled === true, requireIsolation: plugins.requireIsolation !== false, enabledIds: plugins.enabledIds || [] };
+  } catch {
+    return { enabled: false, requireIsolation: true, enabledIds: [] };
   }
 }
 
@@ -335,6 +348,41 @@ export async function runHealthCheck(opts = {}) {
     } finally { db.close(); }
   } catch (error) {
     add('sqlite-integrity', false, error?.message ?? String(error));
+  }
+
+  // ⑧ 插件（v1）：装了几个、授权几个、manifest 有没有问题、这台机器能不能隔离。
+  // 巡检是**独立进程**（ops health-check），拿不到运行中注册表的状态 —— 它只查磁盘与配置；
+  // "某个插件此刻是不是在跑"由控制台「插件」页回答（那是唯一有活注册表的地方）。
+  try {
+    const pluginCfg = readPluginConfig(dataDir);
+    if (pluginCfg.enabled !== true) add('plugins', true, '插件总开关关着（跳过）');
+    else {
+      const root = path.join(dataDir, 'plugins');
+      let entries = [];
+      try { entries = fs.readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()); }
+      catch { entries = []; }
+      const broken = [];
+      for (const entry of entries) {
+        const dir = path.join(root, entry.name);
+        let raw = null;
+        try { raw = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8')); }
+        catch { broken.push(`${entry.name}（读不到 plugin.json）`); continue; }
+        // 与宿主用**同一份**校验（plugins/manifest.js）：两处口径分裂的话，
+        // "巡检说没事、宿主却拒载"是最难受的一种状态。
+        const parsed = parsePluginManifest(raw, { dir });
+        if (!parsed.ok) broken.push(`${entry.name}（${parsed.error}）`);
+        else if (parsed.manifest.id !== entry.name) broken.push(`${entry.name}（manifest 的 id 与目录名不一致）`);
+      }
+      const cannotRun = !permissionFlagSupported() && pluginCfg.requireIsolation !== false;
+      const detail = [
+        `已装 ${entries.length} 个，授权 ${Array.isArray(pluginCfg.enabledIds) ? pluginCfg.enabledIds.length : 0} 个`,
+        broken.length ? `有问题：${broken.join('; ')}` : '',
+        cannotRun ? '本机 Node 不支持权限隔离，插件不会被加载（换 Node，或明确关掉 plugins.requireIsolation）' : ''
+      ].filter(Boolean).join('；');
+      add('plugins', broken.length === 0 && !cannotRun, detail);
+    }
+  } catch (error) {
+    add('plugins', false, error?.message ?? String(error));
   }
 
   const healthy = checks.every((c) => c.ok);

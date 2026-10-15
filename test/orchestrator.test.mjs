@@ -1971,6 +1971,53 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
     assert.equal(runner.firstPendingAt.has(chatKey), false, 'firstPendingAt 也要清掉');
   });
 
+  it('插件工具按注册表的授权进工具表，且真的能执行（默认拒）', async (t) => {
+    // 注册表在插件侧另有一整套门控（总开关 / enabledIds / 进程状态 / manifest 声明），
+    // 这里钉的是**编排器这一侧**的接线：注册表给什么就注入什么、执行走的是同一个 executeTool，
+    // 注册表收回授权（返回空数组）时工具立刻消失。
+    let defs = [];
+    const seen = [];
+    defs = [{
+      name: 'demo.echo',
+      description: '第三方插件给的只读工具（来自插件「demo」）',
+      parameters: { type: 'object', properties: { text: { type: 'string' } } },
+      pluginId: 'demo',
+      execute: async (_ctx, args) => { seen.push(args); return { content: JSON.stringify({ ok: true, echo: args.text }) }; }
+    }];
+    const { runner, append } = fixture(t, { getPlugins: () => ({ toolDefsFor: () => defs }) });
+    const bodies = [];
+    globalThis.fetch = async (_url, options) => {
+      const body = JSON.parse(options.body);
+      bodies.push(body);
+      if (bodies.length === 1) {
+        assert.ok(body.tools.some((tool) => tool.function.name === 'demo.echo'),
+          '注册表提供了插件工具，工具表里就该有它');
+        return Response.json({
+          choices: [{
+            message: {
+              tool_calls: [{
+                id: 'plug-1', type: 'function',
+                function: { name: 'demo.echo', arguments: JSON.stringify({ text: '来自群里的输入' }) }
+              }]
+            }
+          }],
+          usage: { prompt_tokens: 100, total_tokens: 110 }
+        });
+      }
+      return Response.json({ choices: [{ message: { content: 'done' } }], usage: { total_tokens: 120 } });
+    };
+    append(1, '在吗');
+    await runner.wake('group:1');
+    assert.deepEqual(seen, [{ text: '来自群里的输入' }], '插件工具必须真的被执行到');
+    assert.match(JSON.stringify(bodies[1].messages), /demo\.echo/, '执行结果要回到模型那一轮');
+
+    // 注册表收回授权（未启用 / 进程没跑 / 未声明）→ 下一轮就不该再出现
+    defs = [];
+    append(2, '还在吗');
+    await runner.wake('group:1');
+    assert.ok(!bodies[2].tools.some((tool) => tool.function.name === 'demo.echo'),
+      '注册表不给的时候，插件工具一个都不该出现');
+  });
 });
 
 describe('proactiveProbability（冷场开话题的发言概率）', () => {
@@ -1984,6 +2031,8 @@ describe('proactiveProbability（冷场开话题的发言概率）', () => {
     assert.equal(proactiveProbability(undefined), 0.25, '没配置才用默认 0.25');
     assert.equal(proactiveProbability('abc'), 0.25);
   });
+
+
 });
 
 process.on('exit', () => fs.rmSync(root, { recursive: true, force: true }));
