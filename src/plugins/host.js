@@ -33,7 +33,13 @@ function childEnv(base = process.env) {
   return env;
 }
 
-const delay = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.(); });
+/**
+ * 可等待的睡眠。**不能 unref**：unref 的定时器只是"我不阻止进程退出"，
+ * 当事件循环里只剩它时（子进程刚退干净就会这样）Node 会直接放弃等待 —— 表现为
+ * `stop()` 永远不返回 / "unsettled top-level await"（2026-10-15 服务器实测）。
+ * 规则：要 await 的定时器保持引用，后台循环（心跳 / 周期）才 unref。
+ */
+const delay = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 export class PluginHost {
   /**
@@ -224,6 +230,7 @@ export class PluginHost {
   async stop() {
     if (this.state === 'idle' || this.state === 'stopped') { this.state = 'stopped'; return; }
     this.stopping = true;
+    this.wakeSleep?.();          // 正在退避等待重启的话，立刻放行（别再等满退避）
     this.state = 'stopping';
     try { this.#notify(HOST_METHODS.shutdown, {}); } catch { /* 已经不在就算了 */ }
     const deadline = this.now() + this.timeouts.shutdownGraceMs;
@@ -276,6 +283,14 @@ export class PluginHost {
     this.heartbeatTimer = null;
   }
 
+  /** 可被打断的睡眠：stop() 调 this.wakeSleep?.() 立刻放行。 */
+  #interruptibleSleep(ms) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { this.wakeSleep = null; resolve(); }, ms);
+      this.wakeSleep = () => { clearTimeout(timer); this.wakeSleep = null; resolve(); };
+    });
+  }
+
   #kill(reason) {
     try { this.child?.kill('SIGKILL'); } catch { /* 已经退了 */ }
     if (reason) this.lastError = String(reason.message ?? reason);
@@ -300,7 +315,8 @@ export class PluginHost {
     this.restarts += 1;
     this.state = 'starting';
     this.log(`[plugin:${this.id}] 进程退出（code=${code}, signal=${signal}），${Math.round(wait / 1000)} 秒后重启（第 ${this.restarts} 次）`);
-    await delay(wait);
+    // 可被打断的退避：停机时不该为一个后台重试干等（最多 15 秒），stop() 会叫醒它
+    await this.#interruptibleSleep(wait);
     if (this.stopping) { this.state = 'stopped'; return; }
     const ok = await this.start();
     if (!ok) this.state = 'failed';
@@ -324,12 +340,12 @@ export class PluginHost {
     if (!this.#alive()) return Promise.reject(Object.assign(new Error(`插件未在运行（${this.id}）`), { code: 'E_PLUGIN_DOWN' }));
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
+      // 同上：这个定时器的职责就是"到点把 promise 结清"，必须保持引用
       const timer = setTimeout(() => {
         this.pending.delete(id);
         this.stats.timeouts += 1;
         reject(Object.assign(new Error(`${method} 超时（${timeoutMs}ms）`), { code: 'E_TIMEOUT' }));
       }, timeoutMs);
-      timer.unref?.();
       this.pending.set(id, { resolve, reject, timer, method });
       this.child.stdin.write(encodeMessage({ id, method, params }), (error) => {
         if (!error) return;
