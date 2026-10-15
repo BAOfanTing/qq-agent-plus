@@ -386,3 +386,32 @@ test('入站投递的接线：位置在唤醒之前、只投别人的消息、�
   }
   assert.ok(!/pluginRegistry\.observe\(\{[^}]{0,400}media/.test(app), '不该把 media 等内部字段递给插件');
 });
+
+// 控制台那一侧：路由与页面接线的锚点（这些要通过真起服务器才测得到，与 settings 那批同一套做法）。
+test('控制台接线：路由的守卫与设置页的分区都在（锚点）', () => {
+  const app = fs.readFileSync(path.join(process.cwd(), 'src', 'console', 'app.js'), 'utf8');
+  for (const route of ['/api/plugins', '/api/plugins/index', '/api/plugins/master',
+    '/api/plugins/toggle', '/api/plugins/reload', '/api/plugins/install', '/api/plugins/uninstall']) {
+    assert.ok(app.includes(`'${route}'`), `缺少路由 ${route}`);
+  }
+  // 卸载是破坏性操作：必须有 confirm 门槛（与全站口径一致）
+  assert.match(app, /卸载插件需要 body\.confirm === true/);
+  // enabledIds 是数组：清空/删除必须 __replace__，否则深合并删不掉键（"停用不掉"）
+  assert.match(app, /enabledIds: \{ __replace__: next \}/);
+  // 从索引装时以索引里的 tarball/sha256 为准（不信请求体里那份）
+  assert.match(app, /url = hit\.tarball;/);
+  assert.match(app, /sha256 = hit\.sha256;/);
+  // 启停/装卸都要重排（否则"点了没反应"）
+  assert.ok((app.match(/pluginRegistry\.reconfigure\(\)/g) || []).length >= 4, '各动作后都要重排');
+
+  const settings = fs.readFileSync(path.join(process.cwd(), 'ui', 'pages', 'settings.js'), 'utf8');
+  assert.ok(settings.includes("['plugins', '插件']"), '侧栏要有入口');
+  assert.ok(settings.includes('plugins: () => renderPluginsSection(c)'), '分区路由要接上');
+  const page = fs.readFileSync(path.join(process.cwd(), 'ui', 'pages', 'plugins.js'), 'utf8');
+  assert.ok(page.includes('id="settings-plugins"'), '分区要有自己的锚点 id');
+  assert.ok(page.includes('第三方代码'), '信任声明要出现在界面上（不能只写在文档里）');
+  assert.ok(page.includes('拦不住网络'), '如实说明拦不住网络（Node 权限模型不管网络）');
+  assert.ok(page.includes('if (delegationBound) return;'), '委托只能绑一次（#settings-form 长期存在，重绑会一次点击发两次请求）');
+  const html = fs.readFileSync(path.join(process.cwd(), 'ui', 'index.html'), 'utf8');
+  assert.ok(html.includes('/pages/plugins.js'), '新页面模块要在 index.html 里加载');
+});

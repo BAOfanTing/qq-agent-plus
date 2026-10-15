@@ -21,6 +21,7 @@ import {
 } from '../core/format.js';
 import { refreshIntervalMs, state } from '../core/state.js';
 import { loadChats, renderChatSection } from './chat.js';
+import { renderPluginsSection } from './plugins.js';
 import {
   renderDailyMomentsSection, renderGroupGameSection, renderQzoneInteractionSection, renderRemindersSection
 } from './moments.js';
@@ -74,7 +75,7 @@ function renderSettingsSidebar() {
     ['模型与服务', [['api', '模型 API'], ['search', '搜索服务'], ['asr', '语音转文字'], ['token-saver', '省 Token']]],
     ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
     ['平台', [['platform', '平台能力'], ['onebot', 'OneBot']]],
-    ['系统', [['appearance', '外观'], ['desktop', '系统']]]
+    ['系统', [['appearance', '外观'], ['plugins', '插件'], ['desktop', '系统']]]
   ];
   sidebar.innerHTML = `
     <div class="settings-runstate">
@@ -200,6 +201,7 @@ function renderSettingsSection(c) {
     persona: () => renderPersonaSection(c),
     allow: () => renderAllowSection(c),
     chat: () => renderChatSection(c),
+    plugins: () => renderPluginsSection(c),
     messageTypes: () => renderMessageTypesSection(c),
     platform: () => renderPlatformSection(c),
     appearance: () => renderAppearanceBlock(c),

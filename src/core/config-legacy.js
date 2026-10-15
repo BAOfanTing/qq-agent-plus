@@ -584,6 +584,9 @@ export const DEFAULT_CONFIG = {
     // 本机 Node 不支持权限模型（--permission）时是否拒绝加载插件。默认 true = fail-closed：
     // 没有隔离就不执行第三方代码 —— 至于"没有隔离"这件事本身会在控制台与巡检里说明白。
     requireIsolation: true,
+    // 官方插件索引（一份 JSON）：控制台「插件」页据此列出可一键安装的插件。
+    // 默认指向本仓库的索引；自建索引改这里即可（拉取走 safe-fetch，内网被拦）。
+    indexUrl: 'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/plugins/index.json',
     // 每个插件自己的配置段：{ "<插件id>": { … } }（插件通过 cap.config.get 只能读自己这段）
     settings: {}
   },

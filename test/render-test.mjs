@@ -3248,6 +3248,76 @@ try {
       + (okSync ? '' : ' -> ' + JSON.stringify(mismatch)));
   }
 
+  // ── 设置 → 插件：分区渲染 + 列表来自接口 + 点「启用」打到 /api/plugins/toggle（2026-10-15）──
+  //    这一页的动作**不走保存按钮**（点了就生效），所以这里验的是"渲染 + 委托 + 请求体"；
+  //    "插件页不该写出任何配置键"由下面的「保存分支」用例顺带保证（它查跨页越界）。
+  {
+    const originalFetch = sandbox.fetch;
+    const posts = [];
+    const indexEntry = {
+      id: 'demo', name: '示例插件', version: '1.0.0', description: '一句话说明',
+      capabilities: ['tools'], tarball: 'https://example.com/demo.tar.gz', sha256: 'a'.repeat(64)
+    };
+    const installedState = {
+      enabled: true, requireIsolation: true, indexUrl: 'https://example.com/index.json',
+      isolation: { supported: true, fs: true, childProcess: true, worker: true, net: false, env: false },
+      plugins: [{
+        id: 'demo', installed: true, enabled: false, error: '',
+        manifest: {
+          name: '示例插件', version: '1.0.0', description: '',
+          capabilities: ['tools', 'observe'], tools: ['ping', 'seen'], schedule: []
+        },
+        status: null
+      }]
+    };
+    sandbox.fetch = async (url, options = {}) => {
+      const target = String(url);
+      const method = String(options?.method || 'GET').toUpperCase();
+      if (method === 'POST') {
+        posts.push({ target, body: options.body ? JSON.parse(options.body) : null });
+        return { ok: true, status: 200, json: async () => ({ ok: true, ...installedState }) };
+      }
+      if (target.includes('/api/plugins/index')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true, plugins: [indexEntry] }) };
+      }
+      if (target.includes('/api/plugins')) {
+        return { ok: true, status: 200, json: async () => ({ ...installedState }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    };
+    vm.runInContext("state.settingsSection = 'plugins';", ctx);
+    await vm.runInContext('renderSettings()', ctx);
+    // 两张表是异步填的（bindPluginsSection → loadPluginsSection），等两拍让桩的 Promise 落地
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const sectionHtml = String(document.getElementById('settings-form')?.innerHTML || '');
+    const installedHtml = String(document.getElementById('plugins-installed')?.innerHTML || '');
+    const indexHtml = String(document.getElementById('plugins-index')?.innerHTML || '');
+    const isolationText = String(document.getElementById('plugins-isolation')?.textContent || '');
+    const rendered = sectionHtml.includes('id="settings-plugins"')
+      && installedHtml.includes('示例插件')
+      && installedHtml.includes('data-plugin-action="enable"')
+      && installedHtml.includes('给模型加工具')
+      && indexHtml.includes('已安装')                     // 索引里已装的那项显示"已安装"而不是再给个安装按钮
+      && sectionHtml.includes('第三方代码')
+      && isolationText.includes('网络');                  // 如实说明拦不住网络
+
+    // 点「启用」：走 #settings-form 上的事件委托 → POST /api/plugins/toggle
+    const enableBtn = { dataset: { pluginAction: 'enable', pluginId: 'demo' }, disabled: false };
+    const delegate = (document.getElementById('settings-form')?._listeners?.click || [])[0];
+    let toggled = false;
+    if (delegate) {
+      await delegate({ target: { closest: () => enableBtn } });
+      toggled = posts.some((entry) => entry.target.includes('/api/plugins/toggle')
+        && entry.body?.id === 'demo' && entry.body?.enabled === true);
+    }
+    sandbox.fetch = originalFetch;
+    const ok = rendered && toggled;
+    ok ? pass++ : fail++;
+    console.log('  ' + (ok ? 'OK   ' : 'FAIL ')
+      + '设置页插件分区（渲染=' + rendered + '，点启用→toggle=' + toggled + '）'
+      + (ok ? '' : ' -> 委托=' + Boolean(delegate) + ' posts=' + JSON.stringify(posts)));
+  }
+
   // ── 保存分支回归（2026-09-28 审查 P1）：控件在哪个页面，patch 就得在哪一段构造 ——
   //    曾经把 tts / groupGame 的保存块放进 moments 分支，等于在看得见控件的页面上点保存什么都不会存。
   {

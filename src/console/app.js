@@ -58,7 +58,8 @@ import {
   inactiveIncidentPilotStatus,
   incidentDatabasePath
 } from '../pilots/incident-pilot.js';
-import { safeFetchBinary } from '../llm/safe-fetch.js';
+import { safeFetch, safeFetchBinary } from '../llm/safe-fetch.js';
+import { installPlugin, uninstallPlugin, fetchPluginIndex } from '../plugins/install.js';
 // 平台能力门控的元数据（键→标签/工具/默认取向/配额默认）：控制台不手抄第二份，防漂移
 import {
   PLATFORM_DEFAULT_OFF, PLATFORM_GATE_LABELS, PLATFORM_QUOTA_DEFAULTS, PLATFORM_TOOL_GATES,
@@ -2497,6 +2498,108 @@ export function createApp({
     } catch (error) {
       return json(res, error?.httpStatus || 400, { error: String(error?.message ?? error) });
     }
+  });
+
+  // ── 插件（v1）：列表 / 索引 / 安装 / 卸载 / 启停 / 重载 ───────────────────────────
+  // 插件的这些动作**全走这里、不进设置页的保存分支**：装/卸/启停要起停子进程并重排工具表，
+  // 是运行时动作而不是配置表单；设置页那一栏只负责渲染与调用这些接口。
+  let pluginIndexCache = { url: '', at: 0, list: [] };
+  const loadPluginIndex = async () => {
+    const url = String(getConfig().plugins?.indexUrl || '').trim();
+    if (!url) return [];
+    if (pluginIndexCache.url === url && Date.now() - pluginIndexCache.at < 10 * 60_000) return pluginIndexCache.list;
+    // 索引也是用户填的 URL → 走 safe-fetch（内网/SSRF/体积/超时都在里面）
+    const list = await fetchPluginIndex({ url, fetchText: safeFetch, log: moduleLog('plugins') });
+    pluginIndexCache = { url, at: Date.now(), list };
+    return list;
+  };
+  const pluginError = (res, error, status = 400) =>
+    json(res, status, { ok: false, code: error?.code || '', error: String(error?.message ?? error) });
+
+  router.add('GET', '/api/plugins', async (_req, res) =>
+    json(res, 200, { ...pluginRegistry.list(), indexUrl: String(getConfig().plugins?.indexUrl || '') }));
+
+  router.add('GET', '/api/plugins/index', async (_req, res) => {
+    try { return json(res, 200, { ok: true, plugins: await loadPluginIndex() }); }
+    catch (error) { return pluginError(res, error, 502); }
+  });
+
+  router.add('POST', '/api/plugins/master', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      updateConfig({ plugins: { enabled: body.enabled === true } });
+      await pluginRegistry.reconfigure();
+      auditWrite('plugins.master', 'plugins.enabled', { req, enabled: body.enabled === true });
+      return json(res, 200, { ok: true, ...pluginRegistry.list() });
+    } catch (error) { return pluginError(res, error); }
+  });
+
+  router.add('POST', '/api/plugins/toggle', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    try {
+      const current = Array.isArray(getConfig().plugins?.enabledIds) ? getConfig().plugins.enabledIds : [];
+      const next = body.enabled === true
+        ? [...new Set([...current, id])]
+        : current.filter((value) => value !== id);
+      // enabledIds 是数组：必须 __replace__，否则普通深合并删不掉键（清不干净就"停用不掉"）
+      updateConfig({ plugins: { enabledIds: { __replace__: next } } });
+      // 单独启一个插件时把总开关一起打开：否则用户点了"启用"却什么都没发生（默认全关）
+      if (body.enabled === true && getConfig().plugins?.enabled !== true) {
+        updateConfig({ plugins: { enabled: true } });
+      }
+      await pluginRegistry.reconfigure();
+      auditWrite('plugins.toggle', `plugins:${id}`, { req, enabled: body.enabled === true });
+      return json(res, 200, { ok: true, enabledIds: next, ...pluginRegistry.list() });
+    } catch (error) { return pluginError(res, error); }
+  });
+
+  router.add('POST', '/api/plugins/reload', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    try {
+      const result = await pluginRegistry.reload(id);
+      if (!result.ok) return json(res, 400, { ok: false, error: result.error || '重载失败' });
+      return json(res, 200, { ok: true, running: result.running === true, ...pluginRegistry.list() });
+    } catch (error) { return pluginError(res, error); }
+  });
+
+  router.add('POST', '/api/plugins/install', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const id = String(body.id || '').trim();
+      let url = String(body.url || '').trim();
+      let sha256 = String(body.sha256 || '').trim();
+      if (!url) {
+        if (!id) return json(res, 400, { ok: false, error: '要么给索引里的 id，要么给 url + sha256' });
+        const hit = (await loadPluginIndex()).find((item) => item.id === id);
+        if (!hit) return json(res, 404, { ok: false, error: `索引里没有 ${id}` });
+        // 以索引为准取地址与校验和（不信请求体里那份，索引是唯一真源）
+        url = hit.tarball;
+        sha256 = hit.sha256;
+      }
+      const result = await installPlugin({
+        id, url, sha256, dataDir: DATA_DIR, fetchBinary: safeFetchBinary, log: moduleLog('plugins')
+      });
+      auditWrite('plugins.install', `plugins:${result.id}`, { req, version: result.version, upgraded: result.upgraded });
+      // 装完重排一次：让控制台立刻看到新插件（默认未授权，不会自动跑）
+      await pluginRegistry.reconfigure();
+      return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });
+    } catch (error) { return pluginError(res, error); }
+  });
+
+  router.add('POST', '/api/plugins/uninstall', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    // 破坏性操作统一 confirm 门槛（与全站口径一致）
+    if (body?.confirm !== true) return json(res, 409, { ok: false, error: '卸载插件需要 body.confirm === true' });
+    const id = String(body.id || '').trim();
+    try {
+      const result = uninstallPlugin({ id, dataDir: DATA_DIR });
+      auditWrite('plugins.uninstall', `plugins:${id}`, { req });
+      await pluginRegistry.reconfigure();
+      return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });
+    } catch (error) { return pluginError(res, error); }
   });
 
   router.add('GET', '/api/memory-files', async (req, res) => {

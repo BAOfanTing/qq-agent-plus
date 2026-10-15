@@ -48,6 +48,24 @@
 | 省 Token 模式 | `src/core/token-saver.js`（新增）、`src/core/config-legacy.js`、`src/llm/prompt.js`、`src/core/orchestrator.js`、`src/memory/memory-global.js`、`src/features/daily-moments.js`、`src/features/qzone-interactions.js`、`ui/app.js`、`src/console/app.js` | 「设置 -> 省 Token」三档，只给上下文档位条数、单次运行轮数与预算、交接/印象注入字符数、表情清单条数**夹上限**，不改写用户设置；关掉即恢复原样 | 本仓库新增 |
 | 关闭上游调试探针 | `src/*.js`、`ui/*.js` | 上游作者留在源码里的调试上报（指向其开发机私网地址）全部关掉 | `apply-disable-upstream-debug.sh` |
 
+**v1 第三段（一键安装与控制台页面，同日）**：新增 `src/plugins/install.js` 与「设置 → 插件」页。
+装的是**别人写的代码**，所以每一步都能挡人：下载走 safe-fetch（内网/体积/超时）、**sha256 必填**
+（不给就拒绝装 —— "从网上抓段代码就跑"至少要有个可核对的内容锚点）、**自己解析 tar**
+（不 shell 出去调 `tar`，好逐条拒绝目录穿越/绝对路径/符号链接/硬链接/设备节点，pax 长路径头
+给出重打指引）、先解到 staging 校验 manifest（与宿主同一份校验）再**原子换入**（升级时旧版挪到
+`.backup-<id>-<时间戳>/`，换入失败原样放回）。卸载只挪代码目录、保留 `plugin-data/<id>/`。
+控制台那一页只负责渲染与调用 `/api/plugins/*`（装/卸/启停/重载都在服务端收口），
+**不进设置页的保存分支**——那是运行时动作而不是配置表单；「启用」与总开关的关系也写明
+（装上 ≠ 授权，单独启用会把总开关一起打开，否则点了没反应）。官方索引是仓库里的一份
+`plugins/index.json`（id/tarball/sha256 三件套，缺项跳过并留痕）。
+
+验证：新增 9 条安装器用例（tar 解析的正反例、sha256 三态、装/升级/回滚/staging 清理、
+体积上限、卸载保留数据、索引容错）+ 渲染用例（分区渲染、列表来自接口、点「启用」打到 toggle）；
+7 条变异全部咬住（跳过 sha 校验、放开目录穿越、放开条目类型、不要求 sha、卸载顺手删数据、
+去掉 confirm 门槛、去掉委托去重）。新增页面模块与分区接线也一并被本仓既有的
+`ui-module-graph` / `layout` / `ui-markdown-stars` 三道守卫检查过（导出形状、相对 import、
+HTML 里的 markdown 星号）。
+
 ## 未发布 · 插件机制（v1 第一段：宿主骨架）（2026-10-15，issue #37）
 
 **尚未发版**。社区反馈（Orange-hash，issue #37）希望能接入自己的功能插件。这一版先落**宿主骨架**：
