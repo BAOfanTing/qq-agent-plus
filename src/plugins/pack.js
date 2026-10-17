@@ -148,7 +148,11 @@ export function packPluginDir({ dir, outDir = null, now = () => Date.now() } = {
       throw fail('E_ARGS', `--out（${out}）在插件目录里面：下次打包会把这次打出的包也装进去（改成插件目录外，例如 ../dist）`);
     }
   }
-  if (!fs.existsSync(path.join(root, 'plugin.json'))) throw fail('E_ARGS', `${root} 里没有 plugin.json`);
+  // 大小写必须精确：Windows/macOS 的文件系统不区分大小写，`Plugin.json` 在本机读得到、
+  // 打进包里也能过自测，而 Linux 用户装的时候直接 E_MANIFEST（2026-10-17 审查 P3）
+  if (!fs.readdirSync(root).includes('plugin.json')) {
+    throw fail('E_ARGS', `${root} 里没有 plugin.json（注意文件名大小写：Linux 上 Plugin.json 不算）`);
+  }
   let raw = null;
   try { raw = JSON.parse(fs.readFileSync(path.join(root, 'plugin.json'), 'utf8')); }
   catch (error) { throw fail('E_MANIFEST', `plugin.json 读不了：${error?.message ?? error}`); }

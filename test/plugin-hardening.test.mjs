@@ -414,6 +414,17 @@ test('撤回名单：id@版本 只撤那一个版本（发新版修复后老版�
   assert.deepEqual((await registry.reconfigure()).started, ['good']);
 });
 
+test('撤回名单：版本写法不同也要命中（1.0 / v1.0.0 / 1.0.0+build 都等于 1.0.0）', async (t) => {
+  // 索引/配置是第三方内容，版本可能写成 1.0 或带构建元数据；按字符串精确比较时，
+  // 这样一条撤回规则对已安装的 1.0.0 完全不起作用（2026-10-17 审查 P2）
+  for (const rule of ['good@1.0', 'good@v1.0.0', 'good@1.0.0+build']) {
+    const cfg = { plugins: { enabled: true, enabledIds: ['good'], revoked: [rule] } };
+    const registry = new PluginRegistry({ root: FIXTURES, dataDir, log: () => {}, getConfig: () => cfg });
+    t.after(() => registry.stop());
+    assert.deepEqual((await registry.start()).started, [], `${rule} 应命中夹具的 1.0.0`);
+  }
+});
+
 // ── 发布者签名 ──────────────────────────────────────────────────────────────
 test('发布者签名：登记过公钥就必须验签通过才许装；没登记公钥照装但标"未验证"', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-plugin-sign-'));

@@ -36,10 +36,15 @@ const goodbye = (ok, payload) => { out(payload); process.exit(ok ? 0 : 1); };
 
 let packed = null;
 try {
+  // 给了 --index 时默认落到索引仓库的 plugins/packages/（verify-index 要求仓库里有这份产物）；
+  // 没给才落在插件目录旁边（作者一眼能找到）。--out 永远优先。
+  const indexFile = flag('index');
+  const defaultOut = indexFile
+    ? path.join(path.dirname(path.resolve(indexFile)), 'packages')
+    : path.dirname(path.resolve(dir));
   packed = packPluginDir({
     dir,
-    // 默认把包落在插件目录的**旁边**（作者一眼能找到），--out 可改
-    outDir: path.resolve(flag('out') || path.dirname(path.resolve(dir)))
+    outDir: path.resolve(flag('out') || defaultOut)
   });
 } catch (error) {
   goodbye(false, { ok: false, error: error?.message ?? String(error), code: error?.code || '' , text: `✗ 打包失败：${error?.message ?? error}` });
@@ -120,6 +125,7 @@ if (/一句话说清/.test(String(entry.description || ''))) placeholders.push('
 if (/^<.*>$/.test(String(entry.homepage || ''))) placeholders.push('homepage 还是 <占位符>');
 if (/^<.*>$/.test(String(entry.author || ''))) placeholders.push('author 还是 <占位符>');
 if (/^<.*>$/.test(String(entry.minVersion || ''))) placeholders.push('minVersion 还是 <占位符>（它会原样写进索引，宿主会把这个插件判成"装不了"）');
+if (/^<.*>$/.test(String(entry.downloadUrl || ''))) placeholders.push('downloadUrl 还是 <占位符>（没有 --base-url / --tag 时生成不出来，写进索引也没法装）');
 
 const text = [
   selfTest.ok ? '✓ 自测：这个包装得上（用宿主自己的安装器在临时目录里真装了一次）' : `✗ 自测没过：${selfTest.error}`,

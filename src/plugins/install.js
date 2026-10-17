@@ -9,6 +9,7 @@
 //   · 先解到 staging 目录、校验 manifest（与宿主同一份校验）、再原子换入；换入前把旧版本挪到
 //     备份目录，失败原样放回（"装坏了但旧版也没了"是最难受的失败模式）。
 import crypto from 'node:crypto';
+import { versionRule } from './version.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -222,7 +223,11 @@ export async function installPlugin({
   const staging = fs.mkdtempSync(path.join(pluginsRoot, `.staging-${requestedId || 'plugin'}-`));
   try {
     extractEntries(entries, staging);
-    // manifest 必须合法、且 id 与目录名一致（与宿主同一份校验：两处口径分裂会出人命）
+    // manifest 必须合法、且 id 与目录名一致（与宿主同一份校验：两处口径分裂会出人命）。
+    // 先按**精确大小写**确认文件存在：Windows 上 `Plugin.json` 也能读到，装完到 Linux 就散架。
+    if (!fs.readdirSync(staging).includes('plugin.json')) {
+      throw fail('E_MANIFEST', '包里没有 plugin.json（文件名大小写必须完全一致）');
+    }
     let raw = null;
     try { raw = JSON.parse(fs.readFileSync(path.join(staging, 'plugin.json'), 'utf8')); }
     catch { throw fail('E_MANIFEST', '包里没有 plugin.json（或不是合法 JSON）'); }
@@ -340,6 +345,27 @@ export function rollbackPlugin({ id, dataDir, now = () => Date.now(), log = () =
   }
   let version = '';
   try { version = JSON.parse(fs.readFileSync(path.join(target, 'plugin.json'), 'utf8')).version || ''; } catch { /* 读不到就算了 */ }
+  // install.json 是"现在装的到底是哪一份"的事实记录：回退后必须跟着改，否则控制台的
+  // 「出处与指纹」会继续显示被回退掉的那个版本（2026-10-17 审查 P3）。
+  // 备份目录里没有原始包，指纹无法重算 —— 清空并在来源里注明回退自哪个版本。
+  try {
+    const recordFile = path.join(dataDir, 'plugin-data', name, 'install.json');
+    const old = JSON.parse(fs.readFileSync(recordFile, 'utf8'));
+    writePluginInstallInfo({
+      dataDir,
+      id: name,
+      source: `${String(old.source || '未知来源').slice(0, 90)}（回退自 ${String(old.version || '未知版本')}）`,
+      url: old.url,
+      sha256: '',
+      version,
+      hostVersion: old.hostVersion,
+      apiVersion: old.apiVersion,
+      publisher: old.publisher,
+      signatureVerified: old.signatureVerified === true,
+      upgraded: true,
+      now: clock
+    });
+  } catch { /* 没有记录或读不出来：不影响回退本身 */ }
   log(`[plugins] ${name} 已回退到 ${latest}（回退掉的版本留在 ${path.basename(aside)}）`);
   return { ok: true, id: name, rolledBackTo: latest, version, removedDir: path.basename(aside) };
 }
@@ -520,8 +546,10 @@ export function createIndexRevokedCache() {
   const rulesOf = (entry) => {
     if (!entry?.id) return [];
     const out = [];
-    if (entry.revoked) out.push(entry.version ? `${entry.id}@${entry.version}` : String(entry.id));
-    for (const version of entry.revokedVersions || []) out.push(`${entry.id}@${version}`);
+    // 索引里的版本可能写成 1.0 / v1.0.0 / 1.0.0+build；与注册表比较前统一规范化，
+    // 否则一条 demo@1.0 的撤回规则对已安装的 1.0.0 完全不起作用（2026-10-17 审查 P2）
+    if (entry.revoked) out.push(versionRule(entry.id, entry.version));
+    for (const version of entry.revokedVersions || []) out.push(versionRule(entry.id, version));
     return out;
   };
 
@@ -542,10 +570,19 @@ export function createIndexRevokedCache() {
         for (const entry of Array.isArray(result.plugins) ? result.plugins : []) next.push(...rulesOf(entry));
         perSource.set('', next);
       } else {
+        // 按 **URL** 做键而不是展示名：两个来源都叫「官方索引」（默认源 + 一个同名 fork）
+        // 时，用名字做键会让后者的规则永远覆盖/丢失前者（2026-10-17 审查 P2）
+        const configured = new Set(reports.map((item) => String(item.url || item.name || '')));
+        for (const key of [...perSource.keys()]) {
+          if (key && !configured.has(key)) perSource.delete(key);   // 来源被移除：规则一并失效
+        }
         for (const item of reports) {
           if (!item.ok) continue;                        // 这个来源这次没拉到：保住它上次的规则
-          const key = String(item.name || item.url || '');
-          const found = fresh.find((entry) => String(entry.source || '') === key);
+          const key = String(item.url || item.name || '');
+          // 新报告带 url；旧调用方只有 source。优先按 url 匹配，缺失时退回名字
+          const found = fresh.find((entry) => (entry.url
+            ? String(entry.url) === key
+            : String(entry.source || '') === String(item.name || '')));
           perSource.set(key, found ? found.rules.slice() : []);
         }
       }
@@ -705,7 +742,8 @@ export function normalizePluginIndex(parsed, { apiVersion = PLUGIN_API_VERSION, 
 /**
  * 拉一份索引（一份 JSON）。
  * 用 safe-fetch：索引地址是用户填的 URL，内网/SSRF/体积/超时都要挡住（与 web_fetch 同一套守卫）。
- */export async function fetchPluginIndex({ url, name = '', fetchText, log = () => {}, hostVersion = '', apiVersion = PLUGIN_API_VERSION } = {}) {
+ */
+export async function fetchPluginIndex({ url, name = '', fetchText, log = () => {}, hostVersion = '', apiVersion = PLUGIN_API_VERSION } = {}) {
   const grab = fetchText;   // 同上：别直接调用解构参数的默认值
   const target = String(url ?? '').trim();
   if (!target) throw fail('E_ARGS', '没有配置索引地址');
@@ -738,40 +776,55 @@ export async function fetchPluginIndexes({
   const report = [];
   const revoked = [];
   const owner = new Map();
-  for (const item of sources) {
-    const url = String(item?.url ?? '').trim();
-    const name = String(item?.name ?? '').trim() || url;
-    if (!url) continue;
+  const prepared = sources
+    .map((item) => ({
+      url: String(item?.url ?? '').trim(),
+      name: String(item?.name ?? '').trim() || String(item?.url ?? '').trim()
+    }))
+    .filter((item) => item.url);
+  // 并发拉取：串行时 N 个来源的最坏耗时是 N ×（DNS 5s + 读超时 20s），点一下要等好几十秒；
+  // 单个来源的失败互不影响，合并仍在下面**按配置顺序**做（顺序 = 优先级，不能乱）
+  const outcomes = await Promise.all(prepared.map(async (item) => {
     try {
-      const { entries, skipped: badEntries } = await fetchPluginIndex({ url, name, fetchText, log, hostVersion, apiVersion });
-      skipped.push(...badEntries);
-      // 撤回规则要在**去重之前**收：同一 id 在多份索引里出现时，后一份的条目会落选，
-      // 但它在自己那份索引里标的撤回仍然算数（否则"重名"就成了一条绕过下架的路）。
-      const rules = [];
-      for (const entry of entries) {
-        if (entry.revoked) rules.push(entry.version ? `${entry.id}@${entry.version}` : entry.id);
-        for (const version of entry.revokedVersions || []) rules.push(`${entry.id}@${version}`);
-      }
-      revoked.push({ source: name, rules: [...new Set(rules)] });
-      let kept = 0;
-      let duplicate = 0;
-      for (const entry of entries) {
-        const first = owner.get(entry.id);
-        if (first) {
-          duplicate += 1;
-          skipped.push({ id: entry.id, source: name, reason: `与「${first}」里的同名条目重复（按来源顺序取靠前的那份）` });
-          continue;
-        }
-        owner.set(entry.id, name);
-        plugins.push(entry);
-        kept += 1;
-      }
-      report.push({ url, name, ok: true, count: kept, duplicate, skipped: badEntries.length, error: '' });
+      const { entries, skipped: badEntries } = await fetchPluginIndex({
+        url: item.url, name: item.name, fetchText, log, hostVersion, apiVersion
+      });
+      return { ...item, ok: true, entries, badEntries };
     } catch (error) {
-      const message = String(error?.message ?? error);
-      report.push({ url, name, ok: false, count: 0, duplicate: 0, skipped: 0, error: message });
-      log(`[plugins] 索引「${name}」拉取失败：${message}`);
+      return { ...item, ok: false, error: String(error?.message ?? error) };
     }
+  }));
+  for (const outcome of outcomes) {
+    const { url, name } = outcome;
+    if (!outcome.ok) {
+      report.push({ url, name, ok: false, count: 0, duplicate: 0, skipped: 0, error: outcome.error });
+      log(`[plugins] 索引「${name}」拉取失败：${outcome.error}`);
+      continue;
+    }
+    const { entries, badEntries } = outcome;
+    skipped.push(...badEntries);
+    // 撤回规则要在**去重之前**收：同一 id 在多份索引里出现时，后一份的条目会落选，
+    // 但它在自己那份索引里标的撤回仍然算数（否则"重名"就成了一条绕过下架的路）。
+    const rules = [];
+    for (const entry of entries) {
+      if (entry.revoked) rules.push(versionRule(entry.id, entry.version));
+      for (const version of entry.revokedVersions || []) rules.push(versionRule(entry.id, version));
+    }
+    revoked.push({ source: name, url, rules: [...new Set(rules)] });
+    let kept = 0;
+    let duplicate = 0;
+    for (const entry of entries) {
+      const first = owner.get(entry.id);
+      if (first) {
+        duplicate += 1;
+        skipped.push({ id: entry.id, source: name, reason: `与「${first}」里的同名条目重复（按来源顺序取靠前的那份）` });
+        continue;
+      }
+      owner.set(entry.id, name);
+      plugins.push(entry);
+      kept += 1;
+    }
+    report.push({ url, name, ok: true, count: kept, duplicate, skipped: badEntries.length, error: '' });
   }
   return { plugins, skipped, sources: report, revoked };
 }

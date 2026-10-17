@@ -60,6 +60,15 @@ test('manifest 校验 fail-closed：坏形状逐一被拒，并给出可读原�
     [{ ...base, tools: [{ name: 'echo' }] }, /description 不能为空/],
     [{ ...base, tools: [{ name: 'echo', description: 'x', parameters: { type: 'array' } }] }, /parameters 必须是/],
     [{ ...base, tools: [{ name: 'echo', description: 'x' }, { name: 'echo', description: 'y' }] }, /工具名重复/],
+    // 入参 schema 无上限时，一个包可以让之后每一次模型请求都超长被拒（2026-10-17 审查 P2）
+    [{ ...base, capabilities: ['tools'], tools: [{ name: 'echo', description: 'x', parameters: {
+      type: 'object',
+      properties: Object.fromEntries(Array.from({ length: 70 }, (_, i) => [`k${i}`, { type: 'string' }]))
+    } }] }, /properties 太多/],
+    [{ ...base, capabilities: ['tools'], tools: [{ name: 'echo', description: 'x', parameters: {
+      type: 'object',
+      properties: { big: { type: 'string', description: 'x'.repeat(20000) } }
+    } }] }, /parameters 太大/],
     [{ ...base, capabilities: ['schedule'], schedule: [{ name: 'tick', everyMs: 10 }] }, /everyMs 必须是/],
     [{ ...base, schedule: [{ name: 'tick', everyMs: 60000 }] }, /必须在 capabilities 里带上 "schedule"/]
   ];

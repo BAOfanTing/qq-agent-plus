@@ -164,6 +164,7 @@ export class PluginHost {
     if (!probe.ok && this.requireIsolation) {
       // 隔离不可用时**不假装**：默认宁可插件跑不起来，也不能在没有隔离的机器上执行第三方代码
       this.#fail(`隔离不可用：${probe.error}`);
+      this.state = 'failed';
       return false;
     }
     if (!probe.ok) {
@@ -174,6 +175,7 @@ export class PluginHost {
     const netProbe = networkIsolationSupported({ spawn: this.spawnSyncImpl, nodePath: this.nodePath });
     if (this.requireNetworkIsolation && !netProbe.ok) {
       this.#fail(`要求网络隔离但本机做不到：${netProbe.error}（换 Linux，或在配置里关掉 plugins.requireNetworkIsolation）`);
+      this.state = 'failed';
       return false;
     }
 
@@ -199,6 +201,7 @@ export class PluginHost {
       if (this.netIsolated && this.unconfined) this.log(`[plugin:${this.id}] 网络已隔离（进程隔离未开启）`);
     } catch (error) {
       this.#fail(`启动失败：${error?.message ?? error}`);
+      this.state = 'failed';
       return false;
     }
 
@@ -207,6 +210,14 @@ export class PluginHost {
       // 与 stdout 同一条限流：插件刷 stderr（或循环打印错误）不该把宿主日志/journal 灌满
       const text = previewLine(String(chunk), 400);
       if (text) this.#raw(`stderr: ${text}`);
+    });
+    // 插件的 stdin 是管道：对端关闭/退出后写入会**异步**抛 EPIPE。没有 error 监听时它变成
+    // uncaughtException，而 server.js 的策略是直接退出进程 —— 一个坏插件（例如自行 destroy(stdin)
+    // 却继续运行）就能带走整个机器人。这里兜住：管道错误不升级成进程级异常，交给 exit/看门狗处理。
+    this.child.stdin.on('error', (error) => {
+      const code = String(error?.code || '');
+      if (code === 'EPIPE' || code === 'ERR_STREAM_DESTROYED') return;
+      this.#raw(`stdin 错误：${error?.message ?? error}`);
     });
     this.child.on('error', (error) => this.#fail(`进程错误：${error?.message ?? error}`));
     this.child.on('exit', (code, signal) => this.#onExit(code, signal));
@@ -444,7 +455,11 @@ export class PluginHost {
 
   #notify(method, params) {
     if (!this.child?.stdin?.writable) return false;
-    this.child.stdin.write(encodeMessage({ method, params }));
+    // 写入错误必须就地吞掉（EPIPE 表示对端已关，真正的处理在 exit/看门狗那边）；
+    // 不传回调时错误会以 'error' 事件冒出来，见 spawn 后的 stdin 监听注释。
+    this.child.stdin.write(encodeMessage({ method, params }), (error) => {
+      if (error && error.code !== 'EPIPE') this.#raw(`写入失败（${method}）：${error?.message ?? error}`);
+    });
     return true;
   }
 
@@ -493,7 +508,9 @@ export class PluginHost {
     const { id, method, params } = message;
     const reply = (payload) => {
       if (id === undefined || id === null || !this.child?.stdin?.writable) return;
-      this.child.stdin.write(encodeMessage(payload));
+      this.child.stdin.write(encodeMessage(payload), (error) => {
+        if (error && error.code !== 'EPIPE') this.#raw(`能力应答写入失败：${error?.message ?? error}`);
+      });
     };
     const required = CAP_REQUIREMENT[method];
     if (!required) {

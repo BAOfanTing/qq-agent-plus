@@ -126,3 +126,21 @@ test('popstate 回到目录时必须把面切回目录（否则渲染进 hidden 
   assert.match(js, /if \(pluginPane !== 'catalog'\) \{ pluginPane = 'catalog'; renderPane\(\); \}\s*\n\s*safeRenderIndex\(\);/,
     '不论新状态有没有 pluginDetail，都要把面切回目录再渲染');
 });
+
+test('插件页 history：别的页签按后退时 popstate 不处理（否则会静默吃掉一步历史）', () => {
+  const js = read('ui/pages/plugins.js');
+  assert.match(js, /const pluginView = document\.getElementById\('view-plugins'\);/,
+    'popstate 要先确认插件页在前台');
+  assert.match(js, /if \(!pluginView \|\| !pluginView\.classList\.contains\('active'\)\) return;/,
+    '不在前台就什么都不做');
+});
+
+test('列表视图窄屏可折行（320px 下不横向溢出）', () => {
+  const css = read('ui/style.css');
+  const block = mediaBlock(css, '(max-width: 760px)', '.plugin-grid.is-list .plugin-card');
+  assert.ok(block, '760px 媒体查询里要有列表档的窄屏规则');
+  assert.match(block, /\.plugin-grid\.is-list \.plugin-card \{[^}]*flex-wrap:\s*wrap/,
+    '列表行要允许折行（图标+标题+动作+作者+下载+时间一行放不下）');
+  assert.match(block, /\.plugin-grid\.is-list \.plugin-card-head,[\s\S]*?min-width:\s*0/,
+    'head/foot 要能收缩');
+});

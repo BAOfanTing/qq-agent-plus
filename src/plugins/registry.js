@@ -17,6 +17,7 @@ import { PluginHost } from './host.js';
 import { isolationSummary, probeIsolation } from './isolation.js';
 import { sanitizeUserText } from '../core/util.js';
 import { sanitizeDeep } from '../tools/tools-core.js';
+import { canonicalVersion } from './version.js';
 
 export const PLUGIN_TOOL_TIMEOUT_MS = 20000;
 /** 插件工具回给模型的结果上限（字符）：别让一个坏插件或一次大响应把上下文撑爆。 */
@@ -175,7 +176,16 @@ export class PluginRegistry {
    * 悄悄消失的话用户只会以为插件坏了。
    */
   #revokedBy(cfg, id, version = '') {
-    const matches = (rule) => rule === id || (version && rule === `${id}@${version}`);
+    // 版本按规范形式比较：索引/配置里写成 1.0、v1.0.0、1.0.0+build 都要能命中已安装的 1.0.0
+    const canonical = canonicalVersion(version);
+    const matches = (rule) => {
+      if (rule === id) return true;
+      const text = String(rule);
+      const at = text.indexOf('@');
+      if (at < 0 || text.slice(0, at) !== id) return false;
+      if (!canonical) return false;
+      return canonicalVersion(text.slice(at + 1)) === canonical;
+    };
     const local = cfg.revoked.find(matches);
     if (local) return local;
     // 索引侧的撤回（集中下架）：`id` 撤全部版本、`id@版本` 只撤那一个

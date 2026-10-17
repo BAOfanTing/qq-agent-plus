@@ -9,7 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-const { installPlugin } = await import('../src/plugins/install.js');
+const { installPlugin, rollbackPlugin } = await import('../src/plugins/install.js');
+const { buildTar } = await import('./helpers/tar.mjs');
 const { packPluginDir } = await import('../src/plugins/pack.js');
 
 /** 造一个最小的合法插件目录，并打成宿主能装的包。 */
@@ -142,4 +143,35 @@ test('升级换入前会通知调用方停掉旧进程（Windows 上 rename 存�
   assert.deepEqual(calls, ['swapme'], '升级前要按最终 id 通知一次');
   const manifest = JSON.parse(fs.readFileSync(path.join(dataDir, 'plugins', 'swapme', 'plugin.json'), 'utf8'));
   assert.equal(manifest.version, '1.1.0');
+});
+
+test('回退后 install.json 必须描述回退到的版本（不能继续显示被回退掉的那份）', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-install-rollback-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  await installPlugin({ tarball: makeTarball(t, 'rollme', '1.0.0').tarball, dataDir, log: () => {} });
+  await installPlugin({ tarball: makeTarball(t, 'rollme', '2.0.0').tarball, dataDir, log: () => {} });
+  rollbackPlugin({ id: 'rollme', dataDir, log: () => {} });
+
+  const record = JSON.parse(fs.readFileSync(path.join(dataDir, 'plugin-data', 'rollme', 'install.json'), 'utf8'));
+  assert.equal(record.version, '1.0.0', '记录要跟着回退后的版本走');
+  assert.equal(record.sha256, '', '备份里没有原始包，指纹无法重算 —— 不能继续沿用上一版的');
+  assert.match(record.source, /回退自 2\.0\.0/, '来源里要注明从哪个版本回退');
+});
+
+test('包里的 manifest 文件名必须精确是小写 plugin.json（Windows 上 Plugin.json 也能读到）', async (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-install-case-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const manifest = JSON.stringify({
+    id: 'case-demo', apiVersion: 1, name: '大小写', version: '1.0.0', description: 'case',
+    entry: 'index.mjs', capabilities: ['tools'],
+    tools: [{ name: 'ping', description: 'p', parameters: { type: 'object', properties: {} } }]
+  });
+  const tarball = buildTar([
+    { name: 'Plugin.json', data: manifest },
+    { name: 'index.mjs', data: "process.stdin.on('data', () => {});" }
+  ]);
+  await assert.rejects(
+    () => installPlugin({ tarball, id: 'case-demo', dataDir, log: () => {} }),
+    (error) => error.code === 'E_MANIFEST' && /大小写/.test(error.message)
+  );
 });

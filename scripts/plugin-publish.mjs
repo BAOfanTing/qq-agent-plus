@@ -23,6 +23,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { indexEntryFor, packPluginDir } from './../src/plugins/pack.js';
 import { installPlugin } from './../src/plugins/install.js';
+import { canonicalVersion } from './../src/plugins/version.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
@@ -197,10 +198,14 @@ if (at === -1) {
   //（索引一个 id 只列一条，不记历史就等于"发新版那一刻旧版的撤回自动解除"）
   if (has('clear-revoked') && old.revoked) {
     const was = String(old.version || '').trim();
-    if (was) {
+    // 同一个版本重新发布（只改了包内容/策略）时**不能**把当前版本记成"已撤回"：
+    // 那会让刚解禁的这一版永远加载不起来，且脚本还会打印"可安装"（2026-10-17 审查 P3）
+    if (was && canonicalVersion(was) !== canonicalVersion(entry.version)) {
       const keep = new Set([...(Array.isArray(base.revokedVersions) ? base.revokedVersions : []), was]);
       base.revokedVersions = [...keep];
       console.log(`· 旧版本 ${was} 会记进 revokedVersions（继续挡），新版本 ${entry.version} 可安装`);
+    } else if (was) {
+      console.log(`· 版本号没变（${entry.version}）：解除撤回后这一版直接可安装，不记进 revokedVersions`);
     }
   }
   // 索引里**既有**的占位符（早期版本发布时写进去的）也要清掉：合并会把旧值原样带过来，

@@ -105,3 +105,25 @@ test('索引被体积上限截断：报"超上限被截断"，不要报成"不�
     (error) => error.code === 'E_INDEX' && /截断/.test(error.message)
   );
 });
+
+test('撤回缓存按 URL 区分同名来源：两个都叫「官方索引」也不互相覆盖，移除的来源会被剪掉', () => {
+  const cache = createIndexRevokedCache();
+  cache.update({
+    sources: [
+      { name: '官方索引', url: 'https://a/index.json', ok: true, count: 1 },
+      { name: '官方索引', url: 'https://b/index.json', ok: true, count: 1 }
+    ],
+    revoked: [
+      { source: '官方索引', url: 'https://a/index.json', rules: ['x@1.0.0'] },
+      { source: '官方索引', url: 'https://b/index.json', rules: ['y@2.0.0'] }
+    ]
+  });
+  assert.deepEqual(cache.rules().sort(), ['x@1.0.0', 'y@2.0.0'], '同名来源的规则都要保留');
+
+  // 移除 b 之后，只保留 a 的规则（不能让已移除索引的撤回永久生效）
+  cache.update({
+    sources: [{ name: '官方索引', url: 'https://a/index.json', ok: true, count: 1 }],
+    revoked: [{ source: '官方索引', url: 'https://a/index.json', rules: ['x@1.0.0'] }]
+  });
+  assert.deepEqual(cache.rules(), ['x@1.0.0']);
+});

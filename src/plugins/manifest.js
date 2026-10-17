@@ -43,6 +43,10 @@ const MAX_TOOL_DESCRIPTION = 900;
 const MIN_EVERY_MS = 60 * 1000;                 // 低于一分钟的周期任务没有意义，只会烧 CPU
 const MAX_EVERY_MS = 7 * 24 * 3600 * 1000;
 
+// 单个工具的入参 schema 上限：属性数与序列化字节数（见 validateTool 注释）
+const MAX_TOOL_PROPERTIES = 64;
+const MAX_TOOL_SCHEMA_BYTES = 16 * 1024;
+
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 const str = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -67,6 +71,22 @@ function validateTool(raw, index) {
   if (parameters.required !== undefined
     && (!Array.isArray(parameters.required) || parameters.required.some((k) => typeof k !== 'string'))) {
     return { error: `${where}.parameters.required 必须是字符串数组` };
+  }
+  // schema 会原样进每一轮模型请求（direct 模式）或拼进 plugin_call 的描述（meta 模式）。
+  // 不设上限时，一个 5MB 内的包可以塞两万个属性，让之后**每一次**请求都超长被拒 ——
+  // 整个机器人静默停摆到有人禁用插件为止（2026-10-17 审查 P2）。
+  const propertyCount = Object.keys(parameters.properties || {}).length;
+  if (propertyCount > MAX_TOOL_PROPERTIES) {
+    return { error: `${where}.parameters.properties 太多（${propertyCount} 个，上限 ${MAX_TOOL_PROPERTIES}）` };
+  }
+  const requiredCount = Array.isArray(parameters.required) ? parameters.required.length : 0;
+  if (requiredCount > MAX_TOOL_PROPERTIES) {
+    return { error: `${where}.parameters.required 太多（${requiredCount} 个，上限 ${MAX_TOOL_PROPERTIES}）` };
+  }
+  let serialized = '';
+  try { serialized = JSON.stringify(parameters); } catch { return { error: `${where}.parameters 不能序列化` }; }
+  if (serialized.length > MAX_TOOL_SCHEMA_BYTES) {
+    return { error: `${where}.parameters 太大（${serialized.length} 字节，上限 ${MAX_TOOL_SCHEMA_BYTES}）` };
   }
   return { tool: { name, description, parameters } };
 }

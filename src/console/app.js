@@ -587,6 +587,9 @@ export function createApp({
   const indexRevokedCache = createIndexRevokedCache();
   // 上次成功读到的索引（失败时回落到它；见 indexResultForDisplay 的注释）
   let lastGoodPluginIndex = null;
+  // 插件宿主是否已经起过。索引加载晚于 start（启动时那 5 秒竞速输了，但请求还在后台跑）
+  // 时，拿到的新撤回名单要能触发一次重排 —— 否则被撤回的插件会一直跑到进程结束。
+  let pluginsStarted = false;
   const indexRevokedRules = () => indexRevokedCache.rules();
   const pluginRegistry = new PluginRegistry({
     root: path.join(DATA_DIR, 'plugins'),   // 约定目录：数据目录不会被版本更新覆盖（见 docs/PLUGINS.md）
@@ -2558,7 +2561,10 @@ export function createApp({
     // 索引是结构化文件，会随条目增多长过网页那份 50KB 上限：给它单独的体积上限
     //（SSRF / 超时 / 重定向守卫仍是 safeFetch 那一套）
     const fresh = await fetchPluginIndexes({
-      sources, fetchText: (url) => safeFetch(url, { maxBytes: 4 * 1024 * 1024 }), log: moduleLog('plugins'), hostVersion: PKG.version
+      sources,
+      // 总截止 25 秒（不是空闲超时）：索引源可以慢，但不能靠"每 19 秒吐一个字节"把请求吊住
+      fetchText: (url) => safeFetch(url, { maxBytes: 4 * 1024 * 1024, signal: AbortSignal.timeout(25_000) }),
+      log: moduleLog('plugins'), hostVersion: PKG.version
     });
     // 拉不到就用上次成功读到的（见 indexResultForDisplay）：索引挂在第三方托管上，偶发超时是常态，
     // 而"这次没拉到"不该让市场变成空的。
@@ -2566,7 +2572,17 @@ export function createApp({
     if (Array.isArray(result.plugins) && result.plugins.length && !result.stale) {
       lastGoodPluginIndex = { at: Date.now(), result };
     }
-    indexRevokedCache.update(fresh);    // 撤回名单只认**这次真拉到的**（拉不动沿用旧名单，见该函数注释）
+    // 撤回名单只认**这次真拉到的**（拉不动沿用旧名单，见该函数注释）。
+    // 名单变化要立刻反映到正在跑的插件上：启动时那次加载可能输给了 5 秒竞速（请求仍在后台跑），
+    // 页面打开/定时刷新也可能在运行中拿到新名单 —— 只在下一轮 start 才生效等于 kill switch 失效。
+    const rulesBefore = indexRevokedRules().slice().sort().join('\n');
+    indexRevokedCache.update(fresh);
+    const rulesAfter = indexRevokedRules().slice().sort().join('\n');
+    if (pluginsStarted && rulesAfter !== rulesBefore) {
+      void pluginRegistry.reconfigure()
+        .then(() => log('[plugins] 集中撤回名单有更新，插件已按新名单重排'))
+        .catch((error) => log('[plugins] 按新撤回名单重排失败：', error?.message ?? error));
+    }
     pluginIndexCache = { key, at: Date.now(), result };
     return result;
   };
@@ -2645,6 +2661,8 @@ export function createApp({
     const body = await readBody(req).catch(() => ({}));
     try {
       updateConfig({ plugins: { enabled: body.enabled === true } });
+      // 启用前先尽力拿一次撤回名单：否则在索引还没加载过时点开总开关，被撤回的插件会先跑起来
+      if (body.enabled === true) await loadPluginIndex().catch(() => null);
       await pluginRegistry.reconfigure();
       auditWrite('plugins.master', 'plugins.enabled', { req, enabled: body.enabled === true });
       return json(res, 200, { ok: true, ...pluginRegistry.list() });
@@ -2667,6 +2685,8 @@ export function createApp({
       if (body.enabled === true && getConfig().plugins?.enabled !== true) {
         updateConfig({ plugins: { enabled: true } });
       }
+      // 启用前先尽力拿一次撤回名单：索引还没加载过就点启用时，被撤回的插件会先跑起来
+      if (body.enabled === true) await loadPluginIndex().catch(() => null);
       await pluginRegistry.reconfigure();
       auditWrite('plugins.toggle', `plugins:${id}`, { req, enabled: body.enabled === true });
       return json(res, 200, { ok: true, enabledIds: next, ...pluginRegistry.list() });
@@ -2685,6 +2705,8 @@ export function createApp({
 
   router.add('POST', '/api/plugins/install', async (req, res) => {
     const body = await readBody(req).catch(() => ({}));
+    // 在 try 的第一句声明：catch 里要用它，而 let 在 TDZ 里连 typeof 都会抛
+    let replaced = false;
     try {
       const id = String(body.id || '').trim();
       let url = String(body.url || '').trim();
@@ -2723,21 +2745,24 @@ export function createApp({
         if (!picked.ok) throw Object.assign(new Error(picked.error), { code: 'E_DOWNLOAD' });
         return { buffer: picked.buffer };
       };
+      // 只有真的走到"换入前"才代表旧进程被停过；下载/验签/解包失败时不必重排（重排会停掉
+      // 其它插件的进程、打断它们正在进行的工具调用）
       const result = await installPlugin({
         id, url, sha256, source, hostVersion: PKG.version, publisher, signature,
         // 发布者公钥来自本机配置（不是索引 —— 索引给自己签名等于没签）
         publishers: getConfig().plugins?.publishers || {},
         dataDir: DATA_DIR, fetchBinary: download, log: moduleLog('plugins'),
         // 升级时先停掉旧进程再换目录（Windows 上 rename 存活进程的 cwd 会失败）
-        beforeReplace: (pluginId) => pluginRegistry.stopOne(pluginId)
+        beforeReplace: (pluginId) => { replaced = true; return pluginRegistry.stopOne(pluginId); }
       });
       auditWrite('plugins.install', `plugins:${result.id}`, { req, version: result.version, upgraded: result.upgraded });
       // 装完重排一次：让控制台立刻看到新插件（默认未授权，不会自动跑）
       await pluginRegistry.reconfigure();
       return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });
     } catch (error) {
-      // 上面为了能换目录先把旧进程停了：装失败时要把它按原配置放回去（否则一次下载失败 = 插件停摆）
-      await pluginRegistry.reconfigure().catch(() => {});
+      // 上面为了能换目录才停旧进程：只有真的动过目录失败时才需要按原配置放回去。
+      // 下载超时/sha 不符这类失败发生在换入之前，此时重排纯属误伤（会打断其它插件在途的工具调用）
+      if (replaced) await pluginRegistry.reconfigure().catch(() => {});
       // 指纹不符时先怀疑"索引是旧的"：目录缓存 10 分钟，而发布方（或用户自己）可能刚更新过索引 ——
       // 这时包没错、是索引旧了，回一句"校验失败"会让人以为包坏了。清掉缓存让下次读到新的，并把话说明白。
       //（2026-10-16 实测：索引仓库刚推上去，服务器侧装的还是旧索引，install 就这么失败了。）
@@ -2766,6 +2791,7 @@ export function createApp({
     if (body?.__tooLarge) {
       return json(res, 413, { ok: false, error: `文件太大：插件包上限 ${MAX_PLUGIN_ARCHIVE_BYTES / 1024 / 1024}MB` });
     }
+    let replaced = false;
     try {
       const encoded = String(body.base64 || '');
       if (!encoded) return json(res, 400, { ok: false, error: '没有收到文件内容' });
@@ -2777,15 +2803,15 @@ export function createApp({
         source: `本地文件：${fileName}`,
         publishers: getConfig().plugins?.publishers || {},
         // 同上：本地包也可能是在升级一个正在跑的插件
-        beforeReplace: (pluginId) => pluginRegistry.stopOne(pluginId),
+        beforeReplace: (pluginId) => { replaced = true; return pluginRegistry.stopOne(pluginId); },
         log: moduleLog('plugins')
       });
       auditWrite('plugins.install-file', `plugins:${result.id}`, { req, version: result.version, upgraded: result.upgraded, fileName });
       await pluginRegistry.reconfigure();
       return json(res, 200, { ok: true, ...result, sha256: sha256Of(buffer), fileName, ...pluginRegistry.list() });
     } catch (error) {
-      // 换入失败时旧进程已被停掉：按原配置放回去
-      await pluginRegistry.reconfigure().catch(() => {});
+      // 换入阶段失败时旧进程已被停掉：按原配置放回去（更早的失败没停过任何进程，不重排）
+      if (replaced) await pluginRegistry.reconfigure().catch(() => {});
       return pluginError(res, error);
     }
   });
@@ -2822,7 +2848,12 @@ export function createApp({
       auditWrite('plugins.uninstall', `plugins:${id}`, { req });
       await pluginRegistry.reconfigure();
       return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });
-    } catch (error) { return pluginError(res, error); }
+    } catch (error) {
+      // stopOne 已经把进程收掉了：卸载失败（Windows 上目录被占用等）时按原配置放回去，
+      // 否则插件会一直停在"已停"直到下次配置变更或重启（与 rollback 的 catch 同口径）
+      await pluginRegistry.reconfigure().catch(() => {});
+      return pluginError(res, error);
+    }
   });
 
   router.add('GET', '/api/memory-files', async (req, res) => {
@@ -4871,6 +4902,7 @@ export function createApp({
     }
     try {
       await pluginRegistry.start();
+      pluginsStarted = true;
     } catch (error) {
       log('[plugins] 插件宿主启动失败：', error);
     }
@@ -4888,6 +4920,7 @@ export function createApp({
   }
 
   async function stop() {
+    pluginsStarted = false;
     // 安装脚本别被落下：进程重启/停服时它是孤儿进程，会一直占着构建目录。
     // 只 kill 包装进程不够：它 spawnSync 出来的 cmake/make 会活下来继续写构建目录、与下一次安装并发
     // （超时那条路径早就按进程组杀了，这里同款处理，2026-09-26 审查）。

@@ -475,3 +475,31 @@ test('打包可复现：同一份源码在 CRLF 工作副本上打出的包，�
   const crlf = packPluginDir({ dir: make('\r\n') });
   assert.equal(crlf.sha256, lf.sha256, 'CRLF 工作副本打出来的包必须与 LF 一致（否则 sha256 两侧对不上）');
 });
+
+test('plugin-pack --index：包默认落进索引仓库的 plugins/packages（verify-index 要求仓库里有产物）', (t) => {
+  const parent = tempDir(t);
+  const target = path.join(parent, 'demo');
+  makePlugin(target, { id: 'demo', manifest: { version: '1.0.0' } });
+  const indexDir = path.join(parent, 'plugins');
+  fs.mkdirSync(indexDir, { recursive: true });
+  const indexPath = path.join(indexDir, 'index.json');
+  const out = lastJson(runScript('scripts/plugin-pack.mjs',
+    [target, '--index', indexPath, '--write', '--json']).stdout);
+  assert.equal(out.index.action, 'added');
+  const packaged = path.join(indexDir, 'packages', 'demo-1.0.0.tar.gz');
+  assert.equal(fs.existsSync(packaged), true, '包应出现在 plugins/packages/ 下');
+});
+
+test('打包拒绝大小写不对的 manifest（Plugin.json 在 Windows 上能读，到 Linux 就装不上）', async (t) => {
+  const { packPluginDir } = await import('../src/plugins/pack.js');
+  const parent = tempDir(t);
+  const dir = path.join(parent, 'demo');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'Plugin.json'), JSON.stringify({
+    id: 'demo', apiVersion: 1, name: '大小写', version: '1.0.0', description: 'x',
+    entry: 'index.mjs', capabilities: ['tools'],
+    tools: [{ name: 'ping', description: 'p', parameters: { type: 'object', properties: {} } }]
+  }));
+  fs.writeFileSync(path.join(dir, 'index.mjs'), "process.stdin.on('data', () => {});");
+  assert.throws(() => packPluginDir({ dir }), /大小写/);
+});
