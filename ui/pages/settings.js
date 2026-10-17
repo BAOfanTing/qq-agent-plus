@@ -809,7 +809,7 @@ function renderMessageTypesSection(c) {
       <label for="cfg-mt-images">查看消息里的图片与表情包</label></div>
     <div class="hint" style="margin-left:26px">关掉后看图工具（get_message_images）从工具表摘掉，提示词改成"看不到图片内容"；
       消息本身照常存档。<b>视频画面也依赖这个工具</b>，关掉后视频只保留声音。
-      表情包的<b>自动收藏</b>由「表情包」页的收藏开关单独控制，不受这里影响。</div>
+      表情包的<b>自动收藏</b>由「聊天设置 → 表情包」里的收藏开关单独控制，不受这里影响。</div>
     <div class="checkbox-row" style="margin-top:8px"><input type="checkbox" id="cfg-mt-stickers" ${mt.stickers !== false ? 'checked' : ''} />
       <label for="cfg-mt-stickers">查看表情库里没备注的图</label></div>
     <div class="hint" style="margin-left:26px">只影响"看"：按备注名发送表情（send_sticker）不受影响；

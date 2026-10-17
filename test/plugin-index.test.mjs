@@ -431,9 +431,10 @@ test('启动时先取一次索引再加载插件：否则重启后没人打开�
 test('撤回名单在运行中变化会重排：启动时 5 秒竞速失败也不至于一直跑到进程结束', () => {
   const app = fs.readFileSync(new URL('../src/console/app.js', import.meta.url), 'utf8');
   assert.match(app, /const rulesBefore = indexRevokedRules\(\)/, '更新前要拍一份旧名单');
-  assert.match(app, /if \(pluginsStarted && rulesAfter !== rulesBefore\)/, '运行中名单变化要触发重排');
+  assert.match(app, /if \(applyRevocation && pluginsStarted && rulesAfter !== rulesBefore\)/, '运行中名单变化要触发重排');
+  assert.match(app, /loadPluginIndex\(\{ applyRevocation: false \}\)/, '启用路由自己会重排，别让加载再排一次');
   assert.match(app, /pluginsStarted = true;/, '启动成功后置位');
-  assert.match(app, /if \(body\.enabled === true\) await loadPluginIndex\(\)/, '启用前先尽力拿一次名单');
+  assert.match(app, /if \(body\.enabled === true\) await loadPluginIndex\(\{ applyRevocation: false \}\)/, '启用前先尽力拿一次名单');
   // 安装失败但没动过目录时不要重排（重排会停掉所有插件、打断在途工具调用）
   assert.match(app, /if \(replaced\) await pluginRegistry\.reconfigure\(\)/,
     '只有真的换过目录才需要恢复重排');

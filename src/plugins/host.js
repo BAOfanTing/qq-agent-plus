@@ -156,6 +156,7 @@ export class PluginHost {
     const check = this.spawnSyncImpl(this.nodePath, ['--check', entry], { encoding: 'utf8', timeout: 15000 });
     if (check?.status !== 0) {
       this.#fail(`语法检查未通过：${previewLine(String(check?.stderr || check?.error?.message || '').split('\n').slice(-3).join(' '), 300)}`);
+      this.state = 'failed';   // 没起子进程就不会有 exit 事件，不置 failed 会永远停在「启动中」
       return false;
     }
 

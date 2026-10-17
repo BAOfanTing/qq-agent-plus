@@ -94,3 +94,35 @@ test('插件关掉 stdin 后继续运行：宿主写入不能升级成未捕获�
   assert.equal(host.status().state, 'running');
   await host.stop();
 });
+
+test('语法检查失败要标 failed（不能永远停在"启动中"并每次调用重试）', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-plugin-syntax-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dir = path.join(root, 'broken');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({
+    id: 'broken',
+    apiVersion: 1,
+    name: '语法错的插件',
+    version: '1.0.0',
+    description: 'index.mjs 有语法错误',
+    entry: 'index.mjs',
+    capabilities: ['tools'],
+    tools: [{ name: 'ping', description: 'p', parameters: { type: 'object', properties: {} } }]
+  }));
+  fs.writeFileSync(path.join(dir, 'index.mjs'), 'const = ;');
+  const parsed = parsePluginManifest(JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8')), { dir });
+  assert.ok(parsed.ok, parsed.error);
+  const host = new PluginHost({
+    manifest: parsed.manifest,
+    dataDir,
+    log: () => {},
+    requireIsolation: false,
+    networkIsolation: false,
+    requireNetworkIsolation: false
+  });
+  t.after(() => host.stop());
+  assert.equal(await host.start(), false);
+  assert.equal(host.status().state, 'failed', '语法错误属于永久失败，必须标 failed（否则每次调用都会重跑一次 node --check）');
+  assert.match(host.lastError, /语法检查未通过/);
+});

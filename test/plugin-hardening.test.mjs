@@ -417,6 +417,13 @@ test('撤回名单：id@版本 只撤那一个版本（发新版修复后老版�
 test('撤回名单：版本写法不同也要命中（1.0 / v1.0.0 / 1.0.0+build 都等于 1.0.0）', async (t) => {
   // 索引/配置是第三方内容，版本可能写成 1.0 或带构建元数据；按字符串精确比较时，
   // 这样一条撤回规则对已安装的 1.0.0 完全不起作用（2026-10-17 审查 P2）
+  // 预发布版是**另一个版本**：撤 1.0.0-beta.1 不能误伤稳定的 1.0.0
+  {
+    const cfg = { plugins: { enabled: true, enabledIds: ['good'], revoked: ['good@1.0.0-beta.1'] } };
+    const registry = new PluginRegistry({ root: FIXTURES, dataDir, log: () => {}, getConfig: () => cfg });
+    t.after(() => registry.stop());
+    assert.deepEqual((await registry.start()).started, ['good'], '撤预发布版不该误伤稳定版');
+  }
   for (const rule of ['good@1.0', 'good@v1.0.0', 'good@1.0.0+build']) {
     const cfg = { plugins: { enabled: true, enabledIds: ['good'], revoked: [rule] } };
     const registry = new PluginRegistry({ root: FIXTURES, dataDir, log: () => {}, getConfig: () => cfg });

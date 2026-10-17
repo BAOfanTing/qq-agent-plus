@@ -2546,7 +2546,7 @@ export function createApp({
     return { prefixes: Array.isArray(configured) ? configured : DEFAULT_MIRROR_PREFIXES };
   };
 
-  const loadPluginIndex = async () => {
+  const loadPluginIndex = async ({ applyRevocation = true } = {}) => {
     const sources = pluginIndexSources();
     const key = sources.map((item) => `${item.name}|${item.url}`).join(' ');
     if (!sources.length) return { plugins: [], skipped: [], sources: [] };
@@ -2578,7 +2578,7 @@ export function createApp({
     const rulesBefore = indexRevokedRules().slice().sort().join('\n');
     indexRevokedCache.update(fresh);
     const rulesAfter = indexRevokedRules().slice().sort().join('\n');
-    if (pluginsStarted && rulesAfter !== rulesBefore) {
+    if (applyRevocation && pluginsStarted && rulesAfter !== rulesBefore) {
       void pluginRegistry.reconfigure()
         .then(() => log('[plugins] 集中撤回名单有更新，插件已按新名单重排'))
         .catch((error) => log('[plugins] 按新撤回名单重排失败：', error?.message ?? error));
@@ -2662,7 +2662,7 @@ export function createApp({
     try {
       updateConfig({ plugins: { enabled: body.enabled === true } });
       // 启用前先尽力拿一次撤回名单：否则在索引还没加载过时点开总开关，被撤回的插件会先跑起来
-      if (body.enabled === true) await loadPluginIndex().catch(() => null);
+      if (body.enabled === true) await loadPluginIndex({ applyRevocation: false }).catch(() => null);
       await pluginRegistry.reconfigure();
       auditWrite('plugins.master', 'plugins.enabled', { req, enabled: body.enabled === true });
       return json(res, 200, { ok: true, ...pluginRegistry.list() });
@@ -2686,7 +2686,7 @@ export function createApp({
         updateConfig({ plugins: { enabled: true } });
       }
       // 启用前先尽力拿一次撤回名单：索引还没加载过就点启用时，被撤回的插件会先跑起来
-      if (body.enabled === true) await loadPluginIndex().catch(() => null);
+      if (body.enabled === true) await loadPluginIndex({ applyRevocation: false }).catch(() => null);
       await pluginRegistry.reconfigure();
       auditWrite('plugins.toggle', `plugins:${id}`, { req, enabled: body.enabled === true });
       return json(res, 200, { ok: true, enabledIds: next, ...pluginRegistry.list() });
@@ -4901,8 +4901,15 @@ export function createApp({
       log('[plugins] 启动时读取索引失败（继续按本地配置加载）：', error?.message ?? error);
     }
     try {
+      const rulesBeforeStart = [...indexRevokedRules()].sort().join('\n');
       await pluginRegistry.start();
       pluginsStarted = true;
+      // 暖加载可能恰好在 start 期间完成（pluginsStarted 还是 false，那次没有触发重排）：
+      // 启动完成后再比一次，名单变了就按新名单重排
+      const rulesAfterStart = [...indexRevokedRules()].sort().join('\n');
+      if (rulesAfterStart !== rulesBeforeStart) {
+        await pluginRegistry.reconfigure().catch(() => {});
+      }
     } catch (error) {
       log('[plugins] 插件宿主启动失败：', error);
     }
