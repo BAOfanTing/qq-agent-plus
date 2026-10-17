@@ -5463,6 +5463,13 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
   .plugin-row-actions { justify-content: flex-start; }
   .plugin-grid { grid-template-columns: 1fr; }
   .plugin-grid.is-list .plugin-card-desc { display: none; }
+  /* 列表档在窄屏把 head/foot 压成一整行会溢出（图标+标题+动作+作者+下载+时间算下来远宽于 320px）。
+     允许折行并放开收缩，否则卡片会画到面板外面、出现横向滚动条。 */
+  .plugin-grid.is-list .plugin-card { flex-wrap: wrap; }
+  .plugin-grid.is-list .plugin-card-head,
+  .plugin-grid.is-list .plugin-card-foot { flex: 0 1 auto; min-width: 0; }
+  .plugin-grid.is-list .plugin-card-title { min-width: 0; }
+  .plugin-grid.is-list .plugin-name { overflow-wrap: anywhere; }
 }
 
 html[data-glass] .plugin-card,

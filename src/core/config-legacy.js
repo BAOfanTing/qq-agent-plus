@@ -1067,6 +1067,18 @@ function migrateConfig(parsed) {
   // 让默认值补上的话，老实例（例如选的是猫娘）载入后会被当成绑定了默认卡、正文被换掉。
   // 空串 = 未绑定（正文按自定义处理，不改动）；在控制台重选一次卡就会自动绑上。
   if (out.persona.templateId === undefined) out.persona.templateId = '';
+  // 消息类型段必须是对象；四个开关统一收敛成布尔（缺键 = 开，保持既有行为）。
+  // 手改成 "messageTypes": null 时不能让整段丢掉 —— 那等于把四项一起打开，静默改变行为。
+  if (!isPlainObject(out.messageTypes)) {
+    out.messageTypes = { ...DEFAULT_CONFIG.messageTypes };
+  } else {
+    out.messageTypes = {
+      expandForward: out.messageTypes.expandForward !== false,
+      videoFrames: out.messageTypes.videoFrames !== false,
+      images: out.messageTypes.images !== false,
+      stickers: out.messageTypes.stickers !== false
+    };
+  }
   // ── 平台能力（2026-10-07 键拆细：读/写分离）──
   // 老配置里 avatarWrites 一个键同时管"换头像"和"改昵称/个性说明"。拆细后按老键回填：
   // 显式开过 avatarWrites=true 的实例，昵称也保持开着 —— 否则用户"开过换头像/改资料"的

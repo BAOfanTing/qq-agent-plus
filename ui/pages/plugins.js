@@ -1301,7 +1301,10 @@ function bindPluginsSection() {
   if (!popstateBound && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
     popstateBound = true;
     window.addEventListener('popstate', (event) => {
-      if (!$('#plugins-page')) return;          // 页面被重建掉了就没什么可恢复的
+      // 插件页没在前台时不要处理：详情压过一条 history 之后切到别的页签，
+      // 用户按后退时这个处理器会把状态改回目录（界面毫无变化），却白白吃掉一步历史。
+      const pluginView = document.getElementById('view-plugins');
+      if (!pluginView || !pluginView.classList.contains('active')) return;          // 页面被重建掉了就没什么可恢复的
       const next = String(event.state?.pluginDetail || '');
       closingDetail = false;
       pluginDetailId = next;

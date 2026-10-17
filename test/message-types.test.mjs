@@ -132,6 +132,20 @@ test('提示词：关掉表情查看后，表情清单与策略段也不再教 g
   }
 });
 
+test('提示词：表情包总开关关闭时不再教 send_sticker / list_stickers', () => {
+  // 与消息类型无关的另一道闸门：总开关关掉后五个贴纸工具都被摘掉（orchestrator），
+  // 提示词不能再教它们（2026-10-17 审查 P1）
+  updateConfig({ sticker: { enabled: false }, messageTypes: { images: true, stickers: true } });
+  try {
+    const p = buildSystemPrompt({ persona: { botName: '测试', roleText: '' } });
+    assert.ok(!p.includes('send_sticker="发表情"'), '工具协议里的示例不能再用 send_sticker');
+    assert.ok(!p.includes('发送：用 send_sticker'), '表情策略段不能再教怎么发');
+    assert.match(p, /表情包功能已关闭/, '要明确说明工具确实不在');
+  } finally {
+    updateConfig({ sticker: { enabled: true } });
+  }
+});
+
 test('入站：自动展开受开关控制，被 @ 时强制展开（锚点：这段在 console 的事件处理里，单测拿不到）', () => {
   const app = src('src/console/app.js');
   assert.ok(app.includes('const autoExpand = cfgNow.messageTypes?.expandForward !== false || mentionsSelf;'),

@@ -752,6 +752,56 @@ describe('Orchestrator', () => {
     assert.ok(names.includes('send_sticker'), '按备注名发送表情不受影响');
   });
 
+  it('表情包关闭时不注入 generate_image（生图只能经 send_sticker 发出）', async (t) => {
+    // 生图工具的结果是"先存进表情库、再用 send_sticker 发"；表情包总开关关掉后那条发送路径
+    // 也没了，留着它会让模型真的花钱生成一张发不出去的图（2026-10-17 审查 P2）。
+    const { cfg, runner, append } = fixture(t);
+    cfg.sticker.enabled = false;
+    cfg.imageGen = { enabled: true, model: 'img-model', baseUrl: 'https://img.example/v1' };
+    setRuntimeConfig(cfg);
+    const bodies = [];
+    globalThis.fetch = async (_url, options) => {
+      bodies.push(JSON.parse(options.body));
+      return Response.json({ choices: [{ message: { content: 'done' } }], usage: { total_tokens: 10 } });
+    };
+    append(1, '在吗', '42');
+    await runner.wake('group:1');
+    assert.ok(!bodies[0].tools.some((tool) => tool.function.name === 'generate_image'),
+      '表情包关闭时不应再注入 generate_image');
+
+    // 对照组：表情包开着、生图配置齐全时它应该在
+    cfg.sticker.enabled = true;
+    setRuntimeConfig(cfg);
+    append(2, '再问一次', '42');
+    await runner.wake('group:1');
+    assert.ok(bodies[1].tools.some((tool) => tool.function.name === 'generate_image'),
+      '表情包开着时生图工具应保留');
+  });
+
+  it('工具描述按当轮配置重建：改「视频画面」开关后不重启也生效', async (t) => {
+    // 工具描述里有随配置变化的文案（"抽 4 帧" / "视频画面看不到"）。构造函数里建一次的话，
+    // 控制台改完设置后提示词已经变了、工具描述还是旧的，模型会收到互相矛盾的两段。
+    const { cfg, runner, append } = fixture(t);
+    cfg.messageTypes = { ...cfg.messageTypes, images: true, videoFrames: true };
+    setRuntimeConfig(cfg);
+    const bodies = [];
+    globalThis.fetch = async (_url, options) => {
+      bodies.push(JSON.parse(options.body));
+      return Response.json({ choices: [{ message: { content: 'done' } }], usage: { total_tokens: 10 } });
+    };
+    const descOf = (body) => body.tools.find((tool) => tool.function.name === 'get_message_images')?.function.description || '';
+    append(1, '在吗', '42');
+    await runner.wake('group:1');
+    assert.match(descOf(bodies[0]), /抽 4 帧/);
+
+    cfg.messageTypes.videoFrames = false;
+    setRuntimeConfig(cfg);
+    append(2, '再看看', '42');
+    await runner.wake('group:1');
+    assert.doesNotMatch(descOf(bodies[1]), /抽 4 帧/, '关掉后同一进程内的工具描述必须跟着改');
+    assert.match(descOf(bodies[1]), /视频画面看不到/);
+  });
+
   it('收藏总闸关闭时只摘 collect_sticker，发送/列表/看图仍在（2026-10-02）', async (t) => {
     // 总闸（collectEnabled）管的是"收"：关掉后模型不该再有主动收藏的工具，
     // 否则它会去调一个必然失败的收藏（还先白花一次看图判断）。
@@ -864,7 +914,9 @@ describe('Orchestrator', () => {
     // 清单不能再说"可以先 get_sticker_image 看一眼"——那句话指向一个不存在的工具
     const listBlock = system.slice(system.indexOf('【可用表情包】'));
     assert.ok(listBlock.includes('stickerId：'), '清单段要在');
-    assert.equal(listBlock.includes('get_sticker_image'), false, '清单里不该再出现这个工具名');
+    // 只断言"教它去看"的那句不在；工具名本身会出现在后面的机制说明里
+    //（"get_sticker_image 不在工具表里"），那是刻意保留的覆盖说明
+    assert.equal(listBlock.includes('先 get_sticker_image 看一眼'), false, '清单里不该再教它去调这个工具');
     assert.equal(listBlock.includes('st-2（'), false, '没备注的（看不明白也用不了看图工具）不该列出来');
     assert.ok(listBlock.includes('st-1'), '有备注的照常列');
     assert.match(system, /看不到图/, '看不到图时的口径要在');
@@ -979,6 +1031,8 @@ describe('Orchestrator', () => {
 
   it('generate_image 只在图片生成开关打开且配置齐时注入（按张计费，未配就别让模型去调）', async (t) => {
     const { cfg, runner, append } = fixture(t);
+    // 生图的发送路径是"进表情库 → send_sticker"：这条用例只测生图开关本身，先把表情包打开
+    cfg.sticker.enabled = true;
     const bodies = [];
     globalThis.fetch = async (_url, options) => {
       bodies.push(JSON.parse(options.body));

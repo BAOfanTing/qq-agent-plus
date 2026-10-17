@@ -11,6 +11,7 @@ import { synthesizeSpeech, ttsConfigured } from '../llm/tts.js';
 import { generateImage, MAX_PROMPT_CHARS } from '../llm/image-gen.js';
 import { resolveApiKey } from '../llm/llm.js';
 import { safeFetchBinary } from '../llm/safe-fetch.js';
+import { stickerVisionEnabled } from '../llm/vision-scan.js';
 import { todayKey } from '../core/util.js';   // 上海自然日（"每群每天一次"的去重用同一个口径）
 import { createQuota } from '../core/quota.js';
 
@@ -541,6 +542,16 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           const result = await ctx.stickers.list(String(args.query ?? ''), Math.min(100, Math.max(1, Number(args.limit) || 24)));
+          // 关掉「查看表情库里没备注的图」后，系统提示只列有备注的；列表工具也必须同口径，
+          // 否则模型能从 list_stickers 拿到一堆裸 id，盲发它根本没看过的图（2026-10-17 审查 P2）。
+          if (!stickerVisionEnabled()) {
+            const visible = (Array.isArray(result?.stickers) ? result.stickers : [])
+              .filter((entry) => String(entry?.desc || entry?.localNote || '').trim());
+            result.stickers = visible;
+            result.matched = visible.length;
+            result.total = visible.length;
+            result.truncated = false;
+          }
           return ok(result);
         } catch (error) {
           return err(error?.message ?? error, {

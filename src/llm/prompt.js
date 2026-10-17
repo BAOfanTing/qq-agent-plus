@@ -45,6 +45,7 @@ function securityRules(grounded = false) {
 }
 
 function toolProtocol(grounded = false) {
+  const stickerOn = getConfig().sticker?.enabled !== false;
   return [
     '【工作方式 —— 先读懂再动手】',
     '1. 你运行在一个事件驱动的桥接程序里：每次有新消息（或主动机会），系统会新开一次处理，把【上次会话交接】【过去状态】和【本次唤醒】放进上下文。生命周期模式可能同时带入同一线程的旧模型轮次；始终以最后一个【本次唤醒】为当前输入。',
@@ -52,7 +53,7 @@ function toolProtocol(grounded = false) {
     '3. send_message：想发一条就传字符串；想分多条就传数组（例如 ["在的","叫我干嘛"]）。数组里的每个字符串是一条完整消息，不要把同一句话拆到两条里。',
     '4. 如果对方可能话没说完、或你想再等等看后续发展，可以什么都不发直接结束（或调用 finish）；等有新消息时你会被再次叫来，届时再决定。这不是失职，是正常节奏。',
     '5. 决定不回：直接安静结束（或调用 finish），文本区一个字都不要写。"不回了""不接了"写在文本里既发不出去、也毫无意义——沉默就是零输出。',
-    '6. 工具调用是本能动作：send_message="打字发送"，get_recent_messages="往前翻聊天记录"，send_sticker="发表情"。内心不要写"我调用 xx 获取数据"这种伪代码。',
+    `6. 工具调用是本能动作：send_message="打字发送"，get_recent_messages="往前翻聊天记录"${stickerOn ? '，send_sticker="发表情"' : ''}。内心不要写"我调用 xx 获取数据"这种伪代码。`,
     grounded
       ? '7. 【空格不是分句符号】分气泡用数组，空格和换行是正文的一部分。技术内容保留英文间隔、代码缩进与换行，不把一段代码拆成多个气泡。'
       : '7. 【空格不是分句符号】QQ 消息里的空格会原样发送，真人不会用空格分句。想说两句就传数组，例如 ["在的","咋了"]。唯一可保留空格的是英文单词/数字之间的必要间隔（如产品型号、英文专有名词）。发送前自检：数组里每个字符串内部不应有用空格分隔的中文短句。',
@@ -183,6 +184,16 @@ function memoryRules(identityPilotAvailable = false, friendProposalAvailable = f
 function stickerRules(grounded = false) {
   // 活跃度档位直接改写策略段的频率行（引导统一在系统提示，不在"本次输入"重复）
   const cfg = getConfig();
+  // 表情包总开关关掉时，orchestrator 会把 send_sticker / list_stickers / get_sticker_image /
+  // collect_sticker / sticker_note 五个工具一起摘掉。提示词不能继续教它们（否则模型每轮都去调
+  // 一个必然失败的工具）—— 只保留与表情包无关的「拍一拍」。
+  if (cfg.sticker?.enabled === false) {
+    return [
+      '- 【系统设置覆盖角色设定】表情包功能已关闭：send_sticker / list_stickers / get_sticker_image / collect_sticker 都不在工具表里，即使角色设定提到也不要调用；想表达情绪可以用 send_face 发 QQ 系统表情。',
+      '',
+      '【拍一拍】send_poke 可以发 QQ 拍一拍。收到消息里的 [拍一拍] 事件时可以自然回应（"？干嘛""再拍试试""哈哈"），也可以回一个拍一拍。有时也可以主动戳一下正在聊的人/熟人，像真人手贱一下反而更拟真；但别频繁。'
+    ].join('\n');
+  }
   const lvl = Math.min(3, Math.max(0, Number(cfg.sticker?.encourage) || 0));
   // 表情库看图会因三件事被摘掉工具：图片输入关、模型不支持图片、或「消息类型」关了表情查看。
   // 口径收敛在 stickerVisionEnabled（与编排器同一判定），否则关掉后提示词还在教一个不存在的工具。
@@ -287,23 +298,24 @@ function qqSceneRules(grounded = false, platform = null, chatKey = '') {
       stickerBits.push('- 想表达情绪时可以用 send_face 发 QQ 系统表情（如 微笑 / 得意 / 流泪 / 玫瑰 / 汪汪）；一条只能一个表情、不能带文字。接梗、被逗笑、吐槽、无语、自嘲时，优先想一下有没有贴切的表情，该用就用，别连着刷。');
     }
     if (collectOn && canViewImages) {
-      stickerBits.push(`- 图库可以自己攒：别人发的表情包会自动进库（不用你操心）；你也可以主动存——看到有意思、能当表情用的图，先 get_message_images 看一眼，确认好玩就用 collect_sticker 存进去（顺手写一句备注）；库里没备注的图，用 list_stickers 找${canViewStickers ? '、get_sticker_image 看' : ''}，再用 sticker_note 补一句备注，以后用 send_sticker 发更准。挑真的会用的存，别什么都收。`);
+      stickerBits.push(`- 图库可以自己攒：别人发的表情包会自动进库（不用你操心）；你也可以主动存——看到有意思、能当表情用的图，先 get_message_images 看一眼，确认好玩就用 collect_sticker 存进去（顺手写一句备注）。${canViewStickers ? '库里没备注的图，用 list_stickers 找、get_sticker_image 看，再用 sticker_note 补一句备注，以后用 send_sticker 发更准。' : '看不到图的条目不会出现在清单里，也先不要给它编备注；按已有备注名挑选即可。'}挑真的会用的存，别什么都收。`);
     } else if (stickerOn && canViewStickers) {
       stickerBits.push('- 图库里的表情可以挑着用：list_stickers 找、get_sticker_image 看、sticker_note 补备注，发的时候 send_sticker 传备注名。');
     } else if (stickerOn) {
-      stickerBits.push('- 图库里的表情可以挑着用：list_stickers 找、sticker_note 补备注，发的时候 send_sticker 传备注名（看不到图片，按备注名选）。');
+      stickerBits.push('- 图库里的表情可以按备注名挑着用（看不到图片，清单里只列有备注的）：list_stickers 找、send_sticker 传备注名。');
     }
     lines.push(...stickerBits);
   } else {
     lines.push(
       '- 你无法查看图片内容：消息里的 [图片] [表情包] 只是占位提示，如实表示"看不到图"即可，绝对不要编造图片内容。'
     );
-    if (vision) {
-      // 两项都关：工具全摘掉了；角色卡里若写着看图工具，用机制层面的说明覆盖掉
-      lines.push(
-        '- 【系统设置覆盖角色设定】「消息类型」里关闭了图片与表情查看：get_message_images / get_sticker_image 都不在工具表里，即使角色设定提到它们也无法调用。'
-      );
-    }
+    // 工具全摘掉了（两种原因：消息类型里关了两项，或模型/设置本身不能看图）。
+    // 角色卡里可能写着看图工具，用机制层面的说明覆盖掉 —— 这里不再区分原因。
+    lines.push(
+      vision
+        ? '- 【系统设置覆盖角色设定】「消息类型」里关闭了图片与表情查看：get_message_images / get_sticker_image 都不在工具表里，即使角色设定提到它们也无法调用。'
+        : '- 【系统设置覆盖角色设定】图片查看不可用（「图片输入」关着，或当前模型不支持图片）：get_message_images / get_sticker_image 都不在工具表里，即使角色设定提到它们也无法调用。'
+    );
   }
   // 平台能力（2026-10-07 协议端 1.14.22 接入，控制台「平台能力」页）：与 vision/搜索/ASR
   // 同一口径 —— 开关关掉后工具会被 orchestrator 摘掉，提示词也不能再教用法（教了白烧一轮）。
@@ -596,7 +608,8 @@ export function buildSystemPrompt({
     // 与工具注入用**同一道门**（orchestrator 按 imageGenAvailable 过滤 generate_image）：
     // 只看 enabled 会在"勾了开关但还没填模型"时告诉模型有个它其实没有的工具
     // （2026-09-30 审查；asr 段用的是同一套 asrAvailable 口径）。
-    if (imageGenAvailable(getConfig())) {
+    // 与工具注入同一道门：生图开关 + 表情包开关（生图的发送路径是 send_sticker）
+    if (imageGenAvailable(getConfig()) && getConfig().sticker?.enabled !== false) {
       gameLines.push('- 群友要你「画一张」时用 generate_image：prompt 写清画面（主体+风格+氛围），生成后图会进表情库，再用 send_sticker 发出去（记得带上一句自己的话，别只甩图）。这是按张计费的，一天里别主动画、只在群友真开口要时才用。');
     }
     parts.push('', gameLines.join('\n'));

@@ -416,3 +416,31 @@ test('memory_query 有条数上限：跨会话记忆不会被一次全灌进一�
   const one = JSON.parse((await tool('memory_query').execute(fx.ctx, { userId: '1005' })).content);
   assert.equal(one.memberImpression.length, 1, '指定 userId 时只给这个人的');
 });
+
+test('list_stickers：关掉「查看表情库里的图」后只返回有备注的条目（与提示词清单同口径）', async () => {
+  const { updateConfig } = await import('../src/core/config.js');
+  const stickers = {
+    list: async () => ({
+      total: 2,
+      matched: 2,
+      truncated: false,
+      stickers: [
+        { id: 's-note', desc: '无语', localNote: '', tags: [], useCount: 1 },
+        { id: 's-bare', desc: '', localNote: '', tags: [], useCount: 0 }
+      ]
+    })
+  };
+  const { ctx } = context({ stickers });
+  updateConfig({ sticker: { enabled: true }, messageTypes: { stickers: true } });
+  const parse = (result) => JSON.parse(result.content);
+  assert.deepEqual(parse(await tool('list_stickers').execute(ctx, {})).stickers.map((s) => s.id), ['s-note', 's-bare']);
+
+  updateConfig({ messageTypes: { stickers: false } });
+  try {
+    const filtered = parse(await tool('list_stickers').execute(ctx, {}));
+    assert.deepEqual(filtered.stickers.map((s) => s.id), ['s-note'], '没备注的图看不到，不该再给模型裸 id 去盲发');
+    assert.equal(filtered.total, 1);
+  } finally {
+    updateConfig({ messageTypes: { stickers: true } });
+  }
+});

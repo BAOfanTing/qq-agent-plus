@@ -1681,7 +1681,10 @@ export class Orchestrator {
     const selfWakeEnabled = cfg.proactive?.selfWakeEnabled !== false;
     // 图片生成按张计费：没开/没配就不注入工具，否则模型会去调一个必然失败的画图工具
     const imageGenEnabled = imageGenAvailable(cfg);
-    const toolDefs = this.toolDefs.filter((d) => {
+    // 每轮现建一份：工具描述里有随配置变化的文案（例如 get_message_images 会写"抽 4 帧"或
+    // "视频画面看不到"）。构造函数里建一次的话，控制台改完设置（不重启）后提示词已经变了、
+    // 工具描述还是旧的，模型会收到互相矛盾的两段（2026-10-17 审查 P2）。
+    const toolDefs = buildToolDefs().filter((d) => {
       if (!viewMessageImages && d.name === 'get_message_images') return false;
       if (!viewLibraryStickers && d.name === 'get_sticker_image') return false;
       // 表情包总开关关掉：发送/列表/看图/收藏四个工具一并摘掉。原先只撤了提示词里的清单，
@@ -1707,7 +1710,9 @@ export class Orchestrator {
       if (cfg.groupGame?.enabled !== true && d.name === 'group_game') return false;
       // ASR 按量计费：开关关掉或没配 key 就不注入，避免模型调用必失败；也防误配置导致意外计费
       if (!asrEnabled && d.name === 'get_message_audio') return false;
-      if (!imageGenEnabled && d.name === 'generate_image') return false;
+      // 生图的唯一发送路径是"进表情库 → send_sticker"；表情包功能关掉时那条路也没了，
+      // 留着它会真的花钱生成一张发不出去的图（2026-10-17 审查）
+      if ((!imageGenEnabled || !stickerEnabled) && d.name === 'generate_image') return false;
       // 平台能力开关（2026-10-07 协议端 1.14.22 能力接入，控制台「平台能力」页）：
       // 关掉就连工具带提示词一起撤 —— 与"表情包/搜索/ASR"同一口径，
       // 留着只会让模型去调一个必然不可用的工具。映射表在 core/platform-gates.js（与测试共用一份）。
