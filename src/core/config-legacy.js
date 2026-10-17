@@ -131,7 +131,7 @@ export const DEFAULT_CONFIG = {
     },
     metaso: {
       apiKey: '',                     // 留空时回退环境变量 METASO_API_KEY（无 key 也尝试官方免费额度）
-      baseUrl: 'https://metaso.cn/api/open/v1/search',
+      baseUrl: 'https://metaso.cn/api/v1/search',   // 官方路径；/api/open/v1/search 是 404（issue #38）
       count: 6,
       timeoutMs: 20000
     },
@@ -584,9 +584,43 @@ export const DEFAULT_CONFIG = {
     // 本机 Node 不支持权限模型（--permission）时是否拒绝加载插件。默认 true = fail-closed：
     // 没有隔离就不执行第三方代码 —— 至于"没有隔离"这件事本身会在控制台与巡检里说明白。
     requireIsolation: true,
+    // 网络隔离：Linux 上把插件进程放进**没有网络接口**的命名空间（unshare --user --net），
+    // 插件连不出去，要联网只能走宿主的 cap.http.request（有内网拦截、体积上限、超时与审计）。
+    // 默认开（有就用）；Windows/macOS 与关了非特权 userns 的内核上做不到，控制台会如实标出来。
+    networkIsolation: true,
+    // 要求网络隔离（fail-closed）：本机做不到就**拒绝加载插件**。默认 false —— 打开它等于
+    // 在 Windows/macOS 上直接禁用整个插件生态，这个取舍交给用户自己拍。
+    requireNetworkIsolation: false,
+    // 懒启动：进程只在"第一次真的要用"时起（模型调它的工具、或有消息要观察），
+    // 空闲 idleMinutes 分钟后自动停掉（声明了 schedule 的插件不自动停 —— 它们要一直待命）。
+    // 装了十个插件也不会有十个常驻进程；代价是第一次调用多等一次进程启动（约 100ms）。
+    lazy: true,
+    idleMinutes: 15,
+    // 每个插件的资源上限（宿主强制，插件自己声明的不算）：
+    //   memoryMb      堆上限 + 常驻内存超过就重启（Linux 上采样 /proc/<pid>/statm）
+    //   callsPerMinute 工具调用每分钟上限（防模型连调打爆宿主；周期任务不受此限）
+    limits: { memoryMb: 128, callsPerMinute: 120 },
+    // 插件工具怎么交给模型：'meta'（默认）只挂一个 `plugin_call`，里面列出可用的插件工具；
+    // 'direct' 是每个插件工具各挂一个（老行为）。工具定义每轮都占提示词，装多了差别很明显。
+    toolMounting: 'meta',
+    // 发布者公钥（Ed25519，base64/hex 都认）：索引条目里写了 publisher + signature 时，
+    // 安装前会用这里的公钥验签，验不过就拒绝安装。没登记公钥的发布者按其未签名处理（如实标注）。
+    publishers: {},
+    // 撤回名单：命中就不加载、也不给模型用（条目不消失，控制台标成"已撤回"）。两种写法：
+    //   "some-plugin"          撤回该插件所有版本
+    //   "some-plugin@1.2.3"    只撤回这一个版本（发新版修复后老版本仍不许跑）
+    revoked: [],
+    // 额外的索引来源（多条，**配置顺序即优先级**：同一个 id 只取最靠前那份，落选的在页面上列出来）。
+    // 不填也能用：下面 indexUrl 那一条就是官方索引。想加第三方索引就往这里追加；
+    // 想清空所有来源（完全离线）就把这里清掉、indexUrl 也留空。
+    indexUrls: [],
     // 官方插件索引（一份 JSON）：控制台「插件」页据此列出可一键安装的插件。
-    // 默认指向本仓库的索引；自建索引改这里即可（拉取走 safe-fetch，内网被拦）。
-    indexUrl: 'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/plugins/index.json',
+    // 索引住在独立仓库 `qq-agent-plugins`（包挂它的 Release；仓库内也提交一份供 CDN 走）。
+    // 自建索引改这里即可（拉取走 safe-fetch：内网被拦、有体积与超时上限；取不动时会自动换镜像）。
+    indexUrl: 'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plugins/main/plugins/index.json',
+    // 取索引与包时的镜像前缀（形如 `https://ghproxy.example/https://github.com/...`）。
+    // 默认用内置的几个；配成空数组＝只用原始地址（不绕第三方）；也可以写自己的代理。
+    mirrorPrefixes: null,
     // 每个插件自己的配置段：{ "<插件id>": { … } }（插件通过 cap.config.get 只能读自己这段）
     settings: {}
   },
@@ -972,6 +1006,40 @@ export function asrKeySlots(asr) {
 /** 外观 v2 的「主题配色」id → v3 的强调色 id（只用于迁移，别的地方不要用这张表）。 */
 const LEGACY_PRESET_TO_ACCENT = { snow: 'indigo', mint: 'emerald', amber: 'amber', violet: 'violet', rose: 'rose' };
 
+/**
+ * 插件官方索引搬过家：原来在宿主仓库（qq-agent-plus）里，现在住在独立仓库 qq-agent-plugins。
+ * 老实例的 config.json 里存着**旧地址**，而旧地址现在只剩一张"指路牌"（索引是空的）——
+ * 界面会显示「索引里暂时没有条目」，用户完全看不出是被搬走了。
+ *
+ * 所以这里做一次**精确**迁移：只有当值**正好等于我们出厂的那个旧默认值**时才改写；
+ * 用户自己填过的地址（哪怕是别的 fork）一律不碰 —— 迁移改的是"我们的旧默认值"，不是"用户的设置"。
+ */
+const LEGACY_PLUGIN_INDEX_URL = 'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/plugins/index.json';
+
+/**
+ * 上面那条迁移的**唯一实现**（导出出来给用例直测：config 是进程内缓存的，
+ * "换个文件再读一次"测不了，所以这条得能单独调）。
+ * 只改"正好等于出厂旧默认值"的那种，其它一律原样返回。
+ */
+export function migratePluginIndexUrl(plugins) {
+  if (!plugins || typeof plugins !== 'object') return plugins;
+  if (plugins.indexUrl !== LEGACY_PLUGIN_INDEX_URL) return plugins;
+  return { ...plugins, indexUrl: DEFAULT_CONFIG.plugins.indexUrl };
+}
+
+/**
+ * 秘塔搜索的地址搬家（issue #38）：出厂默认曾经写成 `/api/open/v1/search`（404），
+ * 而默认值**会被写进 config.json** —— 只改默认值救不了已经装过的实例，得在读盘时把那一条搬过来。
+ * 只搬"正好等于旧出厂值"的，用户自己填的代理/镜像地址一律不动。
+ */
+const LEGACY_METASO_BASE_URL = 'https://metaso.cn/api/open/v1/search';
+export function migrateMetasoBaseUrl(webSearch) {
+  if (!webSearch || typeof webSearch !== 'object') return webSearch;
+  const metaso = webSearch.metaso;
+  if (!metaso || typeof metaso !== 'object' || metaso.baseUrl !== LEGACY_METASO_BASE_URL) return webSearch;
+  return { ...webSearch, metaso: { ...metaso, baseUrl: DEFAULT_CONFIG.webSearch.metaso.baseUrl } };
+}
+
 function migrateConfig(parsed) {
   // 顶层必须是对象：手改坏的 config.json 可能是 null / 5 / "x" / true（都是合法 JSON）。
   // 放它过去，下面 out.persona = … 那一步就会抛（Cannot create property 'persona' on number '5'），
@@ -1106,6 +1174,10 @@ function migrateConfig(parsed) {
   delete out.providersSourceYaml;
   delete out.providersImported;
   delete out.telemetry;
+  // 插件索引搬家（2026-10-16）：只改"等于出厂旧默认值"的那种，用户自填的地址不动（见上面的注释）
+  if (out.plugins) out.plugins = migratePluginIndexUrl(out.plugins);
+  // 秘塔搜索地址搬家（2026-10-17 issue #38）：旧出厂值是 /api/open/v1/search（404）
+  if (out.webSearch) out.webSearch = migrateMetasoBaseUrl(out.webSearch);
   if (out.server) {
     delete out.server.autoStart;
     delete out.server.closeToTray;

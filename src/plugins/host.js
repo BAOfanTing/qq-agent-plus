@@ -6,12 +6,14 @@
 // 这个类负责的四件事：起进程（带隔离参数）、按 manifest 鉴权能力调用、看住它（心跳/超时/崩溃
 // 重启/连续失败停用）、以及停机时收干净。它**不**决定插件的工具能不能给模型用 —— 那是
 // registry.js 的门控（默认拒），两边分开放，免得"加载成功"被当成"被授权"。
+import fs from 'node:fs';
 import { spawn as spawnChild } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import {
   CAP_REQUIREMENT, HOST_METHODS, encodeMessage, createLineDecoder, isResponse, previewLine, rpcError, rpcResult
 } from './protocol.js';
-import { pluginNodeArgs, probeIsolation } from './isolation.js';import { createCapabilities } from './capabilities.js';
+import { pluginLaunchSpec, probeIsolation, networkIsolationSupported } from './isolation.js';
+import { createCapabilities } from './capabilities.js';
 
 // 默认时间参数：测试会覆盖成小值，生产用这一套。
 export const HOST_DEFAULTS = Object.freeze({
@@ -49,9 +51,10 @@ export class PluginHost {
    * @param deps     注入点（测试用）：spawn / spawnSyncImpl / checkEntry / now
    */
   constructor({
-    manifest, dataDir, log = () => {}, getSettings = () => ({}),
+    manifest, dataDir, log = () => {}, getSettings = () => ({}), getSender = () => null,
     spawn = spawnChild, spawnSyncImpl = spawnSync, nodePath = process.execPath,
-    timeouts = {}, capabilities = null, now = () => Date.now(), requireIsolation = true
+    timeouts = {}, capabilities = null, now = () => Date.now(), requireIsolation = true,
+    networkIsolation = true, requireNetworkIsolation = false, limits = {}
   } = {}) {
     this.manifest = manifest;
     this.id = manifest.id;
@@ -66,9 +69,19 @@ export class PluginHost {
     // 隔离不可用时是否拒绝加载（默认拒绝）。置 false 是"我明确接受没有隔离"——
     // 那种情况下插件进程读得到 config.json，所以状态里会带 unconfined:true，控制台如实显示。
     this.requireIsolation = requireIsolation !== false;
+    // 网络：默认"有命名空间就断网"；requireNetworkIsolation = 没有网络隔离就拒绝加载（fail-closed，
+    // 给"我就是要插件连不出去"的人一个真开关 —— 默认关是因为 Windows/macOS 上根本做不到，
+    // 默认打开等于插件生态在那些平台直接不可用）
+    this.networkIsolation = networkIsolation !== false;
+    this.requireNetworkIsolation = requireNetworkIsolation === true;
+    this.limits = { memoryMb: 128, callsPerMinute: 120, ...limits };
+    this.callWindow = [];          // 最近一分钟的调用时间戳（限频用，见 #allowCall）
+    this.rssKb = 0;                // 最近一次采样到的常驻内存（Linux 读 /proc，其他平台 0）
     this.unconfined = false;
+    this.netIsolated = false;
     this.caps = capabilities ?? createCapabilities({
-      pluginId: this.id, dataDir, getSettings, log, now
+      pluginId: this.id, dataDir, getSettings, log, now,
+      getSender      // send 能力用：插件发言必须走机器人自己那条队列（守卫全在里面）
     });
 
     this.state = 'idle';           // idle | starting | running | stopping | stopped | failed
@@ -108,6 +121,9 @@ export class PluginHost {
       state: this.state,
       running: this.state === 'running',
       unconfined: this.unconfined,   // true = 本机没隔离且配置允许降级（控制台要显示出来）
+      netIsolated: this.netIsolated, // true = 插件进程在无网络的命名空间里（只能走宿主出网）
+      rssKb: this.rssKb,             // 最近一次采样到的常驻内存（Linux；其他平台 0）
+      limits: { ...this.limits },
       restarts: this.restarts,
       startedAt: this.startedAt,
       lastError: this.lastError,
@@ -154,18 +170,33 @@ export class PluginHost {
       // 配置里明确关掉了 requireIsolation：照常起，但这件事必须吵闹地说出来（日志 + 状态 + 控制台）
       this.log(`[plugin:${this.id}] ⚠️ 未隔离运行（${probe.error}）：该插件进程读得到 config.json，风险自负`);
     }
+    // 网络隔离：能拦就拦（Linux 上的网络命名空间）。拦不住时按配置决定是拒绝加载还是照跑并说明。
+    const netProbe = networkIsolationSupported({ spawn: this.spawnSyncImpl, nodePath: this.nodePath });
+    if (this.requireNetworkIsolation && !netProbe.ok) {
+      this.#fail(`要求网络隔离但本机做不到：${netProbe.error}（换 Linux，或在配置里关掉 plugins.requireNetworkIsolation）`);
+      return false;
+    }
 
     try {
-      // 隔离参数按**本插件自己的目录**现算（probeIsolation 只返回"能不能用"的结论，
-      // 不缓存参数 —— 缓存一份会把第一个插件的目录发给所有插件）
+      // 启动方式（命令 + 参数）由 isolation.js 现算：隔离参数按**本插件自己的目录**算
+      // （probeIsolation 只返回"能不能用"的结论，不缓存参数 —— 缓存一份会把第一个插件的目录发给所有插件）
       // 未隔离时用最朴素的参数起（不加 --permission —— 那组参数在本机跑不起来）
-      const spawnArgs = this.unconfined ? [] : pluginNodeArgs({ pluginDir: this.#pluginDir() });
-      this.child = this.spawnImpl(this.nodePath, [...spawnArgs, entry], {
+      const spec = pluginLaunchSpec({
+        pluginDir: this.#pluginDir(),
+        unconfined: this.unconfined,
+        networkIsolation: this.networkIsolation && !this.unconfined,
+        memoryMb: this.limits.memoryMb,
+        spawn: this.spawnSyncImpl,
+        nodePath: this.nodePath
+      });
+      this.netIsolated = spec.netIsolated;
+      this.child = this.spawnImpl(spec.command, [...spec.args, entry], {
         cwd: this.#pluginDir(),
         env: childEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true
       });
+      if (this.netIsolated && this.unconfined) this.log(`[plugin:${this.id}] 网络已隔离（进程隔离未开启）`);
     } catch (error) {
       this.#fail(`启动失败：${error?.message ?? error}`);
       return false;
@@ -200,10 +231,65 @@ export class PluginHost {
     return true;
   }
 
-  /** 让插件执行一个工具调用。超时/进程不可用都会抛带 code 的错误。 */
+  /** 让插件执行一个工具调用。超时/进程不可用/超频都会抛带 code 的错误。 */
   async callTool(name, args, { timeoutMs } = {}) {
+    this.#allowCall('callTool');
     return this.#request(HOST_METHODS.callTool, { name: String(name ?? ''), args: args ?? {} },
       timeoutMs ?? this.timeouts.callTimeoutMs);
+  }
+
+  /**
+   * 调用频次闸门：**每分钟上限**（默认 120）。守的是宿主自己 —— 模型可以在一轮里连调同一个工具，
+   * 或者一个坏插件让工具"总是失败"引发重试风暴；没有这道闸门，宿主会被自己的工具表拖垮。
+   * 周期任务（宿主自己驱动，不由模型触发）不设限。
+   */
+  #allowCall(kind) {
+    const limit = Number(this.limits.callsPerMinute) || 0;
+    if (limit <= 0) return;
+    const cutoff = this.now() - 60000;
+    this.callWindow = this.callWindow.filter((at) => at > cutoff);
+    if (this.callWindow.length >= limit) {
+      this.stats.rateLimited = (this.stats.rateLimited || 0) + 1;
+      throw Object.assign(new Error(`插件 ${this.id} 调用太频繁（每分钟上限 ${limit} 次，来源：${kind}）`), { code: 'E_RATE_LIMIT' });
+    }
+    this.callWindow.push(this.now());
+  }
+
+  /**
+   * 采样插件进程的常驻内存（Linux 读 /proc/<pid>/statm，其他平台返回 0 = 采样不到）。
+   * 超上限不直接杀 —— 交给看门狗按"异常"处理（重启 + 日志 + 计数），避免误杀正在干活的插件。
+   */
+  #sampleRss() {
+    const pid = this.child?.pid;
+    if (!pid || process.platform !== 'linux') return 0;
+    try {
+      const statm = fs.readFileSync(`/proc/${pid}/statm`, 'utf8').trim().split(/\s+/);
+      const pages = Number(statm[1]) || 0;                    // [1] = resident
+      this.rssKb = Math.round((pages * 4096) / 1024);
+    } catch {
+      // 读不到就**清零**，别保留上一次的值：进程刚重启时 pid 可能还不存在，留着旧进程的高水位
+      // 会把刚起来的那个当成"超限"直接杀掉。清零的代价只是这一拍不设防（堆上限仍由 V8 管）。
+      this.rssKb = 0;
+    }
+    return this.rssKb;
+  }
+
+  /**
+   * 内存超限就重启（返回 true = 已触发重启）。
+   *
+   * `limits.memoryMb` 是 **V8 堆上限**；常驻内存（RSS）会多出 Node 二进制、堆外的 C++ 结构等开销，
+   * 所以看门狗用 1.5 倍作为阈值 —— 两者用同一个数会自相矛盾（RSS 永远先撞线，
+   * 表现是"插件刚起来就被判超限"）。真把上限设得很小时，进程可能还没到 init 就被 V8 自己按堆上限带走，
+   * 那是另一回事（日志里能看到退出码）。
+   */
+  #enforceMemoryLimit() {
+    const cap = Number(this.limits.memoryMb) || 0;
+    if (cap <= 0 || !this.rssKb) return false;
+    if (this.rssKb <= cap * 1.5 * 1024) return false;
+    this.stats.memoryKills = (this.stats.memoryKills || 0) + 1;
+    this.#raw(`[插件内存超过上限] 实测 ${(this.rssKb / 1024).toFixed(0)}MB > ${cap}MB，重启该插件进程`);
+    this.#kill();
+    return true;
   }
 
   /** 周期任务由宿主驱动（这样插件重启后周期不会丢），失败不向上抛。 */
@@ -226,24 +312,47 @@ export class PluginHost {
     return this.#notify(HOST_METHODS.observe, event);
   }
 
-  /** 停机：先请它自己退，宽限期内没动静就 kill。 */
+  /**
+   * 停机：先请它自己退，宽限期内没动静就 kill。
+   *
+   * ⚠️ 只收**这一次停机开始时的那一代**子进程：宽限期内如果被重新 start 了（懒启动的空闲停遇上
+   * 一次新调用），手里的 child 已经换了人 —— 继续按 this.child 收就会把新进程 SIGKILL 掉，
+   * 然后因为 stopping 被清掉而当崩溃重启，插件在"已停掉"之后又活过来（日志还写着"空闲 N 分钟"）。
+   */
   async stop() {
     if (this.state === 'idle' || this.state === 'stopped') { this.state = 'stopped'; return; }
     this.stopping = true;
     this.wakeSleep?.();          // 正在退避等待重启的话，立刻放行（别再等满退避）
     this.state = 'stopping';
+    const target = this.child;   // 这一代
     try { this.#notify(HOST_METHODS.shutdown, {}); } catch { /* 已经不在就算了 */ }
-    const deadline = this.now() + this.timeouts.shutdownGraceMs;
-    while (this.child && !this.child.killed && this.#alive() && this.now() < deadline) {
+    // 宽限期用**真实时钟**：注入的 now 可能被测试冻住，用它会让这个循环永远转下去
+    const deadline = Date.now() + this.timeouts.shutdownGraceMs;
+    while (target && this.child === target && this.#alive(target) && Date.now() < deadline) {
       await delay(50);
     }
-    this.#kill();
+    if (this.child === target) {
+      this.#kill();
+      // 等它**真的退出**再返回：卸载/回退会在 stop() 之后 rename 插件目录，而 Windows 上
+      // rename 一个存活进程的 cwd 会 EPERM/EBUSY。上限 1.5 秒，等不到也不阻塞（日志里看得到）。
+      await this.#waitExit(target, 1500);
+      this.state = 'stopped';
+    }
     this.caps.flush();
-    this.state = 'stopped';
+  }
+
+  /** 等某个子进程退出（最多 ms 毫秒）。已经退了的立刻返回。 */
+  #waitExit(child, ms = 1500) {
+    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const done = (ok) => { clearTimeout(timer); resolve(ok); };
+      const timer = setTimeout(() => done(false), ms);
+      child.once('exit', () => done(true));
+    });
   }
 
   #pluginDir() { return this.manifest.dir || ''; }
-  #alive() { return Boolean(this.child) && this.child.exitCode === null && this.child.signalCode === null; }
+  #alive(child = this.child) { return Boolean(child) && child.exitCode === null && child.signalCode === null; }
   #settingsForInit() { return structuredClone(this.getSettings() ?? {}); }
 
   #fail(reason) {
@@ -265,6 +374,9 @@ export class PluginHost {
     this.heartbeatMisses = 0;
     this.heartbeatTimer = setInterval(() => {
       if (this.state !== 'running') return;
+      // 每一拍顺手采一次内存：超上限就走"当成异常重启"那条路（不静默杀，也不放任它吃到把机器拖垮）
+      this.#sampleRss();
+      if (this.#enforceMemoryLimit()) return;
       this.#request(HOST_METHODS.ping, {}, Math.max(1000, Math.floor(this.timeouts.heartbeatMs / 2)))
         .then(() => { this.heartbeatMisses = 0; })
         .catch(() => {
@@ -308,7 +420,7 @@ export class PluginHost {
     if (this.restarts >= this.timeouts.maxRestarts) {
       // 连续崩够次数就停用：空转重启只会一直刷日志、一直烧 CPU
       this.state = 'failed';
-      this.#fail(`连续崩溃 ${this.restarts} 次（最后 code=${code}, signal=${signal}），已停用该插件`);
+      this.#fail(`连续崩溃 ${this.restarts + 1} 次（已自动重启 ${this.restarts} 次，最后 code=${code}, signal=${signal}），已停用该插件`);
       return;
     }
     const wait = this.timeouts.restartBackoffMs[Math.min(this.restarts, this.timeouts.restartBackoffMs.length - 1)];

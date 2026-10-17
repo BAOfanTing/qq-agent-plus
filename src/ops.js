@@ -27,6 +27,7 @@ import { readTextBounded } from './core/http-body.js';
 import { SNOWLUMA_BASELINE_IMAGE, createSnowlumaUpdater } from './core/snowluma-update.js';
 import { readOwnerUin, sendOwnerText } from './core/notify-owner.js';
 import { pruneAudit } from './core/audit-log.js';
+import { installPlugin, readPluginInstallInfo, sha256Of } from './plugins/install.js';
 import { resolveModelPrice, modelLabel, setRemotePrices, setChannelPrices } from './pricing/model-prices.js';
 
 const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -2151,6 +2152,81 @@ function cmdAuditPrune(args) {
   return 0;
 }
 
+// ───────────────────────────────── plugins ─────────────────────────────────
+
+/**
+ * 插件子命令组。做的是"不用打开控制台也能装/看/停"这件事，重点是 `install <文件>`：
+ * 别人发你一个 `.tar.gz`、或者你自己刚 `plugin-pack` 出来一个，这是最短的一条路
+ * （控制台的"手动安装"要一个公开 URL + 手填 sha256，拷目录要 SSH 权限）。
+ *
+ * 本地文件安装的口径：**sha256 是算出来给你核对的**，不是要你提供 —— 内容就是身份。
+ * 装完来源记录里写"本地文件：<文件名>"，控制台「已安装」里能看到。
+ */
+async function cmdPlugins(args) {
+  const sub = args.find((a) => !a.startsWith('-')) || '';
+  if (wantsHelp(args) || !sub) { say(HELP.plugins); return sub ? 0 : 2; }
+  const cfg = config({ data: optValue(args, '--data', null) });
+
+  if (sub === 'list') {
+    const root = path.join(cfg.dataDir, 'plugins');
+    let names = [];
+    try { names = fs.readdirSync(root).filter((name) => !name.startsWith('.')); } catch { /* 还没装过 */ }
+    if (!names.length) { noteLine(`数据目录 ${cfg.dataDir} 下没有插件`); return 0; }
+    section('已装插件');
+    for (const name of names) {
+      let manifest = null;
+      try { manifest = JSON.parse(fs.readFileSync(path.join(root, name, 'plugin.json'), 'utf8')); } catch { /* 坏包 */ }
+      const info = readPluginInstallInfo({ dataDir: cfg.dataDir, id: name });
+      noteLine(`${name}${manifest ? ` v${manifest.version}` : '（plugin.json 读不了）'}`
+        + `｜能力 ${(manifest?.capabilities || []).join('/') || '?'}`
+        + `｜来源 ${info ? [info.source, info.publisher ? `${info.publisher}${info.signatureVerified ? '（签名已验证）' : '（未验证）'}` : ''].filter(Boolean).join(' ') : '（没有来源记录）'}`);
+    }
+    const enabledIds = readPluginEnabledIds(cfg);
+    noteLine(`授权（会真跑）的：${enabledIds.length ? enabledIds.join(', ') : '（一个都没有——装上 ≠ 授权）'}`);
+    return 0;
+  }
+
+  if (sub === 'install') {
+    const file = args.filter((a) => !a.startsWith('-'))[1] || '';
+    if (!file) { ngLine('要指定一个包文件：node src/ops.js plugins install <文件.tar.gz>'); return 2; }
+    const full = path.resolve(file);
+    if (!fs.existsSync(full)) { ngLine(`找不到文件：${full}`); return 1; }
+    const buffer = fs.readFileSync(full);
+    if (!buffer.length) { ngLine('文件是空的'); return 1; }
+    try {
+      const result = await installPlugin({
+        tarball: buffer, dataDir: cfg.dataDir, log: noteLine,
+        source: `本地文件：${path.basename(full)}`, hostVersion: readRepoVersion()
+      });
+      section('安装完成');
+      okLine(`插件 ${result.id} v${result.version}${result.upgraded ? '（升级，旧版已备份）' : ''}`);
+      noteLine(`包内容 sha256：${sha256Of(buffer)}`);
+      noteLine('这一步只是"装上"。要让它跑，还得授权：控制台左侧「插件」页点启用，');
+      noteLine('或者写进配置 plugins.enabledIds（并确保 plugins.enabled 为 true）。');
+      return 0;
+    } catch (error) {
+      ngLine(`安装失败：${error?.message ?? error}${error?.code ? `（${error.code}）` : ''}`);
+      return 1;
+    }
+  }
+
+  ngLine(`认不得的子命令：${sub}（可用：list / install）`);
+  return 2;
+}
+
+/** 从配置里读"已授权会真跑"的插件 id（只读，不写盘）。 */
+function readPluginEnabledIds(cfg) {
+  try {
+    const json = JSON.parse(fs.readFileSync(path.join(cfg.dataDir, 'config.json'), 'utf8'));
+    return Array.isArray(json?.plugins?.enabledIds) ? json.plugins.enabledIds : [];
+  } catch { return []; }
+}
+
+/** 本仓版本号（来源记录里写"装的时候宿主是什么版本"）。 */
+function readRepoVersion() {
+  try { return JSON.parse(fs.readFileSync(path.join(REPO_DIR, 'package.json'), 'utf8')).version || ''; } catch { return ''; }
+}
+
 // ───────────────────────────────── 帮助 ─────────────────────────────────
 
 const HELP = {
@@ -2174,6 +2250,13 @@ OneBot get_status、协议端版本、Docker 套接字可读写性、
 
 环境变量: QQ_AGENT_DATA_DIR / QQ_AGENT_ONEBOT_HTTP_PORT`,
 
+  plugins: `用法: node src/ops.js plugins <子命令> [--data=目录]
+
+  list                              列出已装插件（版本/能力/来源）与已授权清单
+  install <文件.tar.gz>             从**本地文件**装一个插件（别人发你的包、或你自己打的包）
+
+本地文件安装不需要你提供 sha256 —— 装完会打印算出来的值供核对；来源记录里写"本地文件：<文件名>"。
+装上不等于授权：要让它跑，还得在控制台点启用（或写进 plugins.enabledIds）。`,
   audit: `用法: node src/ops.js audit [--app=目录] [--data=目录] [--dir=部署根目录]
 
 服务 + 代码 + 数据体检（只读，不会改配置或重启服务）：
@@ -2339,6 +2422,7 @@ function printMainHelp() {
   say('  face-names      合并三个来源导出表情名对照表');
   say('  deploy          非交互部署（需 --confirm）');
   say('  console         SSH 隧道 + 打开控制台（Windows/macOS/Linux）');
+  say('  plugins         插件：本地文件安装 / 列已装的（node src/ops.js plugins install <文件>）');
   say('  install-timers  生成并安装 systemd user 定时器（需 --confirm）');
   say('  health-check    健康巡检（控制台/协议端/入站水位/磁盘/更新状态）；退出码 0=健康');
   say('  snowluma-version 看协议端（SnowLuma）镜像版本与是否落后于项目基线');
@@ -2359,6 +2443,7 @@ const COMMANDS = {
   scan: { run: cmdScan, help: HELP.scan },
   'watch-send': { run: cmdWatchSend, help: HELP['watch-send'] },
   'watch-login': { run: cmdWatchLogin, help: HELP['watch-login'] },
+  plugins: { run: cmdPlugins, help: HELP.plugins },
   guard: { run: cmdGuard, help: HELP.guard },
   'face-names': { run: cmdFaceNames, help: HELP['face-names'] },
   deploy: { run: cmdDeploy, help: HELP.deploy },

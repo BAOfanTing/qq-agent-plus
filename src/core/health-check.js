@@ -10,7 +10,7 @@ import { budgetStatus } from './budget.js';
 import { todayKey } from './util.js';
 import { readJsonBounded } from './http-body.js';
 import { parsePluginManifest } from '../plugins/manifest.js';
-import { permissionFlagSupported } from '../plugins/isolation.js';
+import { permissionFlagSupported, isolationSummary } from '../plugins/isolation.js';
 import {
   SNOWLUMA_BASELINE_IMAGE, SNOWLUMA_MIN_RECOMMENDED, readComposeEnv, parseImage, compareVersions
 } from './snowluma-update.js';
@@ -95,9 +95,16 @@ function readPluginConfig(dataDir) {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
     const plugins = cfg?.plugins && typeof cfg.plugins === 'object' ? cfg.plugins : {};
-    return { enabled: plugins.enabled === true, requireIsolation: plugins.requireIsolation !== false, enabledIds: plugins.enabledIds || [] };
+    return {
+      enabled: plugins.enabled === true,
+      requireIsolation: plugins.requireIsolation !== false,
+      requireNetworkIsolation: plugins.requireNetworkIsolation === true,
+      networkIsolation: plugins.networkIsolation !== false,
+      revoked: Array.isArray(plugins.revoked) ? plugins.revoked : [],
+      enabledIds: plugins.enabledIds || []
+    };
   } catch {
-    return { enabled: false, requireIsolation: true, enabledIds: [] };
+    return { enabled: false, requireIsolation: true, networkIsolation: true, requireNetworkIsolation: false, revoked: [], enabledIds: [] };
   }
 }
 
@@ -379,12 +386,24 @@ export async function runHealthCheck(opts = {}) {
         else if (parsed.manifest.id !== entry.name) broken.push(`${entry.name}（manifest 的 id 与目录名不一致）`);
       }
       const cannotRun = !permissionFlagSupported() && pluginCfg.requireIsolation !== false;
+      // 网络隔离：本机做不到时——要求了就报红（fail-closed 说好的不许装），没要求就如实说明（不报红，
+      // 否则 Windows/macOS 上每次巡检都红，等于把红变成噪音）
+      const netOk = isolationSummary().net;
+      const netBlocked = pluginCfg.networkIsolation !== false && pluginCfg.requireNetworkIsolation === true && !netOk;
+      const revoked = pluginCfg.revoked.length
+        ? `撤回名单 ${pluginCfg.revoked.length} 条（${pluginCfg.revoked.slice(0, 3).join(', ')}${pluginCfg.revoked.length > 3 ? ' …' : ''}）`
+        : '';
       const detail = [
         `已装 ${entries.length} 个，授权 ${Array.isArray(pluginCfg.enabledIds) ? pluginCfg.enabledIds.length : 0} 个`,
         broken.length ? `有问题：${broken.join('; ')}` : '',
-        cannotRun ? '本机 Node 不支持权限隔离，插件不会被加载（换 Node，或明确关掉 plugins.requireIsolation）' : ''
+        revoked,
+        cannotRun ? '本机 Node 不支持权限隔离，插件不会被加载（换 Node，或明确关掉 plugins.requireIsolation）' : '',
+        !netOk && pluginCfg.networkIsolation !== false && !pluginCfg.requireNetworkIsolation
+          ? '插件进程的网络未隔离（本机没有可用的网络命名空间）：插件能自己连出去，控制台里也会显示'
+          : '',
+        netBlocked ? '要求网络隔离但本机做不到，插件不会被加载（换 Linux，或关掉 plugins.requireNetworkIsolation）' : ''
       ].filter(Boolean).join('；');
-      add('plugins', broken.length === 0 && !cannotRun, detail);
+      add('plugins', broken.length === 0 && !cannotRun && !netBlocked, detail);
     }
   } catch (error) {
     add('plugins', false, error?.message ?? String(error));

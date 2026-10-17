@@ -17,6 +17,8 @@ const MAX_WRITES_PER_MIN = 120;
 const MAX_LOG_CHARS = 2000;
 const MAX_HTTP_CHARS = 40000;          // 与 web_fetch 的 2 万字符同档：插件也不该把整站塞进上下文
 const MAX_INCIDENT_LOGS_PER_MIN = 5;   // 插件崩溃循环时不能把管理员异常面板刷满
+const MAX_SEND_CHARS = 800;            // 单条发言上限（比模型的回复短：插件不该长篇大论）
+const MAX_SENDS_PER_MIN = 6;           // 每个插件每分钟最多说几句 —— 防"刷屏"这种最直观的作恶
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
 
@@ -32,19 +34,22 @@ export function pluginDataDir(dataDir, pluginId) {
  * @param log        宿主日志函数（约定与各 manager 一致：Error 实例才会进异常面板）
  */
 export function createCapabilities({
-  pluginId, dataDir, getSettings = () => ({}), log = () => {}, now = () => Date.now()
+  pluginId, dataDir, getSettings = () => ({}), log = () => {}, now = () => Date.now(),
+  getSender = () => null
 } = {}) {
   // 注入点先落到本地常量：`node src/ops.js scan --strict`（CI 门禁）只认 const/let 声明与
   // KNOWN_IGNORE 里的名字，**直接调用解构参数的默认值会被判成"未定义调用"**
   //（同一约定见 src/core/ledger-retention.js 顶部那段注释）。
   const settingsOf = getSettings;
   const nowFn = now;
+  const senderOf = getSender;
   const dir = pluginDataDir(dataDir, pluginId);
   const storageFile = path.join(dir, 'storage.json');
   let storage = null;
   const writeTimes = [];
   const incidentLogs = [];
-  const stats = { storageWrites: 0, storageBytes: 0, logLines: 0, incidentLogs: 0, httpRequests: 0 };
+  const stats = { storageWrites: 0, storageBytes: 0, logLines: 0, incidentLogs: 0, httpRequests: 0, sends: 0 };
+  const sendTimes = [];
 
   const loadStorage = () => {
     if (storage) return storage;
@@ -120,6 +125,35 @@ export function createCapabilities({
       log(line);
       return { ok: true };
     },
+    /**
+     * **代机器人发言**（v1.1）。这是信任面最大的一条能力，所以：
+     *   · 强制走宿主的发送队列（`sender.sendTextBatch`）—— 非活跃时间、观察/暂停模式、群白名单、
+     *     禁言预检、限频、outbox 未知写入记账，全都在那条路上，插件绕不过去；
+     *   · 每个插件每分钟最多说 MAX_SENDS_PER_MIN 句（防刷屏：最直观的作恶方式）；
+     *   · 单条长度上限；内容过 sanitizeUserText（与作者文本同一口径）；
+     *   · 每次发言都写一条带插件 id 的日志 —— 控制台里查得到"这句话是哪个插件说的"。
+     * 宿主没有发送队列时**明确报错**，不假装发成功。
+     */
+    [CAP_METHODS.sendText]: async ({ chatKey, text } = {}) => {
+      const target = String(chatKey ?? '').trim();
+      const body = sanitizeUserText(String(text ?? '').trim()).slice(0, MAX_SEND_CHARS);
+      // 收紧到"数字 id"：原先的 \S+ 放行 `group:123:0` 这类形状 —— 下游 `chatKey.split(':')` 只取
+      // 前两段（消息真发到群 123），但禁言预检拿的是整串（必失败 → 当成"未禁言"），每会话限频的桶键
+      // 也是整串（每次换后缀就是一个新预算桶）→ 一道禁言、一道限频双双被绕。
+      if (!/^(group|private):\d+$/.test(target)) throw fail('E_ARGS', 'chatKey 必须是 group:<数字群号> 或 private:<数字QQ号>');
+      if (!body) throw fail('E_ARGS', 'text 不能为空');
+      const sender = senderOf();
+      if (!sender?.sendTextBatch) throw fail('E_NO_SENDER', '宿主没有可用的发送队列（插件暂时发不了言）');
+      const cutoff = nowFn() - 60000;
+      while (sendTimes.length && sendTimes[0] < cutoff) sendTimes.shift();
+      if (sendTimes.length >= MAX_SENDS_PER_MIN) throw fail('E_RATE', `说话太频繁（每分钟上限 ${MAX_SENDS_PER_MIN} 句）`);
+      sendTimes.push(nowFn());     // 先记时间再发：失败也占额度，免得一个总失败的插件无限重试刷屏
+      await sender.sendTextBatch(target, [body], {});
+      stats.sends += 1;
+      log(`[plugin:${pluginId}] 以机器人身份在 ${target} 说了一句：${body.slice(0, 60)}`);
+      return { ok: true, chatKey: target, chars: body.length };
+    },
+
     [CAP_METHODS.httpRequest]: async ({ url, maxChars } = {}) => {
       const target = String(url ?? '').trim();
       if (!target) throw fail('E_ARGS', 'url 不能为空');

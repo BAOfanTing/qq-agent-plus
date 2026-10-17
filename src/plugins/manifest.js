@@ -3,7 +3,7 @@
 //
 // 契约（apiVersion 1，见 docs/PLUGINS.md）：
 //   {
-//     "id": "mc-status",                     // 小写字母数字与连字符，2-32 位
+//     "id": "weather",                       // 小写字母数字与连字符，2-32 位
 //     "apiVersion": 1,
 //     "name": "Minecraft 服务器状态",          // 给人看的名字
 //     "version": "1.0.0",
@@ -29,7 +29,9 @@ export const PLUGIN_CAPABILITIES = Object.freeze([
   'http',       // 经宿主发 HTTP（走 safe-fetch 的守卫，便于审计；**不是**安全边界，见 docs/PLUGINS.md）
   'log',        // 经宿主写日志（带插件前缀 + 脱敏）
   'storage',    // 经宿主读写自己那点状态（宿主侧落盘，插件进程没有写权限）
-  'config'      // 读自己那段配置（plugins.settings.<id>）
+  'config',     // 读自己那段配置（plugins.settings.<id>）
+  'send'        // **代机器人发言**（走宿主的发送队列：非活跃时间、观察/暂停模式、群白名单、
+                //  禁言预检、限频、outbox 记账全都在里面）。信任面最大的一条，界面上会明确标出来
 ]);
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
@@ -125,7 +127,8 @@ export function parsePluginManifest(raw, { dir = '' } = {}) {
   if (entry.includes('\0')) return { ok: false, error: 'entry 含非法字符' };
   const entryAbs = path.resolve(dir, entry);
   if (dir && entryAbs !== dir && !entryAbs.startsWith(dir + path.sep)) {
-    return { ok: false, error: `entry 必须落在插件目录内，实际指向 ${entryAbs}` };
+    // 不回显 entryAbs：这条错误会一路显示到控制台，绝对路径属于不该漏的服务器细节
+    return { ok: false, error: `entry 必须落在插件目录内（收到的是 ${JSON.stringify(raw.entry)}）` };
   }
 
   const rawTools = raw.tools ?? [];

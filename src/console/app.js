@@ -59,7 +59,10 @@ import {
   incidentDatabasePath
 } from '../pilots/incident-pilot.js';
 import { safeFetch, safeFetchBinary } from '../llm/safe-fetch.js';
-import { installPlugin, uninstallPlugin, fetchPluginIndex } from '../plugins/install.js';
+import { DEFAULT_CONFIG } from '../core/config.js';
+import { uiBuildStamp } from './ui-build.js';
+import { installPlugin, uninstallPlugin, fetchPluginIndexes, sha256Of, MAX_PLUGIN_ARCHIVE_BYTES, rollbackPlugin, createIndexRevokedCache, indexResultForDisplay } from '../plugins/install.js';
+import { DEFAULT_MIRROR_PREFIXES, fetchBinaryWithMirrors } from '../plugins/mirrors.js';
 // 平台能力门控的元数据（键→标签/工具/默认取向/配额默认）：控制台不手抄第二份，防漂移
 import {
   PLATFORM_DEFAULT_OFF, PLATFORM_GATE_LABELS, PLATFORM_QUOTA_DEFAULTS, PLATFORM_TOOL_GATES,
@@ -88,20 +91,15 @@ try {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.resolve(__dirname, '..', '..', 'ui');
 
-// 前端构建戳：进程启动时按 ui/ 关键文件的体积+修改时间算一次。
+// 前端构建戳：按 ui/ 关键文件的体积+修改时间算，**每次请求现算**（不缓存在模块常量里）。
 // 用途：/api/status 带上它，前端轮询发现戳变了就提示"控制台已更新，点此刷新"
 // —— 控制台是单页应用，部署不会自动替换已打开的页面，此前只能靠人记得按 F5。
-function uiBuildStamp() {
-  return ['index.html', 'app.js', 'style.css', 'stable-features.js', 'status-refresh.js', 'auto-update-network.js']
-    .map((name) => {
-      try {
-        const s = fs.statSync(path.join(UI_DIR, name));
-        return `${name}:${s.size}:${Math.round(s.mtimeMs)}`;
-      } catch { return `${name}:missing`; }
-    })
-    .join('|');
-}
-const UI_BUILD = uiBuildStamp();
+//
+// ⚠️ 为什么必须现算（2026-10-16）：控制台的 ui/ 是**每个请求现从磁盘读**的（见 handleHttp 的
+// 静态分支），所以"只改前端"根本不需要重启进程 —— 而重启会掐断 OneBot 连接（实测每次约 3 秒，
+// 今天一天 8 次部署就是 8 次断线）。戳若在开机时算死，"不重启发前端"这条路就不成立：已打开的
+// 页面永远收不到刷新提示，用户会拿着旧 JS 对着新 CSS 跑。代价是 6 次 statSync / 次请求，只在
+// /api/status 这条路上，可以忽略。
 
 // ── UI 静态资源的版本令牌（改进方案 §11「给 core/* 加内容哈希长缓存」）──
 // 令牌 = 文件内容的 sha256 前 12 位，按 (size, mtime) 记忆，避免每次请求重算哈希。
@@ -579,11 +577,26 @@ export function createApp({
   let identityPilotError = '';
   // 定时提醒：落盘持久化（重启不丢），到点由编排器走主动唤醒让模型说出来
   const reminders = new ReminderStore();
+  // 索引结果的 10 分钟缓存（声明放在注册表之前：注册表要读它的「被撤回」清单）
+  let pluginIndexCache = { key: '', at: 0, result: { plugins: [], skipped: [], sources: [] } };
+
+  /**
+   * 索引里被撤回的条目（`id@版本`）：注册表据此拒载 —— 集中下架，不用每台机器改配置。
+   * 缓存语义（"拉取失败时沿用旧名单，失败不许清空"）在 createIndexRevokedCache 里，那里有用例钉着。
+   */
+  const indexRevokedCache = createIndexRevokedCache();
+  // 上次成功读到的索引（失败时回落到它；见 indexResultForDisplay 的注释）
+  let lastGoodPluginIndex = null;
+  const indexRevokedRules = () => indexRevokedCache.rules();
   const pluginRegistry = new PluginRegistry({
     root: path.join(DATA_DIR, 'plugins'),   // 约定目录：数据目录不会被版本更新覆盖（见 docs/PLUGINS.md）
     dataDir: DATA_DIR,
     log: moduleLog('plugins'),
-    getConfig
+    getConfig,
+    // 索引里标了 revoked 的插件一律拒载（索引改一次，所有机器下次读到就生效）
+    getIndexRevoked: indexRevokedRules,
+    // 插件声明 send 能力后，发言走机器人自己那条发送队列（禁言/限频/白名单/记账全在里面）
+    getSender: () => sender
   });
   const orchestrator = new Orchestrator({
     store,
@@ -2503,25 +2516,129 @@ export function createApp({
   // ── 插件（v1）：列表 / 索引 / 安装 / 卸载 / 启停 / 重载 ───────────────────────────
   // 插件的这些动作**全走这里、不进设置页的保存分支**：装/卸/启停要起停子进程并重排工具表，
   // 是运行时动作而不是配置表单；设置页那一栏只负责渲染与调用这些接口。
-  let pluginIndexCache = { url: '', at: 0, list: [] };
-  const loadPluginIndex = async () => {
-    const url = String(getConfig().plugins?.indexUrl || '').trim();
-    if (!url) return [];
-    if (pluginIndexCache.url === url && Date.now() - pluginIndexCache.at < 10 * 60_000) return pluginIndexCache.list;
-    // 索引也是用户填的 URL → 走 safe-fetch（内网/SSRF/体积/超时都在里面）
-    const list = await fetchPluginIndex({ url, fetchText: safeFetch, log: moduleLog('plugins') });
-    pluginIndexCache = { url, at: Date.now(), list };
-    return list;
+  // 索引来源清单：`plugins.indexUrls`（数组，顺序即优先级）+ 旧配置 `plugins.indexUrl`（单条，仍认）。
+  // 两者都空 = 不看任何索引（页面上如实说明），不会静默回落到某个内置地址。
+  const pluginIndexSources = () => {
+    const cfg = getConfig().plugins || {};
+    const sources = [];
+    const push = (url, name) => {
+      const target = String(url || '').trim();
+      if (!target || sources.some((item) => item.url === target)) return;
+      sources.push({ url: target, name: String(name || '').trim() });
+    };
+    for (const item of Array.isArray(cfg.indexUrls) ? cfg.indexUrls : []) {
+      if (item && typeof item === 'object') push(item.url, item.name);
+      else push(item, '');
+    }
+    // 旧单条配置（plugins.indexUrl）来的那条：如果它就是出厂的那份官方索引，名字就叫"官方索引"，
+    // 否则叫"自定义索引" —— 页面上写着"索引来源：自定义索引"会让人以为缺省值被改过
+    push(cfg.indexUrl, String(cfg.indexUrl || '').trim() === String(DEFAULT_CONFIG.plugins?.indexUrl || '').trim()
+      ? '官方索引'
+      : '自定义索引');
+    return sources;
   };
-  const pluginError = (res, error, status = 400) =>
-    json(res, status, { ok: false, code: error?.code || '', error: String(error?.message ?? error) });
+  /** 镜像配置：默认用内置前缀列表；`plugins.mirrorPrefixes` 可以改成自己的（空数组＝只用原始地址）。 */
+  const pluginMirrorConfig = () => {
+    const configured = getConfig().plugins?.mirrorPrefixes;
+    return { prefixes: Array.isArray(configured) ? configured : DEFAULT_MIRROR_PREFIXES };
+  };
+
+  const loadPluginIndex = async () => {
+    const sources = pluginIndexSources();
+    const key = sources.map((item) => `${item.name}|${item.url}`).join(' ');
+    if (!sources.length) return { plugins: [], skipped: [], sources: [] };
+    if (pluginIndexCache.key === key && Date.now() - pluginIndexCache.at < 10 * 60_000) return pluginIndexCache.result;
+    // 索引地址是用户填的 URL → 走 safe-fetch（内网/SSRF/体积/超时都在里面）
+    // hostVersion 用于兼容门控（条目标了 minVersion 时判断本机够不够），不是网络参数
+    // ⚠️ **索引不走第三方镜像**，只走你配置的那个地址（原始 raw 或你自己的地址）。
+    // 因为索引是信任根：镜像能替换"该装什么"（塞一条它自己的插件 + 它自己的 sha256），
+    // 而 sha256 只能证明"包与索引里写的一致"——索引被换掉时它救不了你。
+    // 包则不同：包被 sha256 钉住，走镜像最多是"取不到"，不可能"取到假的还装上"（见 mirrors.js）。
+    // 索引拉不动时的兜底是三件事：10 分钟缓存、页面明确报错、以及你可以把 indexUrls 指向自己的 fork/镜像。
+    // 索引是结构化文件，会随条目增多长过网页那份 50KB 上限：给它单独的体积上限
+    //（SSRF / 超时 / 重定向守卫仍是 safeFetch 那一套）
+    const fresh = await fetchPluginIndexes({
+      sources, fetchText: (url) => safeFetch(url, { maxBytes: 4 * 1024 * 1024 }), log: moduleLog('plugins'), hostVersion: PKG.version
+    });
+    // 拉不到就用上次成功读到的（见 indexResultForDisplay）：索引挂在第三方托管上，偶发超时是常态，
+    // 而"这次没拉到"不该让市场变成空的。
+    const result = indexResultForDisplay(fresh, lastGoodPluginIndex);
+    if (Array.isArray(result.plugins) && result.plugins.length && !result.stale) {
+      lastGoodPluginIndex = { at: Date.now(), result };
+    }
+    indexRevokedCache.update(fresh);    // 撤回名单只认**这次真拉到的**（拉不动沿用旧名单，见该函数注释）
+    pluginIndexCache = { key, at: Date.now(), result };
+    return result;
+  };
+  /**
+   * 启动阶段取一次索引，只为拿到**集中撤回名单**：否则重启后只要没人打开插件页，
+   * 被撤回的插件就会照常跑完整个进程生命周期（kill switch 形同虚设）。
+   * 网络抖动不该拖慢启动：最多等 ms 毫秒，拉不到就按本地配置先起，定时刷新会补。
+   */
+  const warmPluginIndexForRevocation = async (ms = 5000) => {
+    if (!pluginIndexSources().length) return 'no-source';
+    let timer = null;
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), ms); timer.unref?.(); });
+    try {
+      return await Promise.race([
+        loadPluginIndex().then(() => 'ok').catch(() => 'failed'),
+        timeout
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+  };
+  // 长期运行的进程也要能收到"后来才撤回"：每 6 小时刷一次，名单有变才重排（重排会重启插件进程）
+  let pluginIndexRefreshTimer = null;
+  const startPluginIndexRefresh = (everyMs = 6 * 60 * 60_000) => {
+    if (pluginIndexRefreshTimer) return;
+    pluginIndexRefreshTimer = setInterval(() => {
+      if (getConfig().plugins?.enabled !== true) return;
+      const before = [...indexRevokedRules()].sort().join('\n');
+      void loadPluginIndex().then(() => {
+        const after = [...indexRevokedRules()].sort().join('\n');
+        if (after === before) return null;
+        return pluginRegistry.reconfigure()
+          .then(() => log('[plugins] 集中撤回名单有更新，插件已按新名单重排'));
+      }).catch((error) => log('[plugins] 索引刷新失败（沿用现有名单）：', error?.message ?? error));
+    }, Math.max(60_000, Number(everyMs) || 0));
+    pluginIndexRefreshTimer.unref?.();
+  };
+  const stopPluginIndexRefresh = () => {
+    if (pluginIndexRefreshTimer) clearInterval(pluginIndexRefreshTimer);
+    pluginIndexRefreshTimer = null;
+  };
+  /**
+   * 插件接口的错误出口。**剥掉文件系统绝对路径**：manifest 校验、换入失败这类错误的原始文案里会带
+   * 服务器路径（"entry 必须落在插件目录内，实际指向 /data/qq-agent/..."），那是控制台不该显示的内部细节。
+   */
+  const pluginError = (res, error, status = 400) => {
+    const raw = String(error?.message ?? error);
+    const safe = raw
+      .replace(/[A-Za-z]:\\[^\s'"]+/g, (hit) => `<路径>/${hit.split(/[\\/]/).pop()}`)
+      .replace(/\/(?:home|root|data|tmp|var|opt|srv|app)\/[^\s'"]*/g, (hit) => `<路径>/${hit.split('/').pop()}`);
+    return json(res, status, { ok: false, code: error?.code || '', error: safe });
+  };
 
   router.add('GET', '/api/plugins', async (_req, res) =>
-    json(res, 200, { ...pluginRegistry.list(), indexUrl: String(getConfig().plugins?.indexUrl || '') }));
+    json(res, 200, {
+      ...pluginRegistry.list(),
+      indexUrl: String(getConfig().plugins?.indexUrl || ''),
+      indexUrls: Array.isArray(getConfig().plugins?.indexUrls) ? getConfig().plugins.indexUrls : [],
+      lazy: getConfig().plugins?.lazy !== false,
+      idleMinutes: Math.max(0, Number(getConfig().plugins?.idleMinutes) || 0)
+    }));
 
   router.add('GET', '/api/plugins/index', async (_req, res) => {
-    try { return json(res, 200, { ok: true, plugins: await loadPluginIndex() }); }
-    catch (error) { return pluginError(res, error, 502); }
+    try {
+      const index = await loadPluginIndex();
+      return json(res, 200, {
+        ok: true,
+        // 条目分两类：compatible=true 能装；false 的照样列出来并带原因（"看得见但装不了"比"看不见"好排查）
+        plugins: index.plugins,
+        // 跳过的条目与拉取失败的来源都如实回报，页面上能看见"少了一条/少了整个索引"
+        skipped: index.skipped,
+        sources: index.sources
+      });
+    } catch (error) { return pluginError(res, error, 502); }
   });
 
   router.add('POST', '/api/plugins/master', async (req, res) => {
@@ -2572,22 +2689,123 @@ export function createApp({
       const id = String(body.id || '').trim();
       let url = String(body.url || '').trim();
       let sha256 = String(body.sha256 || '').trim();
+      let source = String(body.source || '').trim();
+      let publisher = '';
+      let signature = '';
+      let hitMirrors = [];
       if (!url) {
         if (!id) return json(res, 400, { ok: false, error: '要么给索引里的 id，要么给 url + sha256' });
-        const hit = (await loadPluginIndex()).find((item) => item.id === id);
+        const hit = (await loadPluginIndex()).plugins.find((item) => item.id === id);
         if (!hit) return json(res, 404, { ok: false, error: `索引里没有 ${id}` });
-        // 以索引为准取地址与校验和（不信请求体里那份，索引是唯一真源）
-        url = hit.tarball;
+        if (hit.compatible === false) {
+          // 装上去也跑不起来（apiVersion / minVersion 对不上）—— 在动手之前就拦住，并说清原因
+          return json(res, 409, { ok: false, error: `这个插件在本机装不了：${hit.reason}` });
+        }
+        // 以索引为准取地址、校验和与签名（不信请求体里那份，索引是唯一真源）
+        url = hit.url;
         sha256 = hit.sha256;
+        publisher = hit.publisher || '';
+        signature = hit.signature || '';
+        hitMirrors = Array.isArray(hit.mirrors) ? hit.mirrors : [];
+        source = `索引：${hit.source || '未命名'}`;
+      } else if (!source) {
+        source = '手动填写的地址';
       }
+      const mirrorConfig = pluginMirrorConfig();
+      const download = async (target, maxBytes) => {
+        const picked = await fetchBinaryWithMirrors({
+          url: target, mirrors: hitMirrors, prefixes: mirrorConfig.prefixes,
+          maxBytes, fetchImpl: safeFetchBinary, log: moduleLog('plugins'),
+          // sha256 校验放进候选循环：镜像回 200 + 错误页/旧包时，只有这里能继续试下一条；
+          // 拖到换入前才校验的话，坏候选已经被记成"这条通"，之后每次都先走它
+          verify: (buffer) => sha256Of(buffer) === String(sha256 || '').toLowerCase()
+        });
+        if (!picked.ok) throw Object.assign(new Error(picked.error), { code: 'E_DOWNLOAD' });
+        return { buffer: picked.buffer };
+      };
       const result = await installPlugin({
-        id, url, sha256, dataDir: DATA_DIR, fetchBinary: safeFetchBinary, log: moduleLog('plugins')
+        id, url, sha256, source, hostVersion: PKG.version, publisher, signature,
+        // 发布者公钥来自本机配置（不是索引 —— 索引给自己签名等于没签）
+        publishers: getConfig().plugins?.publishers || {},
+        dataDir: DATA_DIR, fetchBinary: download, log: moduleLog('plugins'),
+        // 升级时先停掉旧进程再换目录（Windows 上 rename 存活进程的 cwd 会失败）
+        beforeReplace: (pluginId) => pluginRegistry.stopOne(pluginId)
       });
       auditWrite('plugins.install', `plugins:${result.id}`, { req, version: result.version, upgraded: result.upgraded });
       // 装完重排一次：让控制台立刻看到新插件（默认未授权，不会自动跑）
       await pluginRegistry.reconfigure();
       return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });
-    } catch (error) { return pluginError(res, error); }
+    } catch (error) {
+      // 上面为了能换目录先把旧进程停了：装失败时要把它按原配置放回去（否则一次下载失败 = 插件停摆）
+      await pluginRegistry.reconfigure().catch(() => {});
+      // 指纹不符时先怀疑"索引是旧的"：目录缓存 10 分钟，而发布方（或用户自己）可能刚更新过索引 ——
+      // 这时包没错、是索引旧了，回一句"校验失败"会让人以为包坏了。清掉缓存让下次读到新的，并把话说明白。
+      //（2026-10-16 实测：索引仓库刚推上去，服务器侧装的还是旧索引，install 就这么失败了。）
+      if (error?.code === 'E_SHA_MISMATCH') {
+        // 清成空壳：key='' 让下一次必然重拉；旧 result 留着也没人读（读的是 key 匹配的那份），
+        // 保留它只会让人以为"旧数据还有用"
+        pluginIndexCache = { key: '', at: 0, result: { plugins: [], skipped: [], sources: [] } };
+        return json(res, 409, {
+          ok: false,
+          code: error.code,
+          error: `${error.message}。目录可能刚更新过（控制台手里的目录最多旧 10 分钟）—— 已刷新，再点一次安装即可。`
+        });
+      }
+      return pluginError(res, error);
+    }
+  });
+
+  router.add('POST', '/api/plugins/install-file', async (req, res) => {
+    // "别人发我一个包 / 我自己打了一个包"的最短路径。走 JSON + base64 是为了复用同一条请求体读取
+    // 与错误通道（body 上限单独放宽到 8MB —— 插件包本身限 5MB，base64 膨胀约 1/3）。
+    // 本地文件安装的 sha256 是**算出来给用户核对**的，不是要用户提供：内容就是身份。
+    const body = await readBody(req, 8 * 1024 * 1024).catch((error) => {
+      if (Number(error?.httpStatus) === 413) return { __tooLarge: true };
+      return {};
+    });
+    if (body?.__tooLarge) {
+      return json(res, 413, { ok: false, error: `文件太大：插件包上限 ${MAX_PLUGIN_ARCHIVE_BYTES / 1024 / 1024}MB` });
+    }
+    try {
+      const encoded = String(body.base64 || '');
+      if (!encoded) return json(res, 400, { ok: false, error: '没有收到文件内容' });
+      const buffer = Buffer.from(encoded, 'base64');
+      if (!buffer.length) return json(res, 400, { ok: false, error: '文件内容解不出来（不是合法的 base64？）' });
+      const fileName = path.basename(String(body.fileName || 'package.tar.gz')).slice(0, 120) || 'package.tar.gz';
+      const result = await installPlugin({
+        tarball: buffer, dataDir: DATA_DIR, hostVersion: PKG.version,
+        source: `本地文件：${fileName}`,
+        publishers: getConfig().plugins?.publishers || {},
+        // 同上：本地包也可能是在升级一个正在跑的插件
+        beforeReplace: (pluginId) => pluginRegistry.stopOne(pluginId),
+        log: moduleLog('plugins')
+      });
+      auditWrite('plugins.install-file', `plugins:${result.id}`, { req, version: result.version, upgraded: result.upgraded, fileName });
+      await pluginRegistry.reconfigure();
+      return json(res, 200, { ok: true, ...result, sha256: sha256Of(buffer), fileName, ...pluginRegistry.list() });
+    } catch (error) {
+      // 换入失败时旧进程已被停掉：按原配置放回去
+      await pluginRegistry.reconfigure().catch(() => {});
+      return pluginError(res, error);
+    }
+  });
+
+  router.add('POST', '/api/plugins/rollback', async (req, res) => {
+    // 升级后悔药：回退到上一次升级前的版本（备份是升级时自动留的，见 install.js）
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    try {
+      await pluginRegistry.stopOne(id);       // 先收进程再换目录（Windows 上不能 rename 存活进程的 cwd）
+      const result = rollbackPlugin({ id, dataDir: DATA_DIR, log: moduleLog('plugins') });
+      auditWrite('plugins.rollback', `plugins:${id}`, { req, version: result.version });
+      await pluginRegistry.reconfigure();
+      return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });
+    } catch (error) {
+      // 回退失败时**也要**重排一次：stopOne 已经把进程收掉了，不重排的话这个插件会一直停在
+      // "已停"直到下次配置变更或重启 —— 用户只看到一条"回退失败"，不知道插件被一并停掉了
+      await pluginRegistry.reconfigure().catch(() => {});
+      return pluginError(res, error);
+    }
   });
 
   router.add('POST', '/api/plugins/uninstall', async (req, res) => {
@@ -2596,6 +2814,10 @@ export function createApp({
     if (body?.confirm !== true) return json(res, 409, { ok: false, error: '卸载插件需要 body.confirm === true' });
     const id = String(body.id || '').trim();
     try {
+      // 先停掉这个插件的进程再挪目录：子进程的 cwd 就是插件目录，Windows 上"作为存活进程 cwd 的
+      // 目录"不能被 rename（EPERM/EBUSY），会出现"点卸载报错、插件还在"。Linux 上虽然能挪，
+      // 但让一个已卸载插件的进程继续跑也没有道理。
+      await pluginRegistry.stopOne(id);
       const result = uninstallPlugin({ id, dataDir: DATA_DIR });
       auditWrite('plugins.uninstall', `plugins:${id}`, { req });
       await pluginRegistry.reconfigure();
@@ -3488,7 +3710,7 @@ export function createApp({
       cacheHitRate: totals.cacheHitRate,
       webSearchCount: usage.webSearchCount || 0,
       // 前端构建戳：轮询时发现它变了 → 前端提示"控制台已更新，点击刷新"
-      uiBuild: UI_BUILD,
+      uiBuild: uiBuildStamp(UI_DIR),
       // 当前版本号（package.json 的 version）：控制台侧栏与控制页的版本徽标用它。
       // 之前控制页只显示部署提交号（sha），用户看不出"这是哪个版本"。
       version: PKG.version,
@@ -4638,11 +4860,21 @@ export function createApp({
     orchestrator.startScheduledWakeTicker();
     // 插件宿主：起插件子进程（隔离不可用时按配置**拒绝加载**，理由写进日志与巡检）。
     // 放在最后、且失败只记日志：插件是第三方扩展，它起不来不该影响控制台与机器人本体。
+    // 先取一次索引（只为撤回名单）：加载前拿到，才能保证"重启后没人打开插件页也挡得住"。
+    try {
+      if (getConfig().plugins?.enabled === true) {
+        const warmed = await warmPluginIndexForRevocation();
+        if (warmed !== 'ok') log(`[plugins] 启动时未能读取索引（${warmed}），先按本地配置加载，稍后自动重试`);
+      }
+    } catch (error) {
+      log('[plugins] 启动时读取索引失败（继续按本地配置加载）：', error?.message ?? error);
+    }
     try {
       await pluginRegistry.start();
     } catch (error) {
       log('[plugins] 插件宿主启动失败：', error);
     }
+    startPluginIndexRefresh();
     autoUpdate.start();
     log(`控制台已就绪：http://${serverCfg.host}:${port} (${getConfig().runtime.mode})`);
     // 协议端自动更新：首检延迟 2 分钟（别跟启动抢 IO），之后每 6 小时一轮；开关默认关
@@ -4670,6 +4902,7 @@ export function createApp({
     clearInterval(sseHeartbeat);
     snowlumaAutoStopped = true;
     clearTimeout(snowlumaAutoTimer);
+    stopPluginIndexRefresh();
     releaseTimeControl();
     dailyMoments.stop();
     dailyMoments.abort();

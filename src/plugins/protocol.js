@@ -29,7 +29,8 @@ export const CAP_METHODS = Object.freeze({
   storageGet: `${CAP_PREFIX}storage.get`,
   storageSet: `${CAP_PREFIX}storage.set`,
   configGet: `${CAP_PREFIX}config.get`,
-  httpRequest: `${CAP_PREFIX}http.request`
+  httpRequest: `${CAP_PREFIX}http.request`,
+  sendText: `${CAP_PREFIX}send.text`
 });
 
 /** 能力方法 → 需要声明的能力名（鉴权用；漏一条就是"没声明也能用"）。 */
@@ -38,7 +39,8 @@ export const CAP_REQUIREMENT = Object.freeze({
   [CAP_METHODS.storageGet]: 'storage',
   [CAP_METHODS.storageSet]: 'storage',
   [CAP_METHODS.configGet]: 'config',
-  [CAP_METHODS.httpRequest]: 'http'
+  [CAP_METHODS.httpRequest]: 'http',
+  [CAP_METHODS.sendText]: 'send'
 });
 
 export const MAX_LINE_BYTES = 1024 * 1024;   // 单行上限：插件不能靠"吐一大坨"把宿主内存打满
