@@ -128,3 +128,19 @@ test('Bing：HTML 解析出 b_algo 块；命中验证页（0 块）要抛错而�
   stub(() => ({ ok: true, text: async () => '<html><body>请完成验证</body></html>' }));
   await assert.rejects(() => bingSearch('x'), /没有返回可解析的结果/);
 });
+
+test('Tavily：provider=tavily 真的走 Tavily（此前静默退回 Bing）', async () => {
+  // 设置页把 Tavily 列为可选、Key 也有独立入口；dispatch 漏了它时 webSearch 会一路落到
+  // Bing，用户以为在用自己的 Key，实际没有（2026-10-17 审查 P2）
+  setWebSearch({ provider: 'tavily', tavily: { apiKey: 'tv-key', count: 3 } });
+  const calls = stub(() => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ results: [{ title: '结果', url: 'https://example.com/a', content: '摘要' }] })
+  }));
+  const { webSearch } = await import('../src/llm/web-search.js');
+  const result = await webSearch('测试查询');
+  assert.match(calls[0].url, /api\.tavily\.com\/search/, '必须打到 Tavily，而不是 Bing');
+  assert.equal(calls[0].headers.authorization, 'Bearer tv-key', 'Key 要带上');
+  assert.deepEqual(result.results, [{ title: '结果', url: 'https://example.com/a', snippet: '摘要' }]);
+});

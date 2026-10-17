@@ -11,12 +11,14 @@ import { readJsonBounded, readTextBounded } from '../core/http-body.js';
 const SEARCH_JSON_MAX_BYTES = 2 * 1024 * 1024;
 const BING_HTML_MAX_BYTES = 1024 * 1024;
 
-// provider 的 JSON 解析：只有 JSON 语法错误才转成「无法解析」，超限错误原样抛出 ——
-// 两者对外含义不同，把超限伪装成解析失败会误导排障。
+// provider 的 JSON 解析：只有 JSON 语法错误才转成「无法解析」；超限、超时、连接中断一律原样抛出 ——
+// 它们对外含义不同，把"读正文时超时"伪装成"返回的 JSON 坏了"会让排障方向完全跑偏
+//（慢供应商在响应头之后超时是常见故障，2026-10-17 审查 P3）。
 function readSearchJson(res, message) {
   return readJsonBounded(res, SEARCH_JSON_MAX_BYTES).catch((error) => {
     if (error?.code === 'BODY_TOO_LARGE') throw error;
-    throw new Error(message);
+    if (error instanceof SyntaxError) throw new Error(message);
+    throw error;
   });
 }
 
@@ -129,6 +131,9 @@ export async function webSearch(query) {
   if (provider === 'baidu') return baiduSearch(clean);
   if (provider === 'metaso') return metasoSearch(clean);
   if (provider === 'doubao') return doubaoSearch(clean);
+  // Tavily 在设置页是可选项、Key 也有独立入口；漏掉这条分发会让它静默退回 Bing，
+  // 用户以为在用自己的 Key，实际没有（2026-10-17 审查 P2）
+  if (provider === 'tavily') return tavilySearch(clean);
   // 自定义：'custom'（旧单槽位）或 'custom:<id>'（设置页添加的多个之一）
   if (provider === 'custom' || provider.startsWith('custom:')) {
     return customSearch(clean, provider);

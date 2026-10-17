@@ -106,7 +106,9 @@ test('metasoSearch：非 200 与坏 JSON 各给一句能读的错', async () => 
   const { metasoSearch } = await import('../src/llm/web-search.js');
   await assert.rejects(() => metasoSearch('x'), /秘塔搜索 HTTP 500/);
 
-  globalThis.fetch = async () => ({ ok: true, json: async () => { throw new Error('bad json'); } });
+  // 真实链路是 JSON.parse 抛 SyntaxError；只有它才该被翻成"无法解析"，
+  // 超时/连接中断要保留原始错误（2026-10-17 审查 P3）
+  globalThis.fetch = async () => ({ ok: true, text: async () => '{not json' });
   await assert.rejects(() => metasoSearch('x'), /无法解析/);
 });
 

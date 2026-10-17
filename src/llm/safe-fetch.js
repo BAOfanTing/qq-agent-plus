@@ -243,11 +243,13 @@ const MAX_REDIRECTS = 5;
  * `maxBytes` 只给"结构化文件"用（插件索引随条目增多会长过网页那份上限）；
  * 网页抓取保持默认值，避免把整页塞进上下文。
  */
-export async function safeFetch(urlString, { maxBytes = 50000 } = {}) {
+export async function safeFetch(urlString, { maxBytes = 50000, signal } = {}) {
   const cap = Math.max(1, Math.floor(Number(maxBytes) || 50000));
   let { url, ip } = await validateFetchUrl(urlString);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const result = await requestOnce(url, ip, { asBinary: false, maxBytes: cap });
+    // signal 用于"整次抓取的总截止时间"：默认的 timeout 是**空闲超时**，对端每隔十几秒吐一个
+    // 字节就能把连接一直吊着（慢速攻击面，2026-10-17 审查 P3）
+    const result = await requestOnce(url, ip, { asBinary: false, maxBytes: cap, signal });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
