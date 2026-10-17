@@ -91,6 +91,15 @@ function cleanup() {
       if (!entry.isDirectory() || !entry.name.startsWith('qq-')) continue;
       if (RUNTIME_TMP_PREFIXES.some((p) => entry.name.startsWith(p))) continue;   // 可能是运行中服务的目录，别动
       if (preexisting.has(entry.name) || entry.name === path.basename(tmpRoot)) continue;
+      // ⚠️ 别的 test-suite 实例的根目录（qq-test-root-*）：它在启动**之后**出现，所以不在
+      // preexisting 里 —— 原来的写法会把**并发跑的另一个实例**的根删掉，那个实例里的用例随后
+      // 报 `mkdtemp ENOENT`（2026-10-17 实测：两个 run 并行，NNP 那轮恰好挂在构建戳用例上）。
+      // 根目录由它自己的 cleanup() 负责；只清超过 6 小时的（确认是死掉的残留）。
+      if (entry.name.startsWith('qq-test-root-')) {
+        let ageMs = 0;
+        try { ageMs = Date.now() - fs.statSync(path.join(baseTmp, entry.name)).mtimeMs; } catch { ageMs = 0; }
+        if (ageMs < 6 * 60 * 60 * 1000) continue;
+      }
       rmBestEffort(path.join(baseTmp, entry.name));
     }
   } catch (err) {

@@ -77,12 +77,15 @@ const SCANNERS = [
     allow: (raw, text, rel) => {
       const lines = text.split('\n').filter((line) => line.includes(raw));
       return lines.length > 0 && lines.every((line) => /uses:\s*[^\s@]+@[0-9a-f]{40}/i.test(line)
-        // 固定版本/哈希常量（const WHISPER_COMMIT = '<40 位 hex>' 这类）：变量名自证不是秘密
-        || /(?:COMMIT|SHA|HASH|CHECKSUM|DIGEST|REVISION)\w*\s*=\s*['"`][0-9a-f]{40,}['"`]/i.test(line)
-        // 测试里整行就是一个 sha256 基准值（fixture 的哈希常量）：**只在 test/ 下**豁免。
-        // 不加文件限定的话，任何"一行就是一个 64 位十六进制"的地方 —— 比如 JSON 数组里的真实
-        // 32 字节密钥 —— 会跟着一起放行，闸门等于漏了（2026-10-14 复审 P3）。
-        || (/^test[\\/]/.test(rel) && /^[\s'"`\[]*[0-9a-f]{64}[\s'"`,;\]]*$/i.test(line.trim())));
+        // 固定版本/哈希常量，以及 JSON 里的校验和字段（`"sha256": "<64 位 hex>"`）：
+        // **字段名/变量名自证它不是秘密**。索引文件是硬需求 —— 插件索引每条都必须带 sha256，
+        // 不豁免这一条，每次发版都会恒假报红（2026-10-16 插件索引落地时踩到）。
+        || /["']?(?:COMMIT|SHA|HASH|CHECKSUM|DIGEST|REVISION)\w*["']?\s*[:=]\s*["']?[0-9a-f]{40,}["']?/i.test(line)
+        // 测试里整行就是一个 sha256 基准值、或断言行里带 sha256（`assert.equal(x.sha256, '<hex>')`）：
+        // **只在 test/ 下**豁免。不加文件限定的话，任何"一行就是一个 64 位十六进制"的地方
+        // （比如 JSON 数组里的真实 32 字节密钥）会跟着一起放行，闸门等于漏了（2026-10-14 复审 P3）。
+        || (/^test[\\/]/.test(rel)
+          && (/sha256/i.test(line) || /^[\s'"`\[]*[0-9a-f]{64}[\s'"`,;\]]*$/i.test(line.trim()))));
     }
   },
   { name: '本机真实用户目录', re: /(?:\/(?:home|Users)\/[A-Za-z0-9._-]{2,}|[A-Za-z]:\\Users\\[^\\\s"']{2,})/g , filter: (hit) => !EXAMPLE_USER_PATH.test(hit) },
