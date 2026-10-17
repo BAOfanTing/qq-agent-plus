@@ -290,8 +290,13 @@ export async function baiduSearch(query) {
     throw new Error(`百度搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
   const data = await readSearchJson(res, '百度搜索返回了无法解析的 JSON');
+  // 千帆的错误字段有两种写法（`error_code` 与 `code`）—— 只认前一种时会把它当成功、
+  // 最后报成"没有有效结果"，把真实原因盖掉（与秘塔那类 200+错误体同型）
   if (data?.error_code && Number(data.error_code) !== 0) {
     throw new Error(`百度搜索 API 错误（code ${data.error_code}）：${data.error_msg || data.message || '未知'}`);
+  }
+  if (data?.code && Number(data.code) !== 200 && Number(data.code) !== 0) {
+    throw new Error(`百度搜索 API 错误（code ${data.code}）：${data.message || '未知'}`);
   }
   const arr = Array.isArray(data?.references) ? data.references : [];
   const results = arr
@@ -306,19 +311,38 @@ export async function baiduSearch(query) {
   return { query, results };
 }
 
-/** 秘塔 AI 搜索（metaso.cn，每天 100 次免费）。 */
+/**
+ * 秘塔 AI 搜索（metaso.cn，每天 100 次免费）。
+ *
+ * 官方接口是 `POST /api/v1/search`（issue #38 报的就是这个）：原来的实现三处都不对 ——
+ * 地址写成 `/api/open/v1/search`（404）、请求体用 `{ query, top_k }`（官方是 `q` + `scope` + `size`）、
+ * 响应读 `results|data|sources`（官方是 `webpages[]`）。三处任一错都拿不到结果，所以它其实从未成功过。
+ * 契约（2026-10-17 对照官方 playground 与两个公开实现核对）：
+ *   请求 { q, scope: 'webpage', size, includeSummary, includeRawContent, conciseSnippet }
+ *   响应 { webpages: [{ title, link|url, snippet|summary }] }；出错时 HTTP 仍是 200，body 里是 { errCode, errMsg }。
+ */
 export async function metasoSearch(query) {
   const cfg = getConfig().webSearch?.metaso ?? {};
   const apiKey = String(cfg.apiKey || process.env.METASO_API_KEY || '').trim();
-  const endpoint = String(cfg.baseUrl || 'https://metaso.cn/api/open/v1/search').replace(/\/+$/, '');
+  const endpoint = String(cfg.baseUrl || 'https://metaso.cn/api/v1/search').replace(/\/+$/, '');
+  // size 是**数字**，官方上限 50（写字符串会被拒）
+  const size = Math.min(50, Math.max(1, Number(cfg.count) || 6));
 
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
+      accept: 'application/json',
       ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
     },
-    body: JSON.stringify({ query, top_k: Math.min(10, Math.max(1, Number(cfg.count) || 6)) }),
+    body: JSON.stringify({
+      q: query,
+      scope: 'webpage',
+      size,
+      includeSummary: false,
+      includeRawContent: false,
+      conciseSnippet: false
+    }),
     signal: AbortSignal.timeout(Math.max(10000, Number(cfg.timeoutMs) || 20000))
   });
   if (!res.ok) {
@@ -326,19 +350,25 @@ export async function metasoSearch(query) {
     throw new Error(`秘塔搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
   }
   const data = await readSearchJson(res, '秘塔搜索返回了无法解析的 JSON');
-  const arr = Array.isArray(data?.results) ? data.results
-    : Array.isArray(data?.data) ? data.data
-    : Array.isArray(data?.sources) ? data.sources
+  // 官方出错时 HTTP 也是 200：body 里带 errCode/errMsg（例如密钥无效是 2005），不认它就会
+  // 被当成"没有返回有效结果"，把真正的原因（Key 错了 / 额度用完）盖掉
+  const errCode = Number(data?.errCode);
+  if (Number.isFinite(errCode) && errCode !== 0 && errCode !== 200) {
+    throw new Error(`秘塔搜索返回错误（${errCode}）：${String(data?.errMsg || data?.message || '未说明原因').slice(0, 200)}`);
+  }
+  const arr = Array.isArray(data?.webpages) ? data.webpages
+    : Array.isArray(data?.documents) ? data.documents
+    : Array.isArray(data?.results) ? data.results
     : [];
   const results = arr
-    .filter((r) => r?.url || r?.link)
+    .filter((r) => r?.link || r?.url)
     .map((r) => ({
-      title: String(r.title ?? r.name ?? '').trim() || '（无标题）',
-      url: String(r.url ?? r.link ?? ''),
-      snippet: String(r.content ?? r.snippet ?? r.summary ?? '').trim()
+      title: String(r.title ?? '').trim() || '（无标题）',
+      url: String(r.link ?? r.url ?? ''),
+      snippet: String(r.snippet ?? r.summary ?? '').trim()
     }))
     .slice(0, Math.max(1, Number(getConfig().webSearch?.maxResults) || 6));
-  if (!results.length) throw new Error('秘塔搜索没有返回有效结果（可能已用完免费额度或接口地址需要更新）');
+  if (!results.length) throw new Error('秘塔搜索没有返回有效结果（可能已用完免费额度，或 Key 没有搜索权限）');
   return { query, results };
 }
 
