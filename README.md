@@ -17,7 +17,7 @@
 
 **简体中文** ｜ [English](README.en.md)
 
-<img src="docs/assets/console-demo.png" alt="控制台：消息存档与会话管理" width="880">
+<img src="docs/assets/console-demo.png" alt="控制台：插件市场（一键安装、权限逐条列出）" width="880">
 
 </div>
 

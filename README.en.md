@@ -17,7 +17,7 @@ A QQ group-chat agent for Linux servers, with split-bubble replies, sticker supp
 
 [简体中文](README.md) ｜ **English**
 
-<img src="docs/assets/console-demo.png" alt="Console: message archive and session management" width="880">
+<img src="docs/assets/console-demo.png" alt="Console: plugin marketplace with one-click install and per-capability permissions" width="880">
 
 </div>
 

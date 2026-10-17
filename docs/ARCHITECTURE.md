@@ -22,6 +22,14 @@ The same process serves the authenticated management console and SSE updates.
 Background managers handle memory consolidation, optional proactive runs, daily
 Qzone moments, Qzone interactions and optional identity indexing.
 
+Plugins are the one exception to the single-process model: every enabled plugin
+runs in its own child process and talks to the host over newline-delimited JSON
+on stdio. The child gets only the capabilities declared in its manifest, and each
+capability is implemented host-side (outbound HTTP through `safe-fetch`, storage
+inside the plugin's own directory, sends through the normal send queue). This is
+what keeps third-party code away from the configuration file and the protocol
+client, and it removes the "unhandled exception in a plugin kills the bot" case.
+
 ## Module Boundaries
 
 | Area | Main modules | Responsibility |
@@ -35,6 +43,7 @@ Qzone moments, Qzone interactions and optional identity indexing.
 | Model access | `src/llm/llm.js`, `src/core/providers.js`, `src/core/provider-presets.js` | Chat Completions, retries, provider credentials, usage and per-channel thinking presets |
 | Sticker system | `src/onebot/sticker-manager.js`, `src/onebot/stickers.js` | QQ favourites sync, notes, tiered lookup, auto-collect and local asset storage |
 | Memory | `src/memory/`, `src/identity/` | Member impressions, handoff state and cross-chat identity index |
+| Plugins | `src/plugins/` | Manifest validation, one child process per plugin (NDJSON protocol), host-side capabilities, index fetching, sha256-anchored install/replace/rollback, revocation |
 | Pilots (observability) | `src/pilots/` | Incident panel, relationship shadow evaluation, slang assets, multimodal-context pilot |
 | Scheduled social work | `src/features/daily-moments.js`, `src/features/qzone-interactions.js` | Independently persisted Qzone decisions and external effects |
 | Runtime guards | `src/core/token-saver.js`, `src/core/time-gate.js`, `src/core/redact.js` | Token ceilings, active-hour gating, log redaction |
@@ -108,6 +117,12 @@ its own idempotency and recovery rules.
   network or a TLS reverse proxy.
 - Remote image and page retrieval validates schemes, DNS answers, redirects and
   response sizes to reduce SSRF and resource-exhaustion risk.
+- Plugin processes run under Node's permission model (read-only access to their
+  own directory) and, on Linux, inside a network namespace without interfaces;
+  when neither is available the host refuses to load them unless the operator
+  explicitly turns isolation off. Plugin packages are only installed from an
+  index entry anchored by sha256, and a central revocation list is fetched before
+  the plugin hosts start.
 - Credentials, login state and runtime data are excluded from Git.
 
 ## Linux Deployment
