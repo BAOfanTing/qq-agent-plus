@@ -43,6 +43,7 @@ import {
   renderIdentityFeaturePageImpl, renderIncidentFeaturePageImpl
 } from './pages/features.js';
 import { loadMemoryView, renderMemoryList } from './pages/memory.js';
+import { loadPluginsPage } from './pages/plugins.js';
 import { renderExperimentalSettingsSectionImpl } from './pages/moments.js';
 import { loadSessionDetail, loadSessions } from './pages/sessions.js';
 import {
@@ -275,6 +276,7 @@ function switchTab(name) {
   if (name === 'slang') loadSlangFeaturePage();
   if (name === 'incidents') loadIncidentFeaturePage();
   if (name === 'assets') loadAssetObservatory();
+  if (name === 'plugins') loadPluginsPage({ force: true });
   if (name === 'usage') loadUsageView({ force: true });
   if (name === 'settings') {
     // 进设置页时忘掉"这个分区已经露过脸"：用户可能手动把菜单滚走了，当前项得再带进视野一次

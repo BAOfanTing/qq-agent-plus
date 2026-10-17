@@ -4981,3 +4981,499 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
    计数动画（ui/pages/overview.js）每帧改文本，不等宽的话数字宽度会抖、整块跟着微移。
    比例字体下的 tabular-nums 只影响数字字形，不影响中文，所以全站 KPI 都开着。 */
 .kpi-value { font-variant-numeric: tabular-nums; }
+/* ══════════════════════════════════════════════════════════════
+   插件页（第五版，2026-10-16 夜）
+   ══════════════════════════════════════════════════════════════
+   前四版一直在"卡片长什么样"上打转，版式本身还是设置页：已装台账压在目录上面、标签挤成横向一行、
+   没有分面栏。这一版按参照（Obsidian 社区插件目录 / VS Code 市场 / Raycast 商店）**量出来**的
+   尺寸重排：
+
+     ① **市场就是这一页**：目录 / 已装 / 手动安装 三个面用页签切换（HACS 的 Installed/Available
+        就是这一手），目录是默认面 —— 管理动作不再压在看货之前；
+     ② **左侧分面栏**（Obsidian 版式的核心）：范围（全部/已装/有更新）、分类、标签、其他，
+        **每项带数量** —— 数量回答"点进去有没有东西"，也把标签从横排 chip 墙变成一竖栏；
+     ③ **主区一条工具栏**：搜索 + 列表/卡片切换 + 排序（Obsidian 也有这两档视图）；
+     ④ **卡片压扁**：图标 + 名字 + 两行说明，名字 15px、说明 13.5px，行高 1.6（参照是 16/16、
+        行高 24px，但我们是在一个 13-14px 的 console 里，等比上抬而不是照抄）。
+
+   保留的是这一页自己的东西：状态轨（活着没有）、两条风险标记、相对时间、详情两栏与相关插件。
+*/
+.plugins-pane { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 30px; }
+/* 整页内容限宽并居中：1920 屏上原来页头/卡片都贴着左边，右边空出 750px ——
+   用户 2026-10-17 的「内容全堆在左侧」就是这个。与「用量」页的 .usage-wrap 同一套口径。 */
+.plugins-pane > * { max-width: 1200px; margin-inline: auto; }
+[data-density='compact'] .plugins-pane { padding: 15px 17px 22px; }
+[data-density='roomy'] .plugins-pane { padding: 26px 30px 34px; }
+
+/* ── 页头：标题 + 信任声明在左，总开关与隔离说明收在右（admin 不占市场的位置）── */
+.plugin-page-head { display: flex; align-items: flex-start; gap: 24px; margin-bottom: 18px; }
+.plugin-page-head > div:first-child { min-width: 0; flex: 1; }
+.plugins-pane .pane-head h2 { font-size: var(--fs-2xl); }
+.plugin-claim { margin-top: 8px; max-width: 68ch; font-size: var(--fs-sm); color: var(--muted); line-height: 1.75; }
+.plugin-claim b { color: var(--text); font-weight: 600; }
+.plugin-master { flex: 0 0 auto; max-width: 320px; margin-top: 4px; }
+.plugin-master .checkbox-row { margin-bottom: 2px; }
+.plugin-master .hint { font-size: var(--fs-2xs); line-height: 1.6; }
+/* 索引状态那行：比隔离说明再淡一点 —— 它说的是「数据从哪来」，不是安全提示 */
+.plugin-source-chip { margin-top: 7px !important; color: var(--faint); }
+
+/* ── 页签：目录 / 已装 / 手动安装（HACS 的 Installed-Available 那一手）──
+   下边框一条线，选中项用强调色下划线 —— 与主导航的滑块不同，这里是"页内二级页签"。 */
+.plugin-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+/* 窄屏（320px）时四个页签 + 「发布插件」放不进一行：允许**整块换行**，而不是把词拆开
+   或让整页横向滚动（`white-space: nowrap` 之后必须配 wrap，否则 flex 不会收缩）。 */
+.plugin-tab {
+  position: relative; background: none; border: 0; cursor: pointer; font: inherit; white-space: nowrap;
+  font-size: var(--fs-md); color: var(--muted); padding: 8px 14px 10px;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+  transition: color var(--dur-interaction) var(--ease-in-out), border-color var(--dur-interaction) var(--ease-in-out);
+}
+.plugin-tab:hover { color: var(--text); }
+.plugin-tab.is-on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.plugin-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.plugin-tab-n { margin-left: 7px; font-family: var(--mono); font-size: var(--fs-2xs); color: var(--faint); }
+.plugin-tab.is-on .plugin-tab-n { color: var(--accent); }
+/* 「发布插件」：作者入口做成**右侧的强调按钮**（不是第四个页签）。
+   第一版把它写成同款页签、只靠一条发丝线分开，用户反馈"不够显眼" —— 页签的语义是
+   "切换视图"，读者会把它当成第四个筛选面。所以这里换一套形状：胶囊 + 描边 + 强调色，
+   一眼分得清"左边是看什么、右边是去做什么"。 */
+.plugin-publish-cta {
+  margin-left: auto; align-self: center; margin-bottom: 6px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: var(--r-pill); cursor: pointer; font: inherit;
+  font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid var(--accent-border);
+  transition: background var(--dur-interaction) var(--ease-in-out), border-color var(--dur-interaction) var(--ease-in-out);
+}
+.plugin-publish-cta svg { flex: 0 0 auto; }
+.plugin-publish-cta.is-on { color: #fff; background: var(--accent); border-color: var(--accent); }
+.plugin-publish-cta:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+  .plugin-publish-cta:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); border-color: var(--accent); }
+  .plugin-publish-cta.is-on:hover { background: var(--accent); opacity: .92; }
+}
+.plugin-pane-head { margin-bottom: 12px; }
+
+/* ── 两栏：左分面栏 + 右主区（Obsidian 的版式）── */
+.plugin-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 26px; align-items: start; }
+/* 详情占满主区时切成单列：分面栏会被隐藏，而"网格项消失"会让主区落到第一列被挤成 190px 宽
+   （2026-10-16 用户实测"详情页全挤一块"就是这个）。所以隐藏分面栏的同时必须改列定义。 */
+.plugin-layout.is-detail { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 900px) { .plugin-layout { grid-template-columns: 1fr; gap: 14px; } }
+/* 窄屏的筛选：分面栏**默认收起**，用工具栏上的「筛选」按钮展开。
+   不收的话整条筛选（范围/分类/标签/其他）会堆在卡片上方，把插件列表推出屏幕 ——
+   这正是 2026-10-17 用户说的"标签放在插件上面对吗"。参照（VS Code 市场窄屏）也是收进按钮。 */
+.plugin-filter-toggle { display: none; }
+@media (max-width: 900px) {
+  .plugin-filter-toggle { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
+  .plugin-filter-toggle.is-on { border-color: var(--accent-border); color: var(--accent); }
+  /* ⚠️ 选择器要带 `.plugin-layout`：基础规则 `.plugin-facets { display: flex }` 写在本块**后面**，
+     同权重下后出现的赢 —— 只用 `.plugin-facets` 会被它顶回来，窄屏照样堆在卡片上方
+     （2026-10-17 实测：railHidden=false、gridTop=988）。 */
+  .plugin-layout .plugin-facets { display: none; }
+  .plugin-layout.is-filters-open .plugin-facets {
+    display: flex; position: static; margin-bottom: 4px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+}
+.plugin-facets { position: sticky; top: 0; display: flex; flex-direction: column; gap: 16px; }
+.plugin-facet-group { display: flex; flex-direction: column; gap: 1px; }
+/* 组标题与参照同款：小字、弱色、留出左边距（Obsidian 就是 TYPE / CATEGORIES / PAYMENTS 那种） */
+.plugin-facet-label { font-size: var(--fs-2xs); color: var(--faint); padding: 0 8px 5px; letter-spacing: .02em; }
+.plugin-facet {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: none; border: 0; cursor: pointer; font: inherit; font-size: var(--fs-sm); color: var(--muted);
+  padding: 4px 8px; border-radius: var(--r-sm); text-align: left; min-height: 28px;
+  transition: background-color var(--dur-interaction) var(--ease-in-out), color var(--dur-interaction) var(--ease-in-out);
+}
+.plugin-facet:hover { background: var(--bg-3); color: var(--text); }
+.plugin-facet.is-on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.plugin-facet:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.plugin-facet-n { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--faint); }
+.plugin-facet.is-on .plugin-facet-n { color: var(--accent); }
+.plugin-facet-clear { justify-content: flex-start; color: var(--accent); }
+
+/* ── 主区工具栏：搜索（左）+ 视图切换 + 排序（右）── */
+.plugin-main { min-width: 0; }
+.plugin-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.plugin-toolbar #plugins-search { flex: 1; min-width: 140px; font-size: var(--fs-sm); }
+.plugin-viewtoggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.plugin-view {
+  display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px;
+  background: none; border: 0; cursor: pointer; color: var(--faint);
+  transition: background-color var(--dur-interaction) var(--ease-in-out), color var(--dur-interaction) var(--ease-in-out);
+}
+.plugin-view + .plugin-view { border-left: 1px solid var(--border); }
+.plugin-view:hover { background: var(--bg-3); color: var(--text); }
+.plugin-view.is-on { background: var(--bg-3); color: var(--accent); }
+.plugin-sort { max-width: 150px; }
+/* 索引的两块（原来是压在卡片上方的灰色提示行，用户反馈"在上面很难受"）：
+   · 顶部只留"这份目录不可信"的告警（拉取失败、正在用缓存）—— 它必须第一眼看见；
+   · 来源与条数挪到列表**尾部**做落款，字号更小、颜色更淡，像页脚而不像提示。 */
+.plugin-index-warn {
+  margin-bottom: 12px; padding: 9px 12px;
+  border: 1px solid rgba(247, 185, 85, .35); border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  font-size: var(--fs-sm); line-height: 1.65;
+}
+.plugin-index-foot {
+  margin-top: 16px; padding-top: 10px; border-top: 1px solid var(--border);
+  font-size: var(--fs-2xs); color: var(--faint); line-height: 1.7;
+}
+.plugin-index-foot code { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--muted); }
+
+/* ── 图标块：按 id 生成的色相（这一版没变）── */
+.plugin-mono {
+  flex: 0 0 auto; width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: var(--fs-lg); font-weight: 650; line-height: 1;
+  border-radius: var(--r-md);
+  background: linear-gradient(155deg, hsl(var(--tile-h, 220) 44% 30%), hsl(var(--tile-h, 220) 52% 20%));
+  border: 1px solid hsl(var(--tile-h, 220) 40% 40% / .55);
+  color: hsl(var(--tile-h, 220) 78% 84%);
+  box-shadow: inset 0 1px 0 hsl(var(--tile-h, 220) 60% 70% / .18);
+}
+[data-theme='light'] .plugin-mono {
+  background: linear-gradient(155deg, hsl(var(--tile-h, 220) 72% 92%), hsl(var(--tile-h, 220) 66% 84%));
+  border-color: hsl(var(--tile-h, 220) 50% 78%);
+  color: hsl(var(--tile-h, 220) 45% 34%);
+}
+.plugin-mono.lg { width: 52px; height: 52px; font-size: var(--fs-2xl); border-radius: var(--r-card); }
+.plugin-mono img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; display: block; }
+.plugin-mono.is-off { filter: saturate(.35) brightness(.75); }
+[data-theme='light'] .plugin-mono.is-off { filter: saturate(.4); }
+
+.plugin-ver { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+.plugin-fact { font-family: var(--mono); font-size: var(--fs-xs); color: var(--faint); }
+.plugin-name { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+/* 卡面上的小标签（分类 / 已弃用 / 风险）——比 chip 轻，只描边不上底 */
+.plugin-tag {
+  font-size: var(--fs-2xs); color: var(--muted); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 0 5px; white-space: nowrap;
+}
+.plugin-tag.is-warn { color: var(--orange); border-color: rgba(247, 185, 85, .4); }
+.plugin-tag.is-danger { color: var(--red); border-color: rgba(255, 107, 107, .4); }
+.plugin-avatar {
+  width: 18px; height: 18px; border-radius: 50%; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: var(--fs-2xs); font-weight: 600;
+  background: linear-gradient(155deg, hsl(var(--tile-h, 220) 40% 32%), hsl(var(--tile-h, 220) 48% 22%));
+  color: hsl(var(--tile-h, 220) 70% 82%);
+  border: 1px solid var(--border);
+}
+
+/* ── 已装：台账 ── */
+.plugin-ledger { border-top: 1px solid var(--border); }
+.plugin-row { position: relative; display: flex; gap: 14px; padding: 14px 14px 14px 18px; border-bottom: 1px solid var(--border); }
+.plugin-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.plugin-row-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.plugin-row[role='button'] { cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .plugin-row[role='button']:hover { background: var(--bg-2); } }
+.plugin-row[role='button']:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--r-sm); }
+.plugin-row-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.plugin-act { background: none; border: 0; padding: 2px 0; font: inherit; font-size: var(--fs-sm); color: var(--muted); cursor: pointer; }
+.plugin-act:hover { color: var(--text); text-decoration: underline; }
+.plugin-act.is-danger:hover { color: var(--red); }
+.plugin-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.plugin-act:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 状态轨：3px 竖条，只表达"活着没有" */
+.plugin-row::before, .plugin-card::before {
+  content: ''; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px;
+  border-radius: var(--r-pill); background: transparent;
+  transition: background-color var(--dur-interaction) var(--ease-in-out);
+}
+.plugin-state-running::before { background: var(--green); }
+.plugin-state-idle::before { background: var(--accent); }
+.plugin-state-off::before { background: var(--border); }
+.plugin-state-failed::before { background: var(--red); }
+.plugin-state-deprecated::before { background: var(--orange); }
+
+.plugin-state-text { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
+.plugin-state-text i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+.plugin-state-text.running { color: var(--green); }
+.plugin-state-text.idle { color: var(--accent); }
+.plugin-state-text.failed { color: var(--red); }
+.plugin-state-text.off { color: var(--faint); }
+.plugin-caps-inline { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--muted); }
+.plugin-caps-inline .ico-svg { display: inline-block; vertical-align: -2px; color: var(--faint); }
+.plugin-caps-inline .lead { color: var(--faint); }
+.plugin-note { font-size: var(--fs-xs); color: var(--muted); line-height: 1.6; max-width: 82ch; }
+.plugin-warn { font-size: var(--fs-xs); color: var(--orange); line-height: 1.6; max-width: 82ch; }
+.plugin-warn.bad { color: var(--red); }
+
+/* ── 目录：卡片网格（压扁版）+ 列表视图 ── */
+.plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.plugin-card {
+  position: relative; display: flex; flex-direction: column; gap: 7px;
+  padding: 13px 14px 12px 17px; text-align: left; color: inherit; cursor: pointer;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2);
+  transition: background-color var(--dur-interaction) var(--ease-in-out),
+    border-color var(--dur-interaction) var(--ease-in-out);
+}
+.plugin-card-head { display: flex; align-items: center; gap: 11px; min-width: 0; width: 100%; }
+.plugin-card-title { min-width: 0; flex: 1; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.plugin-card-head .plugin-card-action { flex: 0 0 auto; }
+.plugin-card-desc {
+  font-size: var(--fs-sm); color: var(--muted); line-height: 1.65;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.plugin-card-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: var(--fs-2xs); color: var(--faint); }
+.plugin-card-foot .ico-svg { color: var(--faint); }
+.plugin-card-foot .pb-item { display: inline-flex; align-items: center; gap: 4px; }
+
+/* 列表视图（Obsidian 的 List 那一档）：一行一条，说明挤到名字右边一行截断 ——
+   同一份 DOM，只换 grid 列数与内部朝向，切换不重排数据 */
+.plugin-grid.is-list { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--border); }
+.plugin-grid.is-list .plugin-card { flex-direction: row; align-items: center; gap: 12px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 11px 14px 11px 17px; background: transparent; }
+.plugin-grid.is-list .plugin-card-head { width: auto; flex: 0 0 auto; min-width: 0; }
+.plugin-grid.is-list .plugin-card-title { flex-direction: column; align-items: flex-start; gap: 2px; }
+.plugin-grid.is-list .plugin-card-desc { flex: 1; min-width: 0; -webkit-line-clamp: 1; margin-left: 4px; }
+.plugin-grid.is-list .plugin-card-foot { flex: 0 0 auto; }
+.plugin-grid.is-list .plugin-warn { flex: 0 0 auto; }
+
+/* ── 详情：面包屑 + 色带 Hero + 正文/侧栏两栏 ──
+   版式照参照量着做（VS Code 市场详情页：面包屑 → 整条彩色 Hero 带大图标/大名字/byline/主按钮
+   → 标签页 → 正文 + 右侧元信息栏；Obsidian 详情：元信息侧栏 + 相关插件）。
+   两处刻意的取舍：
+   · Hero 的色相跟着插件自己走（--tile-h 与图标块同源）—— 一屏里每个插件一条不同色的带子，
+     这是"我在看哪一条"最省事的信号；
+   · sha256 从正文最显眼的位置挪进右栏小字：它是给怀疑的人核对用的，不是给所有人读的。 */
+.plugin-detail {
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-2);
+  overflow: hidden;           /* Hero 与面包屑各有自己的底线，圆角要裁干净 */
+}
+.plugin-crumbs {
+  display: flex; align-items: center; gap: 7px; padding: 10px 18px;
+  border-bottom: 1px solid var(--border); font-size: var(--fs-sm); color: var(--muted);
+}
+.plugin-crumb-back {
+  display: inline-flex; align-items: center; padding: 0; background: none; border: 0;
+  font: inherit; font-size: var(--fs-sm); color: var(--accent); cursor: pointer;
+}
+.plugin-crumb-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--r-sm); }
+.plugin-crumb-sep { color: var(--faint); }
+.plugin-crumb.is-cur { color: var(--text); font-weight: 600; }
+@media (hover: hover) and (pointer: fine) { .plugin-crumb-back:hover { text-decoration: underline; } }
+
+.plugin-hero {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px;
+  padding: 20px 18px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(100deg, hsl(var(--tile-h, 220) 46% 18% / .75), hsl(var(--tile-h, 220) 40% 12% / .25) 58%, transparent);
+}
+[data-theme='light'] .plugin-hero {
+  background: linear-gradient(100deg, hsl(var(--tile-h, 220) 74% 94%), hsl(var(--tile-h, 220) 66% 97%) 58%, transparent);
+}
+.plugin-hero .plugin-mono { width: 60px; height: 60px; font-size: var(--fs-2xl); border-radius: var(--r-xl); }
+.plugin-hero-main { min-width: 0; }
+.plugin-hero-title { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.plugin-detail-name { margin: 0; font-size: var(--fs-2xl); font-weight: 650; letter-spacing: .01em; }
+/* byline 一行：作者 · 下载 · 体积 · 更新 · 兼容 · 来源。值本身不强调，靠 mono 与间隔分组 */
+.plugin-hero-stats { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 7px; font-size: var(--fs-sm); color: var(--muted); }
+.plugin-hero-stats .pb-item { display: inline-flex; align-items: center; gap: 5px; }
+/* 头像位（.plugin-avatar）在下面卡片那一段已经定义过 —— 这里**不再重复一份**：
+   同一个类两份声明，同权重下后写的赢，改前一份会"改了没反应"（本仓踩过两次的死声明）。
+   Hero 要的只是比卡片里小一点，所以只覆盖尺寸，其余继承。 */
+.plugin-hero .plugin-avatar { width: 17px; height: 17px; }
+/* 右栏的标签 chip：与卡片上的 .plugin-tag 同一个外观，但这里是 <button>（点了按标签筛目录），
+   所以要补按钮复位 —— 少了 background/border 复位就会出现浏览器默认按钮底与边框。 */
+.plugin-tag.is-btn {
+  background: none; font: inherit; font-size: var(--fs-2xs); cursor: pointer; padding: 1px 6px;
+}
+.plugin-tag.is-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) { .plugin-tag.is-btn:hover { color: var(--text); border-color: var(--accent-border); } }
+.plugin-hero-desc { margin: 9px 0 0; font-size: var(--fs-md); color: var(--text); line-height: 1.7; max-width: 76ch; }
+.plugin-detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.plugin-hero-flags { padding: 10px 18px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.plugin-warn.bad { color: var(--red); }
+
+.plugin-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 264px); gap: 30px; padding: 20px 18px 22px; }
+@media (max-width: 980px) { .plugin-detail-grid { grid-template-columns: 1fr; gap: 22px; } }
+/* 手机宽度（≤640）：Hero 的三列（图标/正文/动作）挤不下 —— 实测 320px 时正文只剩 68px，
+   名字会一个字一行。改成两列 + 动作换到下一行。 */
+@media (max-width: 640px) {
+  .plugin-hero { grid-template-columns: auto minmax(0, 1fr); }
+  .plugin-detail-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}
+.plugin-detail-main { min-width: 0; }
+.pd-block + .pd-block { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--border); }
+/* 分节标题要比 README 自己的标题（h3.md-h = --fs-lg）高一级，否则"它能做什么"（分节）
+   与 README 里同名的 h4 看起来一样重，读者分不清哪层是宿主写的、哪层是作者写的 */
+.pd-block-title { margin: 0 0 12px; font-size: var(--fs-xl); font-weight: 600; letter-spacing: .01em; }
+/* README：真标题层级 + 真列表 + 真链接（渲染在 ui/core/format.js）。
+   标题整体降两档（`#` → h3）：详情页已经用 hero 的名字当了 h1 的位置，
+   README 自己的一级标题再顶一个大字号，页面就有两个"最粗的标题"了。 */
+/* 正文不再按 78ch 卡宽：卡片本身已经限到 1080px，主列 ≈749px（约 89 字符，与 VS Code 市场
+   的正文栏同量级）。再卡一次就又在栏内留出 180px 的空洞 —— 那正是「堆在左侧」的观感来源。 */
+.pd-readme { font-size: var(--fs-md); color: var(--text); line-height: 1.85; overflow-wrap: anywhere; }
+.pd-readme .md-h { margin: 18px 0 8px; font-weight: 650; letter-spacing: .01em; }
+.pd-readme .md-h:first-child { margin-top: 0; }
+.pd-readme h3.md-h { font-size: var(--fs-lg); }
+.pd-readme h4.md-h { font-size: var(--fs-md); }
+.pd-readme h5.md-h, .pd-readme h6.md-h { font-size: var(--fs-sm); color: var(--muted); }
+.pd-readme .md-ul, .pd-readme .md-ol { margin: 6px 0 10px; padding-left: 1.45em; }
+.pd-readme .md-ul { list-style: disc; }
+.pd-readme .md-ol { list-style: decimal; }
+.pd-readme .md-ul li, .pd-readme .md-ol li { margin: 3px 0; }
+/* 段落：空行分段（段内换行由作者自己敲的 <br> 保留）。首段不留上边距 —— 它紧跟在分节标题下 */
+.pd-readme .md-p { margin: 0 0 10px; }
+.pd-readme .md-p:last-child { margin-bottom: 0; }
+.pd-readme a { color: var(--accent); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) { .pd-readme a:hover { text-decoration: underline; } }
+.pd-readme strong { font-weight: 650; }
+.pd-readme .md-pre {
+  margin: 10px 0; padding: 11px 13px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--r-md); overflow-x: auto; line-height: 1.6;
+}
+.pd-readme code { font-family: var(--mono); font-size: var(--fs-xs); color: var(--muted); }
+.pd-readme .md-pre code { color: var(--text); white-space: pre; }
+.pd-caps { display: flex; flex-direction: column; gap: 12px; max-width: 70ch; }
+.pd-cap { display: flex; gap: 10px; align-items: flex-start; }
+.pd-cap-ico { display: inline-flex; color: var(--faint); margin-top: 2px; }
+.pd-cap-name { font-size: var(--fs-sm); font-weight: 600; }
+.pd-cap-desc { margin-top: 2px; font-size: var(--fs-xs); color: var(--muted); line-height: 1.65; }
+.pd-shots { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.pd-shots img { max-width: 200px; max-height: 126px; border-radius: var(--r-md); border: 1px solid var(--border); display: block; }
+
+/* 右栏：标签 / 资源 / 作者 / 出处与指纹。参照里这一栏是"决定要不要装"的元信息堆放处 */
+.plugin-detail-aside { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.pd-side-label { font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); margin-bottom: 8px; }
+.plugin-detail-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+.pd-side-links { display: flex; flex-direction: column; gap: 7px; font-size: var(--fs-sm); }
+.pd-side-links a { color: var(--accent); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) { .pd-side-links a:hover { text-decoration: underline; } }
+.plugin-fp code { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--faint); overflow-wrap: anywhere; line-height: 1.5; }
+.plugin-note { margin-top: 7px; font-size: var(--fs-xs); color: var(--muted); line-height: 1.6; }
+.plugin-author { display: flex; align-items: center; gap: 10px; }
+.plugin-author-ico { width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-family: var(--mono); font-size: var(--fs-sm); font-weight: 600; background: linear-gradient(155deg, hsl(var(--tile-h, 220) 40% 32%), hsl(var(--tile-h, 220) 48% 22%)); color: hsl(var(--tile-h, 220) 70% 82%); border: 1px solid var(--border); }
+[data-theme='light'] .plugin-author-ico { background: linear-gradient(155deg, hsl(var(--tile-h, 220) 70% 90%), hsl(var(--tile-h, 220) 64% 82%)); color: hsl(var(--tile-h, 220) 45% 34%); }
+.plugin-author-name { font-size: var(--fs-sm); font-weight: 600; }
+.plugin-author-sub { margin-top: 2px; font-size: var(--fs-2xs); color: var(--faint); }
+
+/* 相关插件：详情底部 */
+.plugin-related { padding: 18px 18px 20px; border-top: 1px solid var(--border); }
+.plugin-related h5 { margin: 0 0 12px; font-size: var(--fs-lg); font-weight: 600; letter-spacing: .01em; }
+.plugin-related-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.plugin-related-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px 13px; background: var(--bg-2); cursor: pointer; border: 1px solid var(--border); border-radius: var(--r-md); text-align: left; color: inherit; width: 100%; }
+.plugin-related-name { font-size: var(--fs-sm); font-weight: 600; }
+.plugin-related-desc { margin-top: 3px; font-size: var(--fs-xs); color: var(--muted); line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ── 发布插件（作者向）──
+   一张卡片里的三段：抬头（图标 + 标题 + 一段话）、三步命令、三条分发渠道。
+   刻意不做成表单：控制台跑在使用者自己的服务器上，它没有作者 GitHub 的写权限 ——
+   这里的职责是把路说清楚，不是替他发布。
+   第一版是"一段大文字 + 灰色命令行 + 三张白卡"直接铺在页面底上，没有边界也没有层次
+   （用户："太难看了"）；这一版给它一个卡片壳、一个强调色抬头的图标块、编号徽标与渠道徽标。 */
+.plugin-publish {
+  padding: 22px 22px 20px;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-2);
+}
+.plugin-publish-hero { display: flex; gap: 14px; align-items: flex-start; padding-bottom: 18px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+.plugin-publish-ico {
+  flex: 0 0 auto; width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-md); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--accent-border);
+}
+.plugin-publish-hero-txt { min-width: 0; }
+.plugin-publish-hero-txt h3 { margin: 0 0 6px; font-size: var(--fs-xl); font-weight: 650; letter-spacing: .01em; }
+.plugin-publish-hero-txt p { margin: 0; font-size: var(--fs-sm); line-height: 1.8; color: var(--muted); max-width: 74ch; }
+.plugin-publish-hero-txt a, .plugin-channel a, .plugin-publish-foot a { color: var(--accent); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) {
+  .plugin-publish-hero-txt a:hover, .plugin-channel a:hover, .plugin-publish-foot a:hover { text-decoration: underline; }
+}
+/* 左三步、右"你会得到什么"：宽屏把右侧那片空白用起来（原来三段命令孤零零占满整张卡，
+   右边一大片空 —— 看着像没做完）。窄屏收成一列，侧栏落到命令下面。 */
+.plugin-publish-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 215px); gap: 22px; align-items: start; }
+@media (max-width: 1000px) { .plugin-publish-grid { grid-template-columns: 1fr; gap: 20px; } }
+.plugin-publish-side {
+  display: flex; flex-direction: column; gap: 9px; padding: 14px 15px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.plugin-publish-side-label { font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
+.plugin-publish-side-label:not(:first-child) { margin-top: 6px; }
+.plugin-tree { margin: 0; padding: 10px 12px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-sm); overflow-x: auto; }
+.plugin-tree code { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text); line-height: 1.7; white-space: pre; }
+.plugin-publish-side-list { margin: 0; padding-left: 1.1em; font-size: var(--fs-xs); line-height: 1.7; color: var(--muted); }
+.plugin-publish-side-list li { margin: 2px 0; }
+.plugin-publish-side-list code { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--text); }
+.plugin-publish-side-link { margin-top: 2px; font-size: var(--fs-xs); color: var(--accent); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) { .plugin-publish-side-link:hover { text-decoration: underline; } }
+.plugin-steps { list-style: none; margin: 0 0 26px; padding: 0; display: flex; flex-direction: column; gap: 18px; }
+.plugin-step { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 12px; }
+.plugin-step-n {
+  width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; font-family: var(--mono); font-size: var(--fs-2xs); font-weight: 600;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--accent-border);
+}
+.plugin-step-body { min-width: 0; }
+.plugin-step-t { font-size: var(--fs-md); font-weight: 600; margin: 2px 0 7px; }
+/* 命令块：等宽、可整块选中。不做"复制"按钮 —— 控制台常在 http 隧道后面，
+   非安全上下文里 navigator.clipboard 根本不存在，按钮会变成假的。 */
+.plugin-cmd {
+  margin: 0; padding: 9px 12px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--r-md); overflow-x: auto; line-height: 1.6;
+}
+/* 长命令**只在空格处折行**（pre-wrap 不含 overflow-wrap:anywhere —— 那个会在 token 中间断，
+   把 URL 劈成两半）。最长的 pack 命令在 577px 宽度下折成两行，每行都是完整的参数。 */
+.plugin-cmd code { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--text); white-space: pre; }
+.plugin-step-hint { margin-top: 7px; font-size: var(--fs-xs); line-height: 1.75; color: var(--muted); }
+.plugin-step-hint code { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--text); }
+.plugin-publish-sec { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.plugin-publish-sec h4 { margin: 0; font-size: var(--fs-lg); font-weight: 600; letter-spacing: .01em; }
+.plugin-publish-sec span { font-size: var(--fs-xs); color: var(--faint); }
+.plugin-channels { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.plugin-channel {
+  display: flex; flex-direction: column; gap: 8px; padding: 14px 15px 13px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.plugin-channel-head { display: flex; align-items: center; gap: 7px; }
+.plugin-channel-ico { display: inline-flex; color: var(--accent); }
+.plugin-channel-head b { font-size: var(--fs-sm); font-weight: 600; }
+.plugin-channel-badge {
+  margin-left: auto; padding: 1px 7px; border-radius: var(--r-pill);
+  border: 1px solid var(--border); font-size: var(--fs-2xs); color: var(--muted); white-space: nowrap;
+}
+.plugin-channel p { margin: 0; font-size: var(--fs-xs); line-height: 1.75; color: var(--muted); }
+.plugin-channel code { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--text); }
+.plugin-channel-link { margin-top: auto; padding-top: 2px; font-size: var(--fs-xs); }
+.plugin-publish-foot {
+  margin: 20px 0 0; padding: 11px 14px; font-size: var(--fs-xs); line-height: 1.8; color: var(--muted);
+  background: var(--bg); border-left: 2px solid var(--accent-border); border-radius: 0 var(--r-md) var(--r-md) 0;
+}
+.plugin-publish-foot b { color: var(--text); }
+.plugin-publish-foot code { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--text); }
+/* 「手动安装」页脚的一句桥接：作者做出包之后最自然的下一步就是看怎么上架 */
+.plugin-publish-bridge { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border); font-size: var(--fs-sm); color: var(--muted); }
+.plugin-linkbtn { background: none; border: 0; padding: 0; font: inherit; font-size: var(--fs-sm); color: var(--accent); cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .plugin-linkbtn:hover { text-decoration: underline; } }
+.plugin-linkbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+
+/* 动作反馈条：贴底 */
+.plugins-status-bar { position: sticky; bottom: 0; z-index: 2; margin-top: 22px; padding: 10px 0 2px; background: var(--bg); border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.plugins-status-bar:empty { display: none; }
+.plugin-empty { padding: 16px 0; font-size: var(--fs-sm); color: var(--muted); }
+
+@media (max-width: 760px) {
+  .plugin-page-head { flex-direction: column; gap: 12px; }
+  .plugin-master { max-width: none; }
+  .plugin-row { flex-wrap: wrap; }
+  .plugin-row-actions { justify-content: flex-start; }
+  .plugin-grid { grid-template-columns: 1fr; }
+  .plugin-grid.is-list .plugin-card-desc { display: none; }
+}
+
+html[data-glass] .plugin-card,
+html[data-glass] .plugin-detail,
+html[data-glass] .plugin-related-item {
+  border-color: var(--glass-edge); background-color: var(--glass-fill); background-image: var(--glass-grain); background-clip: padding-box;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .plugin-row:hover { background: var(--bg-2); }
+  .plugin-card:hover { background: var(--bg-3); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .plugin-grid.is-list .plugin-card:hover { background: var(--bg-2); border-color: transparent; border-bottom-color: var(--border); }
+  .plugin-related-item:hover { background: var(--bg-3); border-color: var(--accent-border); }
+}

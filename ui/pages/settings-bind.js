@@ -11,7 +11,6 @@ import { ASR_SERVICES, MODEL_SERVICES_UI, QZONE_RUN_LABELS } from '../core/const
 import { askForConfirmation, bindPeekToggle, requestExperimentOwnerUin, syncClampedInputs } from '../core/dom-util.js';
 import { bindKeyToggles, fetchRealKey } from './key-toggles.js';
 import { $, $$, esc } from '../core/dom.js';
-import { bindPluginsSection, loadPluginsSection } from './plugins.js';
 import {
   asrSlotOf, hostOfUrl, mulOf, paramActiveForProbability, segOfProbability, sliderDesc
 } from '../core/format.js';
@@ -232,7 +231,6 @@ function sliderFillPos(ratio) {
 // 设置页事件绑定：原来是一个 1544 行的单函数，按**安全边界**（两侧无共享局部名）切成 4 段。
 // 只切不改 —— 每段的语句与切分前逐字节一致，顺序、条件、守卫都没动；这里按原顺序调用。
 function bindSettingsEvents(c) {
-  if (state.settingsSection === 'plugins') { bindPluginsSection(); void loadPluginsSection(); }
   bindSettingsSaveAndSections();
   bindSettingsListsAndGroups(c);
   bindSettingsModelsAndKeys(c);

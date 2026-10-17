@@ -164,15 +164,142 @@ function formatElapsed(seconds) {
   return `${Math.floor(minutes / 60)} 小时 ${String(minutes % 60).padStart(2, '0')} 分`;
 }
 
-// Release 说明是 markdown；先整体转义，再把标题/加粗/列表替换成最小样式，
+// Release 说明与上下文消息都是 markdown；先整体转义，再把标题/加粗/列表替换成最小样式，
 // 避免把 --- 之类的分隔线与标题混在一起时出现乱码感。
-function formatReleaseNotes(body) {
-  return esc(String(body || '').trim())
+//
+// `rich`（插件 README 走它）比默认档多做三件事 —— 都只在"长文档"里成立：
+//   · 标题真成标题（默认档 `##` → `<strong>`）；
+//   · `- x` 成 `<ul><li>`（默认档只把 `- ` 换成 `• `）；
+//   · `[文字](链接)` 成可点的 `<a>`（默认档原样显示）。
+// 为什么默认档**不**跟着改：它最大的消费者是会话页的上下文检查器，那里看的是**原文本**——
+// 系统提示词的分节与缩进本身就是被检查的东西，把缩进折进 `<ul>` 会丢掉一层结构。
+// 两条路共用同一份 esc 前提与同一次围栏切段，不是两份渲染器。
+function formatMinimalMarkdown(body, { rich = false } = {}) {
+  const escaped = esc(String(body || '').trim());
+  // 先整体转义、再按围栏切段（不是先切再转义）：围栏内的内容不该再被当成 markdown 解析
+  //（行首的 * 或 # 在代码里是字面量），而它同样必须已经转义过 —— 这是本函数唯一的安全前提。
+  const parts = escaped.split(/^```[^\n]*\n?/gm);
+  // split 的产物里，奇数段是围栏内内容，偶数段是普通行文
+  return parts.map((chunk, index) => {
+    if (index % 2 === 1) return `<pre class="md-pre"><code>${chunk.replace(/\n$/, '')}</code></pre>`;
+    return rich ? renderMarkdownChunk(chunk) : renderPlainChunk(chunk);
+  }).join('');
+}
+
+/** 默认档：只换符号，行结构与缩进一律保留（诊断视图要的是原文本的样子）。 */
+function renderPlainChunk(chunk) {
+  return chunk
     .replace(/^#{1,6}\s*(.+)$/gm, '<strong>$1</strong>')
     .replace(/^[*-]\s+/gm, '• ')
     .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`\n]+)`/g, '<code>$1</code>');
 }
+
+const CJK = /[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]/;
+
+/**
+ * 段内软换行怎么合：**按 CommonMark/GitHub 的语义合成一行**（软换行 = 空格），只有
+ * 行尾两个空格才是硬换行（`<br>`）。
+ *
+ * 为什么不保留原换行：这是照参照做的决定。GitHub / Obsidian / VS Code 渲染同一份 README
+ * 都会把软换行折成一行 —— 作者们按 80 列硬折的行，在详情页里逐行断句就成了"每行半句"的
+ * 参差文本（实测中文 README 尤其难看）。语义上也没丢东西：换行位置不是作者要表达的内容。
+ *
+ * 唯一比参照多做的一点：**中文之间不插空格**。按空格合的话会出现「…时， 模型可以…」这种
+ * 全角标点后面多一个空格的样子，中文排版里那看着像错字。两侧都是中日韩字符就直接接上。
+ */
+function joinParagraphLines(lines) {
+  let out = lines[0].trim();
+  for (let i = 1; i < lines.length; i += 1) {
+    const prev = lines[i - 1];
+    const next = lines[i].trim();
+    if (/ {2,}$/.test(prev)) { out += `\n${next}`; continue; }            // 硬换行
+    const left = out.slice(-1);
+    const glue = (CJK.test(left) && CJK.test(next.slice(0, 1))) ? '' : ' ';
+    out += glue + next;
+  }
+  return out;
+}
+
+/**
+ * 普通行文那一段的最小 markdown（围栏外）。按行归块：标题 / 无序列表 / 有序列表 / 段落。
+ *
+ * 为什么要有标题层级：README 是**长文档**，原来 `##` 只渲染成 `<strong>` —— 一整页粗体小字，
+ * 读起来是一堵墙（VS Code / Obsidian 的插件详情页都是"标题就是标题"）。
+ * 为什么段落要包 `<p>`：详情页的 README 不再用 `white-space: pre-wrap`（标题与列表要正常折行），
+ * 于是裸文本里的换行会被 HTML 折成一个空格 —— `1. 甲 2. 乙` 那种两行会挤成一行。所以：
+ * 空行分段、列表行归 `<ul>`/`<ol>`、其余按上面的软换行规则合段。
+ * 链接：README 里 `[Open-Meteo](https://open-meteo.com/)` 这种原来原样显示成文字。
+ * ⚠️ 链接只收 http(s)：README 是**第三方内容**（插件作者的仓库里写什么都有），
+ * `javascript:`/`data:` 拼进 href 就是在持有控制台令牌的页面上执行别人的脚本。
+ */
+function renderMarkdownChunk(chunk) {
+  const lines = chunk.split('\n');
+  const out = [];
+  let list = null;      // { tag: 'ul' | 'ol', items: [] } —— 连着几行同一种符号才算一个列表
+  let para = [];
+  const flushList = () => {
+    if (!list) return;
+    out.push(`<${list.tag} class="md-${list.tag}">${list.items.join('')}</${list.tag}>`);
+    list = null;
+  };
+  // ⚠️ 行内处理要**在合好的整段上做、最后才换 `<br>`**：加粗可以跨软换行（真 README 里有
+  // `…会注明**实际用了哪家、\n汇率是哪一天的**。` 这种），逐行处理的话那一对 `**` 永远配不上，
+  // 页面上就明晃晃留着两个星号。
+  const flushPara = () => {
+    if (!para.length) return;
+    out.push(`<p class="md-p">${inlineMarkdown(joinParagraphLines(para)).replace(/\n/g, '<br>')}</p>`);
+    para = [];
+  };
+  const both = () => { flushList(); flushPara(); };
+  for (const line of lines) {
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    const bullet = /^\s*[*-]\s+(.+)$/.exec(line);
+    const ordered = /^\s*\d+[.)]\s+(.+)$/.exec(line);
+    if (heading) {
+      both();
+      // README 的一级标题在详情页里已经由 hero 顶着了，所以整体降一档：`#` → h3
+      const level = Math.min(6, heading[1].length + 2);
+      out.push(`<h${level} class="md-h">${inlineMarkdown(heading[2])}</h${level}>`);
+    } else if (bullet || ordered) {
+      flushPara();
+      const tag = bullet ? 'ul' : 'ol';
+      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+      list.items.push(`<li>${inlineMarkdown((bullet || ordered)[1])}</li>`);
+    } else if (!line.trim()) {
+      both();
+    } else {
+      flushList();
+      // 保留原行（不 trim）：`joinParagraphLines` 要靠行尾的两个空格认硬换行
+      para.push(line);
+    }
+  }
+  both();
+  return out.join('\n');
+}
+
+/** 行内：加粗 / 行内码 / 链接（链接只收 http(s)）。
+ *
+ * ⚠️ URL 的字符类里**必须排掉 `*` 与反引号**：三趟替换是顺序跑在同一串上的，链接先跑，
+ * 于是生成的 `<a href="…">` 会被后两趟扫到 —— URL 里只要有一个 `*`，加粗那趟就能从 href
+ * 内部一直吃到行尾，把标签结构撕坏（`[x](https://a**b)**` → href 里钻出 `<strong>`）。
+ * 宁可这种 URL 不成为链接（原样显示），也不能生成坏标记。
+ */
+function inlineMarkdown(text) {
+  return String(text)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s*`]+)\)/g,
+      (whole, label, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`)
+    // `[^*]` 允许跨换行：段内软换行之间的一对 `**` 是真 markdown（见 flushPara 的注释）。
+    // 它跨不过 `*` 本身，所以同一行里 `**a** 和 **b**` 仍然是两对，不会吃成一个。
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+}
+// 旧名沿用（会话页在用它渲染 Release 说明与上下文消息）：同一份实现，围栏处理它也跟着有
+const formatReleaseNotes = formatMinimalMarkdown;
+
+// 插件 README 与 Release 说明是同一类文本（作者写的 markdown，都要"先整体转义、再换少量样式"）。
+// 用同一个函数而不是各写一份：这类渲染器多一份就多一个注入面 —— 这里的中性名字是给调用方看的，
+// 实现与 esc 纪律完全共用（改一处两处都变）。
 
 function fmtTokens(n) {
   n = Number(n) || 0;
@@ -645,7 +772,7 @@ function parseList(s) {
 export {
   asrHostOf, asrServiceOf, asrServiceOptions, asrSlotOf, chatNameOf, clampInt, effectivePriceFor, fmtClock, fmtRate,
   fmtRemainingMs, fmtTime, fmtTok, fmtTokens, fmtWaitRemain, fmtYuan, formatChatTitle, formatElapsed,
-  formatReleaseNotes, formatRevision, groupSliderPosForUi, hasOwnPrice, hostOfUrl, initialServiceNote,
+  formatMinimalMarkdown, formatReleaseNotes, formatRevision, groupSliderPosForUi, hasOwnPrice, hostOfUrl, initialServiceNote,
   legacyServiceDeployed, matchPriceTable, memThreshold, mulOf, normalizeAsrMax, normalizeImageGenMax, normalizeStickerMax,
   normalizeStickerCollectMax,
   onebotIssueText, onebotStatusLineHtml, paramActiveForProbability, parseList, priceTxt, segOfProbability,

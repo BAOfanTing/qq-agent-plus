@@ -139,6 +139,10 @@
         <button class="tab" data-icon="activity" data-tab="assets" data-group-start data-page-node-id="qassetobserve"><span class="tab-label"><b>观测</b><i>素材与实验状态</i></span></button>
         <button class="tab" data-icon="coins" data-tab="usage" data-page-node-id="hcZzcXuMojNoiE7UcRVYfR"><span class="tab-label"><b>用量</b><i>花费与 token</i></span></button>
         <button class="tab" data-icon="alert" data-tab="incidents" data-feature-nav="incidents"><span class="tab-label"><b>异常处理</b><i>告警与日志</i></span></button>
+        <!-- 插件：市场与已装的扩展（2026-10-16 从「设置 → 插件」搬出来）。它本来就不是配置表单：
+             动作点了就生效、没有"保存设置"这一步，藏在设置里会被强制加一条保存条，还得用文案解释
+             "不用点下面那个按钮" —— 那是布局错了的信号。位置放在「设置」之前（同为"管"的页面）。 -->
+        <button class="tab" data-icon="chip" data-tab="plugins"><span class="tab-label"><b>插件</b><i>市场与已装的扩展</i></span></button>
         <button class="tab" data-icon="gear" data-tab="settings" data-page-node-id="4cXbRBtGmcpcL272eKvHPV"><span class="tab-label"><b>设置</b><i>全部配置</i></span></button>
       </nav>
 
@@ -290,6 +294,11 @@
     <!-- 用量视图 -->
     <section id="view-usage" class="view" data-page-node-id="At5AHGr3EpuOFlDyc7dES4">
       <div id="usage-page" class="usage-pane" data-page-node-id="1AXcokyh5yiXqQgwn6X2gu"></div>
+    </section>
+
+    <!-- 插件视图 -->
+    <section id="view-plugins" class="view">
+      <div id="plugins-page" class="plugins-pane"></div>
     </section>
 
     <!-- 设置视图 -->
