@@ -23,8 +23,19 @@ fs.writeFileSync(dockerSock, '');
 process.env.DOCKER_HOST = `unix://${dockerSock}`;
 after(() => fs.rmSync(dockerSockDir, { recursive: true, force: true }));
 
+// 每个用例的数据目录都记下来，整文件跑完统一清：在此之前这些目录是**只建不删**的，
+// 单跑这个文件多跑几次就会在系统临时目录里堆一地 qq-health-*（本仓的测试套件只在整轮结束时
+// 兜底扫一遍，单跑没有那道网；2026-10-16 连续单跑时数出 87 个）
+const madeDataDirs = [];
+after(() => {
+  for (const dir of madeDataDirs) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 句柄占用就算了 */ }
+  }
+});
+
 function makeDataDir({ withDb = true, withUpdaterState = false, withMarker = false, outboundAgoMs = 0, inboundAgoMs = 0, inboundState = 'pending', inboundAvailableInMs = null, runtimePaused = false, budgetDegraded = false, budgetPolicy = 'degrade', extraInbound = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-health-'));
+  madeDataDirs.push(dir);
   if (runtimePaused || budgetDegraded) {
     fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
       runtime: { mode: 'active', paused: runtimePaused },

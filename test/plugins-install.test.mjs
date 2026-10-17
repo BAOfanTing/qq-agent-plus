@@ -13,7 +13,7 @@ process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: tr
 
 const dotSlash = (name) => ['.', name].join('/');   // 直写 `./x.mjs` 会被 layout 守卫当成 import
 const dotDot = (name) => ['..', name].join('/');
-const { parseTarGz, installPlugin, uninstallPlugin, fetchPluginIndex, sha256Of, isSha256, verifySha256, MAX_PLUGIN_ARCHIVE_BYTES } =
+const { parseTarGz, installPlugin, uninstallPlugin, fetchPluginIndex, sha256Of, isSha256, verifySha256, MAX_PLUGIN_ARCHIVE_BYTES, MAX_TOTAL_UNPACKED } =
   await import('../src/plugins/install.js');
 const { parsePluginManifest } = await import('../src/plugins/manifest.js');
 
@@ -114,7 +114,7 @@ test('安装：装成功、重复装＝升级并留下旧版备份、staging 不
   assert.ok(fs.existsSync(path.join(second.backupDir, 'plugin.json')));
   // 备份轮转：连装几次只留最近 3 份（不留的话每次升级堆一份代码）
   for (let i = 0; i < 4; i += 1) await installPlugin({ tarball: packPlugin('demo'), dataDir });
-  const backups = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo-'));
+  const backups = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo.'));
   assert.equal(backups.length, 3, `备份应只留最近 3 份，实际 ${backups.length}`);
   assert.deepEqual(strays().filter((name) => !name.startsWith('.backup-')), [], '除了备份不该有别的东西');
 });
@@ -126,7 +126,7 @@ test('同一毫秒内连装也不撞名（时钟不前进时升级照样留档�
   const fixed = () => 1_700_000_000_000;
   await installPlugin({ tarball: packPlugin('demo'), dataDir, now: fixed });
   for (let i = 0; i < 3; i += 1) await installPlugin({ tarball: packPlugin('demo'), dataDir, now: fixed });
-  const backups = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo-'));
+  const backups = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo.'));
   assert.equal(backups.length, 3, `同一毫秒连装也要各自留档并轮转到 3 份，实际 ${backups.length}`);
   assert.ok(fs.existsSync(path.join(pluginsRoot, 'demo', 'plugin.json')), '升级后新版本要在位');
 });
@@ -187,6 +187,65 @@ test('卸载：只挪走代码目录，插件数据保留（重装后状态还�
   assert.throws(() => uninstallPlugin({ id: '../etc', dataDir }), /id 不合法/);
 });
 
+test('备份目录名不会被"前缀相同的另一个插件"命中（demo 升级不许动 demo-tools 的备份）', async () => {
+  slate();
+  // 这一条是审查抓到的：备份名原来用 `.backup-<id>-` 做前缀筛选，而 id 允许连字符，
+  // 于是给 `demo` 升级会把 `demo-tools` 的备份一起纳入排序与删除 —— 最坏是**删掉本次升级刚做的回滚点**，
+  // 而界面上还写着"旧版留在 .backup-* 里，确认没问题可以删"（用户以为那是安全网）。
+  for (let i = 0; i < 3; i += 1) {
+    await installPlugin({ tarball: packPlugin('demo-tools', { extraFiles: [{ name: 'v.mjs', data: `x${i}` }] }), dataDir, log: () => {} });
+  }
+  const before = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo-tools.'));
+  assert.equal(before.length, 2, `demo-tools 应该有两份备份（留最近 3 份），实际 ${before.join(', ')}`);
+
+  await installPlugin({ tarball: packPlugin('demo-tools', { extraFiles: [{ name: 'v.mjs', data: 'new' }] }), dataDir, log: () => {} });
+  const mine = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo-tools.'));
+  assert.equal(mine.length, 3, '第四份换入后仍保留 3 份（轮转照旧）');
+
+  // 装另一个 id（前缀是 demo 而不是 demo-tools）时，demo-tools 的备份一份都不许少
+  await installPlugin({ tarball: packPlugin('demo', { extraFiles: [{ name: 'v.mjs', data: 'a' }] }), dataDir, log: () => {} });
+  await installPlugin({ tarball: packPlugin('demo', { extraFiles: [{ name: 'v.mjs', data: 'b' }] }), dataDir, log: () => {} });
+  const stillThere = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo-tools.'));
+  assert.equal(stillThere.length, 3, `demo 的备份轮转不许碰到 demo-tools 的备份，实际剩 ${stillThere.join(', ')}`);
+  const demoBackups = fs.readdirSync(pluginsRoot).filter((name) => name.startsWith('.backup-demo.'));
+  assert.equal(demoBackups.length, 1, 'demo 自己那一次升级应该留着回滚点');
+});
+
+test('解压炸弹：解压后超过上限直接拒（这段代码跑在宿主进程里，不能让它把机器人撑爆）', async () => {
+  // 5MB 的 gz 能解开成 GB 级。造一个高压缩比的东西：全零内容压完只有几十 KB。
+  const zlib = await import('node:zlib');
+  const raw = Buffer.alloc(MAX_TOTAL_UNPACKED + 8 * 1024 * 1024, 0);
+  const gz = zlib.gzipSync(raw, { level: 9 });
+  assert.ok(gz.length < 1024 * 1024, `压缩后应该很小（${gz.length} 字节）才有"炸弹"的意义`);
+  assert.throws(() => parseTarGz(gz), /上限|疑似压缩炸弹/);
+  // 正常的包照旧能解（别把上限做成"永远拒绝"）
+  assert.ok(parseTarGz(packPlugin('ok-bomb')).length > 0);
+});
+
+test('sha256 给了但形状不对：一律拒（不许"跳过校验继续装"）', async () => {
+  slate();
+  const tarball = packPlugin('sha-shape');
+  await assert.rejects(
+    () => installPlugin({ tarball, id: 'sha-shape', sha256: 'abc123', dataDir, log: () => {} }),
+    (error) => error.code === 'E_SHA_SHAPE',
+    '给了 sha256 就得能核对：形状不对必须报错，而不是静默跳过'
+  );
+  assert.equal(fs.existsSync(path.join(pluginsRoot, 'sha-shape')), false, '被拒时不该落盘');
+});
+
+test('索引门控：minVersion 写成 v0.8.5 也不许静默放过；形状坏掉一律标成装不了', async () => {
+  const { normalizePluginIndexEntry } = await import('../src/plugins/install.js');
+  const base = { id: 'gate-plugin', downloadUrl: 'https://e/x.tar.gz', sha256: 'a'.repeat(64) };
+  const higher = normalizePluginIndexEntry({ ...base, minVersion: 'v9.9.9' }, { hostVersion: '0.8.5' });
+  assert.equal(higher.entry.compatible, false, '带 v 前缀的高版本要求必须拦住（原来因为这层正则直接跳过门控）');
+  assert.match(higher.entry.reason, /9\.9\.9/);
+  const lower = normalizePluginIndexEntry({ ...base, minVersion: 'v0.1.0' }, { hostVersion: '0.8.5' });
+  assert.equal(lower.entry.compatible, true, '带 v 的低版本要求要能正常通过');
+  const broken = normalizePluginIndexEntry({ ...base, minVersion: '下个版本' }, { hostVersion: '0.8.5' });
+  assert.equal(broken.entry.compatible, false, '形状不对要 fail-closed');
+  assert.match(broken.entry.reason, /形状不对/);
+});
+
 test('索引：坏项跳过、好项归一化、非 200 与坏 JSON 都要报出来', async () => {
   const body = JSON.stringify({
     plugins: [
@@ -197,10 +256,16 @@ test('索引：坏项跳过、好项归一化、非 200 与坏 JSON 都要报出
     ]
   });
   const skipped = [];
-  const list = await fetchPluginIndex({ url: 'https://example.com/index.json', fetchText: async () => ({ statusCode: 200, body }), log: (line) => skipped.push(line) });
+  const index = await fetchPluginIndex({ url: 'https://example.com/index.json', fetchText: async () => ({ statusCode: 200, body }), log: (line) => skipped.push(line) });
+  const list = index.entries;
   assert.deepEqual(list.map((p) => p.id), ['good'], '只保留完整的项');
-  assert.equal(skipped.length, 2, '跳过两个坏项（缺 sha 与坏 id）要留痕');
+  // 三条坏项都要留痕（含"整项不是对象"那种形状坏）：悄悄少一条最难排查
+  assert.equal(skipped.length, 3, '缺 sha / 坏 id / 不是对象 都要留下原因');
+  // 跳过的条目要能从返回值拿到（只写日志的话，界面那句「缺字段被跳过」永远不会出现）
+  assert.equal(index.skipped.length, 3, '跳过的条目要回传给调用方');
+  assert.ok(index.skipped.every((item) => item.reason && item.source === 'https://example.com/index.json'), '每条都要带原因与来源');
   assert.equal(list[0].sha256, 'e'.repeat(64));
+  assert.equal(list[0].url, 'https://example.com/g.tar.gz', 'tarball 这个老字段名要能读出来（归一化到 url）');
   await assert.rejects(() => fetchPluginIndex({ url: 'https://x/index.json', fetchText: async () => ({ statusCode: 404, body: 'nope' }) }), /HTTP 404/);
   await assert.rejects(() => fetchPluginIndex({ url: 'https://x/index.json', fetchText: async () => ({ statusCode: 200, body: 'not json' }) }), /不是合法 JSON/);
   await assert.rejects(() => fetchPluginIndex({ url: 'https://x/index.json', fetchText: async () => ({ statusCode: 200, body: '{}' }) }), /没有 plugins 数组/);

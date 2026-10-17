@@ -195,7 +195,20 @@ test('图标条的样式取值与参照实现一致（宽度/曲线/时长/关�
   // 选中项自己不许再有底色：否则滑块滑过来时旧格子还留着底色。
   // 但**窄屏例外** —— ≤900px 时侧栏是顶部横向标签条、滑块 display:none，选中态得回到逐项底色。
   // 所以只在"窄屏断点之前"的 CSS 里禁止给 .tab.active 上色。
-  const narrowAt = CSS.lastIndexOf("@media (max-width: 900px)");
+  // ⚠️ 不能用"文件里最后一个 900px 断点"来切宽/窄屏：任何**别的页面**加一条自己的
+  // `@media (max-width: 900px)`（插件页 2026-10-16 就加了一条布局断点）都会把它带偏，
+  // 于是侧栏的窄屏兜底被当成宽屏规则，这条用例开始假红。
+  // 认准侧栏自己那一段：它里面一定有 `.side-pill { display: none`。
+  // 认准侧栏自己那条窄屏回落：它同时含"藏滑块"与"逐项底色兜底"两件事
+  //（`#view-settings .settings-menu .side-pill` 那条也提到 side-pill，但它不含 .tab.active 兜底）。
+  const narrowBlocks = [...CSS.matchAll(/@media \(max-width: 900px\) \{/g)]
+    .map((m) => m.index)
+    .filter((idx) => {
+      const body = CSS.slice(idx, idx + 3000);
+      return /\.side-pill \{ display: none/.test(body) && /#sidebar \.tab\.active/.test(body);
+    });
+  assert.equal(narrowBlocks.length, 1, `侧栏的窄屏回落应当唯一（找到 ${narrowBlocks.length} 个）`);
+  const narrowAt = narrowBlocks[0];
   assert.ok(narrowAt > 0, '窄屏断点要在（横向标签条那套）');
   const wideCss = CSS.slice(0, narrowAt);
   const wideBlocks = [...wideCss.matchAll(/\.tab\.active \{([^}]*)\}/g)].map((m) => m[1]);

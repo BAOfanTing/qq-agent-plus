@@ -102,6 +102,70 @@ function loadPage() {
   return { window, fetchLog, errors };
 }
 
+test('插件页骨架：标签分面在左栏里、且真的渲染出来', { skip: SKIP }, async () => {
+  // 这条放在真实 DOM 里量：render-test 用的手写 DOM 桩没有属性 API（hidden/outerHTML/style.display
+  // 全缺），而且它**不解析 HTML** —— 骨架里的子节点在那边根本不存在，能查到的只有脚本写进去的容器。
+  //
+  // 历史：标签那组原来单独摆在卡片**上方**（`#plugins-tags`），2026-10-17 用户指出"标签放在插件
+  // 上面很难看"。参照（Obsidian / VS Code）的筛选全在侧栏，所以四组统一进 `#plugins-facets`。
+  // 这条用例钉两件事：标签**在左栏里**（而不是又跑回列表上方），且整组可见（不是被
+  // `[hidden] { display:none !important }` 压住的那种"渲染了但看不见"）。
+  const { window, errors } = loadPage();
+  await settle();
+  try {
+    window.switchTab('plugins');
+    await settle(60);
+    const doc = window.document;
+    const rail = doc.getElementById('plugins-facets');
+    assert.ok(rail, '插件页要有 #plugins-facets（左侧分面栏）');
+    assert.notEqual(rail.hidden, true, '分面栏必须可见');
+    const html = String(rail.innerHTML);
+    // 「范围」与「其他」是固定的两组（不依赖索引内容）；「分类」「标签」只有在索引里有条目时
+    // 才出现 —— 这个冒烟环境的 fetch 桩没有索引数据，所以这里不能硬要求那两组（否则断言的
+    // 其实是"桩里有没有数据"）。有数据时的分组断言在 render-test 里用 fixture 钉。
+    assert.ok(html.includes('范围') && html.includes('其他'),
+      '分面栏要有「范围」与「其他」两组（不依赖索引内容）');
+    assert.ok((html.match(/plugin-facet-group/g) || []).length >= 2, '分组结构要渲染进去');
+    assert.equal(doc.getElementById('plugins-tags'), null,
+      '标签不许再从骨架里单开一个容器横铺在列表上方');
+    assert.deepEqual(errors, [], `切到插件页出现未捕获错误：${errors.join(' | ')}`);
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('插件页「发布插件」：页签切得过去、指南里三条命令在、外链只走 https', { skip: SKIP }, async () => {
+  // 为什么在真实 DOM 里测：切页签靠 `renderPane()` 给别的面板 setAttribute('hidden')、
+  // 给当前面板 removeAttribute('hidden')。render-test 的手写 DOM 桩这两样都没有（hidden 也永远
+  // 读不到），在那儿写的"切过去了"恒为真 —— 与上面那条标签分面同一个坑。
+  const { window, errors } = loadPage();
+  await settle();
+  try {
+    window.switchTab('plugins');
+    await settle(60);
+    const doc = window.document;
+    const tab = doc.querySelector('[data-plugin-pane="publish"]');
+    assert.ok(tab, '要有「发布插件」页签（作者入口）');
+    const pub = doc.querySelector('[data-plugin-pane-body="publish"]');
+    const cat = doc.querySelector('[data-plugin-pane-body="catalog"]');
+    assert.ok(pub && cat, '发布面与目录面都要在');
+    assert.equal(pub.hidden, true, '默认停在目录面');
+    tab.click();
+    await settle(30);
+    assert.notEqual(pub.hidden, true, '点了页签要能看到发布面');
+    assert.equal(cat.hidden, true, '目录面要收起（不同时显示两个面）');
+    const html = String(pub.innerHTML);
+    // 三步命令都要在：作者照着敲就能跑起来，不靠去翻文档找命令名
+    for (const cmd of ['plugin-create.mjs', 'plugin-dev.mjs', 'plugin-pack.mjs']) {
+      assert.ok(html.includes(cmd), `指南里要有 ${cmd}`);
+    }
+    // 三条分发渠道：官方索引 / 自己的索引 / 直接给包
+    assert.ok(html.includes('qq-agent-plugins') && html.includes('plugins.indexUrls'),
+      '要分别给出"官方索引"与"自己的索引"两条路');
+    // 外链只许 https —— 这是页面上唯一会跳出控制台的地方
+    assert.equal(/href="http:\/\//.test(html), false, '外部链接只许 https');
+    assert.deepEqual(errors, [], `发布面渲染出现未捕获错误：${errors.join(' | ')}`);
+  } finally { window.happyDOM?.abort?.(); }
+});
+
 test('真实 DOM 冒烟：加载全部脚本、全部 tab 切换入口不抛', { skip: SKIP }, async () => {
   const { window, errors } = loadPage();
   await settle();
@@ -897,5 +961,104 @@ test('真实 DOM 冒烟：人物记忆页点「刷新」不会把列表卡在占
 
     assert.ok(!doc.querySelector('#global-memory-items .gm-empty'), '占位符不该留在 DOM 里');
     assert.ok(doc.querySelector('#global-memory-items [data-gm-key]'), '刷新后列表要回来（数据没变也不能卡在"正在读取…"）');
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('插件详情：打开压一条 history，浏览器后退回到目录', { skip: SKIP }, async () => {
+  // 用户反馈：进了详情只能找「← 返回目录」，浏览器的后退（含鼠标侧键 / 右键菜单后退）
+  // 直接退出插件页 —— 因为打开详情**没有压 history**。这里验那条链路：
+  // 点一个带 data-plugin-open 的卡片 → history.state 里有 pluginDetail；后退 → 回到目录。
+  // ⚠️ 不能 import 模块函数来测：happy-dom 里的页面跑在 window 上下文，Node 侧再 import 一份
+  // 会拿到没有 document 的另一个实例（dom.js 直接 ReferenceError）。
+  const { window, errors } = loadPage();
+  await settle();
+  try {
+    window.switchTab('plugins');
+    await settle(80);
+    const doc = window.document;
+    const grid = doc.getElementById('plugins-index');
+    assert.ok(grid, '要有目录容器');
+    grid.innerHTML = '<article class="plugin-card" data-plugin-open="smoke" tabindex="0" role="button">假卡片</article>';
+    const before = window.history.length;
+    grid.querySelector('[data-plugin-open="smoke"]').click();
+    await settle(60);
+    assert.equal(window.history.state?.pluginDetail, 'smoke', '打开详情要压一条 history（浏览器后退才有的退）');
+    assert.ok(window.history.length > before, 'history 长度要增加');
+    window.history.back();
+    await settle(80);
+    assert.equal(window.history.state?.pluginDetail ?? '', '', '后退之后不该再停在详情态');
+    assert.equal(doc.querySelector('[data-plugin-pane-body="catalog"]')?.hidden, false, '后退之后仍在目录面');
+
+    // 反方向也要一致：UI 的「← 返回目录」走 history.back()，不能只是把详情清掉 ——
+    // 否则按钮退一步、浏览器后退又退一步，URL 栈与界面会错开
+    // 注意：点完之后 renderIndex 会**重写** #plugins-index，注入的节点会被冲掉 ——
+    // 所以卡片要重新注入，「返回目录」按钮要挂到 #plugins-page 上（不在被重写的区域里）
+    grid.innerHTML = '<article class="plugin-card" data-plugin-open="smoke2" tabindex="0" role="button">假卡片</article>';
+    grid.querySelector('[data-plugin-open="smoke2"]').click();
+    await settle(60);
+    assert.equal(window.history.state?.pluginDetail, 'smoke2', '第二次打开也要压 history');
+    const closer = doc.createElement('button');
+    closer.setAttribute('data-plugin-close', '1');
+    doc.getElementById('plugins-page').appendChild(closer);
+    closer.click();
+    await settle(80);
+    assert.equal(window.history.state?.pluginDetail ?? '', '', '「返回目录」按钮要退掉自己压的那条 history（不是只清界面）');
+    assert.deepEqual(errors, [], `插件详情交互出现未捕获错误：${errors.join(' | ')}`);
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('插件页：反复进出后按 Enter 只压一条 history；Esc 能关详情', { skip: SKIP }, async () => {
+  // 审查 P1-1：keydown 原来注册在 delegationBound 守卫**之前**，而 #plugins-page 是静态容器，
+  // 每进一次插件页就叠一条 —— 按一次 Enter 打开 N 次、压 N 条 history，「返回目录」要连点 N 次。
+  const { window, errors } = loadPage();
+  await settle();
+  try {
+    // 进出三次（每次都是 force 重建）
+    for (let i = 0; i < 3; i += 1) {
+      window.switchTab('plugins');
+      await settle(60);
+      window.switchTab('sessions');
+      await settle(30);
+    }
+    window.switchTab('plugins');
+    await settle(80);
+    const doc = window.document;
+    const grid = doc.getElementById('plugins-index');
+    grid.innerHTML = '<article class="plugin-card" data-plugin-open="kb" tabindex="0" role="button">假卡片</article>';
+    const card = grid.querySelector('[data-plugin-open="kb"]');
+    const before = window.history.length;
+    card.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await settle(60);
+    assert.equal(window.history.length - before, 1,
+      `一次 Enter 只能压一条 history（进出 3 次后仍应是 1；实际 ${window.history.length - before}，说明 keydown 叠加了）`);
+    assert.equal(window.history.state?.pluginDetail, 'kb');
+
+    // Esc 关详情（也走 history.back，栈保持平衡）
+    doc.getElementById('plugins-page').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await settle(80);
+    assert.equal(window.history.state?.pluginDetail ?? '', '', 'Esc 之后不该再停在详情态');
+    assert.deepEqual(errors, [], `键盘交互出现未捕获错误：${errors.join(' | ')}`);
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('插件页：「手动安装」的按钮失败后能再点（不是一次性锁）', { skip: SKIP }, async () => {
+  // 审查 P2-2：静态骨架里的按钮不会被 refreshPlugins 重画，`disabled = true` 一直不复位 ——
+  // 装失败一次就连重试都点不了。
+  const { window, errors } = loadPage();
+  await settle();
+  try {
+    window.switchTab('plugins');
+    await settle(80);
+    const doc = window.document;
+    doc.getElementById('plugins-manual-url').value = 'https://example.com/x.tar.gz';
+    doc.getElementById('plugins-manual-sha').value = 'a'.repeat(64);
+    const realFetch = window.fetch;
+    window.fetch = async () => ({ ok: false, status: 500, json: async () => ({ error: '假装失败' }) });
+    const btn = doc.getElementById('plugins-manual-install');
+    btn.click();
+    await settle(120);
+    window.fetch = realFetch;
+    assert.equal(btn.disabled, false, '安装失败之后按钮要能再点（重试）');
+    assert.deepEqual(errors, [], `手动安装出现未捕获错误：${errors.join(' | ')}`);
   } finally { window.happyDOM?.abort?.(); }
 });

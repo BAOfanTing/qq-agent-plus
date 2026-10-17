@@ -3248,15 +3248,87 @@ try {
       + (okSync ? '' : ' -> ' + JSON.stringify(mismatch)));
   }
 
-  // ── 设置 → 插件：分区渲染 + 列表来自接口 + 点「启用」打到 /api/plugins/toggle（2026-10-15）──
-  //    这一页的动作**不走保存按钮**（点了就生效），所以这里验的是"渲染 + 委托 + 请求体"；
-  //    "插件页不该写出任何配置键"由下面的「保存分支」用例顺带保证（它查跨页越界）。
+  // ── 插件页（左侧顶层 tab，2026-10-16 从「设置 → 插件」搬出来）──
+  //    渲染 + 列表来自接口 + 点「启用」打到 /api/plugins/toggle；
+  //    这一页的动作**不走保存按钮**（点了就生效），所以验的是"渲染 + 委托 + 请求体"。
+  //    ⚠️ 搬到顶层之后它**不再经过 renderSettings 的越界检查**：那条用例查的是"设置页某分区
+  //    点保存会不会写出别的分区的键"，插件页已经不在这条路径上了（它自己的写入全是 /api/plugins/*）。
   {
     const originalFetch = sandbox.fetch;
     const posts = [];
     const indexEntry = {
-      id: 'demo', name: '示例插件', version: '1.0.0', description: '一句话说明',
-      capabilities: ['tools'], tarball: 'https://example.com/demo.tar.gz', sha256: 'a'.repeat(64)
+      id: 'demo', name: '示例插件', version: '1.2.0', description: '一句话说明',
+      capabilities: ['tools'], tags: ['官方', '工具'], downloadUrl: 'https://example.com/demo.tar.gz', sha256: 'a'.repeat(64),
+      updatedAt: '2026-10-01', downloads: 12
+    };
+    const otherEntry = {
+      id: 'weather', name: '天气', version: '1.0.0', description: '查天气',
+      capabilities: ['tools', 'http'], tags: ['工具'], category: '工具', downloadUrl: 'https://example.com/w.tar.gz', sha256: 'b'.repeat(64),
+      // 详情页要显示"它能做什么 / 它要哪些权限"：正文、截图、外链都放进来，好断言它们真的渲染了。
+      // README 故意写成**真 markdown**（标题/列表/链接/围栏/一个 javascript: 链接）：插件 README
+      // 走 formatMinimalMarkdown 的 rich 档，这条 fixture 就是那条通路的形状钉（含"不给 javascript: 放行"）。
+      // updatedAt 故意写成**完整 ISO 时间**：第三方索引给的不一定是 `YYYY-MM-DD`，
+      // 拼 `T00:00:00` 会拼成非法日期、函数退回原样显示 —— 页面上就会顶着一串 ISO。
+      updatedAt: '2026-10-16T09:30:00Z', downloads: 3,
+      readme: [
+        '# 天气（weather）',
+        '这是天气插件的说明正文第一句。第二段。',
+        '',
+        '## 用法',
+        '- 直接问「今天天气」',
+        '- 也可以问 `天气 北京`',
+        '',
+        '1. 装好之后在群里直接问',
+        '2. 要换默认城市，去控制台改配置',
+        '',
+        '数据来自 [Open-Meteo](https://open-meteo.com/)。',
+        '',
+        '```js',
+        '// 围栏里的 # 和 - 是字面量',
+        '# 不是标题',
+        '```',
+        '',
+        '[点我](javascript:alert(1))',
+        // URL 里带 `*`：三趟替换顺序跑在同一串上（链接先、加粗后）—— 若 URL 的字符类允许 `*`，
+        // 加粗那趟就会从 href 内部一直吃到行尾，把刚生成的标签结构撕坏。
+        '坏链接 [x](https://ex.com/a**b)** 结束',
+        '',
+        // 跨行的加粗对（真 README 里就有：`…会注明**实际用了哪家、\n汇率是哪一天的**。`）——
+        // 逐行做行内处理的话这一对永远配不上，页面上会明晃晃留着两个星号。
+        '跨行加粗：**这一对星号',
+        '横跨了两行**。',
+        '',
+        // 软换行（行尾无空格）合成一行、中文之间不插空格；行尾两个空格才是硬换行
+        '软换行这两行',
+        '要合成一段',
+        '硬换行在这里  ',
+        '这里起新行'
+      ].join('\n'),
+      screenshots: ['https://example.com/shot.png'],
+      homepage: 'https://example.com/home'
+    };
+    const revokedEntry = {
+      id: 'spam', name: '被撤的插件', version: '1.0.0', description: '发广告',
+      capabilities: ['tools'], downloads: 1,
+      // updatedAt 给一个**解析不了的值**：relativeTime 的兜底是"原样显示"，不能被悄悄吃掉
+      //（既不能变空、也不能变 NaN —— 页面上顶着一串原文本，总比什么都没有强）
+      updatedAt: '不确定',
+      revoked: '被举报：往群里发广告', compatible: false, reason: '已被撤回：被举报：往群里发广告',
+      downloadUrl: 'https://example.com/s.tar.gz', sha256: 'c'.repeat(64)
+    };
+    // 第四条：撤回 + **没装**。与上面那条（撤回 + 已装）配成一对 —— 这两种情况动作区的话
+    // 必须不一样（"不能安装" vs "已安装但不会被加载"），只留一条的话那个分支永远是死的。
+    // 第五条：只有契约强制字段（id/version/sha/地址），没有 name / description / tags。
+    // 第三方索引完全可能这样写 —— 卡片和详情必须用 id 兜底，不能顶一行空白。
+    const bareEntry = {
+      id: 'bare-one', version: '0.1.0', description: '',
+      capabilities: ['tools'], downloadUrl: 'https://example.com/b.tar.gz', sha256: 'e'.repeat(64)
+    };
+    const retiredEntry = {
+      id: 'retired', name: '退休插件', version: '0.2.0', description: '没人维护了',
+      capabilities: ['tools'], tags: ['社区'], updatedAt: '2026-08-01',
+      revoked: '作者申请下架', compatible: false, reason: '已被撤回：作者申请下架',
+      downloadUrl: 'https://example.com/r.tar.gz', sha256: 'd'.repeat(64)
     };
     const installedState = {
       enabled: true, requireIsolation: true, indexUrl: 'https://example.com/index.json',
@@ -3267,7 +3339,16 @@ try {
           name: '示例插件', version: '1.0.0', description: '',
           capabilities: ['tools', 'observe'], tools: ['ping', 'seen'], schedule: []
         },
-        status: null
+        status: { state: 'running', netIsolated: false, unconfined: true, rssKb: 2048, limits: {} },
+        install: { source: '索引：官方', url: 'https://example.com/demo.tar.gz', sha256: 'a'.repeat(64), version: '1.0.0', publisher: 'alice', signatureVerified: true, installedAt: Date.now(), upgraded: false },
+        revoked: '', lazy: false
+      }, {
+        // 已装 + 被撤回（撤回名单来自索引、装机状态在本机，这是真实存在的组合）
+        id: 'spam', installed: true, enabled: false, error: '',
+        manifest: { name: '被撤的插件', version: '1.0.0', description: '', capabilities: ['tools'], tools: ['push'], schedule: [] },
+        status: { state: 'stopped', netIsolated: false, unconfined: true, rssKb: 0, limits: {} },
+        install: { source: '索引：官方', url: 'https://example.com/s.tar.gz', sha256: 'c'.repeat(64), version: '1.0.0', publisher: 'bob', signatureVerified: true, installedAt: Date.now(), upgraded: false },
+        revoked: '被举报：往群里发广告', lazy: false, backups: []
       }]
     };
     sandbox.fetch = async (url, options = {}) => {
@@ -3278,44 +3359,302 @@ try {
         return { ok: true, status: 200, json: async () => ({ ok: true, ...installedState }) };
       }
       if (target.includes('/api/plugins/index')) {
-        return { ok: true, status: 200, json: async () => ({ ok: true, plugins: [indexEntry] }) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, plugins: [indexEntry, otherEntry, revokedEntry, retiredEntry, bareEntry], skipped: [], sources: [{ url: 'https://example.com/index.json', name: '官方', ok: true, count: 5 }] }) };
       }
       if (target.includes('/api/plugins')) {
         return { ok: true, status: 200, json: async () => ({ ...installedState }) };
       }
       return { ok: true, status: 200, json: async () => ({}) };
     };
-    vm.runInContext("state.settingsSection = 'plugins';", ctx);
-    await vm.runInContext('renderSettings()', ctx);
-    // 两张表是异步填的（bindPluginsSection → loadPluginsSection），等两拍让桩的 Promise 落地
+    vm.runInContext("state.tab = 'plugins';", ctx);
+    await vm.runInContext('loadPluginsPage({ force: true })', ctx);
+    // 三块是异步填的（loadPluginsPage → refreshPlugins），等一拍让桩的 Promise 落地
     await new Promise((resolve) => setTimeout(resolve, 30));
-    const sectionHtml = String(document.getElementById('settings-form')?.innerHTML || '');
+    const sectionHtml = String(document.getElementById('plugins-page')?.innerHTML || '');
     const installedHtml = String(document.getElementById('plugins-installed')?.innerHTML || '');
     const indexHtml = String(document.getElementById('plugins-index')?.innerHTML || '');
     const isolationText = String(document.getElementById('plugins-isolation')?.textContent || '');
-    const rendered = sectionHtml.includes('id="settings-plugins"')
+    const facetsHtml = String(document.getElementById('plugins-facets')?.innerHTML || '');
+    const rendered = sectionHtml.includes('id="plugins-head"')        // 顶栏页头（页面化之后的锚点）
       && installedHtml.includes('示例插件')
       && installedHtml.includes('data-plugin-action="enable"')
       && installedHtml.includes('给模型加工具')
       && indexHtml.includes('已安装')                     // 索引里已装的那项显示"已安装"而不是再给个安装按钮
       && sectionHtml.includes('第三方代码')
-      && isolationText.includes('网络');                  // 如实说明拦不住网络
+      && isolationText.includes('网络')                   // 如实说明网络这一项的实际情况
+      && installedHtml.includes('发布者 alice（签名已验证）')   // 发布者/验签结论要真的到界面（这条链路漏搬过一次）
+      // 「已装」的行也要能点进详情（用户反馈：那一页点了没反应）。与目录卡片同一套属性
+      && /data-plugin-open="demo"[^>]*tabindex="0"[^>]*role="button"/.test(installedHtml)
+      && installedHtml.includes('未隔离')                  // 降级运行（unconfined）要在界面上标出来，不能只在日志里
+      && installedHtml.includes('网络未隔离')               // 这个桩没网络隔离，要如实说
+      && sectionHtml.includes('id="plugins-search"')      // 搜索框
+      // 四组筛选全在左栏里：范围 / 分类 / 标签 / 其他。标签原来单独横铺在卡片上方
+      // （#plugins-tags），2026-10-17 用户指出那位置难看 —— 参照里筛选都在侧栏。
+      && facetsHtml.includes('标签') && facetsHtml.includes('data-plugin-tag')
+      && facetsHtml.includes('范围') && facetsHtml.includes('分类')
+      && !sectionHtml.includes('id="plugins-tags"')
+      // 而且它得**看得见**：全局 `[hidden] { display:none !important }` 会压过内联 display，
+      // 所以必须查属性而不是 style（2026-10-16 审查就是这样抓到一个"永远不可见"的真 bug）
 
-    // 点「启用」：走 #settings-form 上的事件委托 → POST /api/plugins/toggle
+      && installedHtml.includes('升级到 v1.2.0')           // 索引里有更新版本 → 给升级入口
+      // 撤回条目：说"已被撤回"（含原因），且**不许出现"本机装不了"**
+      // （只查 includes('已撤回') 是假断言：名字后面那个 pill 也是"已撤回"三个字，
+      //   把操作格改回"本机装不了"照样绿 —— 变异验证抓到的）
+      && indexHtml.includes('已被撤回：被举报')
+      && !indexHtml.includes('本机装不了')
+      && sectionHtml.includes('id="plugins-sort"');         // 市场排序控件
+
+    // 点「启用」：走 #plugins-page 上的事件委托 → POST /api/plugins/toggle
     const enableBtn = { dataset: { pluginAction: 'enable', pluginId: 'demo' }, disabled: false };
-    const delegate = (document.getElementById('settings-form')?._listeners?.click || [])[0];
+    const delegate = (document.getElementById('plugins-page')?._listeners?.click || [])[0];
     let toggled = false;
     if (delegate) {
-      await delegate({ target: { closest: () => enableBtn } });
+      // closest 要按选择器回答（真实的 closest 就是这样）：点的是「启用」按钮，它不在标签 chip 里。
+      // 桩写成 closest 恒返回 enableBtn 会变成「任意选择器都命中」——新增的标签筛选支路会把它当成标签点击
+      // closest 要按选择器回答：点的是「启用」按钮，它不在标签 chip / 详情入口里。
+      // （这个桩已经是第二次被新支路绊到 —— 以后这里再加属性选择器，记得同步这条）
+      const notMe = ['data-plugin-tag', 'data-plugin-open', 'data-plugin-close'];
+      await delegate({ target: { closest: (sel) => (notMe.some((attr) => String(sel).includes(attr)) ? null : enableBtn) } });
       toggled = posts.some((entry) => entry.target.includes('/api/plugins/toggle')
         && entry.body?.id === 'demo' && entry.body?.enabled === true);
     }
+    // 搜索：typing 之后只剩匹配的那条（纯前端过滤，不因此多发请求）
+    let filtered = false;
+    let requestsDuringSearch = 0;
+    const searchInput = document.getElementById('plugins-search');
+    const inputListener = (searchInput?._listeners?.input || [])[0];
+    if (inputListener) {
+      const before = posts.length;
+      searchInput.value = '天气';
+      await inputListener({ target: searchInput });
+      requestsDuringSearch = posts.length - before;
+      const afterHtml = String(document.getElementById('plugins-index')?.innerHTML || '');
+      filtered = afterHtml.includes('天气') && !afterHtml.includes('示例插件');
+    }
+    // 离开插件页再回来（渲染第二次）：搜索框必须还是活的 —— 它挂在每次渲染都会被换掉的元素上，
+    // 只绑一次的话第二次进来输入框就没反应了（而旧的搜索词还生效，列表看起来"莫名其妙少了一半"）
+    vm.runInContext("state.tab = 'control';", ctx);
+    await vm.runInContext('switchTab', ctx) && vm.runInContext("switchTab('control')", ctx);
+    vm.runInContext("state.tab = 'plugins';", ctx);
+    await vm.runInContext('loadPluginsPage({ force: true })', ctx);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    let reRenderSearch = false;
+    const search2 = document.getElementById('plugins-search');
+    const input2 = (search2?._listeners?.input || [])[0];
+    if (input2) {
+      search2.value = '天气';
+      await input2({ target: search2 });
+      const html2 = String(document.getElementById('plugins-index')?.innerHTML || '');
+      reRenderSearch = html2.includes('天气') && !html2.includes('示例插件');
+      search2.value = '';
+      await input2({ target: search2 });
+    }
+
+    // 这几次点击都不是"标签 chip / 详情入口"上的点击 —— 桩的 closest 要按这个回答
+    // （真实 DOM 的 closest 只返回带该属性的元素；桩要是恒返回按钮，新支路就会把它当成别的点击）
+    const notAction = ['data-plugin-tag', 'data-plugin-open', 'data-plugin-close'];
+    const closestFor = (button) => ({ closest: (sel) => (notAction.some((attr) => String(sel).includes(attr)) ? null : button) });
+
+    // 升级：点了要发 /api/plugins/install（body 里是 id）
+    let upgradePosted = false;
+    const upgradeBtn = { dataset: { pluginAction: 'upgrade', pluginId: 'demo' }, disabled: false };
+    const delegate2 = (document.getElementById('plugins-page')?._listeners?.click || [])[0];
+    if (delegate2) {
+      const before = posts.length;
+      await delegate2({ target: closestFor(upgradeBtn) });
+      upgradePosted = posts.slice(before).some((entry) => entry.target.includes('/api/plugins/install') && entry.body?.id === 'demo');
+    }
+
+    // 手动安装：地址/sha256 形状不对时**不许**发请求（前端先拦一道）
+    let manualBlocked = false;
+    const manualBtn = { dataset: { pluginAction: 'install-url', pluginId: '' }, disabled: false };
+    const urlBox = document.getElementById('plugins-manual-url');
+    const shaBox = document.getElementById('plugins-manual-sha');
+    if (urlBox && shaBox && delegate2) {
+      const before = posts.length;
+      urlBox.value = 'ftp://x/y.tar.gz';
+      shaBox.value = 'zz';
+      await delegate2({ target: closestFor(manualBtn) });
+      manualBlocked = posts.length === before;
+    }
+
+    // ── 发布插件（作者入口）：页签在、指南里三类命令与三条渠道都在、外链只走 https ──
+    //   控制台跑在使用者服务器上，没有他 GitHub 的写权限 —— 所以这一页**只给命令与提交入口**，
+    //   不能做成一个假的"发布"按钮。这条用例钉的就是"入口真存在且说的是真话"。
+    let publishEntry = false;
+    {
+      const pub = sectionHtml.includes('data-plugin-pane="publish"')
+        && sectionHtml.includes('发布插件')
+        && sectionHtml.includes('data-plugin-pane-body="publish"')
+        && sectionHtml.includes('node scripts/plugin-create.mjs')
+        && sectionHtml.includes('node scripts/plugin-dev.mjs')
+        && sectionHtml.includes('node scripts/plugin-pack.mjs')
+        // 三条分发渠道各一句：官方索引 / 自己的索引 / 直接给包
+        && sectionHtml.includes('plugins.indexUrls')
+        && sectionHtml.includes('qq-agent-plugins')
+        && sectionHtml.includes('手动安装')
+        && sectionHtml.includes('docs/PLUGINS.md')
+        // 入口的形状：做成按钮，不是第四个页签（页签样式会被读成"又一个筛选面"）
+        && sectionHtml.includes('plugin-publish-cta')
+        && !sectionHtml.includes('plugin-tab-publish')
+        // 索引来源挪到列表尾部（顶部只留拉取失败的告警）—— 顺序也要对：
+        // 卡片容器在来源落款之前，告警槽在卡片之前
+        && sectionHtml.includes('plugin-index-foot') && sectionHtml.includes('plugin-index-warn')
+        && sectionHtml.indexOf('id="plugins-index"') < sectionHtml.indexOf('id="plugins-sources"')
+        && sectionHtml.indexOf('id="plugins-index-warn"') < sectionHtml.indexOf('id="plugins-index"')
+        // 外链只许 https：这里是唯一会跳出控制台的地方，http 会让中间人换掉目标
+        && !/href="http:\/\//.test(sectionHtml);
+      // 页签**能不能切过去**这一条放在 ui-smoke 里测：这个文件的 DOM 是手写桩，
+      // `querySelectorAll` 恒返回 []、也没有 hidden 属性 API —— 在这里写"元素可见"永远为真。
+      publishEntry = pub;
+    }
+
+    // ── 市场排序：默认"最近更新"与"按下载量"必须给出**相反**的顺序（维度要是空的，这里就一样了）──
+    //    断言只用这两个维度：它们的比较对象是 ISO 文本与数字，跟本机 collation 无关。
+    //    （"按名字"用的是 localeCompare，中文名之间的先后随 locale 变 —— zh-CN 与 en 下相反，
+    //      拿它写死期望值就是一条跟着机器变的用例。）
+    const sortedByUpdated = indexHtml.indexOf('天气') < indexHtml.indexOf('示例插件');   // 天气更新于更近
+    let sortedByDownloads = false;
+    const sortSelect = document.getElementById('plugins-sort');
+    const sortListener = (sortSelect?._listeners?.change || [])[0];
+    if (sortListener) {
+      sortSelect.value = 'downloads';
+      await sortListener({ target: sortSelect });
+      const byDownloads = String(document.getElementById('plugins-index')?.innerHTML || '');
+      sortedByDownloads = byDownloads.indexOf('示例插件') < byDownloads.indexOf('天气');   // 12 > 3
+      sortSelect.value = 'updated';
+      await sortListener({ target: sortSelect });
+      const backToUpdated = String(document.getElementById('plugins-index')?.innerHTML || '');
+      // 切回来还要复原（选中项驱动渲染，不是单向的）
+      sortedByDownloads = sortedByDownloads && backToUpdated.indexOf('天气') < backToUpdated.indexOf('示例插件');
+    }
+
+    // ── 详情页：点插件名进去看 README / 逐条权限，再返回列表 ──
+    //   这一段原来**一条断言都没有**（桩的 closest 对 data-plugin-open 恒返回 null），于是详情渲染里
+    //   一个 TDZ 的 ReferenceError 一直藏在"点了没反应"里 —— 整页从未渲染成功过。
+    let detailOpened = false;
+    let detailClosed = false;
+    let tagChipWorks = false;
+    let revokedInstalled = false;
+    let revokedDetail = false;
+    const openSpan = { dataset: { pluginOpen: 'weather' } };
+    const revokedOpen = { dataset: { pluginOpen: 'spam' } };
+    const retiredOpen = { dataset: { pluginOpen: 'retired' } };
+    const closeSpan = { dataset: { pluginClose: '1' } };
+    const detailDelegate = (document.getElementById('plugins-page')?._listeners?.click || [])[0];
+    if (detailDelegate) {
+      await detailDelegate({
+        target: { closest: (sel) => (String(sel).includes('data-plugin-open') ? openSpan : null) }
+      });
+      const detailHtml = String(document.getElementById('plugins-index')?.innerHTML || '');
+      // 通用不变量：**任何 href 属性里都不许出现 `<`** —— 属性逃逸、以及“标签被别的替换趟撕坏”
+      // 两种改坏法都会撞上它（happy-dom 之外的浏览器也认这条）。
+      const badHref = /href="[^"]*</.test(detailHtml);
+      detailOpened = detailHtml.includes('这是天气插件的说明正文第一句')
+        && detailHtml.includes('它要哪些权限')
+        && detailHtml.includes('给模型加工具：模型可以在对话里调用它')          // 权限的人话解释（市场立信任靠它）
+        && detailHtml.includes('联网（经宿主）：它的网络请求走宿主这条路')
+        && detailHtml.includes('← 返回目录')      // 分节名从「插件市场」收敛成「目录」，返回入口跟着改口径
+        && detailHtml.includes('https://example.com/shot.png')                    // 截图字段要真的渲染
+        && detailHtml.includes('https://example.com/home')                        // 外链（过协议白名单后仍要在）
+        && detailHtml.includes('sha256')                                          // 装之前看得到内容指纹
+        // ── 版式（第六版：面包屑 + 色带 Hero + 正文/侧栏两栏，照 VS Code 市场详情页）──
+        && detailHtml.includes('plugin-crumbs')                                   // 面包屑：知道自己在哪一层
+        && detailHtml.includes('plugin-hero')                                     // Hero 色带：大图标/大名字/一行统计/主按钮
+        && detailHtml.includes('plugin-detail-aside')                             // 右栏：标签/资源/作者/指纹
+        && detailHtml.includes('<h3 class="plugin-detail-name">天气</h3>')         // 名字是页面的 h1 位（不是 320px 栏里的小字）
+        && detailHtml.includes('<button class="btn btn-primary" data-plugin-action="install" data-plugin-id="weather">安装</button>')  // 主动作就在 Hero 里（不在正文底部）
+        // ── README 的 rich markdown（title 真成标题、列表真成列表、链接真能点）──
+        && detailHtml.includes('<h3 class="md-h">天气（weather）</h3>')            // `#` 降一档成 h3（页面 h1 由 hero 占）
+        && detailHtml.includes('<h4 class="md-h">用法</h4>')                      // `##` → h4
+        && detailHtml.includes('<ul class="md-ul"><li>直接问「今天天气」</li>')     // `- x` → 真列表项
+        && detailHtml.includes('<a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>')
+        && detailHtml.includes('<li>也可以问 <code>天气 北京</code></li>')          // 列表项里的行内码也渲染了
+        && detailHtml.includes('<ol class="md-ol"><li>装好之后在群里直接问</li><li>要换默认城市，去控制台改配置</li></ol>')  // 有序列表归块
+        && detailHtml.includes('<p class="md-p">数据来自 <a href=')                 // 空行分段：正文成 <p>（不再是一堆裸文本行）
+        && detailHtml.includes('更新于 ') && !detailHtml.includes('T09:30')    // updatedAt 走了相对时间（不顶着 ISO：第三方索引给的就是完整时间）
+        && detailHtml.includes('# 不是标题')                                       // 围栏里的 # 保持字面量（没被当标题）
+        && detailHtml.includes('href="javascript:') === false                     // 非 http(s) 链接**不给放行**
+        && detailHtml.includes('[点我](javascript:alert(1))')                      // 而是原样留在文本里（信息还在，门关着）
+        && !badHref                                                                // href 里没被别的替换趟钻进去
+        && detailHtml.includes('<strong>这一对星号横跨了两行</strong>')                // 跨行的 ** 也能配上（逐行处理会漏）
+        // 这四行之间没有空行 → 属于**同一个段落**：软换行合成一行、行尾两空格才是 <br>
+        && detailHtml.includes('<p class="md-p">软换行这两行要合成一段硬换行在这里<br>这里起新行</p>')
+        // 详情替换掉的是**目录列表本身**（目录卡片没了、详情在），而不是"别的插件名一个字都不许出现"
+        // —— 详情底部现在有「相关插件」（同分类/同标签的条目，参照里每个插件详情页都有这一节），
+        // 那里出现别的插件名是正常的。
+        // ⚠️ 这里用**字符串**判定而不是 querySelector：happy-dom 对 `#a .b` 这种后代选择器的
+        // querySelector 会返回一个非 null 的怪东西（同一选择器 querySelectorAll 是 0、
+        // firstElementChild 是 null），拿它当断言会得到一个永远为假的判定。
+        && !detailHtml.includes('plugin-card')
+        // 相关插件（同标签的 demo）：参照里每个详情页都有这一节；它恒空或被砍掉时这条要红
+        && detailHtml.includes('plugin-related') && detailHtml.includes('示例插件')
+        // 右栏四块的分节名（标签/资源/作者/出处与指纹）—— 右栏被整个删掉时这里要红
+        && detailHtml.includes('出处与指纹') && detailHtml.includes('源码 / 主页');
+
+      // ── 详情里的标签 chip：点了要**回到按标签筛过的目录**，不能原地重画同一个详情 ──
+      //   （原来的实现只改 pluginFilter.tag 就重画，于是页面纹丝不动、目录还落进筛选态；
+      //     分面栏在详情里是藏着的，用户看不出筛选是什么时候被设上的）
+      const tagSpan = { dataset: { pluginTag: '工具' } };
+      await detailDelegate({
+        target: { closest: (sel) => (String(sel).includes('data-plugin-tag') ? tagSpan : null) }
+      });
+      const tagged = String(document.getElementById('plugins-index')?.innerHTML || '');
+      tagChipWorks = !tagged.includes('plugin-detail') && tagged.includes('plugin-card');
+      // 再点一次同一个标签把它关掉（否则筛选态会跟到后面的断言里）
+      await detailDelegate({
+        target: { closest: (sel) => (String(sel).includes('data-plugin-tag') ? tagSpan : null) }
+      });
+
+      // ── 被撤回的插件详情：动作区不许说"安装"，Hero 下面要挂撤回原因 ──
+      //   用 retired（撤回 + **没装**）：spam 现在装在本机，走的是下面那条"已安装"的分支
+      await detailDelegate({
+        target: { closest: (sel) => (String(sel).includes('data-plugin-open') ? retiredOpen : null) }
+      });
+      const revokedHtml = String(document.getElementById('plugins-index')?.innerHTML || '');
+      revokedDetail = revokedHtml.includes('已被撤回，不能安装')
+        && revokedHtml.includes('已被撤回：作者申请下架')                   // 原因要出现在 Hero 的告警行里
+        && !revokedHtml.includes('data-plugin-action="install"')          // 撤回的条目**一个安装按钮都不许有**
+        && revokedHtml.includes('更新于 ') && !revokedHtml.includes('2026-08-01')   // 能解析的走相对时间，不露原文
+        && revokedHtml.includes('plugin-warn bad');                       // 告警行有专属类（红色那档）
+
+      // ── 已装 + 被撤回：那句话必须换成"不会被加载"，且只给卸载（不给启停/回退）──
+      //   撤回名单来自索引、装机状态在本机，这是真实存在的组合；给它说"不能安装"是错的。
+      await detailDelegate({
+        target: { closest: (sel) => (String(sel).includes('data-plugin-open') ? openSpan : null) }
+      });
+      await detailDelegate({
+        target: { closest: (sel) => (String(sel).includes('data-plugin-open') ? revokedOpen : null) }
+      });
+      const bannedHtml = String(document.getElementById('plugins-index')?.innerHTML || '');
+      revokedInstalled = bannedHtml.includes('已安装，但已被撤回：不会被加载')
+        && !bannedHtml.includes('已被撤回，不能安装')                      // 已装的不许说"不能安装"
+        && bannedHtml.includes('data-plugin-action="uninstall"')           // 卸载要留着（撤回的正该清掉）
+        && !bannedHtml.includes('data-plugin-action="enable"')             // 启停/回退一个都不给
+        && !bannedHtml.includes('data-plugin-action="disable"')
+        && !bannedHtml.includes('data-plugin-action="rollback"');
+      await detailDelegate({
+        target: { closest: (sel) => (String(sel).includes('data-plugin-close') ? closeSpan : null) }
+      });
+      const backHtml = String(document.getElementById('plugins-index')?.innerHTML || '');
+      detailClosed = backHtml.includes('示例插件') && backHtml.includes('天气');
+    }
+
     sandbox.fetch = originalFetch;
-    const ok = rendered && toggled;
+    const ok = rendered && toggled && filtered && requestsDuringSearch === 0
+      && reRenderSearch && upgradePosted && manualBlocked
+      && sortedByUpdated && sortedByDownloads && detailOpened && detailClosed
+      // 缺 name 的条目要用 id 顶上，而不是渲染成空白卡片
+      && indexHtml.includes('<span class="plugin-name">bare-one</span>')   // 缺 name → 可见标题用 id（不是只有 data 属性里有）
+      && tagChipWorks && revokedDetail && revokedInstalled && publishEntry;
     ok ? pass++ : fail++;
     console.log('  ' + (ok ? 'OK   ' : 'FAIL ')
-      + '设置页插件分区（渲染=' + rendered + '，点启用→toggle=' + toggled + '）'
-      + (ok ? '' : ' -> 委托=' + Boolean(delegate) + ' posts=' + JSON.stringify(posts)));
+      + '设置页插件分区（渲染=' + rendered + '，点启用→toggle=' + toggled + '，搜索过滤=' + filtered
+      + '，二次渲染后搜索=' + reRenderSearch + '，升级发请求=' + upgradePosted + '，坏输入拦住=' + manualBlocked
+      + '，排序=' + [sortedByUpdated, sortedByDownloads].join('/') + '，详情=' + detailOpened + '/' + detailClosed
+      + '，标签chip=' + tagChipWorks + '，撤回详情=' + revokedDetail + '，撤回+已装=' + revokedInstalled
+      + '，发布入口=' + publishEntry + '）'
+      + (ok ? '' : ' -> 委托=' + Boolean(delegate) + ' posts=' + posts.length));
   }
 
   // ── 保存分支回归（2026-09-28 审查 P1）：控件在哪个页面，patch 就得在哪一段构造 ——

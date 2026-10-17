@@ -81,6 +81,27 @@ test('发布脱敏脚本：64 位十六进制豁免只对 test/ 生效（别把�
   assert.ok(src.includes('allow: (raw, text, rel)'), '豁免回调要拿到文件路径');
   assert.ok(src.includes('/^test[\\\\/]/.test(rel)'), '豁免必须限定在 test/ 下');
   assert.ok(src.includes('scanner.allow(raw, text, rel)'), '调用点要把 rel 传进去');
+  // 2026-10-16 增加两条精确豁免（插件索引的 sha256 字段、test/ 下的 sha256 断言行）。
+  // 校验和那一条**以字段名自证**为条件，所以要盯住"字段名候选还在"
+  assert.ok(src.includes('CHECKSUM|DIGEST|REVISION'), '校验和字段豁免必须靠字段名自证，不能只看长得像');
+});
+
+test('发布脱敏脚本：豁免是精确的 —— 换字段名、换目录都要照样报出来', () => {
+  const src = fs.readFileSync(path.join(process.cwd(), 'scripts', 'sanitize-release.mjs'), 'utf8');
+  // 把 allow 谓词抠出来单测：证明这次放宽只覆盖有 sha256/校验和语境的行（这几条要是被一起
+  // 放行，闸门就成了摆设）。抠不出来就直接失败，别让用例悄悄空转。
+  const match = /allow: \(raw, text, rel\) => \{\n([\s\S]*?)\n    \}/.exec(src);
+  assert.ok(match, '没能从脚本里取出豁免谓词（脚本结构变了要同步改这条用例）');
+  const allow = new Function('raw', 'text', 'rel', match[1]);
+  const hex = 'a'.repeat(64);
+  const raw = (line) => `${line}\n`;
+  assert.equal(allow(hex, raw(`  "sha256": "${hex}"`), 'plugins/index.json'), true, '索引里的 sha256 字段要放行');
+  assert.equal(allow(hex, raw(`const BUILD_SHA = '${hex}'`), 'src/x.js'), true, '哈希常量要放行');
+  assert.equal(allow(hex, raw(`  assert.equal(packed.sha256, '${hex}');`), 'test/x.test.mjs'), true, 'test/ 下的 sha256 断言要放行');
+  assert.equal(allow(hex, raw(`  "apiKey": "${hex}"`), 'src/config.json'), false, '换个字段名就必须报出来');
+  assert.equal(allow(hex, raw(`  secret = '${hex}'`), 'src/x.js'), false, '普通变量名不许放行');
+  assert.equal(allow(hex, raw(`  "${hex}"`), 'src/x.json'), false, '非 test/ 下裸的十六进制不许放行（可能是真密钥）');
+  assert.equal(allow('c'.repeat(40), raw(`  uses: actions/checkout@${'c'.repeat(40)}`), '.github/workflows/ci.yml'), true, 'action 固定版本仍放行');
 });
 
 test('日报补跑：多群发到一半被重启，剩下的群当天要补上（不是整天咽掉）', async () => {
