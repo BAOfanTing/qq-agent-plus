@@ -715,6 +715,43 @@ describe('Orchestrator', () => {
     }
   });
 
+  it('messageTypes.images 关闭时只摘 get_message_images（消息里的图片不看）', async (t) => {
+    // 与 videoFrames 同一口径：开关关掉，工具与提示词引导一起撤。
+    // 表情库的看图工具（get_sticker_image）不受影响 —— 那是另一个开关。
+    const { cfg, runner, append } = fixture(t);
+    cfg.sticker.enabled = true;
+    cfg.messageTypes = { ...cfg.messageTypes, images: false, stickers: true };
+    setRuntimeConfig(cfg);
+    const bodies = [];
+    globalThis.fetch = async (_url, options) => {
+      bodies.push(JSON.parse(options.body));
+      return Response.json({ choices: [{ message: { content: 'done' } }], usage: { total_tokens: 10 } });
+    };
+    append(1, '在吗', '42');
+    await runner.wake('group:1');
+    const names = bodies[0].tools.map((tool) => tool.function.name);
+    assert.ok(!names.includes('get_message_images'), '关掉图片查看后不应再注入 get_message_images');
+    assert.ok(names.includes('get_sticker_image'), '表情库的看图开关没关，get_sticker_image 应保留');
+  });
+
+  it('messageTypes.stickers 关闭时只摘 get_sticker_image（表情库的图不看）', async (t) => {
+    const { cfg, runner, append } = fixture(t);
+    cfg.sticker.enabled = true;
+    cfg.messageTypes = { ...cfg.messageTypes, images: true, stickers: false };
+    setRuntimeConfig(cfg);
+    const bodies = [];
+    globalThis.fetch = async (_url, options) => {
+      bodies.push(JSON.parse(options.body));
+      return Response.json({ choices: [{ message: { content: 'done' } }], usage: { total_tokens: 10 } });
+    };
+    append(1, '在吗', '42');
+    await runner.wake('group:1');
+    const names = bodies[0].tools.map((tool) => tool.function.name);
+    assert.ok(!names.includes('get_sticker_image'), '关掉表情查看后不应再注入 get_sticker_image');
+    assert.ok(names.includes('get_message_images'), '消息图片的开关没关，get_message_images 应保留');
+    assert.ok(names.includes('send_sticker'), '按备注名发送表情不受影响');
+  });
+
   it('收藏总闸关闭时只摘 collect_sticker，发送/列表/看图仍在（2026-10-02）', async (t) => {
     // 总闸（collectEnabled）管的是"收"：关掉后模型不该再有主动收藏的工具，
     // 否则它会去调一个必然失败的收藏（还先白花一次看图判断）。

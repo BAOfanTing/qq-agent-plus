@@ -805,8 +805,17 @@ function renderMessageTypesSection(c) {
       <label for="cfg-expand-forward">自动展开合并转发 / 聊天记录卡片</label></div>
     <div class="hint" style="margin-left:26px">关掉后正文只留一行占位符，模型需要时自己调 read_forward 展开；
       <b>被 @ 的那条仍会自动展开</b>。一条 20 条的记录展开后是几千字符，还会跟着进存档和之后每一轮的上下文。</div>
-    <div class="hint" style="margin-top:8px">图片与表情：由「模型 API」页的「图片输入」开关统一控制，当前<b>${visionOn ? '开' : '关'}</b>
-      （关掉时看图工具会从工具表里摘掉）。</div>
+    <div class="checkbox-row" style="margin-top:8px"><input type="checkbox" id="cfg-mt-images" ${mt.images !== false ? 'checked' : ''} />
+      <label for="cfg-mt-images">查看消息里的图片与表情包</label></div>
+    <div class="hint" style="margin-left:26px">关掉后看图工具（get_message_images）从工具表摘掉，提示词改成"看不到图片内容"；
+      消息本身照常存档。<b>视频画面也依赖这个工具</b>，关掉后视频只保留声音。
+      表情包的<b>自动收藏</b>由「表情包」页的收藏开关单独控制，不受这里影响。</div>
+    <div class="checkbox-row" style="margin-top:8px"><input type="checkbox" id="cfg-mt-stickers" ${mt.stickers !== false ? 'checked' : ''} />
+      <label for="cfg-mt-stickers">查看表情库里没备注的图</label></div>
+    <div class="hint" style="margin-left:26px">只影响"看"：按备注名发送表情（send_sticker）不受影响；
+      关掉后 get_sticker_image 从工具表摘掉，模型只能按备注名挑选。</div>
+    <div class="hint" style="margin-top:8px">以上两项叠加在「模型 API」页的「图片输入」开关之上 —— 当前<b>${visionOn ? '开' : '关'}</b>
+      （关掉时看图工具会一律摘掉，这里的两项不起作用）。</div>
     <div class="checkbox-row" style="margin-top:8px"><input type="checkbox" id="cfg-video-frames" ${mt.videoFrames !== false ? 'checked' : ''} />
       <label for="cfg-video-frames">查看视频画面（抽 4 帧拼 2×2）</label></div>
     <div class="hint" style="margin-left:26px">关掉后视频只剩声音（get_message_audio 转写），

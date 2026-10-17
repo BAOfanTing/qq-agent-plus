@@ -65,10 +65,12 @@ async function saveConfig({ quiet = false } = {}) {
   const patch = {};
 
   if (sec === 'messageTypes') {
-    // 两个开关都在这一页（默认 true，缺值按 true 回落 —— 与 DEFAULT_CONFIG 同口径）
+    // 四个开关都在这一页（默认 true，缺值按 true 回落 —— 与 DEFAULT_CONFIG 同口径）
     patch.messageTypes = {
       expandForward: chk('#cfg-expand-forward', c.messageTypes?.expandForward !== false),
-      videoFrames: chk('#cfg-video-frames', c.messageTypes?.videoFrames !== false)
+      videoFrames: chk('#cfg-video-frames', c.messageTypes?.videoFrames !== false),
+      images: chk('#cfg-mt-images', c.messageTypes?.images !== false),
+      stickers: chk('#cfg-mt-stickers', c.messageTypes?.stickers !== false)
     };
   }
 

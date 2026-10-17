@@ -14,9 +14,11 @@ const { DEFAULT_CONFIG, updateConfig } = await import('../src/core/config.js');
 const { buildSystemPrompt } = await import('../src/llm/prompt.js');
 const src = (rel) => fs.readFileSync(path.join(process.cwd(), rel), 'utf8');
 
-test('默认值：两个开关都默认开（保持既有行为，不偷偷改变已部署的实例）', () => {
+test('默认值：四个开关都默认开（保持既有行为，不偷偷改变已部署的实例）', () => {
   assert.equal(DEFAULT_CONFIG.messageTypes.expandForward, true, '合并转发默认仍然自动展开');
   assert.equal(DEFAULT_CONFIG.messageTypes.videoFrames, true, '视频画面默认仍然可看');
+  assert.equal(DEFAULT_CONFIG.messageTypes.images, true, '消息里的图片/表情包默认仍然可看');
+  assert.equal(DEFAULT_CONFIG.messageTypes.stickers, true, '表情库里的图默认仍然可看');
 });
 
 test('提示词：关掉视频画面后不再教它去调抽帧，且说清为什么看不到', () => {
@@ -62,6 +64,49 @@ test('工具描述跟着开关走：关掉视频画面后不再承诺"视频抽 
   updateConfig({ messageTypes: { expandForward: true, videoFrames: true } });
 });
 
+test('提示词：关掉图片查看后不再教 get_message_images，但仍可查看表情库（另一个开关）', () => {
+  updateConfig({ api: { vision: true }, sticker: { enabled: true }, messageTypes: { images: true, stickers: true } });
+  const both = buildSystemPrompt({ persona: { botName: '测试', roleText: '' } });
+  assert.ok(both.includes('可以用 get_message_images'), '默认要教消息图片怎么查看');
+  assert.ok(both.includes('get_sticker_image 看图'), '默认要教表情库怎么查看');
+
+  updateConfig({ messageTypes: { images: false } });
+  try {
+    const off = buildSystemPrompt({ persona: { botName: '测试', roleText: '' } });
+    assert.ok(!off.includes('可以用 get_message_images'), '关掉后不能再教它调一个已被摘掉的工具');
+    assert.ok(off.includes('get_sticker_image 看图'), '表情库的开关没关，那条路仍要教');
+    assert.match(off, /看不到内容/, '要说清为什么看不到，避免模型编造画面');
+    assert.match(off, /系统设置覆盖角色设定/, '角色卡里若写着看图工具，要用机制说明覆盖掉');
+  } finally {
+    updateConfig({ messageTypes: { images: true } });
+  }
+});
+
+test('提示词：关掉表情查看后不再教 get_sticker_image，按备注名发送仍要教', () => {
+  updateConfig({ api: { vision: true }, sticker: { enabled: true }, messageTypes: { images: true, stickers: false } });
+  try {
+    const off = buildSystemPrompt({ persona: { botName: '测试', roleText: '' } });
+    assert.ok(!off.includes('get_sticker_image 看图'), '关掉后不能再教它查看表情库');
+    assert.ok(off.includes('可以用 get_message_images'), '消息图片的开关没关，那条路仍要教');
+    assert.match(off, /send_sticker/, '按备注名发送表情不受影响');
+    assert.match(off, /系统设置覆盖角色设定/, '角色卡里若写着表情看图工具，要用机制说明覆盖掉');
+  } finally {
+    updateConfig({ messageTypes: { stickers: true } });
+  }
+});
+
+test('提示词：两项都关时整体退回"看不到图"口径（不再逐条教看图）', () => {
+  updateConfig({ api: { vision: true }, sticker: { enabled: true }, messageTypes: { images: false, stickers: false } });
+  try {
+    const off = buildSystemPrompt({ persona: { botName: '测试', roleText: '' } });
+    assert.ok(!off.includes('看图（你能直接看懂图片内容）'), '两项都关时不该再出现教看图的句子');
+    assert.match(off, /你无法查看图片内容/, '要退回整体口径');
+    assert.match(off, /系统设置覆盖角色设定/, '两项都关时要说明工具确实不在');
+  } finally {
+    updateConfig({ messageTypes: { images: true, stickers: true } });
+  }
+});
+
 test('入站：自动展开受开关控制，被 @ 时强制展开（锚点：这段在 console 的事件处理里，单测拿不到）', () => {
   const app = src('src/console/app.js');
   assert.ok(app.includes('const autoExpand = cfgNow.messageTypes?.expandForward !== false || mentionsSelf;'),
@@ -78,6 +123,8 @@ test('控制台：侧栏入口、分区路由、控件、保存分支四件套�
   assert.ok(settings.includes('messageTypes: () => renderMessageTypesSection(c)'), '分区路由要接上');
   assert.ok(settings.includes('id="cfg-expand-forward"'), '合并转发开关要有控件');
   assert.ok(settings.includes('id="cfg-video-frames"'), '视频画面开关要有控件');
+  assert.ok(settings.includes('id="cfg-mt-images"'), '图片查看开关要有控件');
+  assert.ok(settings.includes('id="cfg-mt-stickers"'), '表情查看开关要有控件');
   assert.ok(settings.includes('图片输入'), '图片/表情要指到 api.vision 那个开关上（别造第二份真源）');
   const save = src('ui/pages/settings-save.js');
   assert.ok(save.includes("if (sec === 'messageTypes')"), '保存分支要在 messageTypes 段构造');
@@ -85,4 +132,6 @@ test('控制台：侧栏入口、分区路由、控件、保存分支四件套�
   // 控件与开关会互串，而"两个 id 都出现过"式的断言照样绿。
   assert.ok(save.includes("expandForward: chk('#cfg-expand-forward'"), 'expandForward 要读自己的控件');
   assert.ok(save.includes("videoFrames: chk('#cfg-video-frames'"), 'videoFrames 要读自己的控件（对调即串台）');
+  assert.ok(save.includes("images: chk('#cfg-mt-images'"), 'images 要读自己的控件');
+  assert.ok(save.includes("stickers: chk('#cfg-mt-stickers'"), 'stickers 要读自己的控件（对调即串台）');
 });

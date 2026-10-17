@@ -1664,6 +1664,11 @@ export class Orchestrator {
     // 工具集按配置过滤：工具列表属于缓存前缀，必须先固定后再决定是否复用生命周期 transcript。
     // 口径收敛在 vision-scan.visionEnabled：只读 api.vision 会漏掉"模型不支持图片"那一半
     const canSeeImages = visionEnabled(cfg);
+    // 「消息类型」页的两个细开关（默认开），叠加在"模型能不能看图"之上：
+    // 关掉后对应工具必须一起摘掉 —— 提示词那边按同一判定收敛，两边漏一边就会出现
+    // "教了但调不到"或"调得到却没教"，两种都白花一轮模型往返。
+    const viewMessageImages = canSeeImages && cfg.messageTypes?.images !== false;
+    const viewLibraryStickers = canSeeImages && cfg.messageTypes?.stickers !== false;
     const searchEnabled = cfg.webSearch?.enabled !== false;
     // ASR 有自己的开关与供应商（asr.enabled / asr.provider / asr.apiKey），与"联网搜索"解耦：
     // 关掉搜索的人不该顺带失去语音转写（2026-09-26 审查）。判定收敛在 config.asrAvailable()。
@@ -1677,7 +1682,8 @@ export class Orchestrator {
     // 图片生成按张计费：没开/没配就不注入工具，否则模型会去调一个必然失败的画图工具
     const imageGenEnabled = imageGenAvailable(cfg);
     const toolDefs = this.toolDefs.filter((d) => {
-      if (!canSeeImages && (d.name === 'get_message_images' || d.name === 'get_sticker_image')) return false;
+      if (!viewMessageImages && d.name === 'get_message_images') return false;
+      if (!viewLibraryStickers && d.name === 'get_sticker_image') return false;
       // 表情包总开关关掉：发送/列表/看图/收藏四个工具一并摘掉。原先只撤了提示词里的清单，
       // 工具还留着 —— 模型仍会发旧库里的表情，而【可用表情包】已被抽走、没有新选项，
       // 只能反复用记得的那一个（2026-10-02 用户反馈："不开那个按钮，它就一直发一个表情"）。

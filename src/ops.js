@@ -748,7 +748,7 @@ const AUDIT_MARKERS = [
   ['发送网络级重试', 1, 'src/onebot/sender.js', '能证明请求没被对方收到|1.5 秒后重试一次'],
   ['QQ表情标签', 1, 'src/onebot/onebot.js', 'QQ表情'],
   ['看图先读情绪', 1, 'src/llm/prompt.js', '看图先读情绪'],
-  ['表情编号≠stickerId 提醒', 1, 'src/llm/prompt.js', '别拿这个编号去 get_sticker_image'],
+  ['表情编号≠stickerId 提醒', 1, 'src/llm/prompt.js', '别拿这个编号去 .*send_sticker'],
   ['发言唯一通道提示', 1, 'src/llm/prompt.js', '发言的唯一通道'],
   ['收尾自检段', 2, 'src/llm/prompt.js', '沉默就是零输出|每次结束前必读'],
   ['多气泡鼓励', 1, 'src/llm/prompt.js', '别把一轮压成一句点评'],

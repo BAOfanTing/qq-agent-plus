@@ -563,7 +563,8 @@ export const DEFAULT_CONFIG = {
   },
   // 消息类型：按类型决定机器人**读不读**这类内容（控制台「消息类型」页）。
   // 只是不让内容进提示词、不进模型；消息本身照常进聊天记录，存档与检索不受影响。
-  // 图片与表情不在这里 —— 那条由 api.vision（模型 API 页的「图片输入」）统一管。
+  // 图片与表情包在这里各有一个开关（默认开）；它们**叠加**在 api.vision 之上 ——
+  // 模型本身不能看图时这两个开关没有意义，相关工具同样会被摘掉。
   messageTypes: {
     // 入站自动展开「合并转发 / 聊天记录卡片」。关掉后正文只留一行占位符
     // （[合并转发聊天记录] / [卡片聊天记录 …]），模型需要时自己调 read_forward 展开；
@@ -572,7 +573,14 @@ export const DEFAULT_CONFIG = {
     expandForward: true,
     // 视频画面（get_message_images 抽 4 帧拼 2×2）。关掉后视频只剩声音（get_message_audio），
     // 提示词同步改成"你只能拿到声音"，不再教它调一个对视频什么都不给的工具。
-    videoFrames: true
+    videoFrames: true,
+    // 消息里发来的图片与表情包：关掉后不再把 get_message_images 交给模型，提示词改成
+    // "看不到图片内容"。表情包的**自动收藏**由 sticker.collectEnabled 单独控制，
+    // 不受这里影响（那条链路在后台看图，不占对话上下文）。
+    images: true,
+    // 表情库里的图片（get_sticker_image）：关掉后模型不能查看库里没备注的图；
+    // 按备注名发送表情（send_sticker）不受影响。
+    stickers: true
   },
   // 插件（第三方扩展，默认全关；契约与信任声明见 docs/PLUGINS.md）
   plugins: {

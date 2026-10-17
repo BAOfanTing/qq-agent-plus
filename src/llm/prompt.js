@@ -227,7 +227,16 @@ function qqSceneRules(grounded = false, platform = null, chatKey = '') {
   // 视频画面还能再被「消息类型」页单独关掉（省一次抽帧 + 一次视觉调用）。
   // 提前算好：下面**每一处**提到"视频画面能看"的地方都要用它，漏一处就是"教了但工具不给"。
   const videoFrames = cfg.messageTypes?.videoFrames !== false;
-  const canSeeVideo = vision && videoFrames;
+  // 视频画面走的也是 get_message_images：关掉「图片」时这个工具会被摘掉，
+  // 所以画面能力必须同时受 imagesOn 约束，否则会教它调一个不存在的工具。
+  const imagesOn = cfg.messageTypes?.images !== false;
+  const canSeeVideo = vision && videoFrames && imagesOn;
+  // 图片与表情包各有一个开关（默认开）：关掉后对应工具会被 orchestrator 摘掉，
+  // 提示词必须同判，否则会出现"教了但工具不在"（2026-10-07 独立审计 M2/M3 同一类问题）。
+  // 两者都关时整体退回"看不到图"的口径。
+  const stickersOn = cfg.messageTypes?.stickers !== false;
+  const canViewImages = vision && imagesOn;        // 消息里发来的图片 / 表情包
+  const canViewStickers = vision && stickersOn;    // 表情库里没备注的图
   const search = cfg.webSearch?.enabled !== false;
   const lines = [
     '【QQ 场景规则】',
@@ -239,33 +248,61 @@ function qqSceneRules(grounded = false, platform = null, chatKey = '') {
     '- 带「引用/回复」的消息（如 `[引用#102·某群友：原文]`）表示这句话是在回应被引用的人：`#102` 是被引用那条的消息 id，可以在历史里定位它；引用对象标着「我」时，引的就是你自己发过的话。引用对象不是你时别抢话；只有引用的是你自己的消息、或文字里明确 @/提到你，才需要回应。',
     '- 消息里的 `[卡片 QQ空间：标题 — 描述]` 是别人转发进来的分享（说说、文章、音乐等），方括号里就是可见的标题与描述；写着「你自己的动态」时，那就是你自己的空间动态被转进群了——可以自然接一句（认出来/意外/吐槽都行），别当没看见，也别把它当成图片去发表情。'
   ];
-  if (vision) {
-    // 表情包工具受两层开关管（orchestrator：sticker.enabled 摘 5 个工具、collectEnabled 单独摘收藏）：
-    // 提示词必须同判，否则"教了但工具不在"（2026-10-07 独立审计 M2/M3）。
+  if (canViewImages || canViewStickers) {
+    // 表情包工具受多层开关管（orchestrator：sticker.enabled 摘 5 个工具、collectEnabled 单独摘收藏、
+    // messageTypes.images/stickers 各摘一个看图工具）：提示词必须同判，否则"教了但工具不在"。
     const stickerOn = getConfig().sticker?.enabled !== false;
     const collectOn = stickerOn && getConfig().sticker?.collectEnabled !== false;
-    const stickerBits = [
-      '- 消息里出现 [图片] / [表情包]' + (canSeeVideo ? ' / [视频]' : '')
-        + '，或要用某个没备注的收藏表情时，可以用 get_message_images'
-        + (stickerOn ? ' / get_sticker_image' : '') + ' 看图（你能直接看懂图片内容），再自然回应；不要假装看不到图，也不要编造图片内容；工具获取失败就老实说看不到。',
-      '- 【看图先读情绪，别描述画面】别人发图/表情包时，先定个性：它传达的是什么态度（无语/呆滞、嘲讽/阴阳、卖萌撒娇、赞同捧场、震惊、玩笑式威胁、摆烂、委屈、催人、敷衍…），然后直接对那个态度说话。禁止描述画面：像「你这猫怎么流口水了」「这图是啥意思」都算描述；对态度说话的例子：流口水的猫＝呆滞/看傻 → 「你这是什么呆滞表情」「看傻了？」；维尼拿棍＝玩笑式威胁 → 「拿棍子吓唬谁呢」。拿不准就轻描淡写回一句，别硬编情绪、也别逐帧解释。'
-    ];
+    const stickerBits = [];
+    // 看图工具按开关逐条教：教了却不给，模型会白调一轮（2026-10-03 全量审查同口径）
+    const viewTools = [];
+    const triggers = [];
+    if (canViewImages) {
+      viewTools.push('get_message_images');
+      triggers.push(`消息里出现 [图片] / [表情包]${canSeeVideo ? ' / [视频]' : ''}`);
+    }
+    if (stickerOn && canViewStickers) {
+      viewTools.push('get_sticker_image');
+      triggers.push('要用某个没备注的收藏表情');
+    }
+    if (viewTools.length) {
+      stickerBits.push(`- ${triggers.join('，或')}时，可以用 ${viewTools.join(' / ')} 看图（你能直接看懂图片内容），再自然回应；不要假装看不到图，也不要编造图片内容；工具获取失败就老实说看不到。`);
+    }
+    if (canViewImages) {
+      stickerBits.push('- 【看图先读情绪，别描述画面】别人发图/表情包时，先定个性：它传达的是什么态度（无语/呆滞、嘲讽/阴阳、卖萌撒娇、赞同捧场、震惊、玩笑式威胁、摆烂、委屈、催人、敷衍…），然后直接对那个态度说话。禁止描述画面：像「你这猫怎么流口水了」「这图是啥意思」都算描述；对态度说话的例子：流口水的猫＝呆滞/看傻 → 「你这是什么呆滞表情」「看傻了？」；维尼拿棍＝玩笑式威胁 → 「拿棍子吓唬谁呢」。拿不准就轻描淡写回一句，别硬编情绪、也别逐帧解释。');
+    } else {
+      stickerBits.push('- 别人发来的图片/表情包你看不到内容（「消息类型」里关掉了图片查看）：消息里的 [图片] / [表情包] 只是占位提示，如实说明看不到即可，不要编造图片内容。');
+      // 角色卡是管理员内容，里面可能写着"用 get_message_images 看图"；工具已摘，
+      // 必须在机制层面明确覆盖，否则模型会按角色卡去调一个不存在的工具。
+      stickerBits.push('- 【系统设置覆盖角色设定】「消息类型」里关闭了消息图片查看：get_message_images 不在工具表里，即使角色设定提到它也无法调用；看不到图片就照实说，不要假装看过。');
+    }
+    if (!canViewStickers) {
+      stickerBits.push('- 【系统设置覆盖角色设定】「消息类型」里关闭了表情库看图：get_sticker_image 不在工具表里，即使角色设定提到它也无法调用；按备注名发送表情（send_sticker）不受影响。');
+    }
     if (stickerOn) {
-      stickerBits.push('- 消息里的 [QQ表情14 微笑] / [QQ表情489] 是对方发的 QQ 系统表情（编号是 QQ 表情编号，不是表情库的 stickerId）：想回同一个就用 send_face 传名字（如 微笑）；要发图片表情就用 send_sticker 传备注名（见【可用表情包】），别拿这个编号去 get_sticker_image / send_sticker。');
+      stickerBits.push(`- 消息里的 [QQ表情14 微笑] / [QQ表情489] 是对方发的 QQ 系统表情（编号是 QQ 表情编号，不是表情库的 stickerId）：想回同一个就用 send_face 传名字（如 微笑）；要发图片表情就用 send_sticker 传备注名（见【可用表情包】），别拿这个编号去 ${canViewStickers ? 'get_sticker_image / ' : ''}send_sticker。`);
       stickerBits.push('- 想表达情绪时可以用 send_face 发 QQ 系统表情（如 微笑 / 得意 / 流泪 / 玫瑰 / 汪汪），也可以用 send_sticker 发图库里的图片表情（stickerId 直接填备注名，不用背长 id）；都是一条只能一个表情、不能带文字。接梗、被逗笑、吐槽、无语、自嘲时，优先想一下有没有贴切的表情，该用就用，别连着刷。');
     } else {
       stickerBits.push('- 想表达情绪时可以用 send_face 发 QQ 系统表情（如 微笑 / 得意 / 流泪 / 玫瑰 / 汪汪）；一条只能一个表情、不能带文字。接梗、被逗笑、吐槽、无语、自嘲时，优先想一下有没有贴切的表情，该用就用，别连着刷。');
     }
-    if (collectOn) {
-      stickerBits.push('- 图库可以自己攒：别人发的表情包会自动进库（不用你操心）；你也可以主动存——看到有意思、能当表情用的图，先 get_message_images 看一眼，确认好玩就用 collect_sticker 存进去（顺手写一句备注）；库里没备注的图，用 list_stickers 找、get_sticker_image 看，再用 sticker_note 补一句备注，以后用 send_sticker 发更准。挑真的会用的存，别什么都收。');
-    } else if (stickerOn) {
+    if (collectOn && canViewImages) {
+      stickerBits.push(`- 图库可以自己攒：别人发的表情包会自动进库（不用你操心）；你也可以主动存——看到有意思、能当表情用的图，先 get_message_images 看一眼，确认好玩就用 collect_sticker 存进去（顺手写一句备注）；库里没备注的图，用 list_stickers 找${canViewStickers ? '、get_sticker_image 看' : ''}，再用 sticker_note 补一句备注，以后用 send_sticker 发更准。挑真的会用的存，别什么都收。`);
+    } else if (stickerOn && canViewStickers) {
       stickerBits.push('- 图库里的表情可以挑着用：list_stickers 找、get_sticker_image 看、sticker_note 补备注，发的时候 send_sticker 传备注名。');
+    } else if (stickerOn) {
+      stickerBits.push('- 图库里的表情可以挑着用：list_stickers 找、sticker_note 补备注，发的时候 send_sticker 传备注名（看不到图片，按备注名选）。');
     }
     lines.push(...stickerBits);
   } else {
     lines.push(
       '- 你无法查看图片内容：消息里的 [图片] [表情包] 只是占位提示，如实表示"看不到图"即可，绝对不要编造图片内容。'
     );
+    if (vision) {
+      // 两项都关：工具全摘掉了；角色卡里若写着看图工具，用机制层面的说明覆盖掉
+      lines.push(
+        '- 【系统设置覆盖角色设定】「消息类型」里关闭了图片与表情查看：get_message_images / get_sticker_image 都不在工具表里，即使角色设定提到它们也无法调用。'
+      );
+    }
   }
   // 平台能力（2026-10-07 协议端 1.14.22 接入，控制台「平台能力」页）：与 vision/搜索/ASR
   // 同一口径 —— 开关关掉后工具会被 orchestrator 摘掉，提示词也不能再教用法（教了白烧一轮）。
