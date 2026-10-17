@@ -58,6 +58,17 @@ export function visionEnabled(cfg = getConfig()) {
 }
 
 /**
+ * 表情库的"看图"能力：模型能看图 **且** 表情包功能开着 **且**「消息类型」里没关表情查看。
+ * 工具摘除（orchestrator）与提示词（表情清单 / 策略段）必须用同一个判定 ——
+ * 只判 visionEnabled 时，关掉 stickers 后工具没了、提示词还在教"先 get_sticker_image 看一眼"。
+ */
+export function stickerVisionEnabled(cfg = getConfig()) {
+  return visionEnabled(cfg)
+    && cfg?.sticker?.enabled !== false
+    && cfg?.messageTypes?.stickers !== false;
+}
+
+/**
  * 探测单个模型。返回 { verdict, note, httpStatus, latencyMs }。
  * verdict: 'vision' 接受图片内容；'no-vision' 明确拒绝图片内容；'unknown' 无法判定。
  */

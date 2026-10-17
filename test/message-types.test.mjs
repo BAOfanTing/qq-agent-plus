@@ -107,6 +107,31 @@ test('提示词：两项都关时整体退回"看不到图"口径（不再逐条
   }
 });
 
+test('提示词：关掉表情查看后，表情清单与策略段也不再教 get_sticker_image', () => {
+  // 审查抓到的漏口：工具被摘掉了，但【可用表情包】清单的尾注与策略段还在说"先看一眼"。
+  // 这两段由 onebot/stickers.js 生成，入参 vision 必须与 orchestrator 的摘除判定同一个。
+  const entries = [
+    { id: 's-note', desc: '无语', localNote: '', useCount: 2, tags: ['日常'], source: 'qq' },
+    { id: 's-bare', desc: '', localNote: '', useCount: 0, tags: [], source: 'qq' }
+  ];
+  updateConfig({ api: { vision: true }, sticker: { enabled: true }, messageTypes: { stickers: true } });
+  const on = buildSystemPrompt({ persona: { botName: '测试', roleText: '' }, stickerEntries: entries });
+  assert.ok(on.includes('get_sticker_image'), '默认（开）时清单尾注要说明可以先看图');
+  assert.ok(on.includes('s-bare'), '默认（开）时没备注的图也在清单里');
+
+  updateConfig({ messageTypes: { stickers: false } });
+  try {
+    const off = buildSystemPrompt({ persona: { botName: '测试', roleText: '' }, stickerEntries: entries });
+    assert.ok(!off.includes('先 get_sticker_image 看一眼'), '关掉后清单尾注与策略段都不该再教它看图');
+    assert.ok(off.includes('get_sticker_image 不在工具表里'), '但要明确告诉模型这个工具确实没有');
+    assert.ok(off.includes('list_stickers'), '列表工具仍可用');
+    assert.ok(!off.includes('s-bare'), '没备注的图看不到，不该留在清单里（省 token，也避免诱导调不存在的工具）');
+    assert.ok(off.includes('s-note'), '有备注的图仍要列出来（按备注名可以发）');
+  } finally {
+    updateConfig({ messageTypes: { stickers: true } });
+  }
+});
+
 test('入站：自动展开受开关控制，被 @ 时强制展开（锚点：这段在 console 的事件处理里，单测拿不到）', () => {
   const app = src('src/console/app.js');
   assert.ok(app.includes('const autoExpand = cfgNow.messageTypes?.expandForward !== false || mentionsSelf;'),

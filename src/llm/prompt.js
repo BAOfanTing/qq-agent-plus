@@ -12,7 +12,7 @@
 
 import { asrAvailable, getConfig, imageGenAvailable } from '../core/config.js';
 import { platformGateAllowed, platformQuotaLimit } from '../core/platform-gates.js';
-import { visionEnabled } from './vision-scan.js';
+import { visionEnabled, stickerVisionEnabled } from './vision-scan.js';
 // 与 orchestrator 摘 send_voice 的条件同源（enabled && baseUrl 都齐才算能用）：
 // 只看 enabled 会在"勾了启用但没填地址"时教一个不存在的工具（2026-10-07 审计 P0）
 import { ttsConfigured } from './tts-openai.js';
@@ -184,8 +184,9 @@ function stickerRules(grounded = false) {
   // 活跃度档位直接改写策略段的频率行（引导统一在系统提示，不在"本次输入"重复）
   const cfg = getConfig();
   const lvl = Math.min(3, Math.max(0, Number(cfg.sticker?.encourage) || 0));
-  // 图片输入关掉、"或模型不支持图片"时 get_sticker_image 都会被摘掉工具：口径与编排器共用 visionEnabled
-  const vision = visionEnabled(cfg);
+  // 表情库看图会因三件事被摘掉工具：图片输入关、模型不支持图片、或「消息类型」关了表情查看。
+  // 口径收敛在 stickerVisionEnabled（与编排器同一判定），否则关掉后提示词还在教一个不存在的工具。
+  const vision = stickerVisionEnabled(cfg);
   return [
     grounded
       ? `${buildStickerStrategyHint(0, { vision })}\n- 表情偏好：${['少用', '适中', '较多', '喜欢用'][lvl]}；只是倾向，不按轮数凑配额，场景、关系与认真交流优先。`
@@ -565,10 +566,10 @@ export function buildSystemPrompt({
     const stickerCtx = buildStickerContext(
       stickerEntries,
       cappedByTokenSaver(wantStickers > 0 ? wantStickers : 10, stickerCap),
-      // 这里必须读 getConfig()：本函数里的 cfg 是 persona 对象（没有 api 字段），
-      // 写成 cfg.api?.vision 会恒为 undefined → 关掉图片输入后照样教模型"先看一眼"
-      // （2026-09-26 审查：提示词自相矛盾，还指向一个已被摘掉的工具）
-      { vision: visionEnabled() }
+      // 这里必须读 getConfig()：本函数里的 cfg 是 persona 对象（没有 api / sticker 字段）。
+      // 判定用 stickerVisionEnabled：图片输入关、模型不支持图片、或消息类型关了表情查看，
+      // 三种情况下 get_sticker_image 都不在工具表里（2026-09-26 / 2026-10-17 审查）
+      { vision: stickerVisionEnabled() }
     );
     if (stickerCtx) parts.push('', stickerCtx);
   }
