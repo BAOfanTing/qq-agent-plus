@@ -67,6 +67,16 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   voice page, and one preset (Pollinations) needs no key at all for a zero-setup try. Billed per
   image, gated by an hourly cap. A stored key never follows you to a different host (same
   credential-binding guard as ASR).
+- **Plugins** — third-party capabilities (model tools, message observers, scheduled jobs). Each
+  plugin runs in its **own child process**; it only receives the capabilities it declared, and every
+  capability is implemented host-side — a plugin cannot read your config file or bypass the send
+  queue's mute pre-check and rate limits. The console's Plugins page installs from the official
+  index (7 plugins, all zero-dependency), from a local package, or from your own index. **Writing
+  one** is documented in [docs/PLUGINS.md](docs/PLUGINS.md) (scaffold → debug against the real
+  runtime → pack and self-test, three commands); submitting to the official index goes through the
+  [index repository](https://github.com/sakurawwwxh/qq-agent-plugins) PR flow. The console's
+  Plugins → Publish pane lists both, with the commands. Plugins are third-party code — read the
+  declared capabilities on the detail page before installing.
 
 Configuration examples are in [docs/CONFIG-EXAMPLES.md](docs/CONFIG-EXAMPLES.md). Operations
 commands are collected in [src/ops.js](src/ops.js) and documented in [docs/OPS.md](docs/OPS.md).

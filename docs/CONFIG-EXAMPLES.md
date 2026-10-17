@@ -601,6 +601,62 @@
   （那条路径有自己的 `maxPromptChars` 预算兜底）。
 - 改不动的部分：每次模型调用的固定底（系统提示 + 工具定义）约 1.2 万-1.5 万 token。
 
+## plugins：插件（第三方扩展，默认全关）
+
+```json
+{
+  "plugins": {
+    "enabled": true,
+    "enabledIds": ["weather"],
+    "requireIsolation": true,
+    "networkIsolation": true,
+    "requireNetworkIsolation": false,
+    "lazy": true,
+    "idleMinutes": 15,
+    "toolMounting": "meta",
+    "limits": { "memoryMb": 128, "callsPerMinute": 120 },
+    "publishers": {},
+    "revoked": [],
+    "indexUrls": [],
+    "indexUrl": "https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plugins/main/plugins/index.json",
+    "mirrorPrefixes": null,
+    "settings": { "weather": { "defaultCity": "上海" } }
+  }
+}
+```
+
+契约、协议与信任声明见 `docs/PLUGINS.md`，这里只说配置形状：
+
+- `enabled`：总开关，**默认 `false`**（一个插件都不加载，落地没有任何副作用）。
+- `enabledIds`：**显式授权清单**，默认空 = 装了也不跑。控制台「插件」页里的「启用/停用」改的就是它。
+- `requireIsolation`：默认 `true` = 本机 Node 不支持权限模型时**拒绝加载**（没有隔离就不执行第三方
+  代码）；控制台与巡检会把"没有隔离"这件事说明白。改成 `false` 是明确接受没有隔离。
+- `indexUrls`：**额外的索引来源**（数组，配置顺序即优先级：同一个 id 只取最靠前那份）。
+  想加第三方索引就往这里追加。
+- `mirrorPrefixes`：取**包**时的镜像前缀（默认用内置的几个；空数组＝只用原始地址）。
+  **索引不走镜像**（索引是信任根，被第三方换掉的话 sha256 也救不了你）；包走镜像则是安全的
+  —— 先按索引里的 sha256 校验再换入，最多是"取不到"。
+- `indexUrl`：单条索引地址（默认官方索引，住在独立仓库 `qq-agent-plugins`）。它等价于 `indexUrls` 里排在最后的一项；
+  两个都留空 = 完全不看索引（控制台那一栏会说清"没有配置来源"，手动填地址仍然可用）。
+  拉取走 safe-fetch：内网地址被拦、有体积与超时上限。
+- `networkIsolation`：Linux 上把插件进程放进**没有网络接口**的命名空间（默认开，有就用）；
+  做不到的平台（Windows/macOS）控制台会明说"网络未隔离"。`requireNetworkIsolation: true` 是严格档：
+  本机做不到就**拒绝加载插件**（默认关 —— 打开等于在那些平台禁用整个插件生态）。
+- `lazy` / `idleMinutes`：懒启动（默认开、空闲 15 分钟停）。只有工具、不观察消息也不起周期任务的
+  插件按需起进程；声明了 `observe`/`schedule` 的插件常驻（否则消息与周期会静默失效）。
+- `toolMounting`：插件工具怎么给模型。默认 `meta`（只挂一个 `plugin_call`，里面列出可用的插件工具
+  —— 每轮提示词不随插件数增长）；`direct` 是每个插件工具各挂一个。插件**声明了 `send` 能力**时
+  安装界面会明确标出"能代机器人发言"，那条发言走的是机器人自己的发送队列（禁言/限频/白名单/记账全在）。
+- `limits`：宿主强制的资源上限 —— `memoryMb`（堆上限 + 常驻超限就重启）、`callsPerMinute`
+  （工具调用每分钟上限，防模型连调打爆宿主；周期任务不受此限）。
+- `publishers`：`{ "<发布者名>": "<Ed25519 公钥>" }`。登记后，该发布者的包必须带签名且验得过才许装。
+- `revoked`：撤回名单，`"id"` 撤全部版本、`"id@1.2.3"` 只撤那个版本；命中的插件不加载但列表里可见。
+- `settings.<id>`：给单个插件的配置段。插件通过 `cap.config.get` **只能读到自己的这一段**
+  （密钥填这里，别写进插件代码 —— 代码是最容易被转发的部分）。
+
+装完在 `plugin-data/<id>/install.json` 会留一份来源记录（从哪个索引/地址装的、哪一份 sha256、
+什么版本、什么时候装的），控制台「已安装」里能看到；卸载插件**不会**删掉它和 `plugin-data/`。
+
 ## messageTypes：消息类型（要不要读这类消息）
 
 ```json

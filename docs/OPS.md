@@ -65,7 +65,27 @@ node src/ops.js install-timers --confirm   # 写入并启用 backup / process-gu
 | `snowluma-update` | —（协议端管理新增） | 把协议端镜像更新到项目基线（或 `--to` 指定镜像）：备份 .env/compose → pull → up -d → 等就绪，起不来自动回滚；`--dry-run` 预演 | 控制台「设置 → OneBot」一键更新的命令行等价 |
 | `deploy` | `ops/deploy_qq_agent.sh` | 非交互部署：设置模型凭据后调用源码目录的 `deploy-all.sh -y` | 新机器初始化、CI 或远程 SSH 环境中的部署 |
 | `console` | `ops/qq-console.bat` | 使用系统 `ssh` 建立控制台 / WebUI / 远程桌面三个端口的隧道，就绪后提示或打开控制台（Windows/macOS/Linux 通用） | 日常打开控制台 |
+| `plugins` | —（插件生态新增） | 插件管理：`list` 列出已装插件（版本/能力/来源）与已授权清单；`install <文件.tar.gz>` **从本地文件装**（别人发的包、自己打的包）——sha256 由它算给你核对，装完来源记录写「本地文件：<文件名>」 | 不打开控制台就能装/看；小白用户拿到包只会在控制台装，命令行这条给运维与作者自测 |
 | `install-timers` | `ops/systemd/` | 生成并安装四个 systemd user 定时器：备份（每周日 04:10）、进程看门狗（每 10 分钟）、健康巡检（每 5 分钟）、审计日志清理（每月 1 日 04:20） | 安装定时任务 |
+
+## 部署纪律：只改 `ui/` 就不要重启服务
+
+**重启会掐断 OneBot 连接**（实测每次约 3 秒：`Stopping → Started → 新进程建立 WS`），
+群消息在那几秒里收不到。控制台的 `ui/` 是**每个请求现从磁盘读**的（`src/console/app.js` 的
+`handleHttp` 静态分支：`statSync` + `readFileSync` + 内容哈希强 ETag），所以：
+
+| 改了什么 | 怎么部署 | 要重启吗 |
+| --- | --- | --- |
+| 只动 `ui/**`（前端页面、样式、文案） | `rsync -a --delete <新树>/ui/ /data/qq-agent/app/ui/` | **不要** |
+| 动 `src/**`、`package.json`、systemd unit、`.env` | 铺整棵树 + `systemctl --user restart qq-agent-linux.service` | 要 |
+
+不重启也**不会**让已打开的页面拿着旧 JS：`/api/status` 里的 `uiBuild` 戳是**按请求现算**的
+（2026-10-16 从"进程启动时算一次"改过来，就是为了让这条路成立），前端轮询发现它变了会提示
+「控制台已更新，点此刷新」。部署完可以这样确认没重启：
+
+```bash
+systemctl --user show -p MainPID --value qq-agent-linux.service   # 部署前后 PID 应相同
+```
 
 ## 常用示例
 
