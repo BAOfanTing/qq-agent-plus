@@ -64,6 +64,36 @@ export function builtinPersonaTemplate(id) {
 }
 
 /**
+ * 按会话解析出生效的人设：全局 `persona` + `personaPerChat[chatKey]` 覆盖。
+ *
+ * 覆盖字段都是"决定口吻"的那几项；没写的继承全局。指定了内置卡（templateId）时，
+ * 正文与档位以卡为准（否则会出现"猫娘的正文 + 全局的 legacy 档"这种混合体）；
+ * 卡 id 认不出来时回落全局正文，避免整个提示词被换空。
+ *
+ * 纯函数：不读写磁盘，调用方（编排器）每轮按 chatKey 取一次即可。
+ */
+export function resolvePersona(cfg, chatKey) {
+  const base = cfg?.persona && typeof cfg.persona === 'object' ? cfg.persona : {};
+  const key = String(chatKey || '');
+  const overlay = key && cfg?.personaPerChat && typeof cfg.personaPerChat === 'object'
+    ? cfg.personaPerChat[key]
+    : null;
+  if (!overlay || typeof overlay !== 'object') return base;
+  const merged = { ...base, ...overlay };
+  const templateId = String(overlay.templateId || '').trim();
+  if (templateId) {
+    const template = builtinPersonaTemplate(templateId);
+    if (template) {
+      merged.roleText = template.text;
+      if (overlay.behaviorProfile === undefined) merged.behaviorProfile = template.behaviorProfile || 'legacy';
+    } else {
+      merged.roleText = base.roleText;
+    }
+  }
+  return merged;
+}
+
+/**
  * 内置卡绑定：只要实例还绑着内置卡（persona.templateId），就按 roles/*.md 的正文刷新副本。
  *
  * 背景：实例里存的是角色正文的**副本**（persona.roleText）。卡文件改了副本不会自己更新，
@@ -94,4 +124,27 @@ export function applyPersonaTemplate(cfg) {
   if (String(persona.roleText || '').trim() === nextText) return null;
   persona.roleText = nextText;
   return { id: rawId, name: template.name };
+}
+
+/**
+ * 按群人设里的卡 id 校验：认不出的 id 清掉（运行时回落全局正文），
+ * 免得实例一直挂着一个永远不会生效的绑定。
+ */
+export function applyPersonaPerChatTemplates(cfg) {
+  const perChat = cfg?.personaPerChat;
+  if (!perChat || typeof perChat !== 'object') return;
+  for (const [key, entry] of Object.entries(perChat)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const id = String(entry.templateId || '').trim();
+    if (!id) continue;
+    if (!builtinPersonaTemplate(id)) {
+      delete entry.templateId;
+      if (!String(entry.roleText || '').trim()
+        && !String(entry.customRules || '').trim()
+        && !String(entry.botName || '').trim()
+        && !String(entry.selfNickname || '').trim()) {
+        delete perChat[key];
+      }
+    }
+  }
 }

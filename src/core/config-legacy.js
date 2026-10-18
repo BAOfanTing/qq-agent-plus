@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PERSONAS, normalizeBehaviorProfile, applyPersonaTemplate } from '../personas.js';
+import { PERSONAS, normalizeBehaviorProfile, applyPersonaTemplate, applyPersonaPerChatTemplates } from '../personas.js';
 import {
   clampProbability,
   legacySliderToProbability,
@@ -277,6 +277,9 @@ export const DEFAULT_CONFIG = {
   },
   // 用户自定义人设库（保存在配置里，可在设置页添加/选择）
   customPersonas: [],
+  // 按群人设：chatKey（`group:<群号>` / `private:<QQ>`）→ 覆盖字段。
+  // 空 = 所有会话跟随全局 persona，行为与升级前完全一致。
+  personaPerChat: {},
   // 接入白名单
   allow: { groups: [], private: [] },
   deny: { groups: [], private: [] },
@@ -1048,6 +1051,40 @@ export function migrateMetasoBaseUrl(webSearch) {
   return { ...webSearch, metaso: { ...metaso, baseUrl: DEFAULT_CONFIG.webSearch.metaso.baseUrl } };
 }
 
+const PERSONA_CHAT_KEY_RE = /^(?:group|private):\d+$/;
+const PERSONA_OVERRIDE_TEXT_CAP = 20000;
+const PERSONA_OVERRIDE_RULE_CAP = 4000;
+const PERSONA_OVERRIDE_NAME_CAP = 40;
+const PERSONA_OVERRIDE_CARD_CAP = 64;
+
+/**
+ * 按群人设的 fail-closed 归一化：只认规范 chatKey 与白名单字段。
+ * 不在这里填卡正文 —— 内置卡正文以 roles/*.md 为唯一来源，运行时按 templateId 解析
+ *（见 personas.resolvePersona）；自定义卡由控制台把正文写进 roleText。
+ */
+export function normalizePersonaPerChat(raw) {
+  if (!isPlainObject(raw)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!PERSONA_CHAT_KEY_RE.test(key) || !isPlainObject(value)) continue;
+    const entry = {};
+    const card = String(value.templateId ?? '').trim().slice(0, PERSONA_OVERRIDE_CARD_CAP);
+    if (card) entry.templateId = card;
+    const roleText = String(value.roleText ?? '').trim().slice(0, PERSONA_OVERRIDE_TEXT_CAP);
+    if (roleText) entry.roleText = roleText;
+    const botName = String(value.botName ?? '').trim().slice(0, PERSONA_OVERRIDE_NAME_CAP);
+    if (botName) entry.botName = botName;
+    const selfNickname = String(value.selfNickname ?? '').trim().slice(0, PERSONA_OVERRIDE_NAME_CAP);
+    if (selfNickname) entry.selfNickname = selfNickname;
+    if (['legacy', 'grounded'].includes(value.behaviorProfile)) entry.behaviorProfile = value.behaviorProfile;
+    if (['low', 'medium', 'high'].includes(value.participation)) entry.participation = value.participation;
+    const customRules = String(value.customRules ?? '').trim().slice(0, PERSONA_OVERRIDE_RULE_CAP);
+    if (customRules) entry.customRules = customRules;
+    if (Object.keys(entry).length) out[key] = entry;
+  }
+  return out;
+}
+
 function migrateConfig(parsed) {
   // 顶层必须是对象：手改坏的 config.json 可能是 null / 5 / "x" / true（都是合法 JSON）。
   // 放它过去，下面 out.persona = … 那一步就会抛（Cannot create property 'persona' on number '5'），
@@ -1067,6 +1104,10 @@ function migrateConfig(parsed) {
   // 让默认值补上的话，老实例（例如选的是猫娘）载入后会被当成绑定了默认卡、正文被换掉。
   // 空串 = 未绑定（正文按自定义处理，不改动）；在控制台重选一次卡就会自动绑上。
   if (out.persona.templateId === undefined) out.persona.templateId = '';
+  // ── 按群人设（personaPerChat）──
+  // 键必须是规范 chatKey（group:<数字> / private:<数字>），值只收白名单字段。
+  // 手改坏、键写错、字段超长的条目一律丢掉 —— 宁可少一条覆盖，也不让坏配置进提示词。
+  out.personaPerChat = normalizePersonaPerChat(out.personaPerChat);
   // 消息类型段必须是对象；四个开关统一收敛成布尔（缺键 = 开，保持既有行为）。
   // 手改成 "messageTypes": null 时不能让整段丢掉 —— 那等于把四项一起打开，静默改变行为。
   if (!isPlainObject(out.messageTypes)) {
@@ -1504,7 +1545,8 @@ export function loadConfig() {
     // 图片生成同款：老配置只有单槽 apiKey、没有 apiKeyHost，不补记的话升级后"换个预设"就拿旧
     // Key 去撞新地址 —— 而那在升级前一直是好用的。只在读盘补，合并路径不补（见 migrateConfig）
     pinUnboundImageGenKey(merged.imageGen, merged.api?.baseUrl);
-    applyPersonaTemplate(merged);   // 绑了内置卡就按 roles/*.md 刷新正文（卡文件是唯一来源）
+    applyPersonaTemplate(merged);
+    applyPersonaPerChatTemplates(merged);   // 绑了内置卡就按 roles/*.md 刷新正文（卡文件是唯一来源）
     return merged;
   } catch (error) {
     // 读不动/解析不了就**先把原件留一份**再退回默认值：config.js 的 stabilize 会把结果持久化，
@@ -1515,6 +1557,7 @@ export function loadConfig() {
     }
     const fresh = structuredClone(DEFAULT_CONFIG);
     applyPersonaTemplate(fresh);
+    applyPersonaPerChatTemplates(fresh);
     return fresh;
   }
 }
@@ -1636,6 +1679,7 @@ export function updateConfig(patch) {
   next.persona.behaviorProfile = normalizeBehaviorProfile(next.persona.behaviorProfile);
   if (patchPersona?.templateId !== undefined || patchPersona?.roleText === undefined) {
     applyPersonaTemplate(next);
+    applyPersonaPerChatTemplates(next);
   }
   // 长文本字段在"写入这一侧"设上界（放在 applyPersonaTemplate 之后，保证最终值也被夹住）：
   // roleText / customRules 每次请求都会进系统提示词，memberNotes 会进控制台回包与 config.json，

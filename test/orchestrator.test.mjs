@@ -1029,6 +1029,30 @@ describe('Orchestrator', () => {
     assert.match(offPrompt, /画面/);
   });
 
+  it('按群人设：同一个进程里不同群用不同的角色卡与群内名字', async (t) => {
+    const { cfg, runner, store } = fixture(t);
+    cfg.allow.groups = ['1', '2'];
+    cfg.personaPerChat = { 'group:2': { templateId: 'maoniang', selfNickname: '猫猫' } };
+    setRuntimeConfig(cfg);
+    const bodies = [];
+    globalThis.fetch = async (_url, options) => {
+      bodies.push(JSON.parse(options.body));
+      return Response.json({ choices: [{ message: { content: 'done' } }], usage: { total_tokens: 10 } });
+    };
+    store.appendIncoming('group:1', { mid: 1, text: '在吗', senderId: '42', senderName: 'member-42' });
+    await runner.wake('group:1');
+    store.appendIncoming('group:2', { mid: 2, text: '在吗', senderId: '43', senderName: 'member-43' });
+    await runner.wake('group:2');
+
+    const globalPrompt = bodies[0].messages[0].content;
+    const catPrompt = bodies[1].messages[0].content;
+    assert.match(globalPrompt, /DeepSeek 小鲸鱼/, 'group:1 用全局卡');
+    assert.match(catPrompt, /二次元猫娘/, 'group:2 用按群覆盖的卡');
+    assert.notEqual(globalPrompt, catPrompt);
+    assert.match(catPrompt, /你在群里的名字是「猫猫」/, '按群覆盖的名字要进同一次请求');
+    assert.doesNotMatch(catPrompt, /你在群里的名字是「bot」/);
+  });
+
   it('generate_image 只在图片生成开关打开且配置齐时注入（按张计费，未配就别让模型去调）', async (t) => {
     const { cfg, runner, append } = fixture(t);
     // 生图的发送路径是"进表情库 → send_sticker"：这条用例只测生图开关本身，先把表情包打开

@@ -615,6 +615,28 @@ async function saveConfig({ quiet = false } = {}) {
       customRules: val('#cfg-customrules', c.persona.customRules || ''),
       templateId
     };
+    // 按群人设：整份替换（用 __replace__ 才能把"改回跟随全局"的行真正删掉，深合并做不到）
+    const perChat = {};
+    for (const row of $$('[data-per-chat]')) {
+      const key = String(row.getAttribute('data-per-chat') || '');
+      if (!/^(group|private):\d+$/.test(key)) continue;
+      const picked = String(row.querySelector('.per-chat-select')?.value || '');
+      if (!picked) continue;                       // 空 = 跟随全局
+      if (picked === 'keep') {
+        const old = c.personaPerChat?.[key];
+        if (old && typeof old === 'object') perChat[key] = old;
+        continue;
+      }
+      if (picked.startsWith('builtin:')) {
+        perChat[key] = { templateId: picked.slice(8) };
+        continue;
+      }
+      if (picked.startsWith('custom:')) {
+        const tpl = state.personaTemplates?.[picked.slice(7)];
+        if (tpl) perChat[key] = { roleText: tpl.text, behaviorProfile: tpl.behaviorProfile || 'legacy' };
+      }
+    }
+    patch.personaPerChat = { __replace__: perChat };
   }
 
   if (sec === 'allow') {

@@ -122,6 +122,7 @@ import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetrya
 import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
 import { normalizeMid } from '../tools/tools-core.js';
 import { visionEnabled } from '../llm/vision-scan.js';
+import { resolvePersona } from '../personas.js';
 import { currentProviders } from './providers.js';
 import { buildSlangContextForChat } from '../console/asset-observer.js';
 import { parseInlineToolCalls } from '../tools/inline-tools.js';
@@ -637,6 +638,8 @@ export class Orchestrator {
    */
   #predictTier(chatKey, { roll } = {}) {
     const cfg = getConfig();
+    // 按群人设：判定"是否在回复机器人"要用这个群生效的名字（可能与全局不同）
+    const persona = resolvePersona(cfg, chatKey);
     const conversation = conversationConfigForChat(chatKey);
     const entries = this.store.peekUnread(chatKey, this.#unreadScanLimit()) || [];
     if (chatKey.startsWith('private:')) {
@@ -654,8 +657,8 @@ export class Orchestrator {
     }
     const result = resolveContextTier({
       triggerEntries: entries,
-      selfNickname: cfg.persona?.selfNickname || this.onebot.selfNickname || '',
-      botName: cfg.persona?.botName || '',
+      selfNickname: persona.selfNickname || this.onebot.selfNickname || '',
+      botName: persona.botName || '',
       selfId: cfg.onebot?.selfId || this.onebot.selfId || '',
       cfg: storeConfigForChat(chatKey),  // 按会话取档位：统一开关关闭时各群可以有独立滑条
       roll                                // 传入已固定的骰子：预判与实跑必须用同一次
@@ -686,13 +689,14 @@ export class Orchestrator {
     return { ...result, conversationMode: 'legacy' };
   }
 
-  #isReplyToSelf(entries) {
+  #isReplyToSelf(chatKey, entries) {
     const cfg = getConfig();
+    const persona = resolvePersona(cfg, chatKey);
     const selfId = String(cfg.onebot?.selfId || this.onebot.selfId || '');
     const names = new Set([
-      cfg.persona?.selfNickname,
+      persona.selfNickname,
       this.onebot.selfNickname,
-      cfg.persona?.botName
+      persona.botName
     ].map((v) => String(v || '').trim()).filter(Boolean));
     return entries.some((m) => {
       if (selfId && String(m.reply?.senderId || '') === selfId) return true;
@@ -722,7 +726,7 @@ export class Orchestrator {
       Math.min(500, Math.max(1, Number(conversation?.continuationContextCount) || 100)),
       tokenSaverCapsOf(getConfig())?.allCount
     );
-    if (this.#isReplyToSelf(entries)) {
+    if (this.#isReplyToSelf(chatKey, entries)) {
       return {
         tier: 5, count, reason: '续接：引用机器人',
         shouldRespond: true, conversationMode: 'threaded'
@@ -769,7 +773,7 @@ export class Orchestrator {
         };
       }
     }
-    if (this.#isReplyToSelf(entries)) {
+    if (this.#isReplyToSelf(chatKey, entries)) {
       return {
         tier: 5, count, reason: '生命周期：引用机器人',
         shouldRespond: true, conversationMode: 'lifecycle'
@@ -1242,8 +1246,8 @@ export class Orchestrator {
     // 否则后续每次渲染提示词都会重新掷，会话记录与提示词会对不上。
     tierResult ||= resolveContextTier({
       triggerEntries,
-      selfNickname: cfgNow.persona?.selfNickname || this.onebot.selfNickname || '',
-      botName: cfgNow.persona?.botName || '',
+      selfNickname: resolvePersona(cfgNow, chatKey).selfNickname || this.onebot.selfNickname || '',
+      botName: resolvePersona(cfgNow, chatKey).botName || '',
       selfId: cfgNow.onebot?.selfId || this.onebot.selfId || '',
       cfg: storeConfigForChat(chatKey)   // 与 #predictTier 同一来源，保证预判/实跑一致
     });
@@ -1629,9 +1633,13 @@ export class Orchestrator {
     signal
   }) {
     const cfg = getConfig();
+    // 本轮生效的人设：全局 persona + 这个群的覆盖（见 personas.resolvePersona）。
+    // 一次解析、多处共用 —— 提示词、群内显示名、运行记录必须是同一份，
+    // 否则会出现"提示词是猫娘、落款还是小鲸鱼"。
+    const persona = resolvePersona(cfg, chatKey);
     const conversationCfg = conversation || conversationConfigForChat(chatKey);
     const chatName = kind === 'group' ? await this.#chatName(chatId) : '';
-    const selfNickname = kind === 'group' ? (cfg.persona.selfNickname || this.onebot.selfNickname || cfg.persona.botName) : cfg.persona.botName;
+    const selfNickname = kind === 'group' ? (persona.selfNickname || this.onebot.selfNickname || persona.botName) : persona.botName;
     let thread = conversationCfg.mode !== 'legacy'
       ? this.store.getConversationThread?.(chatKey)
       : null;
@@ -1731,6 +1739,8 @@ export class Orchestrator {
     if (pluginToolDefs.length) toolDefs.push(...pluginToolDefs);
     const openAiTools = toOpenAiTools(toolDefs);
     const systemPrompt = buildSystemPrompt({
+      // 按群生效的人设（缺省 = 全局）
+      persona,
       // 与【此刻状态】用同一个名字（群名片优先），否则同一次请求里会出现两个"你在群里的名字"
       selfNickname,
       // 进行中的游戏：只注入公开摘要（不含词与身份）
@@ -1900,8 +1910,8 @@ export class Orchestrator {
       chatKey, kind, chatId,
       selfId: this.onebot.selfId,
       selfNickname,
-      botName: cfg.persona.botName,
-      behaviorProfile: cfg.persona.behaviorProfile || 'legacy',
+      botName: persona.botName,
+      behaviorProfile: persona.behaviorProfile || 'legacy',
       onebot: this.onebot,
       store: this.store,
       memory: this.memory,

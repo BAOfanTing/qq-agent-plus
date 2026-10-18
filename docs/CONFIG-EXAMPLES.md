@@ -691,6 +691,25 @@
 - 换模型时先确认 `vision`、`contextWindowTokens`、`maxRunTokens` 三项与模型能力一致，
   否则会出现"图片被当成文本"或"上下文被过早裁剪"。
 
+## personaPerChat：按群人设（可选）
+
+```json
+{
+  "personaPerChat": {
+    "group:100200301": { "templateId": "maoniang" },
+    "group:100200302": { "templateId": "duzui_sunyou", "customRules": "这个群人比较正经，少开玩笑" },
+    "private:700000001": { "roleText": "你是一只看门狗。", "behaviorProfile": "legacy" }
+  }
+}
+```
+
+- 键：`group:<群号>` / `private:<QQ>`；**不配 = 跟随全局 `persona`**（升级行为不变）。
+- 可覆盖字段：`templateId`（内置卡 id：正文与档位以 `roles/*.md` 为准）、`roleText`（自定义正文，不绑卡时使用）、
+  `botName`、`selfNickname`、`behaviorProfile`、`participation`、`customRules`。
+- 控制台入口：设置 → 人设 →「按群人设」。白名单里的每个会话一行，选一张卡即可；选「跟随全局」即删除该行。
+- **人物记忆是全局的**：同一个群友在不同群共用一份印象，只是每个群用哪套口吻不同。
+- 群昵称是账号级的，无法按群不同；能按群改的展示名是群名片（`set_group_card`，平台能力里默认关）。
+
 ### 安全规则在哪里改（常被问）
 
 系统提示里的**【安全规则（最高优先级，不可违反）】**是**写死在源码里的**：
