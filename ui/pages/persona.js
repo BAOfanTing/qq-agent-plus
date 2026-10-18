@@ -10,6 +10,7 @@ import {
   PERSONA_BAD_SECTIONS, PERSONA_RULE_EXAMPLES, PERSONA_SECTION_EMOJI, PERSONA_TAG_SECTIONS
 } from '../core/constants.js';
 import { $, esc } from '../core/dom.js';
+import { perChatOptions } from './persona-per-chat.js';
 import { personaDescCache, state } from '../core/state.js';
 function findPersonaTemplateId(roleText, behaviorProfile = 'legacy', customRules = '') {
   return Object.entries(state.personaTemplates || {}).find(([, p]) =>
@@ -501,31 +502,12 @@ function renderPersonaSection(c) {
 function renderPersonaPerChat(c) {
   const map = c.personaPerChat && typeof c.personaPerChat === 'object' ? c.personaPerChat : {};
   const templates = Object.entries(state.personaTemplates || {});
-  const builtins = templates.filter(([, t]) => t?.builtin);
-  const customs = templates.filter(([, t]) => t && !t.builtin);
   const chats = new Set();
   for (const id of (c.allow?.groups || [])) chats.add(`group:${String(id).trim()}`);
   for (const id of (c.allow?.private || [])) chats.add(`private:${String(id).trim()}`);
   for (const key of Object.keys(map)) chats.add(key);
   const rows = [...chats].filter((key) => /^(group|private):\d+$/.test(key)).sort();
   const labelOf = (key) => (key.startsWith('group:') ? `群 ${key.slice(6)}` : `私聊 ${key.slice(8)}`);
-  const optionsFor = (entry) => {
-    const opts = ['<option value="">跟随全局</option>'];
-    for (const [id, t] of builtins) {
-      opts.push(`<option value="builtin:${esc(id)}"${entry?.templateId === id ? ' selected' : ''}>${esc(t.name)}</option>`);
-    }
-    for (const [id, t] of customs) {
-      const hit = !entry?.templateId && entry?.roleText && entry.roleText === t.text;
-      opts.push(`<option value="custom:${esc(id)}"${hit ? ' selected' : ''}>${esc(t.name)}（自定义）</option>`);
-    }
-    if (entry?.templateId && !templates.some(([id]) => id === entry.templateId)) {
-      opts.push(`<option value="keep" selected>未知卡 ${esc(entry.templateId)}（回落全局）</option>`);
-    }
-    if (!entry?.templateId && entry?.roleText && !customs.some(([, t]) => t.text === entry.roleText)) {
-      opts.push('<option value="keep" selected>自定义正文（保持）</option>');
-    }
-    return opts.join('');
-  };
   return `
     <h3 id="persona-per-chat">按群人设</h3>
     <div class="hint">每个群 / 私聊可以单独选一张卡；不选 = 跟随上面的全局人设。<b>人物记忆是全局的</b>——
@@ -534,7 +516,7 @@ function renderPersonaPerChat(c) {
       ${rows.length ? rows.map((key) => `
         <div class="per-chat-row" data-per-chat="${esc(key)}">
           <span class="per-chat-name">${esc(labelOf(key))}</span>
-          <select class="per-chat-select" aria-label="${esc(labelOf(key))} 的人设">${optionsFor(map[key])}</select>
+          <select class="per-chat-select" aria-label="${esc(labelOf(key))} 的人设">${perChatOptions(map[key], templates)}</select>
         </div>`).join('') : '<div class="pd-empty">白名单里还没有群或私聊。</div>'}
     </div>`;
 }

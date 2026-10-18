@@ -4106,6 +4106,8 @@ export function createApp({
     // "历史里的旧口癖/自称不作数"（换卡后它会被自己的旧发言锚住，实测能锚一天以上）
     if (patch?.persona && typeof patch.persona === 'object') {
       const before = cfgNow.persona || {};
+      // 时间戳只由服务端写：客户端送来的 changedAt 一律丢弃（否则可以伪造/永久压住"刚换过人设"的提醒）
+      delete patch.persona.changedAt;
       const changed = ['roleText', 'templateId', 'behaviorProfile', 'customRules', 'botName',
         'selfNickname', 'participation']
         .some((key) => String(patch.persona[key] ?? before[key] ?? '') !== String(before[key] ?? ''));
@@ -4116,11 +4118,18 @@ export function createApp({
       const beforeMap = cfgNow.personaPerChat || {};
       const afterMap = patch.personaPerChat.__replace__ ?? patch.personaPerChat;
       if (afterMap && typeof afterMap === 'object' && !Array.isArray(afterMap)) {
+        // 按键名排序后比较：保存时字段顺序会变（删了再赋值），用原生 JSON.stringify 会把
+        // "没改"误判成"改了"，每保存一次都刷新 changedAt
+        const stable = (value) => {
+          const obj = { ...(value || {}) };
+          delete obj.changedAt;
+          return JSON.stringify(Object.fromEntries(Object.entries(obj).sort(([a], [b]) => a.localeCompare(b))));
+        };
         for (const [key, entry] of Object.entries(afterMap)) {
           if (!entry || typeof entry !== 'object') continue;
+          delete entry.changedAt;                 // 时间戳只由服务端写
           const old = beforeMap[key];
-          const strip = (value) => JSON.stringify({ ...(value || {}), changedAt: undefined });
-          if (strip(entry) !== strip(old)) entry.changedAt = Date.now();
+          if (stable(entry) !== stable(old)) entry.changedAt = Date.now();
           else if (old?.changedAt) entry.changedAt = old.changedAt;
         }
       }

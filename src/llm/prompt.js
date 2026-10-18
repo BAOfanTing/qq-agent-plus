@@ -847,7 +847,7 @@ function triggerLabels(entry, ctx) {
   // 这里以前是 text.startsWith('@')：任何以 @ 开头的消息（@群友、@别的机器人、
   // @全体成员）都记成「@我」，模型于是把别人的点名当成叫自己。
   const atMe = entry?.mentionsSelf === true
-    || isAtMe(text, { selfNickname: ctx.selfNickname, botName: persona.botName, selfId: ctx.selfId });
+    || isAtMe(text, { selfNickname: ctx.selfNickname, botName: ctx.botName || persona.botName, selfId: ctx.selfId });
   const at = atTargetsIn(text);
   const selfQq = String(ctx.selfId || '').trim();
   // 数字形态（CQ 码、@QQ号）在不知道自己 QQ 号时判断不出指向：宁可不贴标签，也不贴成「别人」。

@@ -1081,8 +1081,9 @@ export function normalizePersonaPerChat(raw) {
     const customRules = String(value.customRules ?? '').trim().slice(0, PERSONA_OVERRIDE_RULE_CAP);
     if (customRules) entry.customRules = customRules;
     // 内部字段：这张覆盖最后一次改变的时间（控制台保存时写，用于"刚换过人设"的提醒）
+    // 只接受过去的时间（客户端/手改塞一个未来值会让"刚换过人设"的提醒永远挂着）
     const changedAt = Number(value.changedAt);
-    if (Number.isFinite(changedAt) && changedAt > 0) entry.changedAt = Math.floor(changedAt);
+    if (Number.isFinite(changedAt) && changedAt > 0) entry.changedAt = Math.min(Math.floor(changedAt), Date.now());
     if (Object.keys(entry).length) out[key] = entry;
   }
   return out;

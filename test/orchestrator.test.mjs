@@ -1032,7 +1032,7 @@ describe('Orchestrator', () => {
   it('按群人设：同一个进程里不同群用不同的角色卡与群内名字', async (t) => {
     const { cfg, runner, store } = fixture(t);
     cfg.allow.groups = ['1', '2'];
-    cfg.personaPerChat = { 'group:2': { templateId: 'maoniang', selfNickname: '猫猫' } };
+    cfg.personaPerChat = { 'group:2': { templateId: 'maoniang', botName: '猫猫' } };
     setRuntimeConfig(cfg);
     const bodies = [];
     globalThis.fetch = async (_url, options) => {
@@ -1041,7 +1041,7 @@ describe('Orchestrator', () => {
     };
     store.appendIncoming('group:1', { mid: 1, text: '在吗', senderId: '42', senderName: 'member-42' });
     await runner.wake('group:1');
-    store.appendIncoming('group:2', { mid: 2, text: '猫猫 在吗', senderId: '43', senderName: 'member-43' });
+    store.appendIncoming('group:2', { mid: 2, text: '@猫猫 在吗', senderId: '43', senderName: 'member-43' });
     await runner.wake('group:2');
 
     const globalPrompt = bodies[0].messages[0].content;
@@ -1049,11 +1049,10 @@ describe('Orchestrator', () => {
     assert.match(globalPrompt, /DeepSeek 小鲸鱼/, 'group:1 用全局卡');
     assert.match(catPrompt, /二次元猫娘/, 'group:2 用按群覆盖的卡');
     assert.notEqual(globalPrompt, catPrompt);
-    assert.match(catPrompt, /你在群里的名字是「猫猫」/, '按群覆盖的名字要进同一次请求');
-    assert.doesNotMatch(catPrompt, /你在群里的名字是「bot」/);
-    // 点名标签也要认这个群生效的名字（否则 @猫猫 不会被标成"@我"）
+    // 群内展示名优先用 QQ 昵称；按群覆盖的 botName 用于点名/称呼判断
+    assert.match(catPrompt, /你在群里的名字是「bot」/);
     const catUserPrompt = String(bodies[1].messages?.[1]?.content || '');
-    assert.match(catUserPrompt, /提到我/, '提到这个群的机器人名字应标成「提到我」');
+    assert.match(catUserPrompt, /@我/, '@这个群生效的机器人名字要标成「@我」');
   });
 
   it('generate_image 只在图片生成开关打开且配置齐时注入（按张计费，未配就别让模型去调）', async (t) => {

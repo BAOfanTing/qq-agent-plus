@@ -18,6 +18,7 @@ import {
   normalizeStickerCollectMax, normalizeStickerMax, parseList, sliderToTierUI
 } from '../core/format.js';
 import { pickedGroups, state } from '../core/state.js';
+import { buildPerChatPatch } from './persona-per-chat.js';
 // 「平台能力」页的键表与配额行：渲染在 platform.js，这里只按同一份键名读控件
 // （键名与 id 约定只维护一处；改名不同步时源码锚点用例会红）。
 import { ALL_GATE_KEYS, QUOTA_ROWS, gateCheckboxId, gateDefaultOn, hydratePlatformGates } from './platform.js';
@@ -615,41 +616,15 @@ async function saveConfig({ quiet = false } = {}) {
       customRules: val('#cfg-customrules', c.persona.customRules || ''),
       templateId
     };
-    // 按群人设：整份替换（用 __replace__ 才能把"改回跟随全局"的行真正删掉，深合并做不到）
-    const perChat = {};
-    for (const row of $$('[data-per-chat]')) {
-      const key = String(row.getAttribute('data-per-chat') || '');
-      if (!/^(group|private):\d+$/.test(key)) continue;
-      const picked = String(row.querySelector('.per-chat-select')?.value || '');
-      if (!picked) continue;                       // 空 = 跟随全局
-      if (picked === 'keep') {
-        const old = c.personaPerChat?.[key];
-        if (old && typeof old === 'object') perChat[key] = old;
-        continue;
-      }
-      const old = c.personaPerChat?.[key];
-      const keepOthers = old && typeof old === 'object' ? { ...old } : {};
-      // 换卡时正文由卡片决定：旧条目里的 roleText 必须清掉，否则会覆盖新卡（resolvePersona 会用它）
-      delete keepOthers.roleText;
-      delete keepOthers.changedAt;
-      if (picked.startsWith('builtin:')) {
-        perChat[key] = { ...keepOthers, templateId: picked.slice(8) };
-        continue;
-      }
-      if (picked.startsWith('custom:')) {
-        const tpl = state.personaTemplates?.[picked.slice(7)];
-        if (tpl) {
-          perChat[key] = {
-            ...keepOthers,
-            roleText: tpl.text,
-            behaviorProfile: tpl.behaviorProfile || 'legacy'
-          };
-          // 自定义卡自带的附加规则也要跟过来，否则同一个群选它和全局选它行为不一致
-          if (tpl.customRules) perChat[key].customRules = tpl.customRules;
-        }
-      }
-    }
-    patch.personaPerChat = { __replace__: perChat };
+    // 按群人设：整份替换（用 __replace__ 才能把"改回跟随全局"的行真正删掉）。
+    // 装配逻辑在 persona-per-chat.js（纯函数，行为用例直接覆盖换卡/保持各分支）。
+    const rows = $$('[data-per-chat]').map((row) => ({
+      key: row.getAttribute('data-per-chat'),
+      value: row.querySelector('.per-chat-select')?.value || ''
+    }));
+    patch.personaPerChat = {
+      __replace__: buildPerChatPatch(rows, c.personaPerChat || {}, Object.entries(state.personaTemplates || {}))
+    };
   }
 
   if (sec === 'allow') {
