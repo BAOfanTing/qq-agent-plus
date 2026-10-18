@@ -1041,7 +1041,7 @@ describe('Orchestrator', () => {
     };
     store.appendIncoming('group:1', { mid: 1, text: '在吗', senderId: '42', senderName: 'member-42' });
     await runner.wake('group:1');
-    store.appendIncoming('group:2', { mid: 2, text: '在吗', senderId: '43', senderName: 'member-43' });
+    store.appendIncoming('group:2', { mid: 2, text: '猫猫 在吗', senderId: '43', senderName: 'member-43' });
     await runner.wake('group:2');
 
     const globalPrompt = bodies[0].messages[0].content;
@@ -1051,6 +1051,9 @@ describe('Orchestrator', () => {
     assert.notEqual(globalPrompt, catPrompt);
     assert.match(catPrompt, /你在群里的名字是「猫猫」/, '按群覆盖的名字要进同一次请求');
     assert.doesNotMatch(catPrompt, /你在群里的名字是「bot」/);
+    // 点名标签也要认这个群生效的名字（否则 @猫猫 不会被标成"@我"）
+    const catUserPrompt = String(bodies[1].messages?.[1]?.content || '');
+    assert.match(catUserPrompt, /提到我/, '提到这个群的机器人名字应标成「提到我」');
   });
 
   it('generate_image 只在图片生成开关打开且配置齐时注入（按张计费，未配就别让模型去调）', async (t) => {

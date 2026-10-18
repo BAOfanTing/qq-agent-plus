@@ -834,7 +834,8 @@ function triggerLabels(entry, ctx) {
   const lower = text.toLowerCase();
   const persona = getConfig().persona || {};
   const nick = String(ctx.selfNickname || '').toLowerCase();
-  const botName = String(persona.botName || '').toLowerCase();
+  // 按群人设时 ctx.botName 是那个群生效的名字（见 orchestrator 的 buildUserPrompt 调用）
+  const botName = String(ctx.botName || persona.botName || '').toLowerCase();
   const notes = getConfig().memberNotes || {};
   // 「提到我（备注名）」说的是"消息里提到**我**的备注名"，所以查机器人自己的备注；
   // 查发言者的备注会变成"他说了他自己的备注名"——既漏判又误判。
@@ -965,7 +966,7 @@ export function buildUserPrompt(ctx) {
 
   // 【角色设定】刚换过的那段时间，历史/交接里留着上一张卡的口癖与自称：
   // 不加说明的话模型会照着自己上一条的口气继续说（实测换卡 26 小时后仍在用旧卡的口癖）。
-  const personaChangedAt = Number(getConfig().persona?.changedAt) || 0;
+  const personaChangedAt = Number(ctx.personaChangedAt ?? getConfig().persona?.changedAt) || 0;
   const personaFreshlyChanged = personaChangedAt > 0 && (now - personaChangedAt) < 24 * 60 * 60 * 1000;
   const staleNote = personaFreshlyChanged
     ? '（注意：【角色设定】刚换过 —— 下面是换卡之前的旧记录，里面的口癖、自称、称呼都不一定还适用，一切以当前卡为准。）'

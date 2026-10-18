@@ -109,3 +109,13 @@ test('载入时校验按群的卡 id：认不出来就清掉，空条目一并�
   assert.equal(cfg.personaPerChat['group:200'].templateId, undefined, '坏 id 清掉');
   assert.equal(cfg.personaPerChat['group:200'].botName, '留名', '同一条目里的其它覆盖保留');
 });
+
+test('坏卡 id 清理不能误删单独的参与度/档位覆盖', () => {
+  // 只列了部分字段名时，participation / behaviorProfile 会被当成"空条目"删掉（2026-10-18 审查 P2）
+  const cfg = {
+    persona: base,
+    personaPerChat: { 'group:300': { templateId: 'gone', participation: 'high', behaviorProfile: 'grounded' } }
+  };
+  applyPersonaPerChatTemplates(cfg);
+  assert.deepEqual(cfg.personaPerChat['group:300'], { participation: 'high', behaviorProfile: 'grounded' });
+});

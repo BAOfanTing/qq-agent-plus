@@ -139,12 +139,9 @@ export function applyPersonaPerChatTemplates(cfg) {
     if (!id) continue;
     if (!builtinPersonaTemplate(id)) {
       delete entry.templateId;
-      if (!String(entry.roleText || '').trim()
-        && !String(entry.customRules || '').trim()
-        && !String(entry.botName || '').trim()
-        && !String(entry.selfNickname || '').trim()) {
-        delete perChat[key];
-      }
+      // 只看"还有没有别的白名单字段"，别自己再列一遍 —— 漏掉 participation /
+      // behaviorProfile 会把用户单独设过的偏好一起删掉（2026-10-18 审查 P2）
+      if (!Object.keys(entry).length) delete perChat[key];
     }
   }
 }

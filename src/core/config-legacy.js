@@ -1080,6 +1080,9 @@ export function normalizePersonaPerChat(raw) {
     if (['low', 'medium', 'high'].includes(value.participation)) entry.participation = value.participation;
     const customRules = String(value.customRules ?? '').trim().slice(0, PERSONA_OVERRIDE_RULE_CAP);
     if (customRules) entry.customRules = customRules;
+    // 内部字段：这张覆盖最后一次改变的时间（控制台保存时写，用于"刚换过人设"的提醒）
+    const changedAt = Number(value.changedAt);
+    if (Number.isFinite(changedAt) && changedAt > 0) entry.changedAt = Math.floor(changedAt);
     if (Object.keys(entry).length) out[key] = entry;
   }
   return out;
@@ -1647,6 +1650,8 @@ export function updateConfig(patch) {
   // 直接把这个键从 patch 里摘掉，免得它在合并/迁移里被当成"恢复默认人设"，甚至抛错。
   const safePatch = isPlainObject(patch) ? { ...patch } : {};
   if ('persona' in safePatch && !isPlainObject(safePatch.persona)) delete safePatch.persona;
+  // 按群人设同理：标量/数组/null 当"这次没改"处理，别让一次坏请求把所有群的覆盖清空
+  if ('personaPerChat' in safePatch && !isPlainObject(safePatch.personaPerChat)) delete safePatch.personaPerChat;
   // 三个带凭据的段同理：它们被 migrateConfig 归一化成 {}，等于**整段清空**（连 keys 映射与
   // 归属钉一起丢），而不是"这次没改"。坏输入最该被忽略，不该当成用户要求清空（2026-10-03 全量审查）。
   for (const sec of ['asr', 'tts', 'imageGen']) {

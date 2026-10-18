@@ -1812,6 +1812,9 @@ export class Orchestrator {
       slangContext,
       incidentContext,
       selfNickname,
+      // 按群人设：点名标签与"刚换过卡"的提醒都用这个群生效的那份
+      botName: persona.botName,
+      personaChangedAt: Number(persona.changedAt) || 0,
       // 点名标签的文本兜底要用它认「@QQ号」与 CQ 码形态（存档里的 mentionsSelf 才是主判据）。
       // 取值与上面的档位判定保持一致，否则两处会对同一条消息给出不同判断。
       selfId: cfg.onebot?.selfId || this.onebot.selfId || '',

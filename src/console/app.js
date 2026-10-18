@@ -4111,6 +4111,20 @@ export function createApp({
         .some((key) => String(patch.persona[key] ?? before[key] ?? '') !== String(before[key] ?? ''));
       if (changed) patch.persona.changedAt = Date.now();
     }
+    // 按群人设同理：哪个群的卡/正文变了，就给那个条目打时间戳（只影响该群，不误报全局）
+    if (patch?.personaPerChat && typeof patch.personaPerChat === 'object') {
+      const beforeMap = cfgNow.personaPerChat || {};
+      const afterMap = patch.personaPerChat.__replace__ ?? patch.personaPerChat;
+      if (afterMap && typeof afterMap === 'object' && !Array.isArray(afterMap)) {
+        for (const [key, entry] of Object.entries(afterMap)) {
+          if (!entry || typeof entry !== 'object') continue;
+          const old = beforeMap[key];
+          const strip = (value) => JSON.stringify({ ...(value || {}), changedAt: undefined });
+          if (strip(entry) !== strip(old)) entry.changedAt = Date.now();
+          else if (old?.changedAt) entry.changedAt = old.changedAt;
+        }
+      }
+    }
     const previousProactive = JSON.stringify(cfgNow.proactive || {});
     const previousDailyMoments = JSON.stringify(cfgNow.dailyMoments || {});
     const previousQzoneInteractions = JSON.stringify(cfgNow.qzoneInteractions || {});

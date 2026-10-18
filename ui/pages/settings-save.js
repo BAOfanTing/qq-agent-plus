@@ -627,13 +627,26 @@ async function saveConfig({ quiet = false } = {}) {
         if (old && typeof old === 'object') perChat[key] = old;
         continue;
       }
+      const old = c.personaPerChat?.[key];
+      const keepOthers = old && typeof old === 'object' ? { ...old } : {};
+      // 换卡时正文由卡片决定：旧条目里的 roleText 必须清掉，否则会覆盖新卡（resolvePersona 会用它）
+      delete keepOthers.roleText;
+      delete keepOthers.changedAt;
       if (picked.startsWith('builtin:')) {
-        perChat[key] = { templateId: picked.slice(8) };
+        perChat[key] = { ...keepOthers, templateId: picked.slice(8) };
         continue;
       }
       if (picked.startsWith('custom:')) {
         const tpl = state.personaTemplates?.[picked.slice(7)];
-        if (tpl) perChat[key] = { roleText: tpl.text, behaviorProfile: tpl.behaviorProfile || 'legacy' };
+        if (tpl) {
+          perChat[key] = {
+            ...keepOthers,
+            roleText: tpl.text,
+            behaviorProfile: tpl.behaviorProfile || 'legacy'
+          };
+          // 自定义卡自带的附加规则也要跟过来，否则同一个群选它和全局选它行为不一致
+          if (tpl.customRules) perChat[key].customRules = tpl.customRules;
+        }
       }
     }
     patch.personaPerChat = { __replace__: perChat };
