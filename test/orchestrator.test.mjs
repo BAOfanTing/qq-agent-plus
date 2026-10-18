@@ -95,6 +95,9 @@ describe('Orchestrator', () => {
     cfg.api.baseUrl = 'https://model.invalid';
     cfg.sticker.enabled = false;
     cfg.memory.consolidateEnabled = false;
+    // 这组用例盯的是编排主流程本身：默认关掉「该回没发」的补救，避免它在只回正文的夹具上
+    // 多出一次模型调用（该行为由 test/reply-guard.test.mjs 单独覆盖）
+    cfg.conversation.replyGuardEnabled = false;
     cfg.wakeDelayMs = 30;
     cfg.wakeDelayMinMs = 30;
     cfg.wakeDelayMaxMs = 30;

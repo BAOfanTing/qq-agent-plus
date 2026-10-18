@@ -350,6 +350,34 @@ export function consolidationRejectionReason({ isNew = false, existing = [], nex
   return `结果变多（${prev.length}→${list.length} 条、${prevChars}→${nextChars} 字），疑似幻觉`;
 }
 
+/**
+ * 这条消息是不是"明确在问机器人"：私聊、被 @、引用/回复它、文本里提到它在该群的名字。
+ * 只用于"该回却没发"的补救判定 —— 不参与是否唤醒（档位那边有自己的判定）。
+ */
+export function isDirectedAtBot({ kind, triggerEntries = [], persona = {}, selfId = '', accountNickname = '' } = {}) {
+  if (kind === 'private') return true;
+  const names = [persona.selfNickname, persona.botName, accountNickname]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const lowered = names.map((name) => name.toLowerCase());
+  const nameSet = new Set(lowered);
+  return (Array.isArray(triggerEntries) ? triggerEntries : []).some((message) => {
+    if (message?.mentionsSelf === true) return true;
+    const reply = message?.reply;
+    if (reply) {
+      if (selfId && String(reply.senderId || '') === String(selfId)) return true;
+      const repliedName = String(reply.sender || '').trim().toLowerCase();
+      if (repliedName && nameSet.has(repliedName)) return true;
+    }
+    // 引用的原文、展开的合并转发都是"转述"，里面出现名字不等于在叫它
+    //（2026-10-18 审查：B 引用 A 的话、而 A 的话里有机器人名字时曾被误判为"在问它"）
+    const raw = String(message?.text || '');
+    if (/^\[合并转发/.test(raw)) return false;
+    const body = raw.replace(/^\[引用[^\]]*\]/, '').toLowerCase();
+    return lowered.some((name) => body.includes(name));
+  });
+}
+
 export class Orchestrator {
   constructor({
     store,
@@ -1617,6 +1645,142 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * 该回却没发时的补救：私聊 / 被 @ / 引用机器人 / 点名，模型只输出了正文（QQ 里看不到）。
+   * 先做**一次**纠正请求（只给 send_message，避免重新执行别的操作），仍没发就发一条固定说明。
+   * 发送结果不确定（outbox 可能已写出）时一律不动 —— 那种情况交人工核对，绝不补发。
+   */
+  async #ensureDirectedReply({
+    session, messages, ctx, toolDefs, persona, kind, triggerEntries,
+    proactive, manual, signal, runLimits, roundsExhausted
+  }) {
+    if (getConfig().conversation?.replyGuardEnabled === false) {
+      session.replyCorrection = 'skipped';
+      return;
+    }
+    if (proactive || manual) return;
+    if (session.sent.length > 0 || session.visibleReply === true) return;
+    if (!Array.isArray(triggerEntries) || !triggerEntries.length) return;
+    const directed = isDirectedAtBot({
+      kind, triggerEntries, persona,
+      selfId: this.onebot.selfId,
+      accountNickname: this.onebot.selfNickname
+    });
+    if (!directed) return;
+    if (this.store.hasUncertainEffects?.(session.leaseId)) {
+      // 可能已经发出去了：补发会造成重复，交给人工核对
+      session.replyCorrection = 'skipped';
+      return;
+    }
+
+    const fallbackText = roundsExhausted
+      ? '这条我还没处理完，稍后再试。'
+      : '这条我暂时处理不了，稍后再试。';
+    const sendTool = toolDefs.find((tool) => tool.name === 'send_message');
+    // 预算：主循环是"已用 + 本次估算 > 上限"就停，所以这里也要把这次请求的体量算进去，
+    // 否则会把主循环刚刚拒掉的那次调用原样再发一遍（2026-10-18 审查 P2）
+    const lastPromptTokens = Number(session.callUsage?.at(-1)?.promptTokens)
+      || Math.ceil((Number(session.inputEstimateChars) || 0) / 2)
+      || 4000;
+    const budgetLeft = (Number(session.usage?.totalTokens) || 0) + lastPromptTokens < runLimits.maxRunTokens;
+    let sendFailed = false;
+
+    if (sendTool && budgetLeft) {
+      try {
+        const response = await chatCompletionWithRetry({
+          messages: [...messages, {
+            role: 'user',
+            content: '你上一轮把回答写成了正文，没有调用 send_message —— 用户在 QQ 里收不到这段文字。'
+              + '请用 send_message 重新回答：能答就直接答；做不了（功能没启用、没有权限、没有这个工具）就简短说明原因。'
+              + '不要重复执行其它工具，也不要解释这条系统提示。'
+          }],
+          tools: toOpenAiTools([sendTool]),
+          signal,
+          // 用 chat 的思考档位：'reply-correction' 不在 api.thinking 的映射表里，会退回 default（常常是思考开）
+          purpose: 'chat'
+        });
+        addUsage(session.usage, response.usage);
+        session.usage.calls += 1;
+        session.replyCorrectionUsage = response.usage;
+        // 与主循环同口径：兜底渠道换过端点时，成本记到实际渠道；per-call 台账也要有一行
+        session.model = response.model || session.model;
+        if (response.channelChanged && response.originBaseUrl) {
+          session.vendor = vendorOfBaseUrl(getConfig(), response.originBaseUrl) || session.vendor;
+        }
+        session.callUsage ||= [];
+        session.callUsage.push({
+          round: (session.rounds || 0) + 1,
+          promptTokens: Number(response.usage?.prompt_tokens) || 0,
+          cachedTokens: 0,
+          cacheHitRate: 0,
+          completionTokens: Number(response.usage?.completion_tokens) || 0,
+          totalTokens: Number(response.usage?.total_tokens) || 0,
+          correction: true
+        });
+        const rawMessage = response.message || {};
+        let calls = (Array.isArray(rawMessage.tool_calls) ? rawMessage.tool_calls : [])
+          .filter((call) => call && typeof call === 'object')
+          .map((call) => ({
+            name: String(call.function?.name ?? ''),
+            args: typeof call.function?.arguments === 'string'
+              ? call.function.arguments
+              : JSON.stringify(call.function?.arguments ?? {})
+          }));
+        if (!calls.length && typeof rawMessage.content === 'string' && rawMessage.content) {
+          // 少数模型把工具调用写成文本：只在明确是 send_message 时执行
+          calls = parseInlineToolCalls(rawMessage.content)
+            .filter((call) => call?.name === 'send_message')
+            .map((call) => ({ name: 'send_message', args: JSON.stringify(call.args ?? {}) }));
+        }
+        for (const call of calls) {
+          if (call.name !== 'send_message') continue;
+          // 走与主循环同一个执行器：禁言预检、限频、outbox 记账全部复用。
+          // 注意 send_message 对"整批失败"仍返回 ok（失败明细在正文里），所以以
+          // session.sent 是否真的增加判定，而不是看 isError。
+          const before = session.sent.length;
+          const sentResult = await executeTool(toolDefs, ctx, 'send_message', call.args);
+          if (session.sent.length === before) {
+            // 只有"明确被拒"（禁言/限频）才放弃兜底；参数写错、目标非法这类失败仍要发固定说明，
+            // 否则这条消息会一句回复都没有（2026-10-18 审查 P2）
+            const reason = String(sentResult?.content || '');
+            sendFailed = /禁言|限频|频率|太快|muted|rate.?limit/i.test(reason);
+          }
+          if (session.sent.length > 0) break;
+        }
+      } catch (error) {
+        if (signal?.aborted) return;
+        log.warn(`[reply-guard] ${session.chatKey || ''} 纠正请求失败：${error?.message ?? error}`);
+      }
+    }
+
+    if (session.sent.length > 0) {
+      session.replyCorrection = 'corrected';
+      session.finishReason ||= '该回未发，已自动纠正';
+      log.info(`[reply-guard] ${session.chatKey || ''} 首轮未发送 → 已纠正并发出一条`);
+      return;
+    }
+    if (sendFailed) {
+      // 纠正轮的发送被明确拒绝（禁言/限频）：不再补发兜底，避免二次打扰或重复失败
+      session.replyCorrection = 'failed';
+      log.warn(`[reply-guard] ${session.chatKey || ''} 首轮未发送，纠正轮发送被拒（禁言/限频？）`);
+      return;
+    }
+    // 纠正仍没发（或预算不足跳过）：发一条固定说明，绝不转发模型正文
+    try {
+      await executeTool(toolDefs, ctx, 'send_message', JSON.stringify({ messages: [fallbackText] }));
+    } catch (error) {
+      log.warn(`[reply-guard] ${session.chatKey || ''} 兜底发送异常：${error?.message ?? error}`);
+    }
+    if (session.sent.length > 0) {
+      session.replyCorrection = 'fallback';
+      session.finishReason ||= '该回未发，已发送兜底说明';
+      log.info(`[reply-guard] ${session.chatKey || ''} 首轮未发送 → 已发送兜底说明`);
+    } else {
+      session.replyCorrection = 'failed';
+      log.warn(`[reply-guard] ${session.chatKey || ''} 首轮未发送，兜底也失败（禁言/限频？）`);
+    }
+  }
+
   async #runAgent(session, {
     kind,
     chatId,
@@ -2183,6 +2347,13 @@ export class Orchestrator {
     }
 
     signal.throwIfAborted();
+    // 该回却没发：只有正文、没有 send_message（QQ 里看不到）。一次纠正 + 固定兜底。
+    // 放在轮数判定之前：跑满轮数且一条没发，同样属于"该回未发"，兜底文案会区分这两种原因。
+    await this.#ensureDirectedReply({
+      session, messages, ctx, toolDefs, persona, kind, triggerEntries,
+      proactive, manual, signal, runLimits,
+      roundsExhausted: !finish && !completed
+    });
     // 轮次用尽是"干不完活"的护栏，不是"需要人工核对"的故障：与 token 预算同口径，
     // 当作本轮正常收尾（已经说的话照常发出、消息正常 ack），并在会话里标注原因。
     // 不能标成可重试去重跑整轮：一条跑满 maxRounds 的会话重跑同样会跑满，成本放大且无解。

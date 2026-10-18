@@ -25,6 +25,9 @@ function fixture(t, mode = 'legacy') {
   cfg.api.baseUrl = 'https://model.invalid';
   cfg.memory.consolidateEnabled = false;
   cfg.sticker.enabled = false;
+  // 这组用例数的是"时间门控放行了几次模型调用"：关掉「该回没发」的补救，
+  // 否则私聊里只回正文的桩会多出一次纠正调用（该行为由 test/reply-guard.test.mjs 覆盖）
+  cfg.conversation.replyGuardEnabled = false;
   cfg.conversation.mode = mode;
   cfg.wakeDelayMs = 100;
   cfg.wakeDelayMinMs = 100;

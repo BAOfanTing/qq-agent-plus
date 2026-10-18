@@ -157,6 +157,19 @@ payloads in every Session file. The message structure, MIME type and original
 request character count remain visible. Token values come from provider usage
 instead of being estimated from character counts.
 
+## Directed Reply Guard
+
+When a run is triggered by a private message, an @mention, a reply/quote of the
+bot, or a message that names it, and the model ends the run without calling
+`send_message`, the text it produced is never visible in QQ. The orchestrator
+then makes one correction request with `send_message` as the only available
+tool. If that still produces no send, it sends a fixed fallback message instead
+of forwarding the draft.
+
+The guard never runs for proactive or manual runs, never sends when the outbox
+may already contain a delivery, and leaves ordinary group conversations free to
+stay silent. Disable it with `conversation.replyGuardEnabled: false`.
+
 ## Operational Guidance
 
 Start with lifecycle mode on one active group. Compare it with threaded and

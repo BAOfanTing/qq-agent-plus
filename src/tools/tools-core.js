@@ -1390,6 +1390,7 @@ export function buildToolDefs() {
           // 走发送队列（限频/禁言预检/outbox）：群文件在群里可见，与发消息同类
           // （2026-10-07 复审 P2）。
           const sent = await ctx.sender.groupFile(ctx.chatKey, { file, name }, { runId: ctx.session?.leaseId, signal: ctx.signal });
+          if (ctx.session) ctx.session.visibleReply = true;   // 群文件也是可见回复
           return ok({ sent: true, name, fileId: sent.file_id ?? null, note: '文件已发到群文件。' });
         } catch (error) {
           return sendErr(error, {}, `发群文件失败：${error?.message ?? error}`);
@@ -1690,6 +1691,7 @@ export function buildToolDefs() {
           } else {
             await ctx.sender.poke(ctx.chatKey, null, { runId: ctx.session.leaseId, signal: ctx.signal });
           }
+          if (ctx.session) ctx.session.visibleReply = true;   // 拍一拍同样是可见回复
           return ok({ poked: true });
         } catch (error) {
           return sendErr(error);
@@ -1987,6 +1989,7 @@ export function buildToolDefs() {
             seconds,
             label: text.slice(0, 40)
           }, { runId: ctx.session?.leaseId, signal: ctx.signal });
+          if (ctx.session) ctx.session.visibleReply = true;   // 语音也是"回过了"，回复兜底据此判断
           return ok({ sent: true, seconds, note: '语音已发出；不需要再回复这条结果。' });
         } catch (error) {
           return sendErr(error, {}, `${String(error?.message ?? error).slice(0, 120)}（若协议端不支持 record 段，请改用 send_message）`);
