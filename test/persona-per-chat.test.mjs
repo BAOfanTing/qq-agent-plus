@@ -96,6 +96,19 @@ test('归一化：只认规范 chatKey 与白名单字段，坏值直接丢', ()
   });
 });
 
+test('归一化：字符串字段收到对象/数组/数字时直接丢，不写成 [object Object]', () => {
+  const out = normalizePersonaPerChat({
+    'group:100': {
+      customRules: { a: 1 },
+      botName: ['猫猫'],
+      templateId: 123,
+      selfNickname: null,
+      roleText: '正常正文'
+    }
+  });
+  assert.deepEqual(out, { 'group:100': { roleText: '正常正文' } });
+});
+
 test('载入时校验按群的卡 id：认不出来就清掉，空条目一并删除', () => {
   const cfg = {
     persona: base,

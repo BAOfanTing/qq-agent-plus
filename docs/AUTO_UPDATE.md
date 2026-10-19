@@ -33,10 +33,12 @@ timer 每小时唤醒一次，应用配置中的 `intervalHours` 决定是否已
 3. 版本号解析不了（非标准安装）时才退回 GitHub compare 判定方向；比较接口不可用时不提示、
    不部署，等待下次检查，不推测方向，以避免部署错误版本。compare 响应包含 diff，跨版本
    可达 1MB 以上，因此单独放宽到 4MB / 60 秒。
-4. 当前部署 revision 不是 git 提交（如压缩包安装）时保持既有行为：控制台仅作说明、不弹窗，
-   但「立即更新」与自动更新会直接安装最新 Release，安装完成后基线即为 git 提交。
-5. 仍运行旧版本检查逻辑的实例无法自动跨过较大的版本区间（旧代码仍受 512KB compare 上限
-   影响），需要手工执行一次部署脚本；此后自动更新恢复。
+4. `data/deployed-revision` 为空（从未写入或被删除）时保持既有行为：控制台仅作说明、不弹窗，
+   但「立即更新」与自动更新会直接安装最新 Release —— 即使本地版本相同或更高。经 `deploy.sh`
+   从非 git 源码树安装会写入 `source-<UTC>`，它不是空值：本版按本地版本判定，不受影响；
+   仍停在旧版本的实例会拿它去调比较接口并失败。
+5. 仍运行旧版本检查逻辑的实例，以及基线为 `source-…` 的压缩包安装，无法自动跨过较大的版本
+   区间（旧代码仍受 512KB compare 上限影响），需要手工执行一次部署脚本；此后自动更新恢复。
 
 发布流程：推送 `v*` tag 触发 `.github/workflows/release.yml`，该工作流先执行与 CI 相同的检查，
 再创建**草稿** Release。确认无误并发布后，控制台的“发现新版本”弹窗与自动更新才会识别该版本。
@@ -181,7 +183,7 @@ timer 每小时唤醒一次，应用配置中的 `intervalHours` 决定是否已
 
 两种都不会因告警失败再次触发部署，也不会递归创建异常。
 
-“没有新 Release”“当前部署已包含最新 Release”“比较接口不可用”均不计为失败：不发送告警、
+“没有新 Release”“本地版本不低于最新 Release”“无法判定方向”均不计为失败：不发送告警、
 不触发 `disableOnFailure`，仅在状态文件与控制页“更新部署”面板中说明原因。
 
 ## 状态与运维
@@ -194,9 +196,10 @@ data/auto-update-request.json  # 一次性请求（manual / scheduled / probe）
 data/deployed-revision         # 当前部署的 git 提交，deploy.sh 写入
 ```
 
-`updateNotice` 中 `reason` 的取值：`no-release`（尚无 Release）、`ahead-of-release`（当前部署已包含最新 Release）、
-`unknown-deployed`（部署基线不是 git 提交）、`compare-failed`（无法比较方向）、`unreachable`（无法连接 GitHub）、
-`unconfigured`（未配置仓库）。仅当 `available=true` 时弹窗，`version` 为待部署的 Release tag。
+`updateNotice` 中 `reason` 的取值：`no-release`（尚无 Release）、`ahead-of-release`（本地版本不低于最新 Release）、
+`unknown-deployed`（没有 `deployed-revision` 基线）、`compare-failed`（版本号无法解析且比较失败）、
+`unreachable`（无法连接 GitHub）、`unconfigured`（未配置仓库）。仅当 `available=true` 时弹窗，
+`version` 为待部署的 Release tag。
 
 判定使用的 GitHub API 默认为 `api.github.com`；仅测试桩或自建镜像需要设置 `QQ_AGENT_GITHUB_API` 覆盖该地址。
 

@@ -55,22 +55,40 @@ function buildPerChatPatch(rows, currentMap = {}, templates = []) {
       if (old && typeof old === 'object') out[key] = { ...old };
       continue;
     }
-    // 换卡 = 采用这张卡的正文、档位与它自带的附加规则；实例级偏好（名字/参与度）保留
-    const keepOthers = old && typeof old === 'object' ? { ...old } : {};
-    delete keepOthers.roleText;
-    delete keepOthers.changedAt;
-    delete keepOthers.templateId;
-    delete keepOthers.behaviorProfile;
-    delete keepOthers.customRules;
+    // 同一张卡重复保存：保留该群手改的附加规则与显式档位，只去掉服务端维护的 changedAt。
+    // 只有真的换卡才采用新卡的正文/档位/自带规则 —— 否则在控制台点一次「保存设置」
+    // 就会把每群手写的 customRules 静默删掉（2026-10-19 发版前审查）。
+    const oldEntry = old && typeof old === 'object' ? old : {};
+    const dropCardFields = (entry) => {
+      const next = { ...entry };
+      delete next.roleText;
+      delete next.changedAt;
+      delete next.templateId;
+      delete next.behaviorProfile;
+      delete next.customRules;
+      return next;
+    };
     if (picked.startsWith('builtin:')) {
-      out[key] = { ...keepOthers, templateId: picked.slice(8) };
+      const cardId = picked.slice(8);
+      if (oldEntry.templateId === cardId) {
+        out[key] = { ...oldEntry };
+        delete out[key].changedAt;
+        continue;
+      }
+      out[key] = { ...dropCardFields(oldEntry), templateId: cardId };
       continue;
     }
     if (picked.startsWith('custom:')) {
       const tpl = templates.find(([id]) => id === picked.slice(7))?.[1];
       if (!tpl) continue;
-      out[key] = { ...keepOthers, roleText: tpl.text, behaviorProfile: tpl.behaviorProfile || 'legacy' };
-      if (tpl.customRules) out[key].customRules = tpl.customRules;
+      if (!oldEntry.templateId && oldEntry.roleText === tpl.text) {
+        out[key] = { ...oldEntry };
+        delete out[key].changedAt;
+        continue;
+      }
+      const next = { ...dropCardFields(oldEntry), roleText: tpl.text, behaviorProfile: tpl.behaviorProfile || 'legacy' };
+      if (tpl.customRules) next.customRules = tpl.customRules;
+      out[key] = next;
     }
   }
   return out;

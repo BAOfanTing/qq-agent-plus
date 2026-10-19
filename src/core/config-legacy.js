@@ -1068,20 +1068,23 @@ const PERSONA_OVERRIDE_CARD_CAP = 64;
 export function normalizePersonaPerChat(raw) {
   if (!isPlainObject(raw)) return {};
   const out = {};
+  // 字符串字段只认字符串：手改成对象/数组时 String() 会写出 "[object Object]" 进提示词，
+  // 与"坏值直接丢"的 fail-closed 约定相反（2026-10-19 发版前审查）。
+  const text = (value, cap) => (typeof value === 'string' ? value.trim().slice(0, cap) : '');
   for (const [key, value] of Object.entries(raw)) {
     if (!PERSONA_CHAT_KEY_RE.test(key) || !isPlainObject(value)) continue;
     const entry = {};
-    const card = String(value.templateId ?? '').trim().slice(0, PERSONA_OVERRIDE_CARD_CAP);
+    const card = text(value.templateId, PERSONA_OVERRIDE_CARD_CAP);
     if (card) entry.templateId = card;
-    const roleText = String(value.roleText ?? '').trim().slice(0, PERSONA_OVERRIDE_TEXT_CAP);
+    const roleText = text(value.roleText, PERSONA_OVERRIDE_TEXT_CAP);
     if (roleText) entry.roleText = roleText;
-    const botName = String(value.botName ?? '').trim().slice(0, PERSONA_OVERRIDE_NAME_CAP);
+    const botName = text(value.botName, PERSONA_OVERRIDE_NAME_CAP);
     if (botName) entry.botName = botName;
-    const selfNickname = String(value.selfNickname ?? '').trim().slice(0, PERSONA_OVERRIDE_NAME_CAP);
+    const selfNickname = text(value.selfNickname, PERSONA_OVERRIDE_NAME_CAP);
     if (selfNickname) entry.selfNickname = selfNickname;
     if (['legacy', 'grounded'].includes(value.behaviorProfile)) entry.behaviorProfile = value.behaviorProfile;
     if (['low', 'medium', 'high'].includes(value.participation)) entry.participation = value.participation;
-    const customRules = String(value.customRules ?? '').trim().slice(0, PERSONA_OVERRIDE_RULE_CAP);
+    const customRules = text(value.customRules, PERSONA_OVERRIDE_RULE_CAP);
     if (customRules) entry.customRules = customRules;
     // 内部字段：这张覆盖最后一次改变的时间（控制台保存时写，用于"刚换过人设"的提醒）
     // 只接受过去的时间（客户端/手改塞一个未来值会让"刚换过人设"的提醒永远挂着）
@@ -1110,7 +1113,8 @@ function migrateConfig(parsed) {
   // 必须在这里显式补空串（deepMerge 之前）：默认值里带的是 "xiaojingyu"，
   // 让默认值补上的话，老实例（例如选的是猫娘）载入后会被当成绑定了默认卡、正文被换掉。
   // 空串 = 未绑定（正文按自定义处理，不改动）；在控制台重选一次卡就会自动绑上。
-  if (out.persona.templateId === undefined) out.persona.templateId = '';
+  // null 也要补：deepMerge 把 null 当"没给"、会退回默认卡，随后默认卡正文会盖掉自定义正文。
+  if (out.persona.templateId === undefined || out.persona.templateId === null) out.persona.templateId = '';
   // ── 按群人设（personaPerChat）──
   // 键必须是规范 chatKey（group:<数字> / private:<数字>），值只收白名单字段。
   // 手改坏、键写错、字段超长的条目一律丢掉 —— 宁可少一条覆盖，也不让坏配置进提示词。

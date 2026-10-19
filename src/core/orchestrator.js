@@ -117,7 +117,7 @@ import { budgetStatus } from './budget.js';
 import { readOwnerUin } from './notify-owner.js';
 import { buildReminderNote, reminderNoteCost } from './reminders.js';
 import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey } from './util.js';
-import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from '../llm/prompt.js';
+import { buildSystemPrompt, buildUserPrompt, isAtMe, resolveContextTier } from '../llm/prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
 import { normalizeMid } from '../tools/tools-core.js';
@@ -350,6 +350,17 @@ export function consolidationRejectionReason({ isNew = false, existing = [], nex
   return `结果变多（${prev.length}→${list.length} 条、${prevChars}→${nextChars} 字），疑似幻觉`;
 }
 
+/** 裸名字要独立成词：两边都不能紧贴名字字符，否则「小鲸」会吃掉「小鲸鱼」。 */
+function containsStandaloneName(text, name) {
+  const isNameChar = (char) => Boolean(char) && /[\w\u3400-\u9fff]/.test(char);
+  let index = text.indexOf(name);
+  while (index !== -1) {
+    if (!isNameChar(text[index - 1]) && !isNameChar(text[index + name.length])) return true;
+    index = text.indexOf(name, index + 1);
+  }
+  return false;
+}
+
 /**
  * 这条消息是不是"明确在问机器人"：私聊、被 @、引用/回复它、文本里提到它在该群的名字。
  * 只用于"该回却没发"的补救判定 —— 不参与是否唤醒（档位那边有自己的判定）。
@@ -369,12 +380,18 @@ export function isDirectedAtBot({ kind, triggerEntries = [], persona = {}, selfI
       const repliedName = String(reply.sender || '').trim().toLowerCase();
       if (repliedName && nameSet.has(repliedName)) return true;
     }
-    // 引用的原文、展开的合并转发都是"转述"，里面出现名字不等于在叫它
+    // 引用的原文、展开的合并转发、卡片聊天记录都是"转述"，里面出现名字不等于在叫它
     //（2026-10-18 审查：B 引用 A 的话、而 A 的话里有机器人名字时曾被误判为"在问它"）
     const raw = String(message?.text || '');
-    if (/^\[合并转发/.test(raw)) return false;
-    const body = raw.replace(/^\[引用[^\]]*\]/, '').toLowerCase();
-    return lowered.some((name) => body.includes(name));
+    if (/^\[(?:合并转发|卡片聊天记录)/.test(raw)) return false;
+    const body = raw.replace(/^\[引用[^\]]*\]/, '');
+    // @昵称 / @QQ号 / CQ:at 与提示词同口径。字符串上报时 mentionsSelf 恒为 false，
+    // 只能靠这里兜住（2026-10-19 发版前审查：此前会漏掉 CQ 码形态的 @）。
+    if (isAtMe(body, { selfNickname: persona.selfNickname, botName: persona.botName, selfId })) {
+      return true;
+    }
+    const lowerBody = body.toLowerCase();
+    return lowered.some((name) => containsStandaloneName(lowerBody, name));
   });
 }
 
@@ -1745,7 +1762,8 @@ export class Orchestrator {
             const reason = String(sentResult?.content || '');
             sendFailed = /禁言|限频|频率|太快|muted|rate.?limit/i.test(reason);
           }
-          if (session.sent.length > 0) break;
+          // 不 break：同一纠正响应里若有多条 send_message（模型没合成一个数组），后半句同样要发；
+          // 主循环也是逐条执行，这里保持同一口径。
         }
       } catch (error) {
         if (signal?.aborted) return;

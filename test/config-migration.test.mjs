@@ -313,3 +313,12 @@ test('外观 v3：新版键在缺省时由默认值补齐（老配置升上来�
   assert.equal(first.ui.noMotion, false);
   assert.deepEqual(first.ui.tweaks, {});
 });
+
+test('人设 templateId 写成 null：按未绑定处理，不退回默认卡', () => {
+  // deepMerge 把 null 当"没给"；不先归一成空串的话，默认卡的正文会盖掉自定义正文
+  const { full } = loadStoreInNewProcess({
+    persona: { templateId: null, roleText: '我自己的正文', botName: '小鲸鱼' }
+  });
+  assert.equal(full.persona.templateId, '', 'null 要归一成未绑定');
+  assert.equal(full.persona.roleText, '我自己的正文', '自定义正文不能被默认卡覆盖');
+});

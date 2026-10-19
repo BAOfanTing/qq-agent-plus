@@ -323,9 +323,10 @@ The installer also installs a separate GitHub update service and timer. Automati
 disabled by default and can be enabled from the “控制 -> 更新部署” page after an administrator is
 configured. Hints and deployments follow **published Releases** only (drafts, pre-releases and
 ordinary commits on `main` do not count) and target the commit of that tag: unit tests run first,
-then deployment is delegated to `deploy.sh`. A deployment that already contains the latest Release
-is not rolled back, and an indeterminate comparison performs no action. On failure the update rolls
-back, disables automatic updates and notifies the administrator by private message.
+then deployment is delegated to `deploy.sh`. A deployment whose local version is not lower than the
+latest Release is considered current and is not rolled back; commit comparison is used only when the
+local version cannot be parsed, and an indeterminate comparison performs no action. On failure the
+update rolls back, disables automatic updates and notifies the administrator by private message.
 See [docs/AUTO_UPDATE.md](docs/AUTO_UPDATE.md).
 
 ## Operations

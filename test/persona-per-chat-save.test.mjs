@@ -49,6 +49,33 @@ test('同卡重复保存：不带旧 changedAt（时间戳由服务端维护）'
   assert.deepEqual(out['group:123'], { templateId: 'maoniang' });
 });
 
+test('同一张内置卡重复保存：该群手改的规则与显式档位不能被删掉', () => {
+  const old = {
+    templateId: 'maoniang',
+    behaviorProfile: 'grounded',
+    customRules: '这个群人比较正经，少开玩笑',
+    botName: '猫猫'
+  };
+  assert.deepEqual(save('builtin:maoniang', { 'group:123': old }), { 'group:123': old });
+});
+
+test('同一张自定义卡重复保存：手改的附加规则保留', () => {
+  const old = {
+    roleText: '自定义A正文',
+    behaviorProfile: 'grounded',
+    customRules: '本群只聊技术',
+    participation: 'low'
+  };
+  assert.deepEqual(save('custom:custom_0', { 'group:123': old }), { 'group:123': old });
+});
+
+test('换到另一张自定义卡：旧卡的手改规则随旧卡一起清掉', () => {
+  const out = save('custom:custom_1', {
+    'group:123': { roleText: '自定义A正文', behaviorProfile: 'grounded', customRules: 'A 的旧规则' }
+  });
+  assert.deepEqual(out['group:123'], { roleText: '自定义B正文', behaviorProfile: 'legacy' });
+});
+
 test('只有实例级字段的旧条目：给「保持」项，保存时原样保留', () => {
   const entry = { participation: 'low', botName: '阿猫' };
   const options = perChatOptions(entry, templates);

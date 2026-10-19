@@ -106,6 +106,27 @@ test('报告场景：私聊问空间动态、首轮只回正文 → 纠正后发
   assert.equal(f.lastSession()?.status, 'done');
 });
 
+test('纠正轮返回两条 send_message：都要发出，不能静默丢掉后半句', async (t) => {
+  const f = fixture(t);
+  const twoSends = {
+    choices: [{
+      message: {
+        tool_calls: [
+          { id: 'c1', type: 'function', function: { name: 'send_message', arguments: JSON.stringify({ messages: ['第一句'] }) } },
+          { id: 'c2', type: 'function', function: { name: 'send_message', arguments: JSON.stringify({ messages: ['第二句'] }) } }
+        ]
+      }
+    }],
+    usage: { total_tokens: 12 }
+  };
+  f.responses.push(f.textReply(), twoSends);
+  f.append('m1');
+  await f.wake();
+
+  assert.deepEqual(f.sent, ['第一句', '第二句']);
+  assert.equal(f.lastSession()?.replyCorrection, 'corrected');
+});
+
 test('纠正轮仍只回正文 → 发固定兜底句，恰好一条', async (t) => {
   const f = fixture(t);
   f.responses.push(f.textReply(), f.textReply('我还是只写正文'));
@@ -224,8 +245,10 @@ test('纠正请求的 usage 记进会话（成本不能漏账）', async (t) => 
   f.responses.push(f.textReply(), f.sendReply());
   f.append('m1');
   await f.wake();
-  assert.equal(f.lastSession()?.replyCorrectionUsage?.total_tokens, 12);
-  assert.ok((f.lastSession()?.usage?.calls || 0) >= 2, '两次模型调用都要计入 calls');
+  const session = f.lastSession();
+  assert.equal(session?.replyCorrectionUsage?.total_tokens, 12);
+  assert.equal(session?.usage?.calls, 2, '两次模型调用都要计入 calls（不能漏记也不能重复记）');
+  assert.equal(session?.usage?.totalTokens, 22, '10 + 12，纠正请求不能重复记账');
 });
 
 test('纠正指令不进会话消息流 / lifecycle transcript（下一轮不该看到内部提示）', async (t) => {
@@ -264,6 +287,37 @@ test('判定函数：引用第三方的原文、展开的合并转发里出现�
   assert.equal(isDirectedAtBot({ ...base, triggerEntries: [{ reply: { senderId: '888' } }] }), true, '引用机器人算');
 });
 
+test('判定函数：CQ 码的 @ 与短名字边界', () => {
+  const base = { kind: 'group', persona: { botName: '小鲸鱼', selfNickname: '' }, selfId: '888', accountNickname: 'bot' };
+  assert.equal(isDirectedAtBot({
+    ...base,
+    triggerEntries: [{ text: '[CQ:at,qq=888] 你能发空间动态吗' }]
+  }), true, '字符串上报没有 mentionsSelf，CQ:at 也要算叫它');
+  assert.equal(isDirectedAtBot({
+    ...base,
+    triggerEntries: [{ text: '[CQ:at,qq=999] 你能发空间动态吗' }]
+  }), false, '@的是别人');
+
+  const shortName = { ...base, persona: { botName: '小鲸', selfNickname: '' } };
+  assert.equal(isDirectedAtBot({
+    ...shortName,
+    triggerEntries: [{ text: '@小鲸鱼 今天吃什么' }]
+  }), false, '@小鲸鱼 不算在叫「小鲸」');
+  assert.equal(isDirectedAtBot({
+    ...shortName,
+    triggerEntries: [{ text: '@小鲸 在吗' }]
+  }), true);
+  assert.equal(isDirectedAtBot({
+    ...shortName,
+    triggerEntries: [{ text: '小鲸鱼真可爱' }]
+  }), false, '裸名字也要独立成词');
+
+  assert.equal(isDirectedAtBot({
+    ...base,
+    triggerEntries: [{ text: '[卡片聊天记录] A：小鲸鱼在吗' }]
+  }), false, '卡片聊天记录同样是转述');
+});
+
 test('纠正请求沿用该群生效的人设（按群人设）', async (t) => {
   const f = fixture(t, { group: true });
   f.cfg.personaPerChat = { 'group:1': { templateId: 'maoniang' } };
@@ -276,9 +330,11 @@ test('纠正请求沿用该群生效的人设（按群人设）', async (t) => {
   assert.match(String(f.bodies[1].messages?.[0]?.content || ''), /二次元猫娘/, '纠正请求的 system prompt 仍用该群的卡');
 });
 
-test('纠正轮发送因"网络错误"失败：仍发兜底说明（不能一句都没有）', async (t) => {
+test('纠正轮发送明确失败（连接被拒）：仍发兜底说明（不能一句都没有）', async (t) => {
   const f = fixture(t);
-  f.sender.failReason = 'network error';
+  // 明确失败（不是超时/5xx 那种"可能已发出"）：允许再试一次兜底。
+  // 不确定的失败由发送队列的 hasUncertainEffects 挡住，另有专门用例。
+  f.sender.failReason = 'ECONNREFUSED';
   f.sender.failNext = true;                       // 纠正轮发送失败一次
   f.responses.push(f.textReply(), f.sendReply());
   f.append('m1');

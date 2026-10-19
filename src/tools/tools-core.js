@@ -1465,6 +1465,7 @@ export function buildToolDefs() {
             albumWriteQuota.refund(ctx.chatKey, reservedAt);
             throw error;
           }
+          if (ctx.session) ctx.session.visibleReply = true;   // 点赞也是可见动作
           return ok({ liked: true, note: '点赞成功。' });
         } catch (error) {
           return err(`相册点赞失败：${error?.message ?? error}`);
@@ -1505,6 +1506,7 @@ export function buildToolDefs() {
             albumWriteQuota.refund(ctx.chatKey, reservedAt);
             throw error;
           }
+          if (ctx.session) ctx.session.visibleReply = true;   // 评论所有人可见
           return ok({ commented: true, content, note: '评论已发。' });
         } catch (error) {
           return err(`相册评论失败：${error?.message ?? error}`);
@@ -1552,6 +1554,7 @@ export function buildToolDefs() {
             albumName = String(first.name ?? first.album_name ?? '');
           }
           await ctx.sender.albumPhoto(ctx.chatKey, { file, albumId, albumName }, { runId: ctx.session?.leaseId, signal: ctx.signal });
+          if (ctx.session) ctx.session.visibleReply = true;   // 传相册也是可见动作
           return ok({ uploaded: true, albumId, note: '已传进群相册（所有人都能看到）。' });
         } catch (error) {
           return sendErr(error, {}, `传相册失败：${error?.message ?? error}`);
