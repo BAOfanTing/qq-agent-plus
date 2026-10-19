@@ -9,7 +9,7 @@ process.env.QQ_AGENT_DATA_DIR = root;
 
 const {
   parseGithubRepo, checkForUpdate, ignoreVersion, githubApiBase,
-  parseVersion, compareVersions, readLocalVersion
+  parseVersion, compareVersions, readLocalVersion, readVersionAt
 } = await import('../src/update-notice.js');
 const { readAutoUpdateState } = await import('../src/auto-update.js');
 
@@ -91,6 +91,14 @@ test('parses GitHub repository slugs', () => {
 test('reads the version of the deployment that is running', () => {
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   assert.equal(readLocalVersion(), String(pkg.version));
+});
+
+test('reads the version of an explicit app directory', () => {
+  // 更新器按 --app-dir 读版本；这里直接覆盖那条路径，不依赖模块所在树
+  const dir = fs.mkdtempSync(path.join(root, 'app-version-'));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: '1.2.3' }));
+  assert.equal(readVersionAt(dir), '1.2.3');
+  assert.equal(readVersionAt(path.join(dir, 'missing')), '', '没有 package.json 时回落空串');
 });
 
 test('parses and compares release versions', () => {
