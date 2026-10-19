@@ -350,12 +350,21 @@ export function consolidationRejectionReason({ isNew = false, existing = [], nex
   return `结果变多（${prev.length}→${list.length} 条、${prevChars}→${nextChars} 字），疑似幻觉`;
 }
 
-/** 裸名字要独立成词：两边都不能紧贴名字字符，否则「小鲸」会吃掉「小鲸鱼」。 */
+/**
+ * 裸名字要独立成词：左边不能紧贴名字字符，否则「小鲸」会吃掉「小鲸鱼」。
+ * 右边分两档：中文没有空格，3 字及以上的名字允许直接接正文（「小鲸鱼在吗」）；
+ * 2 字以内的短名仍要求右边界，否则「小鲸」会在「小鲸鱼」里误命中。
+ * 紧跟在 @ 后面的出现交给 isAtMe（它要求名字右侧有边界）。
+ */
 function containsStandaloneName(text, name) {
   const isNameChar = (char) => Boolean(char) && /[\w\u3400-\u9fff]/.test(char);
   let index = text.indexOf(name);
   while (index !== -1) {
-    if (!isNameChar(text[index - 1]) && !isNameChar(text[index + name.length])) return true;
+    const before = text[index - 1];
+    if (before !== '@' && !isNameChar(before)) {
+      const after = text[index + name.length];
+      if (!isNameChar(after) || name.length >= 3) return true;
+    }
     index = text.indexOf(name, index + 1);
   }
   return false;

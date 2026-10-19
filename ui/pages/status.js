@@ -127,7 +127,7 @@ function renderUpdateCheckNote(update = {}) {
       + `（${esc(short(check.deployed))}），无需更新。`;
   }
   if (check.reason === 'unknown-deployed') {
-    return `上次更新检查${when}：当前部署不是 git 提交（可能是压缩包安装），无法比较版本`
+    return `上次更新检查${when}：没有部署基线（deployed-revision 为空），无法判断当前版本`
       + `${check.version ? `；最新 Release 为 ${esc(check.version)}，可用「立即更新」安装该版本` : ''}。`;
   }
   if (check.reason === 'compare-failed') {

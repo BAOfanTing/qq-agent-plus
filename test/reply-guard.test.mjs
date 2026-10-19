@@ -276,6 +276,8 @@ test('判定函数：引用第三方的原文、展开的合并转发里出现�
   const base = { kind: 'group', persona, selfId: '888', accountNickname: 'bot' };
   assert.equal(isDirectedAtBot({ ...base, triggerEntries: [{ text: '今天天气不错' }] }), false);
   assert.equal(isDirectedAtBot({ ...base, triggerEntries: [{ text: '小鲸鱼 在吗' }] }), true);
+  assert.equal(isDirectedAtBot({ ...base, triggerEntries: [{ text: '小鲸鱼在吗' }] }), true,
+    '中文名字后面通常没有空格，直接接正文也要算');
   assert.equal(isDirectedAtBot({
     ...base,
     triggerEntries: [{ text: '[引用#12·A：小鲸鱼今天怎么不说话]估计在忙', reply: { senderId: '7', sender: 'A' } }]

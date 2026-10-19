@@ -324,9 +324,10 @@ disabled by default and can be enabled from the “控制 -> 更新部署” pag
 configured. Hints and deployments follow **published Releases** only (drafts, pre-releases and
 ordinary commits on `main` do not count) and target the commit of that tag: unit tests run first,
 then deployment is delegated to `deploy.sh`. A deployment whose local version is not lower than the
-latest Release is considered current and is not rolled back; commit comparison is used only when the
-local version cannot be parsed, and an indeterminate comparison performs no action. On failure the
-update rolls back, disables automatic updates and notifies the administrator by private message.
+latest Release is considered current and is not rolled back (installations without a deployment
+baseline are excepted and install the latest Release directly); commit comparison is used only when
+the local version cannot be parsed, and an indeterminate comparison performs no action. On failure
+the update rolls back, disables automatic updates and notifies the administrator by private message.
 See [docs/AUTO_UPDATE.md](docs/AUTO_UPDATE.md).
 
 ## Operations
