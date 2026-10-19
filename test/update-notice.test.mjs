@@ -101,6 +101,9 @@ test('parses and compares release versions', () => {
   assert.equal(compareVersions('v0.9.1', '0.9.1'), 0);
   assert.equal(compareVersions('0.10.0', '0.9.9'), 1);
   assert.equal(compareVersions('9.9.9-beta.1', 'v9.9.9'), -1, '预发布低于同号正式版');
+  assert.equal(compareVersions('9.9.9-beta.10', '9.9.9-beta.9'), 1, '预发布数字段按数值比');
+  assert.equal(compareVersions('9.9.9-beta', '9.9.9-beta.1'), -1, '段数少的预发布更低');
+  assert.equal(compareVersions('9.9.9-1', '9.9.9-alpha'), -1, '数字标识低于字母标识');
   assert.equal(compareVersions('nightly', 'v9.9.9'), null);
 });
 
@@ -153,13 +156,15 @@ test('the same version is "current", never a rollback', async () => {
 });
 
 test('a local prerelease is older than the same stable release', async () => {
+  const github = fakeGitHub();
   const notice = await checkForUpdate(caseDir(), CONFIG, {
-    fetchImpl: fakeGitHub(),
+    fetchImpl: github,
     force: true,
     localVersion: '9.9.9-beta.1'
   });
   assert.equal(notice.available, true);
   assert.equal(notice.reason, '');
+  assert.equal(compareCalls(github), 0, '版本号能解析就不走 compare');
 });
 
 test('compare is only a fallback when the local version cannot be parsed', async () => {
@@ -291,7 +296,8 @@ test('serves cached results within the TTL and refreshes once the baseline moves
 
   const cached = await checkForUpdate(dir, CONFIG, {
     fetchImpl: github,
-    now: Number(first.checkedAt) + 60_000
+    now: Number(first.checkedAt) + 60_000,
+    localVersion: '9.9.9'
   });
   assert.equal(cached.cached, true);
   assert.equal(github.calls.length, callsAfterFirst, '缓存命中时不请求 GitHub');
@@ -300,10 +306,34 @@ test('serves cached results within the TTL and refreshes once the baseline moves
   fs.writeFileSync(path.join(dir, 'deployed-revision'), `${'1'.repeat(40)}\n`);
   const refreshed = await checkForUpdate(dir, CONFIG, {
     fetchImpl: github,
-    now: Number(first.checkedAt) + 60_000
+    now: Number(first.checkedAt) + 60_000,
+    localVersion: '9.9.9'
   });
   assert.equal(refreshed.cached, undefined);
   assert.ok(github.calls.length > callsAfterFirst);
+});
+
+test('a changed local version invalidates the cached verdict', async () => {
+  const dir = caseDir();
+  const github = fakeGitHub();
+  const first = await checkForUpdate(dir, CONFIG, {
+    fetchImpl: github,
+    force: true,
+    localVersion: '9.9.9'
+  });
+  assert.equal(first.available, false);
+
+  // 版本从"已是最新"变成"更旧"（手工替换源码没走 deploy.sh，deployed-revision 没变）：
+  // 若仍命中缓存，就会漏掉真实更新；反过来则会回退领先的代码。
+  const callsAfterFirst = github.calls.length;
+  const second = await checkForUpdate(dir, CONFIG, {
+    fetchImpl: github,
+    now: Number(first.checkedAt) + 60_000,
+    localVersion: '0.8.5'
+  });
+  assert.equal(second.cached, undefined, 'localVersion 也是缓存键');
+  assert.equal(second.available, true);
+  assert.ok(github.calls.length > callsAfterFirst, '版本变了必须重新检查');
 });
 
 test('the GitHub API base can be pointed elsewhere for tests and mirrors', () => {

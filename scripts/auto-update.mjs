@@ -18,7 +18,7 @@ import {
   normalizeUpdateNetworkSettings,
   retryUpdateOperation
 } from '../src/update-network.js';
-import { checkForUpdate, githubApiBase } from '../src/update-notice.js';
+import { checkForUpdate, githubApiBase, readVersionAt } from '../src/update-notice.js';
 import { readJsonBounded } from '../src/core/http-body.js';
 
 const { values } = parseArgs({
@@ -868,7 +868,12 @@ async function run() {
   // 判定与控制台弹窗共用 checkForUpdate，避免两边口径不一致。
   // 手动 update-now 是明确的重试意图：绕过"忽略该版本"——否则更新失败一次之后
   // 同名 Release 永远 no-update，只能手改 state 文件（Issue #7 踩到的坑）。
-  const notice = await checkForUpdate(dataDir, cfg, { force: mode === 'manual' });
+  // 版本判定读的是**这次要更新的那棵树**（--app-dir），不是更新器脚本所在树：
+  // 两者在标准部署下相同，但显式传入才能覆盖"从别处运行更新器"和端到端用例。
+  const notice = await checkForUpdate(dataDir, cfg, {
+    force: mode === 'manual',
+    localVersion: readVersionAt(appDir) || undefined
+  });
   targetVersion = releaseTarget(notice, mode === 'manual' ? '' : previous?.ignoredVersion);
   if (!targetVersion) {
     console.log(`[auto-update] no released version to deploy (${notice?.reason || 'unknown'})`);

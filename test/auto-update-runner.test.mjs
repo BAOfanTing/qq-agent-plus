@@ -12,6 +12,10 @@ import {
 } from '../src/auto-update.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// 版本号主判定后，"没有可部署版本"的用例要给出与运行版本相同的假 Release tag，
+// 否则 0.9.1 < v9.9.9 会被判成"有更新"，用例测的就不是 no-update 了。
+const LOCAL_VERSION = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8')).version;
+const LOCAL_TAG = `v${LOCAL_VERSION}`;
 
 function writeDeployment(appDir, dataDir) {
   fs.writeFileSync(path.join(appDir, '.deployment.json'), JSON.stringify({
@@ -180,11 +184,15 @@ test('scheduled updater uses the persistent Git cache and records no-update', as
     server: { host: '127.0.0.1', port: 3210, token: 'token' }
   }));
   fs.writeFileSync(path.join(dataDir, 'deployed-revision'), `${revision}\n`);
+  // 更新器读的是 --app-dir 这棵树的版本；给它一个 package.json，覆盖"显式传入"的路径
+  fs.writeFileSync(path.join(appDir, 'package.json'), JSON.stringify({ version: LOCAL_VERSION }));
   writeDeployment(appDir, dataDir);
 
+  const gitLog = path.join(root, 'git.log');
   const fakeGit = path.join(binDir, 'git');
   fs.writeFileSync(fakeGit, `#!/bin/sh
 args="$*"
+[ -n "$FAKE_GIT_LOG" ] && printf '%s\\n' "$args" >> "$FAKE_GIT_LOG"
 case "$args" in
   *" remote") printf '%s\\n' 'origin' ;;
   *"remote set-url origin"*) ;;
@@ -195,13 +203,13 @@ case "$args" in
 esac
 `, { mode: 0o700 });
 
-  const github = await startFakeGitHub({ status: 'identical' });
+  const github = await startFakeGitHub({ status: 'identical', tag: LOCAL_TAG });
   t.after(() => github.close());
   const result = runUpdater({
     appDir,
     dataDir,
     binDir,
-    env: { QQ_AGENT_GITHUB_API: github.base },
+    env: { FAKE_GIT_LOG: gitLog, QQ_AGENT_GITHUB_API: github.base },
     timeout: 10000
   });
   assert.equal(result.status, 0, result.stderr);
@@ -216,6 +224,9 @@ esac
   assert.ok(state.lastCheckAt > 0);
   assert.ok(state.completedAt >= state.lastCheckAt);
   assert.equal(fs.existsSync(autoUpdatePaths(dataDir).lock), false);
+  const gitCalls = fs.readFileSync(gitLog, 'utf8');
+  assert.doesNotMatch(gitCalls, /\bfetch\b/, '版本相同不解析目标：不 fetch');
+  assert.doesNotMatch(gitCalls, /rev-parse/, '版本相同不解析目标提交');
 });
 
 test('no published release means the updater never fetches or deploys', async (t) => {
@@ -421,7 +432,7 @@ case "$args" in
 esac
 `, { mode: 0o700 });
 
-  const github = await startFakeGitHub({ status: 'identical' });
+  const github = await startFakeGitHub({ status: 'identical', tag: LOCAL_TAG });
   t.after(() => github.close());
   const result = runUpdater({
     appDir,
@@ -1126,7 +1137,7 @@ const posixOnly = { skip: process.platform === 'win32' ? '需要 POSIX 假 git �
 
 test('自动更新锁：读不出 pid 的锁在宽限期内不被抢，做旧后可以接管', posixOnly, async (t) => {
   const { appDir, dataDir, binDir } = seedIdleUpdater(t, 'qq-update-stale-');
-  const github = await startFakeGitHub({ status: 'identical' });
+  const github = await startFakeGitHub({ status: 'identical', tag: LOCAL_TAG });
   t.after(() => github.close());
   const env = { QQ_AGENT_GITHUB_API: github.base };
   const lockFile = autoUpdatePaths(dataDir).lock;
@@ -1151,7 +1162,7 @@ test('自动更新锁：读不出 pid 的锁在宽限期内不被抢，做旧后
 
 test('自动更新锁：接管先抢互斥文件；遗留互斥过 5 分钟可被清掉', posixOnly, async (t) => {
   const { appDir, dataDir, binDir } = seedIdleUpdater(t, 'qq-update-takeover-');
-  const github = await startFakeGitHub({ status: 'identical' });
+  const github = await startFakeGitHub({ status: 'identical', tag: LOCAL_TAG });
   t.after(() => github.close());
   const env = { QQ_AGENT_GITHUB_API: github.base };
   const lockFile = autoUpdatePaths(dataDir).lock;

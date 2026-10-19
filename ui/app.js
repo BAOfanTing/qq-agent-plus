@@ -666,12 +666,14 @@ async function checkUpdateNotice() {
 function openUpdateNoticeDialog(notice) {
   const dialog = $('#update-notice');
   if (!dialog) return;
-  const short = (value) => String(value || '').slice(0, 7);
+  // deployed 是提交 SHA，截 7 位；revision 是 Release tag，不能按 SHA 截断
+  //（v0.10.10 截成 v0.10.1 会被读成另一个版本）
+  const shortSha = (value) => String(value || '').slice(0, 7);
   state.updateNoticeVersion = String(notice.version || '');
   $('#update-notice-title').textContent = notice.version ? `发现新版本 ${notice.version}` : '发现新版本';
   $('#update-notice-sub').textContent = [
     String(notice.name || '').trim(),
-    `当前 ${short(notice.deployed) || '未知'} → 最新 ${short(notice.revision) || '未知'}`,
+    `当前 ${shortSha(notice.deployed) || '未知'} → 最新 ${String(notice.revision || '').trim() || '未知'}`,
     Number(notice.commitCount) > 0 ? `${Number(notice.commitCount)} 个新提交` : ''
   ].filter(Boolean).join(' · ');
   $('#update-notice-notes').innerHTML = String(notice.body || '').trim()

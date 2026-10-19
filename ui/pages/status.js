@@ -109,7 +109,7 @@ function renderUpdateCheckNote(update = {}) {
   const when = check.checkedAt ? `（${esc(fmtTime(check.checkedAt))}）` : '';
   if (check.available) {
     return `上次更新检查${when}：发现新版本${check.version ? ` ${esc(check.version)}` : ''}`
-      + `（当前 ${esc(short(check.deployed))} → 最新 ${esc(short(check.revision))}`
+      + `（当前 ${esc(short(check.deployed))} → 最新 ${esc(String(check.revision || '-'))}`
       + `${Number(check.commitCount) > 0 ? `，${Number(check.commitCount)} 个新提交` : ''}）。`;
   }
   if (check.reason === 'unconfigured') {
@@ -120,8 +120,11 @@ function renderUpdateCheckNote(update = {}) {
       + '（只有发布 Release 才算新版本，branch 上的日常提交不会提示）。';
   }
   if (check.reason === 'ahead-of-release') {
-    return `上次更新检查${when}：当前部署已包含最新 Release`
-      + `${check.version ? ` ${esc(check.version)}` : ''}（${esc(short(check.deployed))}），无需更新。`;
+    // 新口径是「本地版本 >= Release 版本」，不再断言提交层面"已包含"（版本相等但提交
+    // 分叉的部署也会落到这里；文案不能比实际保证更强）。
+    return `上次更新检查${when}：本地版本${check.localVersion ? ` ${esc(check.localVersion)}` : ''}`
+      + `不低于最新 Release${check.version ? ` ${esc(check.version)}` : ''}`
+      + `（${esc(short(check.deployed))}），无需更新。`;
   }
   if (check.reason === 'unknown-deployed') {
     return `上次更新检查${when}：当前部署不是 git 提交（可能是压缩包安装），无法比较版本`

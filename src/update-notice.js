@@ -51,6 +51,33 @@ export function parseVersion(value) {
   };
 }
 
+/** 预发布标识按 semver 比较：数字段按数值、数字低于字母、前缀相同则段数少的更低。 */
+function comparePrerelease(left, right) {
+  if (left === right) return 0;
+  if (!left) return 1;  // 正式版高于同号预发布
+  if (!right) return -1;
+  const a = left.split('.');
+  const b = right.split('.');
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const x = a[index];
+    const y = b[index];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const xNumeric = /^\d+$/.test(x);
+    const yNumeric = /^\d+$/.test(y);
+    if (xNumeric && yNumeric) {
+      const nx = Number(x);
+      const ny = Number(y);
+      if (nx !== ny) return nx < ny ? -1 : 1;
+    } else if (xNumeric !== yNumeric) {
+      return xNumeric ? -1 : 1;  // 数字标识低于字母标识
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 /** 语义化比较：负数表示 left 更旧，0 相等，正数表示 left 更新；任一解析失败返回 null。 */
 export function compareVersions(left, right) {
   const a = parseVersion(left);
@@ -59,20 +86,22 @@ export function compareVersions(left, right) {
   for (const key of ['major', 'minor', 'patch']) {
     if (a[key] !== b[key]) return a[key] < b[key] ? -1 : 1;
   }
-  if (a.prerelease === b.prerelease) return 0;
-  if (!a.prerelease) return 1; // 正式版高于同号预发布
-  if (!b.prerelease) return -1;
-  return a.prerelease < b.prerelease ? -1 : 1;
+  return comparePrerelease(a.prerelease, b.prerelease);
 }
 
-/** 本机正在运行的版本：部署目录根的 package.json。读不到返回空串。 */
-export function readLocalVersion() {
+/** 读取指定部署目录根的版本（`<appDir>/package.json`）；读不到返回空串。 */
+export function readVersionAt(appDir) {
   try {
-    const pkg = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
+    const pkg = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'));
     return cleanText(pkg?.version, 64);
   } catch {
     return '';
   }
+}
+
+/** 本机正在运行的版本：本模块所在部署目录根的 package.json。读不到返回空串。 */
+export function readLocalVersion() {
+  return readVersionAt(path.resolve(fileURLToPath(new URL('..', import.meta.url))));
 }
 
 /**
@@ -223,8 +252,12 @@ export async function checkForUpdate(
   const fresh = previous && Number(previous.checkedAt) > 0
     && now - Number(previous.checkedAt) < CHECK_TTL_MS;
   const baselineUnchanged = previous && String(previous.deployed || '') === String(deployedNow || '');
-  if (!force && fresh && baselineUnchanged) {
-    return { ...previous, cached: true };
+  // 版本号现在是主判定，必须进缓存键：手工替换源码（版本变了、deployed-revision 没变，
+  // 或只写了 "-dirty" 被剥掉）时若命中旧结论，会把"已是最新"的树回退成 Release tag。
+  // 旧版本写的 notice 没有 localVersion 字段，这里也会自然失效、重算一次。
+  const localUnchanged = previous && String(previous.localVersion || '') === local;
+  if (!force && fresh && baselineUnchanged && localUnchanged) {
+    return { ...previous, localVersion: local, cached: true };
   }
 
   const base = {
