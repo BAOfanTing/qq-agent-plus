@@ -6,8 +6,13 @@
 ## 0. 前提
 
 - Docker Engine 24+（或 Docker Desktop），`docker compose version` 可用。
+  普通用户还要能执行 Docker 命令：如果 `docker ps` 报 permission denied，执行
+  `sudo usermod -aG docker $USER` 后重新登录，或者所有命令前加 `sudo`。
 - 一个 QQ 账号（扫码登录协议端）。
 - 一个 OpenAI 兼容的模型 API（Base URL、Key、模型名）。
+
+> 没装过 Docker、也不想处理 SSH 隧道的新手，优先用 `install.sh` 的裸机一键安装；
+> Docker 路径适合“已经有 Docker、会用 SSH”的用户。
 
 镜像里已经包含运行期依赖与 `ffmpeg`；宿主机不需要 Node、git、curl、openssl。
 镜像约 1.2GB（磁盘）、压缩下载约 310MB，多架构（amd64/arm64）。体积主要来自
