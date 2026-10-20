@@ -23,6 +23,11 @@ the old instance.
   re-runs the installer as that user. `deploy-all.sh` itself still refuses root.
 - Recommended resources: 2 CPU cores, 2GB RAM and 10GB free local disk. A 1GB
   host can OOM while SnowLuma/Chromium starts; SQLite must not live on NFS/SMB.
+- Distribution tiers: tested on Ubuntu 22.04/24.04, Debian 12, Rocky 9 and AlmaLinux 9.
+  Fedora/CentOS Stream/RHEL/Oracle/Amazon Linux, Arch/Manjaro, openSUSE/SLES and
+  openEuler/Anolis/Kylin/UOS are attempted through their package manager but not
+  tested here. Alpine/musl, NixOS, Gentoo, Void, WSL1 and containers without systemd
+  are unsupported. Run `sh scripts/check-platform.sh` for a read-only verdict.
 - A separately managed OneBot v11 HTTP/forward WebSocket service when using
   `deploy.sh`; `deploy-all.sh` installs SnowLuma/OneBot.
 - An OpenAI Chat Completions compatible model with function calling.

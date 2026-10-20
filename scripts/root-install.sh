@@ -196,6 +196,8 @@ install_packages() {
     dnf install -y "$@"
   elif command -v yum >/dev/null 2>&1; then
     yum install -y "$@"
+  elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install -y "$@"
   elif command -v pacman >/dev/null 2>&1; then
     pacman -Sy --noconfirm "$@"
   else

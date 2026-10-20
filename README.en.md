@@ -196,6 +196,20 @@ a single copied script.
 Recommended host: 2 CPU cores, 2GB RAM and 10GB free local disk. A 1GB host can run out of memory
 while SnowLuma/Chromium starts; SQLite must not live on NFS or SMB.
 
+Distribution support is split into three tiers:
+
+- **Tested**: Ubuntu 22.04/24.04, Debian 12, Rocky Linux 9, AlmaLinux 9.
+- **Expected to work**: Fedora, CentOS Stream, RHEL, Oracle Linux, Amazon Linux,
+  Arch/Manjaro, openSUSE Leap/Tumbleweed, SLES, openEuler, Anolis, Kylin/UOS
+  (attempted through dnf/yum/zypper/pacman).
+- **Unsupported**: Alpine (musl), NixOS, Gentoo, Void, WSL1, and containers without systemd.
+
+Run the read-only check before installing:
+
+```bash
+sh scripts/check-platform.sh
+```
+
 
 
 When you prefer to answer the questions (deployment directory, ports, credentials, model), use the

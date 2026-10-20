@@ -169,6 +169,18 @@ SnowLuma 已包含 OneBot，无需另行安装 NapCat 或 Lagrange。
 | 账号 | root 或带 sudo 的普通用户；一个 QQ 号 |
 | 模型 | OpenAI Chat Completions 兼容的地址、Key、模型名（可装完再配） |
 
+发行版支持分三档：
+
+- **已实测**：Ubuntu 22.04/24.04、Debian 12、Rocky Linux 9、AlmaLinux 9。
+- **预期可用**：Fedora、CentOS Stream、RHEL、Oracle Linux、Amazon Linux、Arch/Manjaro、openSUSE Leap/Tumbleweed、SLES、openEuler、Anolis、麒麟/UOS（按 dnf/yum/zypper/pacman 尝试）。
+- **明确不支持**：Alpine（musl）、NixOS、Gentoo、Void、WSL1，以及没有 systemd 的容器环境。
+
+安装前可以先跑只读体检，它会打印发行版、包管理器、systemd、libc 和结论：
+
+```bash
+sh scripts/check-platform.sh
+```
+
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus

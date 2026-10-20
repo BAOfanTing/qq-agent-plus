@@ -270,6 +270,11 @@ install_docker() {
   elif command -v dnf >/dev/null 2>&1; then
     run_root dnf install -y docker docker-compose-plugin \
       || run_root dnf install -y moby-engine docker-compose-plugin
+  elif command -v yum >/dev/null 2>&1; then
+    run_root yum install -y docker docker-compose-plugin \
+      || run_root yum install -y docker-compose
+  elif command -v zypper >/dev/null 2>&1; then
+    run_root zypper --non-interactive install -y docker docker-compose
   elif command -v pacman >/dev/null 2>&1; then
     run_root pacman -Sy --noconfirm docker docker-compose
   else
@@ -437,6 +442,11 @@ check_host_ownership() {
 
 [[ "$(uname -s)" == Linux ]] || die 'Full-stack deployment is supported on Linux only'
 ((EUID != 0)) || die 'Run as the service user, not root; sudo is used only for host dependencies'
+if [[ "${QQ_AGENT_PLATFORM_CHECKED:-}" != "1" ]]; then
+  bash "$SOURCE_DIR/scripts/check-platform.sh" --strict \
+    || die '当前系统不受支持（原因见上）。推荐 Ubuntu 22.04/24.04、Debian 12、Rocky/Alma 9；openSUSE 等 dnf/zypper 系属于预期可用、未实测。'
+  export QQ_AGENT_PLATFORM_CHECKED=1
+fi
 command -v curl >/dev/null 2>&1 || die 'curl is required'
 [[ "$SERVICE" =~ ^[A-Za-z0-9_-]+$ ]] || die 'Invalid service name'
 [[ "$IMAGE" =~ ^[A-Za-z0-9._/:@-]+$ ]] || die 'Invalid SnowLuma image reference'

@@ -25,6 +25,15 @@ case "${BASH_VERSINFO[0]:-0}" in
   0|1|2|3) die "需要 bash 4 以上（当前 ${BASH_VERSION:-unknown}）。请用 bash install.sh 运行。" ;;
 esac
 
+# 发行版/运行环境体检：Alpine（musl）、无 systemd、无包管理器的环境直接说清楚，
+# 不要让用户在装到一半才看到 Node 二进制或 systemctl 报错。
+if [[ "$(uname -s)" == "Linux" ]]; then
+  if ! bash "$SCRIPT_DIR/scripts/check-platform.sh" --strict; then
+    die '当前系统不受支持（原因见上）。推荐 Ubuntu 22.04/24.04、Debian 12、Rocky/Alma 9；openSUSE 等 dnf/zypper 系可尝试，但属于预期可用、未实测。'
+  fi
+  export QQ_AGENT_PLATFORM_CHECKED=1
+fi
+
 # root 不是问题，但机器人不该以 root 跑：交给 root 包装层创建/复用普通服务用户，
 # 完成 Docker、docker 组、linger、目录属主这些 root 才能做的事，再以服务用户重跑本脚本。
 if [[ "$(id -u)" == "0" ]]; then
