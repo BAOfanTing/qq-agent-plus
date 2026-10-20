@@ -130,6 +130,9 @@ cd qq-agent-plus
 docker compose up -d
 ```
 
+`docker compose up -d` 的默认镜像已经按国内网络配置：Agent 走上面的 ACR，协议端走
+`docker.1panel.live` 镜像站。海外用户可在环境变量里换回 GHCR 与官方 Docker Hub 镜像。
+
 体积敏感的场景注意：镜像磁盘约 1.2GB、压缩下载约 310MB，主要是 ffmpeg 及其依赖；
 项目只提供完整版，以保证语音、视频、GIF 与大图降采样和裸机一致。
 

@@ -22,8 +22,10 @@ ffmpeg 及其依赖（约 470MB 的层）；不提供精简变体，以保证语
 docker compose up -d
 ```
 
-compose 里的应用镜像默认钉在当前版本（示例为 `0.9.3`）；升级时改 compose 里的默认值，或设
+compose 默认已经按国内网络配好：应用镜像走阿里云 ACR 的公开 `0.9.3`，协议端走
+`docker.1panel.live` 镜像站。升级时改 compose 里的默认值，或设
 `QQ_AGENT_IMAGE=<镜像>:<版本>`。不要用 `latest` 当默认值——首次发布前它不存在，会拉取失败。
+海外用户可以把 `QQ_AGENT_IMAGE` 换成 GHCR、`SNOWLUMA_IMAGE` 换成官方 Docker Hub 镜像。
 
 这会启动两个服务：
 
@@ -246,12 +248,13 @@ ffmpeg 层有构建缓存，后续版本主要重新传应用层；首次推送�
 
 这里涉及两个来源不同的镜像：
 
-| 服务 | 镜像 | 来源 |
+| 服务 | 默认 | 来源 |
 | --- | --- | --- |
-| `agent` | `ghcr.io/sakurawwwxh/qq-agent-plus` | GHCR（不在 Docker Hub） |
-| `snowluma` | `motricseven7/snowluma` | Docker Hub |
+| `agent` | `crpi-.../wangxinhong/qq-agent-plus:0.9.3` | 阿里云 ACR（国内可直连） |
+| `snowluma` | `docker.1panel.live/motricseven7/snowluma:v1.14.22` | 镜像站（官方在 Docker Hub） |
 
-Docker Hub 在国内通常不可直连；GHCR 也可能很慢。三种取法，按省事程度排序：
+compose 默认已经走国内可访问的地址；Docker Hub 在国内通常不可直连，GHCR 也可能很慢。
+要换回官方源或换镜像站，用环境变量覆盖。三种取法，按省事程度排序：
 
 **A. 用镜像站前缀（推荐先试）**
 

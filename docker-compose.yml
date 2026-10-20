@@ -12,9 +12,9 @@ name: qq-agent
 
 services:
   snowluma:
-    # 国内网络：Docker Hub 不可直连时，用镜像站前缀覆盖，例如
-    #   SNOWLUMA_IMAGE=docker.1panel.live/motricseven7/snowluma:v1.14.22
-    image: ${SNOWLUMA_IMAGE:-motricseven7/snowluma:v1.14.22}
+    # 国内网络：Docker Hub 不可直连，默认走镜像站。要用官方镜像设：
+    #   SNOWLUMA_IMAGE=motricseven7/snowluma:v1.14.22
+    image: ${SNOWLUMA_IMAGE:-docker.1panel.live/motricseven7/snowluma:v1.14.22}
     container_name: ${SNOWLUMA_CONTAINER:-qq-agent-snowluma}
     restart: unless-stopped
     shm_size: 1gb
@@ -50,11 +50,10 @@ services:
       - ./snowluma-client-data:/app/.local/share
 
   agent:
-    # 国内网络：GHCR 慢/不可达时，换成 GHCR 镜像站或你自己的仓库，例如
-    #   QQ_AGENT_IMAGE=ghcr.nju.edu.cn/sakurawwwxh/qq-agent-plus:0.9.3
-    # 默认钉在最近一次发布的版本；升级时改这里或设 QQ_AGENT_IMAGE。
+    # 默认用阿里云 ACR 的公开镜像（国内可直连）；海外/其他仓库设：
+    #   QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3
     # 不要默认 latest：首次发布前 latest 不存在，docker compose 会拉取失败。
-    image: ${QQ_AGENT_IMAGE:-ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3}
+    image: ${QQ_AGENT_IMAGE:-crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.3}
     container_name: ${QQ_AGENT_CONTAINER:-qq-agent}
     restart: unless-stopped
     init: true
