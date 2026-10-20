@@ -127,7 +127,9 @@ async function loadOverview() {
   const onebot = status?.onebot || {};
   const usageToday = status?.usage || {};
   const selfName = onebot?.self?.nickname ? String(onebot.self.nickname) : '';
-  const modeText = status?.paused ? '已暂停' : (status?.runtime?.mode === 'observe' || status?.mode === 'observe' ? '观察模式' : '运行中');
+  // 运行模式在 /api/status.orchestrator.mode 里；不要把 observe 误显示成"运行中"。
+  const runMode = status?.orchestrator?.mode;
+  const modeText = status?.paused ? '已暂停' : (runMode === 'observe' ? '观察模式' : '运行中');
   const modeChip = status?.paused ? { text: '暂停', cls: 'warn' } : null;
 
   const incidentList = Array.isArray(incidents?.incidents) ? incidents.incidents : [];
@@ -138,10 +140,12 @@ async function loadOverview() {
   const ackedCount = Number(counts.acknowledged) || 0;
 
   const slVersion = String(snowluma?.currentVersion || '');
-  const slChip = !snowluma?.installed ? { text: '未检测到', cls: '' }
-    : snowluma?.outdated ? { text: `落后 → ${snowluma.targetVersion}`, cls: 'warn' }
-      : snowluma?.belowRecommended ? { text: `低于推荐 ${snowluma.minRecommended}`, cls: 'warn' }
-        : { text: '已是最新', cls: 'ok' };
+  const slContainer = snowluma?.container === true;
+  const slChip = slContainer ? { text: '容器模式', cls: 'ok' }
+    : !snowluma?.installed ? { text: '未检测到', cls: '' }
+      : snowluma?.outdated ? { text: `落后 → ${snowluma.targetVersion}`, cls: 'warn' }
+        : snowluma?.belowRecommended ? { text: `低于推荐 ${snowluma.minRecommended}`, cls: 'warn' }
+          : { text: '已是最新', cls: 'ok' };
 
   // 按天的行在 stats.days 里（不是 rows）；每天的次数用 exactCalls，runs 是另一维
   const statDays = Array.isArray(usage?.days) ? usage.days : [];
@@ -209,8 +213,12 @@ async function loadOverview() {
       })}
       ${kpi({
         icon: 'globe', label: '协议端（SnowLuma）',
-        value: slVersion ? `v${esc(slVersion)}` : '—',
-        sub: snowluma?.installed ? `容器${snowluma.running ? '运行中' : '未运行'} · 基线 v${esc(snowluma.targetVersion || '')}` : '没检测到协议端 compose 项目',
+        value: slVersion ? `v${esc(slVersion)}` : (slContainer ? '由 compose 管理' : '—'),
+        sub: slContainer
+          ? '容器模式 · 更新请改 compose 里的镜像 tag'
+          : (snowluma?.installed
+            ? `容器${snowluma.running ? '运行中' : '未运行'} · 基线 v${esc(snowluma.targetVersion || '')}`
+            : '没检测到协议端 compose 项目'),
         chip: slChip
       })}
     </div>
