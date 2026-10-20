@@ -61,6 +61,10 @@ test('compose：控制台只绑 127.0.0.1、根文件系统只读、不挂 docke
   assert.match(compose, /QQ_AGENT_ONEBOT_HTTP_URL: \$\{[^}]+:-http:\/\/snowluma:3000\}/);
   assert.match(compose, /SNOWLUMA_INTERNAL_URL: \$\{[^}]+:-http:\/\/snowluma:5099\}/);
   assert.match(compose, /QQ_AGENT_NOVNC_URL: \$\{[^}]+:-http:\/\/snowluma:6081\/\}/);
+  // OneBot 令牌两侧都要接：SnowLuma 侧 ONEBOT_TOKEN，Agent 侧 WS/HTTP 令牌
+  assert.match(compose, /ONEBOT_TOKEN: \$\{ONEBOT_TOKEN:-/);
+  assert.match(compose, /QQ_AGENT_ONEBOT_ACCESS_TOKEN: \$\{ONEBOT_TOKEN:-/);
+  assert.match(compose, /QQ_AGENT_ONEBOT_HTTP_TOKEN: \$\{ONEBOT_TOKEN:-/);
   assert.match(compose, /stop_grace_period: 30s/);
   assert.doesNotMatch(compose, /docker\.sock/);
   assert.doesNotMatch(compose, /"0\.0\.0\.0:\$\{QQ_AGENT_PORT/);

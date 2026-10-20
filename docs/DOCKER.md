@@ -49,6 +49,17 @@ docker compose exec agent cat /data/console-access.txt
 3. 控制台 → 聊天设置/白名单，加入要参与的群。
 4. 在群里 @ 机器人一句，确认能回。
 
+几个首次部署的边界：
+
+- **宿主机 uid 不是 1000**：SnowLuma 默认按 `SNOWLUMA_UID/GID=1000` 写数据；用
+  `SNOWLUMA_UID=$(id -u) SNOWLUMA_GID=$(id -g) docker compose up -d` 对齐。
+- **noVNC 密码**：`VNC_PASSWD` 默认 `qqagent`，正式用请改掉（noVNC 只绑 127.0.0.1，
+  但密码不该留默认值）。
+- **自定义宿主端口**：`QQ_AGENT_PORT`、`SNOWLUMA_WEBUI_HOST_PORT`、`NOVNC_PORT` 可以改，
+  但控制台里的服务链接仍按 3210/5099/6081 拼接；改了端口请手动调整链接或保持默认。
+- **OneBot 令牌（可选）**：如果在 SnowLuma 里设置了令牌，给两个服务都传同一个
+  `ONEBOT_TOKEN`，否则 Agent 会因鉴权失败连不上。
+
 控制台与协议端 WebUI 都只绑宿主机 `127.0.0.1`。远程访问用 SSH 隧道：
 
 ```bash

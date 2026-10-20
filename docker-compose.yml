@@ -40,6 +40,8 @@ services:
       SNOWLUMA_HOOK_AUTOLOAD: "1"
       SNOWLUMA_QQ_FLAGS: --disable-gpu --disable-software-rasterizer --disable-gpu-compositing
       SNOWLUMA_TELEMETRY: "0"
+      # 可选：与 Agent 的 OneBot 令牌保持一致（在 SnowLuma WebUI 里设了令牌时填同一个值）
+      ONEBOT_TOKEN: ${ONEBOT_TOKEN:-}
     ports:
       - "127.0.0.1:${SNOWLUMA_WEBUI_HOST_PORT:-5099}:5099"
       - "127.0.0.1:${NOVNC_PORT:-6081}:6081"
@@ -78,7 +80,11 @@ services:
       QQ_AGENT_SERVER_PORT: "3210"
       QQ_AGENT_ONEBOT_WS_URL: ${QQ_AGENT_ONEBOT_WS_URL:-ws://snowluma:3001}
       QQ_AGENT_ONEBOT_HTTP_URL: ${QQ_AGENT_ONEBOT_HTTP_URL:-http://snowluma:3000}
-      # 留空＝首次启动自动生成并写进 data/config.json（日志里会打印一次）。
+      # 可选：与 SnowLuma 的 OneBot 令牌一致；留空表示不使用令牌。
+      QQ_AGENT_ONEBOT_ACCESS_TOKEN: ${ONEBOT_TOKEN:-}
+      QQ_AGENT_ONEBOT_HTTP_TOKEN: ${ONEBOT_TOKEN:-}
+      # 留空＝首次启动自动生成并写进 data/config.json；
+      # 访问信息写入 /data/console-access.txt（日志不打印令牌）。
       QQ_AGENT_CONSOLE_TOKEN: ${QQ_AGENT_CONSOLE_TOKEN:-}
       # 兼容旧配置：服务端探测的回退地址（新部署用 SNOWLUMA_INTERNAL_URL）。
       # 浏览器里的链接由控制台按当前访问地址拼，不读这个变量。
