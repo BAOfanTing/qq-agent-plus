@@ -14,7 +14,7 @@ services:
   snowluma:
     # 国内网络：Docker Hub 不可直连，默认走镜像站。要用官方镜像设：
     #   SNOWLUMA_IMAGE=motricseven7/snowluma:v1.14.22
-    image: ${SNOWLUMA_IMAGE:-docker.1panel.live/motricseven7/snowluma:v1.14.22}
+    image: ${SNOWLUMA_IMAGE:-docker.m.daocloud.io/motricseven7/snowluma:v1.14.22}
     container_name: ${SNOWLUMA_CONTAINER:-qq-agent-snowluma}
     restart: unless-stopped
     shm_size: 1gb
