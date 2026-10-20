@@ -11,6 +11,8 @@ audit
 .playwright-mcp
 .zcode
 *.png
+# 默认液态玻璃壁纸是运行期资源，不能跟着截图一起排除
+!ui/assets/liquid-wallpaper.png
 *.jpg
 *.jpeg
 *.gif

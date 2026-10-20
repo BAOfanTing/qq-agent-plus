@@ -43,6 +43,7 @@ test('运行环境识别：显式变量优先于标记文件', () => {
 
 test('更新提示包含可执行的 compose 命令', () => {
   const hint = containerUpdateHint();
+  assert.match(hint, /QQ_AGENT_IMAGE/);
   assert.match(hint, /docker compose pull/);
   assert.match(hint, /docker compose up -d/);
 });

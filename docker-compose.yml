@@ -78,6 +78,8 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
       QQ_AGENT_DATA_DIR: /data
       QQ_AGENT_RUNTIME: docker
+      # 仅影响全新配置的首次运行模式；已有配置里用户选的模式不会被覆盖。
+      QQ_AGENT_RUNTIME_MODE: ${QQ_AGENT_RUNTIME_MODE:-active}
       # 容器内必须绑 0.0.0.0，否则宿主机端口映射进不来；宿主侧仍只发布到 127.0.0.1。
       QQ_AGENT_SERVER_HOST: 0.0.0.0
       QQ_AGENT_SERVER_PORT: "3210"
@@ -88,6 +90,8 @@ services:
       QQ_AGENT_ONEBOT_ACCESS_TOKEN: ${QQ_AGENT_ONEBOT_ACCESS_TOKEN:-}
       QQ_AGENT_ONEBOT_HTTP_TOKEN: ${QQ_AGENT_ONEBOT_HTTP_TOKEN:-}
       QQ_AGENT_SNOWLUMA_CONFIG_DIR: /snowluma-config
+      # 只跑 agent（外部协议端）时设 0，避免等 SnowLuma 配置的 30 秒空转
+      QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: ${QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS:-30000}
       # 留空＝首次启动自动生成并写进 data/config.json；
       # 访问信息写入 /data/console-access.txt（日志不打印令牌）。
       QQ_AGENT_CONSOLE_TOKEN: ${QQ_AGENT_CONSOLE_TOKEN:-}

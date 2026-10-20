@@ -35,6 +35,11 @@ test('.dockerignore：不把 node_modules、数据、测试与构建上下文垃
       `.dockerignore 缺少 ${entry}`
     );
   }
+  // 默认液态玻璃壁纸必须进镜像（*.png 排除规则不能把它一起带上）
+  assert.ok(
+    dockerignore.split('\n').map((line) => line.trim()).includes('!ui/assets/liquid-wallpaper.png'),
+    '.dockerignore 缺少壁纸的否定规则'
+  );
   // 本地 compose 跑过之后，这些目录/文件可能带着令牌或 QQ 登录态；漏一个就会进镜像层。
   for (const entry of [
     '.env', '.env.*', 'snowluma', 'snowluma-data', 'snowluma-client-config',
@@ -65,6 +70,8 @@ test('compose：控制台只绑 127.0.0.1、根文件系统只读、不挂 docke
   // OneBot 令牌：只读挂载 SnowLuma 配置自动同步；外部协议端才用显式环境变量
   assert.match(compose, /\.\/snowluma-data\/config:\/snowluma-config:ro/);
   assert.match(compose, /QQ_AGENT_SNOWLUMA_CONFIG_DIR: \/snowluma-config/);
+  assert.match(compose, /QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: \$\{QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS:-30000\}/);
+  assert.match(compose, /QQ_AGENT_RUNTIME_MODE: \$\{QQ_AGENT_RUNTIME_MODE:-active\}/);
   assert.match(compose, /QQ_AGENT_ONEBOT_ACCESS_TOKEN: \$\{QQ_AGENT_ONEBOT_ACCESS_TOKEN:-/);
   assert.match(compose, /QQ_AGENT_ONEBOT_HTTP_TOKEN: \$\{QQ_AGENT_ONEBOT_HTTP_TOKEN:-/);
   assert.doesNotMatch(compose, /ONEBOT_TOKEN:/);
