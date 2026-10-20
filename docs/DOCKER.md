@@ -169,6 +169,18 @@ QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3 docker compose up -d agen
 **容器里没有 `deploy.sh`、systemd、宿主 Docker 套接字**，控制台的“立即更新”“更新协议端”
 会被禁用并提示改用上面的命令。这是故意的：容器里 exec 宿主机命令既不可靠也不安全。
 
+### 已经部署过 Docker 版本的
+
+1. **先更新 compose 文件**：本次新增了 SnowLuma 配置挂载和 OneBot 令牌同步，只 `pull` 镜像不够。
+   在仓库目录 `git pull`，或重新下载 `docker-compose.yml`。
+2. `docker compose pull && docker compose up -d`；数据卷不动，不需要迁移数据。
+3. 如果升级前控制台显示“观察模式”，到 控制 → 运行模式 切到**活跃**（旧配置不会被自动改成 active）。
+4. 如果 noVNC 密码变了，看 `docker compose logs snowluma`（`VNC_PASSWD` 留空时是随机生成的）。
+5. 固定了旧镜像 digest 的，把 `QQ_AGENT_IMAGE` 改回 `...:0.9.3` 或新 digest 后再 pull。
+
+**裸机 systemd 部署不受影响**：这次只改了 Docker 路径，服务器上的 `qq-agent-linux.service`
+继续按原来的方式升级即可；只有想迁到 Docker 时才需要处理数据目录与旧协议端容器。
+
 ## 6. 从裸机部署迁移
 
 1. 停旧服务：`systemctl --user stop qq-agent-linux.service`。
