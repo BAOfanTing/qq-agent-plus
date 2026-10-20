@@ -1,0 +1,34 @@
+# 构建上下文排除项：镜像里只需要运行期代码、依赖与入口脚本。
+.git
+.github
+.gitignore
+.gitattributes
+node_modules
+data
+test
+audit
+.mimosa
+.playwright-mcp
+.zcode
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.tar.gz
+*.zip
+_staging
+# 本地运行/compose 产生的敏感物：只要有一样进镜像，令牌或 QQ 登录态就跟着镜像走了。
+.env
+.env.*
+snowluma
+snowluma-data
+snowluma-client-config
+snowluma-client-data
+backups
+console-access.txt
+*.log
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile
+.dockerignore

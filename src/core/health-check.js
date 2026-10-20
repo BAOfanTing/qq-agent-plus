@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { openDatabase } from './sqlite.js';
+import { isContainerRuntime } from './runtime.js';
 import { budgetStatus } from './budget.js';
 import { todayKey } from './util.js';
 import { readJsonBounded } from './http-body.js';
@@ -141,9 +142,11 @@ export async function runHealthCheck(opts = {}) {
     mode = 'active',
     consolePort = 3210,
     onebotHttpPort = 3390,
+    onebotHttpUrl = '',
     onebotToken = '',
     snowlumaDir = '',
     service = '',
+    containerRuntime = null,   // 可注入（测试）：null＝按运行环境判断
     noNewPrivsStatus = null,   // 可注入（测试）：null＝自动探测主服务进程
     sudoDockerProbe = null,    // 可注入（测试）：null＝走真实 probeSudoDocker()
     outboundStaleMs = OUTBOUND_STALE_MS,
@@ -156,6 +159,7 @@ export async function runHealthCheck(opts = {}) {
 
   const checks = [];
   const add = (name, ok, detail = '') => checks.push({ name, ok, detail });
+  const container = containerRuntime === null ? isContainerRuntime() : Boolean(containerRuntime);
   // AbortSignal.timeout 覆盖整次请求（含读 body）：挂死的服务在 fetchTimeoutMs 内必被中止，
   // 巡检不会为它多等一个 undici 默认超时。
   const probeSignal = () => AbortSignal.timeout(fetchTimeoutMs);
@@ -172,7 +176,10 @@ export async function runHealthCheck(opts = {}) {
   try {
     const headers = { 'content-type': 'application/json' };
     if (onebotToken) headers.authorization = `Bearer ${onebotToken}`;
-    const res = await fetchImpl(`http://127.0.0.1:${onebotHttpPort}/get_status`, { method: 'POST', headers, body: '{}', signal: probeSignal() });
+    // 容器里协议端是 compose 网络里的另一个服务（snowluma:3000），不是 127.0.0.1。
+    // 优先用完整的 httpUrl；没给才回落到宿主机式的端口探测。
+    const onebotBase = String(onebotHttpUrl || '').replace(/\/+$/, '') || `http://127.0.0.1:${onebotHttpPort}`;
+    const res = await fetchImpl(`${onebotBase}/get_status`, { method: 'POST', headers, body: '{}', signal: probeSignal() });
     // 有界读：巡检目标是本机协议端，但"巡检把常驻进程读爆"这类亏不能再吃第二次（2026-10-10 审查）
     const data = await readJsonBounded(res, 256 * 1024).catch(() => ({}));
     add('onebot-status', res.ok && data?.status === 'ok', res.ok ? `retcode=${data?.retcode ?? '?'}` : `HTTP ${res.status}`);
@@ -219,8 +226,10 @@ export async function runHealthCheck(opts = {}) {
     const hardened = noNewPrivsStatus ?? mainServiceHasNoNewPrivs(service);
     if (error?.code === 'ENOENT') {
       // 没装 docker、或用了远程 DOCKER_HOST ——与 protocol-version 的“跳过”同一口径：
-      // 这不是异常，不该把巡检报红。
-      add('docker-socket', true, '没有 docker 套接字（未装 docker 或用了远程 DOCKER_HOST，跳过）');
+      // 这不是异常，不该把巡检报红。容器里更是常态（协议端由 compose 管）。
+      add('docker-socket', true, container
+        ? '容器模式：未挂载宿主 docker 套接字（协议端更新由 compose 管理，跳过）'
+        : '没有 docker 套接字（未装 docker 或用了远程 DOCKER_HOST，跳过）');
     } else if (hardened) {
       add('docker-socket', false,
         `${error?.code || '不可读'}：控制台主进程被 NoNewPrivileges 加固，sudo 回退不可用，`
@@ -335,16 +344,26 @@ export async function runHealthCheck(opts = {}) {
   }
 
   // ⑤ 自动更新状态
-  try {
-    const upd = JSON.parse(fs.readFileSync(path.join(dataDir, 'auto-update.json'), 'utf8'));
-    add('auto-update', upd?.status !== 'failed', upd?.status === 'failed' ? `status=failed（${String(upd?.error || '').slice(0, 120)}）` : `status=${upd?.status ?? 'unknown'}`);
-  } catch {
-    add('auto-update', true, '跳过（无 auto-update.json）');
+  if (container) {
+    // 容器里的更新是"换镜像"，没有 auto-update.json 这回事；旧卷里残留的 failed 状态
+    // 也不能拿到这里报红（那会让迁移过来的用户永久看到一条无法自愈的告警）。
+    add('auto-update', true, '容器模式：应用由镜像管理（跳过自动更新状态）');
+  } else {
+    try {
+      const upd = JSON.parse(fs.readFileSync(path.join(dataDir, 'auto-update.json'), 'utf8'));
+      add('auto-update', upd?.status !== 'failed', upd?.status === 'failed' ? `status=failed（${String(upd?.error || '').slice(0, 120)}）` : `status=${upd?.status ?? 'unknown'}`);
+    } catch {
+      add('auto-update', true, '跳过（无 auto-update.json）');
+    }
   }
 
   // ⑥ 部署中断标记（36c649a 加固项）：存在＝上次部署被 SIGKILL/OOM 打断且未收尾
   const marker = path.join(dataDir, '.deploy-in-progress');
-  add('deploy-interrupted', !fs.existsSync(marker), fs.existsSync(marker) ? '存在中断标记，按 docs/LINUX.md「部署被中断后怎么恢复」处理' : '');
+  if (container) {
+    add('deploy-interrupted', true, '容器模式：不适用（部署由镜像/编排负责）');
+  } else {
+    add('deploy-interrupted', !fs.existsSync(marker), fs.existsSync(marker) ? '存在中断标记，按 docs/LINUX.md「部署被中断后怎么恢复」处理' : '');
+  }
 
   // ⑦ messages 库完整性（适配层只读打开）
   try {

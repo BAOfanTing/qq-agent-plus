@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { normalizeUpdateNetworkSettings } from './update-network.js';
+import { isContainerRuntime, containerUpdateHint } from './core/runtime.js';
 
 const STATE_FILE = 'auto-update.json';
 const REQUEST_FILE = 'auto-update-request.json';
@@ -290,12 +291,14 @@ export class AutoUpdateManager {
   }
 
   installed() {
+    // 容器里没有 update service（也不该有）：deploy.sh/auto-update.mjs 都不在容器的可写面里。
+    if (isContainerRuntime()) return false;
     return Boolean(this.serviceName())
       && fs.existsSync(path.join(this.appDir, 'scripts', 'auto-update.mjs'));
   }
 
   serviceActive() {
-    if (!this.installed()) return false;
+    if (isContainerRuntime() || !this.installed()) return false;
     const result = this.runSystemctl([
       '--quiet',
       'is-active',
@@ -309,6 +312,42 @@ export class AutoUpdateManager {
     const settings = cfg.autoUpdate || {};
     const network = normalizeUpdateNetworkSettings(settings);
     const state = readAutoUpdateState(this.dataDir);
+    const container = isContainerRuntime();
+    if (container) {
+      // 不读 systemd、不看 pending：容器里的更新状态由镜像 tag 决定，控制台只展示
+      // "由 compose 管理"与当前配置，不把宿主机的旧状态误报成"卡住/失败"。
+      let containerRevision = '';
+      try {
+        containerRevision = fs.readFileSync(path.join(this.dataDir, 'deployed-revision'), 'utf8').trim();
+      } catch { /* 容器里通常没有这个文件 */ }
+      return {
+        installed: false,
+        managedBy: 'docker',
+        container: true,
+        hint: containerUpdateHint(),
+        enabled: false,
+        busy: false,
+        ownerUin: autoUpdateOwner(cfg),
+        repository: String(settings.repository || ''),
+        branch: String(settings.branch || 'main'),
+        intervalHours: Number(settings.intervalHours) || 6,
+        ...network,
+        nextCheckAt: 0,
+        // 旧卷里的 auto-update.json 可能带着 failed / pending：容器模式不跑更新，
+        // 这些字段必须清干净，否则控制台会永久显示一条无法自愈的失败，甚至触发旧通知。
+        status: 'idle',
+        phase: '',
+        error: '',
+        targetVersion: '',
+        targetRevision: '',
+        startedAt: 0,
+        progressAt: 0,
+        lastCheckAt: 0,
+        completedAt: 0,
+        autoDisabled: false,
+        currentRevision: containerRevision || state.currentRevision
+      };
+    }
     const intervalMs = Math.max(1, Number(settings.intervalHours) || 6) * 60 * 60 * 1000;
     // 与「发现新版本」提示用同一套判据（autoUpdatePending）：一处说"在跑"、另一处说"卡住"
     // 会让用户卡在"提示弹出来了、按钮却是灰的"。基准见 autoUpdatePending 的注释。
@@ -375,6 +414,9 @@ export class AutoUpdateManager {
   }
 
   resume({ ownerUin, intervalHours = 6 } = {}) {
+    if (isContainerRuntime()) {
+      throw updateError(containerUpdateHint());
+    }
     const current = this.config();
     const adminPatch = ownerUin === undefined
       ? null
@@ -425,6 +467,9 @@ export class AutoUpdateManager {
   }
 
   requestManual({ version = '' } = {}) {
+    if (isContainerRuntime()) {
+      throw updateError(containerUpdateHint());
+    }
     if (!this.installed()) {
       throw updateError('自动更新服务尚未安装，请先用 deploy.sh 部署当前版本');
     }
@@ -538,6 +583,8 @@ export class AutoUpdateManager {
   }
 
   start() {
+    // 容器里没有 systemd unit，通知器也没有可投递的更新状态；启动它只会定期空转。
+    if (isContainerRuntime()) return;
     this.stop();
     this.notificationTimer = setInterval(() => {
       this.resumeNotifications();
@@ -558,6 +605,9 @@ export class AutoUpdateManager {
   }
 
   resumeNotifications() {
+    // OneBot 连上时会无条件调这里（console/app.js 的 onStatus）。容器里没有更新器，
+    // 旧卷遗留的 notification.pending 会让 owner 收到一条"更新部署失败"的假告警。
+    if (isContainerRuntime()) return null;
     if (this.notificationTask) return this.notificationTask;
     this.notificationTask = this.#notifyPending()
       .catch((error) => this.log(`[auto-update] 管理员通知失败：${error?.message ?? error}`))
@@ -566,6 +616,7 @@ export class AutoUpdateManager {
   }
 
   async handlePendingFailure() {
+    if (isContainerRuntime()) return;
     const state = readAutoUpdateState(this.dataDir);
     const policy = normalizeUpdateNetworkSettings(this.config().autoUpdate || {});
     if (

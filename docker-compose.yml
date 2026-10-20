@@ -1,0 +1,88 @@
+# 一键全栈：协议端（SnowLuma）+ QQ Agent。
+#
+#   docker compose up -d
+#
+# 只更新应用（协议端在别处）：
+#   QQ_AGENT_ONEBOT_WS_URL=ws://<主机>:3001 QQ_AGENT_ONEBOT_HTTP_URL=http://<主机>:3000 \
+#     docker compose up -d agent
+#
+# 控制台与协议端 WebUI 默认只绑宿主机 127.0.0.1：远程访问请用 SSH 隧道或带 TLS 的反代，
+# 不要把 3210/5099 直接暴露到公网。
+name: qq-agent
+
+services:
+  snowluma:
+    # 国内网络：Docker Hub 不可直连时，用镜像站前缀覆盖，例如
+    #   SNOWLUMA_IMAGE=docker.1panel.live/motricseven7/snowluma:v1.14.22
+    image: ${SNOWLUMA_IMAGE:-motricseven7/snowluma:v1.14.22}
+    container_name: ${SNOWLUMA_CONTAINER:-qq-agent-snowluma}
+    restart: unless-stopped
+    shm_size: 1gb
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 1048576
+    # SnowLuma 的 Chromium 需要 ptrace；这两项是它自己文档要求，不是给 Agent 的。
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      VNC_PASSWD: ${VNC_PASSWD:-qqagent}
+      SNOWLUMA_ONEBOT_HOST: 0.0.0.0
+      SNOWLUMA_UID: ${SNOWLUMA_UID:-1000}
+      SNOWLUMA_GID: ${SNOWLUMA_GID:-1000}
+      SNOWLUMA_WEBUI_HOST: 0.0.0.0
+      SNOWLUMA_WEBUI_PORT: "5099"
+      SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: ${SNOWLUMA_WEBUI_PASSWORD:-}
+      SNOWLUMA_LOG_LEVEL: ${SNOWLUMA_LOG_LEVEL:-info}
+      SNOWLUMA_SCREEN: ${SNOWLUMA_SCREEN:-1920x1080x24}
+      SNOWLUMA_HOOK_AUTOLOAD: "1"
+      SNOWLUMA_QQ_FLAGS: --disable-gpu --disable-software-rasterizer --disable-gpu-compositing
+      SNOWLUMA_TELEMETRY: "0"
+    ports:
+      - "127.0.0.1:${SNOWLUMA_WEBUI_HOST_PORT:-5099}:5099"
+      - "127.0.0.1:${NOVNC_PORT:-6081}:6081"
+    volumes:
+      # 与 Agent 的 ./data 分开，避免两个服务抢同一个目录
+      - ./snowluma-data:/app/data
+      - ./snowluma-client-config:/app/.config
+      - ./snowluma-client-data:/app/.local/share
+
+  agent:
+    # 国内网络：GHCR 慢/不可达时，换成 GHCR 镜像站或你自己的仓库，例如
+    #   QQ_AGENT_IMAGE=ghcr.nju.edu.cn/sakurawwwxh/qq-agent-plus:latest
+    image: ${QQ_AGENT_IMAGE:-ghcr.io/sakurawwwxh/qq-agent-plus:latest}
+    container_name: ${QQ_AGENT_CONTAINER:-qq-agent}
+    restart: unless-stopped
+    init: true
+    # 应用自己的退出兜底是 25 秒；Docker 默认 10 秒就会 SIGKILL，可能打断 SQLite 收尾。
+    stop_grace_period: 30s
+    # 应用进程本身以 node 运行；容器根文件系统只读，可写面只剩 /data 与 /tmp。
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${QQ_AGENT_PORT:-3210}:3210"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      QQ_AGENT_DATA_DIR: /data
+      QQ_AGENT_RUNTIME: docker
+      # 容器内必须绑 0.0.0.0，否则宿主机端口映射进不来；宿主侧仍只发布到 127.0.0.1。
+      QQ_AGENT_SERVER_HOST: 0.0.0.0
+      QQ_AGENT_SERVER_PORT: "3210"
+      QQ_AGENT_ONEBOT_WS_URL: ${QQ_AGENT_ONEBOT_WS_URL:-ws://snowluma:3001}
+      QQ_AGENT_ONEBOT_HTTP_URL: ${QQ_AGENT_ONEBOT_HTTP_URL:-http://snowluma:3000}
+      # 留空＝首次启动自动生成并写进 data/config.json（日志里会打印一次）。
+      QQ_AGENT_CONSOLE_TOKEN: ${QQ_AGENT_CONSOLE_TOKEN:-}
+      # 兼容旧配置：服务端探测的回退地址（新部署用 SNOWLUMA_INTERNAL_URL）。
+      # 浏览器里的链接由控制台按当前访问地址拼，不读这个变量。
+      SNOWLUMA_WEBUI_URL: ${SNOWLUMA_WEBUI_URL:-http://127.0.0.1:5099}
+      # 服务端探测/改密钥走 compose 网络；两个变量分开，避免"浏览器能开、控制台报离线"。
+      SNOWLUMA_INTERNAL_URL: ${SNOWLUMA_INTERNAL_URL:-http://snowluma:5099}
+      # noVNC 同样分浏览器/服务端两个地址：默认探测 compose 网络里的 6081。
+      QQ_AGENT_NOVNC_URL: ${QQ_AGENT_NOVNC_URL:-http://snowluma:6081/}

@@ -8,6 +8,7 @@ import { DATA_DIR } from './core/config.js';
 import { assertSqliteAvailable } from './core/sqlite.js';
 import { createLogger } from './core/logger.js';
 import { createDailyRetentionScheduler } from './core/ledger-retention.js';
+import { isContainerRuntime } from './core/runtime.js';
 
 const log = createLogger('server');
 
@@ -45,6 +46,9 @@ process.on('uncaughtException', (error) => {
  * 只告警不拦截：让人按快照决定，而不是让服务起不来。恢复步骤见 docs/LINUX.md。
  */
 function reportInterruptedDeploy() {
+  // 容器里没有 deploy.sh，旧卷残留的 .deploy-in-progress 只会制造一条无法自愈的误报：
+  // 巡检已经把这项标成"容器模式不适用"，启动日志与异常面板要同一口径。
+  if (isContainerRuntime()) return;
   // 这段挂在 app.start() 的 then 后面，抛错会落进下游的 catch 直接 process.exit(1) ——
   // 一句告警不该有能力把服务带崩，所以整体兜住。
   try {

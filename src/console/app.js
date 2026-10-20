@@ -71,6 +71,7 @@ import {
 import { integrationStatus, updateSnowLumaPassword } from './integrations.js';
 import { createSnowlumaUpdater, baselineAlignDecision } from '../core/snowluma-update.js';
 import { hostStats } from '../core/host-stats.js';
+import { isContainerRuntime, containerUpdateHint } from '../core/runtime.js';
 import { AutoUpdateManager, autoUpdatePending, readAutoUpdateState } from '../auto-update.js';
 import { checkForUpdate, ignoreVersion } from '../update-notice.js';
 
@@ -986,6 +987,9 @@ export function createApp({
   }
 
   async function snowlumaAutoCheck({ first = false } = {}) {
+    // 容器里没有宿主 docker 套接字，协议端由 compose 管：更新只能换镜像，不能在这里 exec。
+    // 直接返回，连基线对齐也不做（那同样要重建协议端容器）。
+    if (isContainerRuntime()) return;
     try {
       // 启动时先做一次"随版本对齐"（默认开，只在基线真的变化时动手）；它与下面的周期检查
       // 相互独立：周期检查的开关（默认关）不受影响。
@@ -1713,6 +1717,13 @@ export function createApp({
   /** 脱敏后的配置 + asr 的运行时结论（GET 与 POST 共用，界面拿到的永远是最新结论）。 */
   function safeConfigWithAsrStatus(cfgNow) {
     const safe = sanitizeConfig(cfgNow);
+    // 容器标记来自运行环境，不是用户配置，所以不落盘、每次响应现算。
+    // 控制台据此禁用"立即更新"、协议端一键更新等只对 systemd 部署有意义的操作。
+    safe.runtime = {
+      ...(safe.runtime || {}),
+      container: isContainerRuntime(),
+      updateManagedBy: isContainerRuntime() ? 'docker' : 'systemd'
+    };
     safe.asr = { ...(safe.asr || {}), ...asrStatusOf(cfgNow) };
     // tts 的 Key 被 sanitize 删掉了，用派生标志告诉界面"哪几家已存"（按供应商显示掩码）
     safe.tts = {
@@ -1969,6 +1980,8 @@ export function createApp({
     const auto = getConfig().autoUpdate?.snowluma || {};
     return json(res, 200, {
       ...st,
+      // 容器模式：协议端由 compose 管，版本信息仍可展示，但"一键更新/回滚"不可用。
+      container: isContainerRuntime(),
       auto: {
         enabled: auto.enabled === true,
         image: String(auto.image || ''),
@@ -1977,6 +1990,9 @@ export function createApp({
     });
   });
   router.add('POST', '/api/snowluma/update', async (req, res) => {
+    if (isContainerRuntime()) {
+      return json(res, 409, { ok: false, error: containerUpdateHint() });
+    }
     const body = await readBody(req).catch(() => ({}));
     const to = String(body?.to || getConfig().autoUpdate?.snowluma?.image || '').trim();
     const result = await snowlumaUpdater.update({ to, dryRun: body?.dryRun === true });
@@ -1987,6 +2003,9 @@ export function createApp({
     return json(res, result.ok ? 200 : 500, result);
   });
   router.add('POST', '/api/snowluma/rollback', async (req, res) => {
+    if (isContainerRuntime()) {
+      return json(res, 409, { ok: false, error: containerUpdateHint() });
+    }
     const result = await snowlumaUpdater.rollback();
     auditWrite('snowluma-rollback', result.to || 'protocol', {
       req, ok: result.ok !== false, error: result.error || ''
@@ -2048,6 +2067,11 @@ export function createApp({
     const body = await readBody(req);
     if (body.confirm !== true) {
       return json(res, 409, { error: '手动更新需要显式确认' });
+    }
+    // 容器里没有 update service / systemd，提交请求只会留下一个永远不执行的 pending。
+    // 在入口直接拒绝，并把正确的更新方式告诉用户。
+    if (isContainerRuntime()) {
+      return json(res, 409, { error: containerUpdateHint() });
     }
     try {
       const status = autoUpdate.requestManual({ version: body.version });
@@ -3114,6 +3138,12 @@ export function createApp({
   });
   router.add('POST', '/api/asr/install', async (req, res) => {
     if (!keyEndpointAllowed(req)) return json(res, 403, { error: '请求来源不被信任，已拒绝。' });
+    if (isContainerRuntime()) {
+      return json(res, 409, {
+        error: '容器模式不支持在容器内编译 whisper.cpp（镜像里没有 git/cmake/编译工具）。'
+          + '请改用托管 ASR，或构建包含 whisper.cpp 的自定义镜像。'
+      });
+    }
     try {
       const started = startAsrInstall();
       auditWrite('asr.install', '', { req, after: started });
@@ -4969,13 +4999,17 @@ export function createApp({
       log('[plugins] 插件宿主启动失败：', error);
     }
     startPluginIndexRefresh();
-    autoUpdate.start();
+    if (isContainerRuntime()) {
+      log('[auto-update] 容器模式：应用与协议端都由镜像管理，跳过自动更新通知器与协议端定时器');
+    } else {
+      autoUpdate.start();
+      // 协议端自动更新：首检延迟 2 分钟（别跟启动抢 IO），之后每 6 小时一轮；开关默认关
+      clearTimeout(snowlumaAutoTimer);
+      snowlumaAutoStopped = false;
+      snowlumaAutoTimer = setTimeout(() => { snowlumaAutoCheck({ first: true }); }, 120_000);
+      snowlumaAutoTimer.unref?.();
+    }
     log(`控制台已就绪：http://${serverCfg.host}:${port} (${getConfig().runtime.mode})`);
-    // 协议端自动更新：首检延迟 2 分钟（别跟启动抢 IO），之后每 6 小时一轮；开关默认关
-    clearTimeout(snowlumaAutoTimer);
-    snowlumaAutoStopped = false;
-    snowlumaAutoTimer = setTimeout(() => { snowlumaAutoCheck({ first: true }); }, 120_000);
-    snowlumaAutoTimer.unref?.();
     log(`OneBot: ws=${getConfig().onebot?.wsUrl} http=${getConfig().onebot?.httpUrl}`);
     log(`模型: ${getConfig().api.model || '（未设置，请在设置里选择）'} @ ${getConfig().api.baseUrl}`);
     return port;

@@ -19,6 +19,8 @@ function renderAsrSection(c) {
   // 不再硬编码「已知 provider」清单：加了新服务却忘了改这里，会把新服务当成"本机"
   // （2026-09-26 就踩过：十家预设里四家渲染成了 custom）。未知值一律按"API Key 那一支"显示。
   const provider = String(c.asr?.provider || '').trim().toLowerCase() || 'local';
+  // 容器里没有 git/cmake 等编译工具，不能在这里装本机 whisper.cpp。
+  const containerMode = c?.runtime?.container === true;
   // 用户要求：只给两个选项 —— 免费的本机 Whisper，或"用 API Key 的托管服务"（具体哪家由下面的服务预设决定）
   const mode = provider === 'local' ? 'local' : 'api';
   const hide = (want) => (mode === want ? '' : 'display:none');
@@ -109,13 +111,16 @@ function renderAsrSection(c) {
         当前会自动用：<code>${esc(c.asr?.localBinResolved || '（还没找到可执行文件）')}</code>
         ＋ <code>${esc(c.asr?.localModelResolved || '（还没找到模型文件）')}</code>
       </div>
-      <div class="field" id="asr-install-field">
+      <div class="field" id="asr-install-field" style="${containerMode ? 'display:none' : ''}">
         <button class="btn btn-primary btn-small" id="asr-install-btn" type="button">${localInstalled ? '重新安装 / 修复' : '安装本机转写（免费）'}</button>
         ${localRemovable ? '<button class="btn btn-small btn-danger" id="asr-uninstall-btn" type="button">完全卸载（删除模型与程序）</button>' : ''}
         <span id="asr-install-hint" class="muted">${localInstalled
           ? '已装好，无需再装。'
           : '约 466MB（small 模型）+ 几分钟构建；装完自动生效，不用重启。'}</span>
         <div id="asr-install-progress" class="hint" style="display:none"></div>
+      </div>
+      <div class="hint" id="asr-container-hint" style="${containerMode ? '' : 'display:none'}">
+        容器模式：镜像里没有编译工具，不能在这里安装本机转写。请改用上面的托管服务，或构建包含 whisper.cpp 的自定义镜像。
       </div>
     </div>
 

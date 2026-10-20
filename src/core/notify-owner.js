@@ -27,14 +27,16 @@ export function readOwnerUin(config = {}) {
  * 给 owner 发一条 QQ 私聊。
  * @returns {{ ok: boolean, detail: string }} 失败时 detail 带原因（供 health-check 记录）。
  */
-export async function sendOwnerText({ httpPort = 3390, token = '', ownerUin, text, fetchImpl = globalThis.fetch } = {}) {
+export async function sendOwnerText({ httpPort = 3390, httpUrl = '', token = '', ownerUin, text, fetchImpl = globalThis.fetch } = {}) {
   const owner = String(ownerUin || '').trim();
   if (!/^\d{5,15}$/.test(owner)) return { ok: false, detail: '未配置有效的全局管理员 QQ（admin.ownerUin）' };
   if (typeof fetchImpl !== 'function') return { ok: false, detail: '运行环境没有 fetch' };
+  // 容器里协议端是 compose 网络里的 snowluma:3000，不能拼 127.0.0.1；有完整 URL 就用它。
+  const base = String(httpUrl || '').trim().replace(/\/+$/, '') || `http://127.0.0.1:${httpPort}`;
   try {
     const headers = { 'content-type': 'application/json' };
     if (token) headers.authorization = `Bearer ${token}`;
-    const res = await fetchImpl(`http://127.0.0.1:${httpPort}/send_private_msg`, {
+    const res = await fetchImpl(`${base}/send_private_msg`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ user_id: Number(owner), message: text })

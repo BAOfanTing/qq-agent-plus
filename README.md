@@ -115,6 +115,23 @@ OneBot WebSocket
 
 ## 部署
 
+### Docker
+
+不想安装 systemd、只想跑容器时：
+
+```bash
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:<版本>
+git clone https://github.com/sakurawwwxh/qq-agent-plus.git
+cd qq-agent-plus
+docker compose up -d
+```
+
+体积敏感的场景注意：镜像磁盘约 1.2GB、压缩下载约 310MB，主要是 ffmpeg 及其依赖；
+项目只提供完整版，以保证语音、视频、GIF 与大图降采样和裸机一致。
+
+控制台访问信息在容器的 `/data/console-access.txt` 里（首次启动生成）。
+国内镜像、协议端镜像、从裸机迁移与容器模式限制见 [docs/DOCKER.md](docs/DOCKER.md)。
+
 ### 全栈部署
 
 全新 Linux 机器推荐使用一键安装脚本 `install.sh`：全程零提问，自动安装 Docker（需 sudo）、

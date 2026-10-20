@@ -12,6 +12,7 @@ import { esc } from '../core/dom.js';
 let lastStatus = null;
 
 function versionChip(st) {
+  if (st?.container) return '<span class="chip">容器模式 · 由 compose 管理</span>';
   if (!st?.installed) return '<span class="chip">未检测到协议端 compose 项目</span>';
   if (st.outdated) return `<span class="chip warn">落后于基线 ${esc(st.targetVersion || '')}</span>`;
   if (st.belowRecommended) return `<span class="chip warn">低于推荐 ${esc(st.minRecommended || '')}</span>`;
@@ -19,6 +20,7 @@ function versionChip(st) {
 }
 
 function fmtState(st) {
+  if (st?.container) return '当前以 Docker 容器运行：协议端镜像由 compose 管理，请在宿主机更新 compose 后重建容器';
   if (!st?.installed) return `没找到 ${st?.composeDir || '协议端目录'}/.env（这台机器可能没装协议端）`;
   const running = st.running ? '运行中' : `状态 ${st.runningState || '未知'}`;
   return `${st.container || 'qq-agent-snowluma'} · ${running}`;
@@ -41,11 +43,15 @@ async function hydrateSnowlumaPanel() {
     if (updateBtn) {
       // 已经是基线时别承诺"重建"：镜像 tag 没变，compose 不会重启容器（只拉取/校验）
       updateBtn.textContent = st.outdated && st.targetVersion ? `更新到 ${st.targetVersion}` : '重新拉取镜像';
-      updateBtn.disabled = !st.installed || st.busy;
+      updateBtn.disabled = st.container === true || !st.installed || st.busy;
     }
     const backBtn = document.getElementById('snowluma-rollback-btn');
-    if (backBtn) backBtn.disabled = !(st.lastResult?.from) || st.busy;
+    if (backBtn) backBtn.disabled = st.container === true || !(st.lastResult?.from) || st.busy;
     if (note) {
+      if (st.container) {
+        note.textContent = '容器模式：协议端镜像由 compose 管理；请在宿主机更新 compose 后重建容器。';
+        return;
+      }
       const bits = [];
       if (st.auto?.enabled) bits.push('自动更新：已开启（每 6 小时检查一次）');
       if (String(st.auto?.image || '').trim()) {
@@ -73,6 +79,10 @@ function bindSnowlumaActions() {
 
   document.getElementById('snowluma-update-btn')?.addEventListener('click', async (event) => {
     const btn = event.currentTarget;
+    if (lastStatus?.container) {
+      say('容器部署请在宿主机更新 compose 中的协议端镜像后重建容器。');
+      return;
+    }
     const outdated = lastStatus?.outdated === true;
     const target = lastStatus?.targetVersion ? ` ${lastStatus.targetVersion}` : '';
     const head = outdated
@@ -96,6 +106,10 @@ function bindSnowlumaActions() {
 
   document.getElementById('snowluma-rollback-btn')?.addEventListener('click', async (event) => {
     const btn = event.currentTarget;
+    if (lastStatus?.container) {
+      say('容器部署请在宿主机把镜像 tag 改回上一版后重建容器。');
+      return;
+    }
     if (!window.confirm('回滚到上一次更新前的镜像？（同样会重启协议端容器，登录态保留）')) return;
     btn.disabled = true;
     say('正在回滚…');

@@ -100,7 +100,16 @@ async function resumePause({ skipBacklog = false } = {}) {
 
 // 「更新部署」里的上次更新检查说明：口径是「已发布的 Release」，
 // 让"连不上 GitHub / 没有新 Release / 当前部署领先"这些情况都能看见，而不是完全无声。
+// 容器部署：更新是"换镜像"，控制台里的"立即更新"没有可执行的 systemd 服务。
+function containerManaged() {
+  return state.config?.runtime?.container === true;
+}
+
 function renderUpdateCheckNote(update = {}) {
+  if (containerManaged()) {
+    return '当前以 Docker 容器运行：应用由镜像管理。更新请在宿主机执行'
+      + ' docker compose pull && docker compose up -d（数据卷不动）。';
+  }
   const short = (value) => (value ? String(value).slice(0, 12) : '-');
   const check = update.updateNotice && typeof update.updateNotice === 'object' ? update.updateNotice : null;
   if (!check || (!check.checkedAt && !check.error)) {
@@ -171,10 +180,17 @@ async function pauseAutoUpdate() {
 }
 
 async function runManualUpdate() {
+  const result = $('#auto-update-result');
+  if (containerManaged()) {
+    if (result) {
+      result.textContent = '容器部署请在宿主机执行：docker compose pull && docker compose up -d';
+      result.className = 'control-result muted';
+    }
+    return;
+  }
   if (!await askForConfirmation('立即检查 GitHub 最新代码并尝试部署？服务会在部署阶段短暂重启。')) {
     return;
   }
-  const result = $('#auto-update-result');
   if (result) result.textContent = '更新任务已提交…';
   try {
     const response = await api('/api/auto-update/run', {
@@ -194,6 +210,13 @@ async function runManualUpdate() {
 async function runUpdateFromNotice() {
   const result = $('#update-notice-result');
   const runBtn = $('#update-notice-run');
+  if (containerManaged()) {
+    if (result) {
+      result.textContent = '容器部署请在宿主机执行：docker compose pull && docker compose up -d';
+      result.className = 'control-result muted';
+    }
+    return;
+  }
   if (runBtn) runBtn.disabled = true;
   if (result) { result.textContent = '正在提交更新任务…'; result.className = 'control-result muted'; }
   try {

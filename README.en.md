@@ -141,6 +141,23 @@ duplicate replies.
 
 ## Deployment
 
+### Docker
+
+For container-only deployments:
+
+```bash
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:<version>
+git clone https://github.com/sakurawwwxh/qq-agent-plus.git
+cd qq-agent-plus
+docker compose up -d
+```
+
+The console access token is written to `/data/console-access.txt` on first start.
+The image is about 1.2GB on disk / ~310MB compressed; most of it is ffmpeg and its
+dependencies. Only the full image is published (no slim variant), so audio, video, GIF and
+large-image handling match a bare-metal install.
+See [docs/DOCKER.md](docs/DOCKER.md) for the full stack, China mirrors and migration.
+
 ### Full-stack installation
 
 A fresh Linux machine should use the one-command installer `install.sh`: it runs with no questions,

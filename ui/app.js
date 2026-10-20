@@ -647,6 +647,8 @@ async function saveAutoUpdateSettings(resume) {
 
 // ── 发现新版本提示（只在控制台打开时检查一次；失败静默）───────────────────────
 async function checkUpdateNotice() {
+  // 容器部署由镜像管理：弹"发现新版本 / 立即更新"只会把用户引到一个点不动的按钮。
+  if (state.config?.runtime?.container === true) return;
   let payload = null;
   try {
     payload = await api('/api/auto-update/check');

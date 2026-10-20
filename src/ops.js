@@ -26,6 +26,7 @@ import { runHealthCheck } from './core/health-check.js';
 import { readTextBounded } from './core/http-body.js';
 import { SNOWLUMA_BASELINE_IMAGE, createSnowlumaUpdater } from './core/snowluma-update.js';
 import { readOwnerUin, sendOwnerText } from './core/notify-owner.js';
+import { isContainerRuntime, containerUpdateHint } from './core/runtime.js';
 import { pruneAudit } from './core/audit-log.js';
 import { installPlugin, readPluginInstallInfo, sha256Of } from './plugins/install.js';
 import { resolveModelPrice, modelLabel, setRemotePrices, setChannelPrices } from './pricing/model-prices.js';
@@ -1896,6 +1897,11 @@ async function cmdSnowlumaVersion(args) {
 
 async function cmdSnowlumaUpdate(args) {
   if (wantsHelp(args)) { say(HELP['snowluma-update']); return 0; }
+  // 容器里没有宿主 docker 套接字，也没有协议端 compose 项目可改；更新只能换镜像。
+  if (isContainerRuntime()) {
+    badWarn(containerUpdateHint());
+    return 1;
+  }
   const { updater } = makeSnowlumaUpdater(args);
   const to = optValue(args, '--to', '');
   const dryRun = hasFlag(args, '--dry-run');
@@ -1940,19 +1946,29 @@ async function cmdHealthCheck(args) {
   try { cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8')); } catch { /* 没有配置＝按默认端口探测 */ }
   const onebotToken = String(cfg.onebot?.httpAccessToken || cfg.onebot?.accessToken || '');
   const onebotHttpPort = Number(intEnv('QQ_AGENT_ONEBOT_HTTP_PORT', Number(cfg.onebot?.httpPort) || Number(cfgBase.onebotPort) || 3390));
+  // 容器/声明式部署里配置写的是完整 URL（snowluma:3000）；只传端口会去探 127.0.0.1。
+  let onebotHttpUrl = String(cfg.onebot?.httpUrl || '').trim();
+  if (!onebotHttpUrl) {
+    try {
+      const parsed = new URL(`http://127.0.0.1:${onebotHttpPort}`);
+      onebotHttpUrl = parsed.href.replace(/\/+$/, '');
+    } catch { onebotHttpUrl = ''; }
+  }
   const ownerUin = readOwnerUin(cfg);
   const result = await runHealthCheck({
     dataDir,
     mode: String(cfg.runtime?.mode || 'active'),
     consolePort: Number(cfg.server?.port) || Number(cfgBase.consolePort) || 3210,
     onebotHttpPort,
+    onebotHttpUrl,
     onebotToken,
+    containerRuntime: isContainerRuntime(),
     snowlumaDir: cfgBase.snowlumaDir,
     // NNP 探测用（2026-10-09 审查）：主进程被加固时 sudo 回退必失败，巡检不能拿它当"能用"
     service: cfgBase.service,
     // 破坏性操作显式确认的同一口径：--confirm 才允许真的发 QQ 通知，--print/无参只巡检
     notify: hasFlag(args, '--confirm') && ownerUin
-      ? (text) => sendOwnerText({ httpPort: onebotHttpPort, token: onebotToken, ownerUin, text })
+      ? (text) => sendOwnerText({ httpPort: onebotHttpPort, httpUrl: onebotHttpUrl, token: onebotToken, ownerUin, text })
       : null
   });
   say(JSON.stringify({ healthy: result.healthy, notified: result.notified, checks: result.checks }, null, 2));
