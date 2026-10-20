@@ -1235,11 +1235,49 @@ html.boot-show .loading-overlay { opacity: 1; }
 .rule-chip { cursor: pointer; color: var(--muted); font: inherit; font-size: var(--fs-xs); }
 .rule-chip:hover { color: var(--text); border-color: var(--accent); background: var(--hover); }
 .rule-chip:active { background: var(--active); }
-/* 按群人设：一行一个会话，窄屏折行 */
-.per-chat-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.per-chat-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.per-chat-name { min-width: 132px; font-size: var(--fs-sm); color: var(--muted); }
-.per-chat-select { max-width: 320px; }
+/* 人设身份区：四个短字段排一行。全局 .field-row 是固定三轨（为了跨行对齐），
+   这一行有四个字段，塞三轨会把「参与度」挤到下一行、第一列还会因为带提示而更高。
+   这里单独给四轨，窄屏降两列/一列；提示统一放在行下方（一个字段带提示、其余不带会显得突兀）。 */
+/* 两段类名：.field-row 的基础定义在文件更后面，单类名会被它按顺序覆盖。 */
+.field-row.persona-identity-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+/* 全站字段已统一「标签在上、控件在下」，这里不需要再单独覆盖排版。 */
+.persona-identity-hint > div + div { margin-top: 4px; }
+@media (max-width: 1240px) {
+  .field-row.persona-identity-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .field-row.persona-identity-row { grid-template-columns: minmax(0, 1fr); }
+}
+/* 按群人设：会话多时按卡片网格排（每张卡：名称 + 下拉），不再一列拉到底。
+   auto-fit 让宽屏 3 列、中等 2 列、窄屏 1 列；名称过长省略，不把下拉挤出去。 */
+.per-chat-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 8px 14px;
+  margin-top: 8px;
+}
+.per-chat-row {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(140px, 1.1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-input);
+  background: var(--bg-2);
+}
+.per-chat-name {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-sm); color: var(--muted);
+}
+.per-chat-select { width: 100%; min-width: 0; max-width: none; }
+@media (hover: hover) and (pointer: fine) {
+  .per-chat-row:hover { border-color: var(--accent-border); }
+}
+@media (max-width: 760px) {
+  .per-chat-list { grid-template-columns: minmax(0, 1fr); }
+}
 .pd-chat { margin: 6px 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-input); background: var(--bg); }
 .pd-msg { display: flex; align-items: flex-start; gap: 6px; margin: 4px 0; font-size: var(--fs-sm); }
 .pd-msg .mark { font-family: var(--mono); font-size: var(--fs-xs); width: 12px; text-align: center; line-height: 1.6; }
@@ -1360,16 +1398,16 @@ html.boot-show .loading-overlay { opacity: 1; }
 .daily-moments-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
 .daily-moments-status .field { min-width: 0; margin-bottom: 12px; overflow-wrap: anywhere; }
 .daily-moments-status .table-wrap { overflow-x: auto; }
-.moment-window-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(60px, .7fr) 32px; align-items: end; gap: 10px; margin-bottom: 10px; }
+.moment-window-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(60px, .7fr) 40px; align-items: end; gap: 10px; margin-bottom: 10px; }
 .moment-window-row .field { min-width: 0; margin: 0; }
-.moment-window-row input { min-width: 0; width: 100%; height: 34px; box-sizing: border-box; }
-.moment-window-remove { width: 32px; height: 32px; padding: 0; margin-bottom: 2px; }
+/* 与全站表单控件同高（40px）：原来写死 34px，时间范围这一行比同页其它输入框矮一截。 */
+.moment-window-row input { min-width: 0; width: 100%; height: 40px; box-sizing: border-box; }
+.moment-window-remove { width: 40px; height: 40px; padding: 0; }
 .moment-schedule { margin-bottom: 14px; min-width: 0; }
 .moment-schedule summary { cursor: pointer; padding: 8px 0; font-size: var(--fs-md); }
 @media (max-width: 420px) {
-  .moment-window-row { gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 58px 28px; }
+  .moment-window-row { gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 58px 40px; }
   .moment-window-row input { padding: 6px 3px; }
-  .moment-window-remove { width: 28px; }
 }
 .moment-error { color: var(--red); overflow-wrap: anywhere; margin: 12px 0; font-size: var(--fs-md); }
 .qzone-run-detail-row td { padding: 0 10px 10px; background: var(--bg-2); }
@@ -1870,7 +1908,7 @@ html.boot-show .loading-overlay { opacity: 1; }
   margin-top: 12px;
 }
 .control-password-form label { display: grid; gap: 5px; min-width: 0; }
-.control-password-form label > span { color: var(--muted); font-size: var(--fs-xs); }
+.control-password-form label > span { color: var(--muted); font-size: var(--fs-sm); font-weight: 600; letter-spacing: .2px; }
 .control-password-form input { min-width: 0; }
 .control-password-form .btn { min-height: 34px; white-space: nowrap; }
 .control-result { min-height: 18px; margin-top: 8px; font-size: var(--fs-xs); }
@@ -2939,34 +2977,14 @@ body {
    为什么用 `:not(:has(.hint))` 分流：带说明文字的字段需要纵向空间放助手文字
    （Carbon：助手文字在控件下方、始终可见），它们的观感问题本来就不是"空框"。
    ══════════════════════════════════════════════════════════════════════════════ */
-.field:not(:has(.hint)):not(:has(> label.checkbox-row)) {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 14px;
-}
-/* 标签固定列宽：所有行的控件都从同一条竖线开始（Ant Design 的 labelCol 思路）。
-   150px 是按最长标签量的（"旧模式最低累计消息" 9 字 ≈ 113px，留出余量）。 */
-.field:not(:has(.hint)):not(:has(> label.checkbox-row)) > label {
-  flex: 0 0 150px;
-  margin: 0;
-  align-self: center;
-}
-.field:not(:has(.hint)):not(:has(> label.checkbox-row)) > :not(label) {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-/* 数字：按内容定宽（8ch ≈ 7 位数字 + 一点余量）。不是"所有数字都这么窄" —— 它只影响
-   参数行里的数字；句子里那种行内小数字有自己的规则。 */
-.field:not(:has(.hint)):not(:has(> label.checkbox-row)) > input[type='number'] {
-  flex: 0 0 auto;
-  width: calc(8ch + 30px);
-}
-/* 下拉：按内容定宽（fit 最长选项），不拉满整行 —— 拉满就会出现"右边一大截空白" */
-.field:not(:has(.hint)):not(:has(> label.checkbox-row)) > select {
-  flex: 0 1 auto;
-  width: auto;
-  max-width: 100%;
+/* 表单统一「标签在上、控件在下」（2026-10-19 UI 审查）。
+   原先密集参数行用「标签左、控件右」：同一页里文本框因为 100% 宽会换行成"标签在上"，
+   下拉却留在"标签在左"，同一行出现两种对齐（人设页的错位就是这么来的）。
+   现在所有字段统一标签在上；数字/下拉按内容定宽，不再拉满整行。 */
+.field > input[type='number'] { max-width: calc(8ch + 30px); }
+.field > select { max-width: 380px; }
+@media (max-width: 760px) {
+  .field > input[type='number'], .field > select { max-width: none; }
 }
 
 /* ── 旧式内联字段（<label><span>标题</span><input></label>，如"更新部署"）── */

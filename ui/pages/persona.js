@@ -468,9 +468,8 @@ function renderPersonaSection(c) {
       <div class="hint">上面那屏是这份原文的读法，保存的也是这份原文。平时逐节改就够了（每节右上角有「编辑」「恢复本节」）；
         这里改一个字也会<strong>解除与内置卡的绑定</strong>（正文归你自己管），想重新跟随卡文件，回上面的卡库里点一下那张卡。</div>
     </div>
-    <div class="field-row">
-      <div class="field"><label>机器人名字</label><input type="text" id="cfg-botname" value="${esc(c.persona.botName)}" />
-        <div class="hint">它是账号的名字，<strong>不随角色卡切换</strong>（换卡只换下面的正文）；群里显示的是「群内展示名」或 QQ 群名片。</div></div>
+    <div class="field-row persona-identity-row">
+      <div class="field"><label>机器人名字</label><input type="text" id="cfg-botname" value="${esc(c.persona.botName)}" /></div>
       <div class="field"><label>群内展示名（可选）</label><input type="text" id="cfg-selfnick" value="${esc(c.persona.selfNickname || '')}" /></div>
       <div class="field"><label>交流策略</label>
         <select id="cfg-behavior-profile">
@@ -484,7 +483,10 @@ function renderPersonaSection(c) {
           <option value="high" ${c.persona.participation === 'high' ? 'selected' : ''}>活跃型</option>
         </select></div>
     </div>
-    <div class="hint">交流策略：「原版群友」那套允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据。嫌它冲或想让它听话，选后者。角色设定里写了相反的脾气时，以角色设定为准（它优先级更高）；参与度（安静/普通/活跃）不受角色设定影响。</div>
+    <div class="hint persona-identity-hint">
+      <div><strong>机器人名字</strong>：账号名字，<strong>不随角色卡切换</strong>（换卡只换上面的正文）；群里显示的是「群内展示名」或 QQ 群名片。</div>
+      <div><strong>交流策略</strong>：「原版群友」允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据。嫌它冲或想让它听话，选后者。角色设定里写了相反的脾气时，以角色设定为准（优先级更高）；参与度（安静/普通/活跃）不受角色设定影响。</div>
+    </div>
     <div class="field"><label>管理员附加规则（可选；排在所有平台规则之后 —— 想压过默认风格就写这里）</label>
       <div class="pd-tags" id="persona-rule-chips">
         ${PERSONA_RULE_EXAMPLES.map((rule) => `<button type="button" class="pd-tag rule-chip" data-rule="${esc(rule)}">＋ ${esc(rule)}</button>`).join('')}
