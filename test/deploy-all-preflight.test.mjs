@@ -19,7 +19,12 @@ function fixture(t, { fakeUid = null } = {}) {
   fs.mkdirSync(bin);
   fs.mkdirSync(home);
   fs.mkdirSync(path.join(source, 'scripts'), { recursive: true });
-  for (const file of ['deploy-all.sh', 'scripts/check-stack-update.mjs', 'scripts/configure-snowluma.mjs']) {
+  for (const file of [
+    'deploy-all.sh',
+    'scripts/check-platform.sh',
+    'scripts/check-stack-update.mjs',
+    'scripts/configure-snowluma.mjs'
+  ]) {
     fs.copyFileSync(path.join(repo, file), path.join(source, file));
   }
   fs.writeFileSync(path.join(source, 'deploy.sh'), '#!/bin/bash\nexit 0\n');
@@ -87,6 +92,9 @@ else process.exit(90);
       cwd: source,
       env: {
         HOME: home, PATH: `${bin}:/usr/bin:/bin`,
+        // 这组用例用 POSIX 桩替代真实 systemd/包管理器；发行版体检由
+        // test/platform-check.test.mjs 单独覆盖，这里不重复跑真实探测。
+        QQ_AGENT_PLATFORM_CHECKED: '1',
         QQ_PREFLIGHT_FIXTURE: stateFile, QQ_PREFLIGHT_CALLS: callsFile
       },
       encoding: 'utf8',
