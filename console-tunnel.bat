@@ -22,7 +22,7 @@ rem  等价工具（本机已装 Node 时）：node src/ops.js console --open
 rem ===========================================================================
 
 set "CFG=%~dp0.console-tunnel.cfg"
-set "SSHOPTS=-o"ServerAliveInterval=30" -o"ServerAliveCountMax=3" -o"ConnectTimeout=15" -o"ExitOnForwardFailure=yes""
+set "SSHOPTS=-o"BatchMode=yes" -o"ServerAliveInterval=30" -o"ServerAliveCountMax=3" -o"ConnectTimeout=15" -o"ExitOnForwardFailure=yes""
 if "%QQ_AGENT_CONSOLE_PORT%"=="" (set "CONSOLE_PORT=3210") else (set "CONSOLE_PORT=%QQ_AGENT_CONSOLE_PORT%")
 if "%QQ_AGENT_WEBUI_PORT%"=="" (set "WEBUI_PORT=5099") else (set "WEBUI_PORT=%QQ_AGENT_WEBUI_PORT%")
 if "%QQ_AGENT_VNC_PORT%"=="" (set "VNC_PORT=6081") else (set "VNC_PORT=%QQ_AGENT_VNC_PORT%")
