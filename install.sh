@@ -27,7 +27,7 @@ esac
 
 # 发行版/运行环境体检：Alpine（musl）、无 systemd、无包管理器的环境直接说清楚，
 # 不要让用户在装到一半才看到 Node 二进制或 systemctl 报错。
-if [[ "$(uname -s)" == "Linux" ]]; then
+if [[ "$(uname -s)" == "Linux" && "${QQ_AGENT_PLATFORM_CHECKED:-}" != "1" ]]; then
   if ! bash "$SCRIPT_DIR/scripts/check-platform.sh" --strict; then
     die '当前系统不受支持（原因见上）。推荐 Ubuntu 22.04/24.04、Debian 12、Rocky/Alma 9；openSUSE 等 dnf/zypper 系可尝试，但属于预期可用、未实测。'
   fi

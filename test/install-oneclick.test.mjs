@@ -49,6 +49,8 @@ function run(f, args = [], env = {}) {
       // 由 t.after 统一清掉，别往系统临时目录漏 qq-* 文件（测试卫生）。
       TMPDIR: f.dir,
       QQ_STUB_ARGS: f.argsFile,
+      // 这组用例用桩 deploy-all，不跑真实发行版探测；发行版体检由 platform-check 用例覆盖。
+      QQ_AGENT_PLATFORM_CHECKED: '1',
       // 模型意图探测会看这几个环境变量：测试里先清掉，避免外层环境干扰断言
       QQ_AGENT_MODEL_BASE_URL: '', QQ_AGENT_MODEL_API_KEY: '', QQ_AGENT_MODEL: '',
       ...env
