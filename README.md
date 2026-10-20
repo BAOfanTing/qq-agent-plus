@@ -120,7 +120,11 @@ OneBot WebSocket
 不想安装 systemd、只想跑容器时：
 
 ```bash
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:<版本>
+# 海外 / GitHub 可达
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3
+# 国内（阿里云 ACR，公开，amd64/arm64）
+docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.3
+
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
 docker compose up -d

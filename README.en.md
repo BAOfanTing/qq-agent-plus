@@ -146,7 +146,11 @@ duplicate replies.
 For container-only deployments:
 
 ```bash
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:<version>
+# GHCR
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3
+# China (Aliyun ACR, public, amd64/arm64)
+docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.3
+
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
 docker compose up -d
