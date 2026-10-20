@@ -91,6 +91,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # 阿里云 ACR 个人版不接受 BuildKit 的 attestation manifest
+          # （application/vnd.oci.empty.v1+json，复制时会 403）。关掉 provenance/SBOM，
+          # 输出标准 OCI image index，GHCR 与 ACR 都能用。
+          provenance: false
+          sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
