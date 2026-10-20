@@ -51,8 +51,10 @@ services:
 
   agent:
     # 国内网络：GHCR 慢/不可达时，换成 GHCR 镜像站或你自己的仓库，例如
-    #   QQ_AGENT_IMAGE=ghcr.nju.edu.cn/sakurawwwxh/qq-agent-plus:latest
-    image: ${QQ_AGENT_IMAGE:-ghcr.io/sakurawwwxh/qq-agent-plus:latest}
+    #   QQ_AGENT_IMAGE=ghcr.nju.edu.cn/sakurawwwxh/qq-agent-plus:0.9.3
+    # 默认钉在最近一次发布的版本；升级时改这里或设 QQ_AGENT_IMAGE。
+    # 不要默认 latest：首次发布前 latest 不存在，docker compose 会拉取失败。
+    image: ${QQ_AGENT_IMAGE:-ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3}
     container_name: ${QQ_AGENT_CONTAINER:-qq-agent}
     restart: unless-stopped
     init: true

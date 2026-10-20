@@ -49,7 +49,9 @@ test('.dockerignore：不把 node_modules、数据、测试与构建上下文垃
 
 test('compose：控制台只绑 127.0.0.1、根文件系统只读、不挂 docker.sock', () => {
   assert.match(compose, /image: \$\{SNOWLUMA_IMAGE:-/);
-  assert.match(compose, /image: \$\{QQ_AGENT_IMAGE:-/);
+  // 应用镜像默认必须是已发布的版本 tag，不能是 latest（首次发布前 latest 不存在）
+  assert.match(compose, /image: \$\{QQ_AGENT_IMAGE:-ghcr\.io\/sakurawwwxh\/qq-agent-plus:\d+\.\d+\.\d+\}/);
+  assert.doesNotMatch(compose, /QQ_AGENT_IMAGE:-[^}]*:latest/);
   assert.match(compose, /127\.0\.0\.1:\$\{QQ_AGENT_PORT:-3210\}:3210/);
   assert.match(compose, /127\.0\.0\.1:\$\{SNOWLUMA_WEBUI_HOST_PORT:-5099\}:5099/);
   assert.match(compose, /read_only: true/);

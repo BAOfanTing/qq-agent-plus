@@ -22,6 +22,9 @@ ffmpeg 及其依赖（约 470MB 的层）；不提供精简变体，以保证语
 docker compose up -d
 ```
 
+compose 里的应用镜像默认钉在当前版本（示例为 `0.9.3`）；升级时改 compose 里的默认值，或设
+`QQ_AGENT_IMAGE=<镜像>:<版本>`。不要用 `latest` 当默认值——首次发布前它不存在，会拉取失败。
+
 这会启动两个服务：
 
 - `snowluma`：QQ 协议端，WebUI 在 `127.0.0.1:5099`；
