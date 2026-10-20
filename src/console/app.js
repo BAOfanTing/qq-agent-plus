@@ -47,6 +47,7 @@ import { scanModelsVision, visionResults } from '../llm/vision-scan.js';
 import { builtinVisionResults } from '../llm/model-vision-docs.js';
 import { createEventBus, todayKey, shanghaiDayStart, isSelfSender, safeSlice, sanitizeUserText, textWithQuote } from '../core/util.js';
 import { assertCanSend } from '../core/access.js';
+import { idList } from '../core/list.js';
 import { isTimeActive } from '../core/time-gate.js';
 import { timeControlState, TIME_ZONE } from '../core/time-control.js';
 import { IdentityPilotManager, inactiveIdentityPilotStatus } from '../identity/identity-pilot.js';
@@ -145,10 +146,10 @@ function rewriteAssetUrls(html) {
 // ── 白名单判断（移植自原版 allowed()） ───────────────────────────────────
 function allowed(kind, id, cfg) {
   const s = String(id);
-  const denyList = cfg.deny?.[kind] ?? cfg.deny?.[`${kind}s`] ?? [];
-  if (denyList.map(String).includes(s)) return false;
-  const allowList = cfg.allow?.[kind] ?? cfg.allow?.[`${kind}s`] ?? [];
-  if (allowList.length > 0) return allowList.map(String).includes(s);
+  const denyList = idList(cfg.deny?.[kind] ?? cfg.deny?.[`${kind}s`]);
+  if (denyList.includes(s)) return false;
+  const allowList = idList(cfg.allow?.[kind] ?? cfg.allow?.[`${kind}s`]);
+  if (allowList.length > 0) return allowList.includes(s);
   return cfg.allowAllWhenEmpty === true;
 }
 
@@ -745,6 +746,7 @@ export function createApp({
       { name: '关系台账', run: () => identityPilot?.pruneRelationshipHistory?.() },
       { name: '异常台账', run: () => incidentPilot?.pruneResolvedIncidents() },
       { name: '运行台账', run: () => store.pruneRuns() },
+      { name: '发送台账', run: () => store.pruneOutbox() },
       { name: '会话留档', run: () => sessions.pruneSessions() }
     ];
   }
@@ -842,11 +844,10 @@ export function createApp({
         const id = String(userId || '').trim();
         if (!/^\d{1,15}$/.test(id)) throw new Error('好友 QQ 号无效');
         const privateAllow = [...new Set([
-          ...(current.allow?.private || []).map(String),
+          ...idList(current.allow?.private),
           id
         ])];
-        const privateDeny = (current.deny?.private || [])
-          .map(String)
+        const privateDeny = idList(current.deny?.private)
           .filter((item) => item !== id);
         updateConfig({
           allow: { ...(current.allow || {}), private: privateAllow },
@@ -1250,8 +1251,8 @@ export function createApp({
     const cfgNow = getConfig();
     const windowMs = catchupReplyWindowMs(cfgNow);
     const targets = [
-      ...(cfgNow.allow?.groups ?? []).map((g) => ({ kind: 'group', id: String(g) })),
-      ...(cfgNow.allow?.private ?? []).map((p) => ({ kind: 'private', id: String(p) }))
+      ...idList(cfgNow.allow?.groups).map((g) => ({ kind: 'group', id: g })),
+      ...idList(cfgNow.allow?.private).map((p) => ({ kind: 'private', id: p }))
     ];
     for (const { kind, id } of targets) {
       const chatKey = `${kind}:${id}`;
@@ -2933,7 +2934,7 @@ export function createApp({
     // 白名单里的群没有记忆也要显示
     const seen = new Set(files.map((f) => f.chatKey));
     // 补上白名单里还没有记忆的会话（缺字段也要有默认值，前端统一处理）
-    for (const gid of (getConfig().allow?.groups || [])) {
+    for (const gid of idList(getConfig().allow?.groups)) {
       const key = `group:${String(gid)}`;
       if (!seen.has(key)) {
         files.push({
@@ -2942,7 +2943,7 @@ export function createApp({
         });
       }
     }
-    for (const uid of (getConfig().allow?.private || [])) {
+    for (const uid of idList(getConfig().allow?.private)) {
       const key = `private:${String(uid)}`;
       if (!seen.has(key)) {
         files.push({
@@ -4499,8 +4500,8 @@ export function createApp({
     const now = Date.now();
     const keys = [...new Set([
       ...store.listChats(),
-      ...(cfgNow.allow?.groups || []).map((id) => `group:${id}`),
-      ...(cfgNow.allow?.private || []).map((id) => `private:${id}`),
+      ...idList(cfgNow.allow?.groups).map((id) => `group:${id}`),
+      ...idList(cfgNow.allow?.private).map((id) => `private:${id}`),
       ...Object.keys(cfgNow.timeControl?.overrides || {})
     ])];
     return json(res, 200, {

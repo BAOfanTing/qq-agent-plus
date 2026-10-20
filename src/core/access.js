@@ -1,17 +1,9 @@
 import { getConfig } from './config.js';
 import { isTimeActive } from './time-gate.js';
+import { idList } from './list.js';
 
-/**
- * 名单字段读成字符串数组。
- * 为什么要防御：config.json 可以手改，`POST /api/config` 也会照单全收 —— 把 allow.groups
- * 写成字符串（`"123"`）时 `.map` 直接抛，而 chatAllowed 在**每条消息**的进路上（canRun →
- * onIncoming / scheduleWake / #wake），抛一次就等于机器人从此不吭声、只在日志里刷错。
- * 形状不对按"空名单"处理（配合 allowAllWhenEmpty 的既有语义），与 config 里其它段
- * 的形状守卫同一口径（2026-10-08 审查）。
- */
-function idList(value) {
-  return Array.isArray(value) ? value.map(String) : [];
-}
+// 名单字段读成字符串数组的守卫集中到 list.js；这里保留导出，兼容既有调用方。
+export { idList };
 
 export function chatAllowed(chatKey, cfg = getConfig()) {
   const [kind, id] = String(chatKey).split(':');

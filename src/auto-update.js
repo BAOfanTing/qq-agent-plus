@@ -3,6 +3,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { normalizeUpdateNetworkSettings } from './update-network.js';
 import { isContainerRuntime, containerUpdateHint } from './core/runtime.js';
+import { idList } from './core/list.js';
 
 const STATE_FILE = 'auto-update.json';
 const REQUEST_FILE = 'auto-update-request.json';
@@ -492,7 +493,7 @@ export class AutoUpdateManager {
       }
       if (
         cfg.allowAllWhenEmpty !== true
-        && !(cfg.allow?.private || []).map(String).includes(ownerUin)
+        && !idList(cfg.allow?.private).includes(ownerUin)
       ) {
         throw updateError('全局管理员 QQ 必须同时加入私聊白名单', 400);
       }

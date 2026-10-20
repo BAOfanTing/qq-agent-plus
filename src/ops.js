@@ -27,6 +27,7 @@ import { readTextBounded } from './core/http-body.js';
 import { SNOWLUMA_BASELINE_IMAGE, createSnowlumaUpdater } from './core/snowluma-update.js';
 import { readOwnerUin, sendOwnerText } from './core/notify-owner.js';
 import { isContainerRuntime, containerUpdateHint } from './core/runtime.js';
+import { idList } from './core/list.js';
 import { pruneAudit } from './core/audit-log.js';
 import { installPlugin, readPluginInstallInfo, sha256Of } from './plugins/install.js';
 import { resolveModelPrice, modelLabel, setRemotePrices, setChannelPrices } from './pricing/model-prices.js';
@@ -937,7 +938,7 @@ async function auditServer(args) {
     noteLine(`模型: ${cfgJson.api?.model} @ ${cfgJson.api?.baseUrl}`);
     const fallback = cfgJson.api?.fallback || {};
     noteLine(`兜底模型: ${fallback.model && fallback.enabled !== false ? `${fallback.model} @ ${fallback.baseUrl}` : '（未配置/已停用）'}`);
-    noteLine(`白名单群/私聊: ${(cfgJson.allow?.groups || []).length} / ${(cfgJson.allow?.private || []).length}`);
+    noteLine(`白名单群/私聊: ${idList(cfgJson.allow?.groups).length} / ${idList(cfgJson.allow?.private).length}`);
     noteLine(`模型密钥(api.apiKey): ${cfgJson.api?.apiKey ? '有' : '无'}`);
     noteLine(`控制台令牌(server.token): ${cfgJson.server?.token ? '有' : '无'}`);
     noteLine(`OneBot 令牌(onebot.accessToken/httpAccessToken): ${cfgJson.onebot?.accessToken || cfgJson.onebot?.httpAccessToken ? '有' : '无'}`);

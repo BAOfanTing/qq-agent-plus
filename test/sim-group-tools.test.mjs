@@ -517,7 +517,8 @@ it('定时提醒·延后唤醒：deferTo 到点只对目标群触发一次，不
     assert.deepEqual(reminders.due().map((x) => x.chatKey), ['group:701']);
 
     runner.fireDueReminders();
-    // 派发是"同步标记 + 异步唤醒"：标记立刻可见
+    // 标记已触发改到"唤醒完成并确认播报"之后，等它落定
+    await waitFor(() => reminders.list('group:701', { includeDone: true }).find((x) => x.id === a.id).status === 'fired');
     assert.equal(reminders.list('group:701', { includeDone: true }).find((x) => x.id === a.id).status, 'fired');
     assert.equal(reminders.list('group:702')[0].status, 'pending', '没到的群不该被触发');
 

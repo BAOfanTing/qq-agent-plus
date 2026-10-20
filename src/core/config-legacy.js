@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PERSONAS, normalizeBehaviorProfile, applyPersonaTemplate, applyPersonaPerChatTemplates } from '../personas.js';
+import { idList } from './list.js';
 import {
   clampProbability,
   legacySliderToProbability,
@@ -1893,7 +1894,7 @@ export function updateConfig(patch) {
     if (!ownerUin) throw new Error('好友审批功能需要配置管理员 QQ');
     if (
       next.allowAllWhenEmpty !== true
-      && !(next.allow?.private || []).map(String).includes(ownerUin)
+      && !idList(next.allow?.private).includes(ownerUin)
     ) {
       throw new Error('审批管理员 QQ 必须同时加入私聊白名单');
     }
@@ -1923,7 +1924,7 @@ export function updateConfig(patch) {
     }
     if (
       next.allowAllWhenEmpty !== true
-      && !(next.allow?.private || []).map(String).includes(next.incidentPilot.ownerUin)
+      && !idList(next.allow?.private).includes(next.incidentPilot.ownerUin)
     ) {
       throw new Error('异常告警管理员 QQ 必须同时加入私聊白名单');
     }
@@ -1969,7 +1970,7 @@ export function updateConfig(patch) {
     }
     if (
       next.allowAllWhenEmpty !== true
-      && !(next.allow?.private || []).map(String).includes(next.autoUpdate.ownerUin)
+      && !idList(next.allow?.private).includes(next.autoUpdate.ownerUin)
     ) {
       throw new Error('自动更新管理员 QQ 必须同时加入私聊白名单');
     }
@@ -2029,7 +2030,7 @@ export function updateConfig(patch) {
     if (!ownerUin) throw new Error('黑话语料库试点需要配置审批管理员 QQ');
     if (
       next.allowAllWhenEmpty !== true
-      && !(next.allow?.private || []).map(String).includes(ownerUin)
+      && !idList(next.allow?.private).includes(ownerUin)
     ) {
       throw new Error('黑话审批管理员 QQ 必须同时加入私聊白名单');
     }
