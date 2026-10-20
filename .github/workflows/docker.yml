@@ -112,7 +112,6 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Check CN credentials
         id: cn
         env:
@@ -126,23 +125,20 @@ jobs:
             echo "未配置 CN_REGISTRY_USERNAME / CN_REGISTRY_PASSWORD，跳过国内镜像推送"
           fi
       - if: steps.cn.outputs.enabled == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
       - if: steps.cn.outputs.enabled == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ${{ vars.CN_REGISTRY }}
-          username: ${{ secrets.CN_REGISTRY_USERNAME }}
-          password: ${{ secrets.CN_REGISTRY_PASSWORD }}
-      - if: steps.cn.outputs.enabled == 'true'
-        name: Copy multi-arch manifests to CN registry
+        name: Copy multi-arch image to CN registry (HTTP/1.1, retries)
         env:
           CN_REGISTRY: ${{ vars.CN_REGISTRY }}
           CN_NAMESPACE: ${{ vars.CN_NAMESPACE }}
           CN_IMAGE_NAME: ${{ vars.CN_IMAGE_NAME }}
+          CN_REGISTRY_USERNAME: ${{ secrets.CN_REGISTRY_USERNAME }}
+          CN_REGISTRY_PASSWORD: ${{ secrets.CN_REGISTRY_PASSWORD }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -eu
@@ -153,7 +149,25 @@ jobs:
           # 手动运行只推 VERSION（GHCR 上没有 0.9 这个 tag）；正式 tag 才带 0.9 与 latest
           TAGS="${VERSION}"
           if [ "${{ github.ref_type }}" = "tag" ]; then TAGS="${TAGS} ${MAJOR_MINOR} latest"; fi
+
+          printf '%s' "$GHCR_TOKEN" | skopeo login ghcr.io --username "$GHCR_USER" --password-stdin
+          printf '%s' "$CN_REGISTRY_PASSWORD" | skopeo login "$CN_REGISTRY" --username "$CN_REGISTRY_USERNAME" --password-stdin
+
           for tag in $TAGS; do
-            docker buildx imagetools create -t "${DST}:${tag}" "${SRC}:${tag}"
+            attempt=0
+            ok=false
+            while [ "$attempt" -lt 5 ]; do
+              attempt=$((attempt + 1))
+              # ACR 对 BuildKit 的 HTTP/2 上传会随机 PROTOCOL_ERROR；强制 HTTP/1.1，
+              # 并在 shell 层重试（失败的层不会重传已完成的部分）。
+              if GODEBUG=http2client=0 skopeo copy --all \
+                "docker://${SRC}:${tag}" "docker://${DST}:${tag}"; then
+                ok=true
+                break
+              fi
+              echo "copy ${tag} failed (attempt ${attempt}/5), retrying..."
+              sleep 10
+            done
+            [ "$ok" = true ] || { echo "copy ${tag} failed after 5 attempts" >&2; exit 1; }
             echo "docker pull ${DST}:${tag}" >> "$GITHUB_STEP_SUMMARY"
           done
