@@ -206,8 +206,8 @@ test('液态玻璃档的侧栏样式与高对比真的生效（这两个 token �
   assert.match(css, /html\[data-glass='liquid'\]\[data-sidebar-style='panel'\] #sidebar \{[^}]*color-mix\(in srgb, var\(--bg-3\) 56%, transparent\)/s,
     '--glass-tint 在液态档是 0%，沿用旧公式会算成全透明');
   assert.match(css, /\[data-theme='dark'\]\[data-glass='liquid'\]\[data-sidebar-style='panel'\] #sidebar \{[^}]*42%, transparent\)/s);
-  assert.match(css, /\[data-theme='light'\]\[data-contrast='high'\]\[data-glass='liquid'\] \{ --glass-fill: var\(--bg-2\); \}/,
-    '液态档填色写死 rgba，高对比必须直接改 --glass-fill');
+  assert.match(css, /\[data-theme='light'\]\[data-contrast='high'\]\[data-glass='liquid'\] \{ --glass-fill: var\(--bg-2\); --glass-modal-fill: var\(--bg-2\); \}/,
+    '液态档填色写死 rgba，高对比必须直接改 --glass-fill（模态框的厚填色同理）');
 });
 
 test('二级侧栏在亮色玻璃下接近白面板（sticky 表头是不透明白条）', () => {
@@ -271,4 +271,67 @@ test('复制内置卡做自定义副本时不能被判回内置卡', () => {
   assert.match(persona, /applyPersonaDraft\(\{ name, text, customRules, behaviorProfile \}, newId\)/);
   // 全局是角色卡优先时，点内置卡换正文不把策略退回卡自带档位
   assert.match(persona, /keepCard = state\.config\?\.persona\?\.behaviorProfile === 'card'/);
+});
+
+test('模态框用更厚的前景填色：浅色液态下页面文字不透过输入框', () => {
+  // 实测：.model-modal 跟着环境面板用 56% 白玻璃，背后页面的文字直接透到输入区，
+  // 「添加人设」看起来像一块没擦干净的毛玻璃。前景单独一条更厚的 token。
+  assert.match(css, /--glass-modal-fill: rgba\(18, 18, 18, \.80\);/);
+  assert.match(css, /\[data-theme='light'\]\[data-glass='liquid'\] \{[^}]*--glass-modal-fill: rgba\(250, 250, 250, \.90\);/s);
+  assert.match(css, /html\[data-contrast='high'\]\[data-glass\] \{[^}]*--glass-modal-fill: var\(--bg-2\);/s);
+  assert.match(css, /html\[data-glass\] \.model-modal,\s*html\[data-glass\] \.modal,\s*html\[data-glass\] dialog \{\s*background-color: var\(--glass-modal-fill\);/s,
+    '前景填色规则必须写在表面组之后，否则会被 --glass-fill 盖掉');
+  // 白名单选择器（.modal）也得进玻璃表面组，否则它仍是死白的一块
+  const group = /html\[data-glass\] #topbar,[\s\S]*?html\[data-glass\] \.list-pane \{/.exec(css);
+  assert.ok(group && group[0].includes('html[data-glass] .modal,'), '.modal 要跟 .model-modal 同一套表面');
+});
+
+test('表情包卡片：动作区贴底，描述长度不再顶开按钮', () => {
+  const sticker = /\.asset-sticker \{([^}]*)\}/.exec(css)?.[1] || '';
+  assert.match(sticker, /display: flex;/);
+  assert.match(sticker, /flex-direction: column;/);
+  assert.match(css, /\.asset-sticker-body \{[^}]*flex: 1; display: flex; flex-direction: column;/s);
+  assert.match(css, /\.asset-sticker-body > \.asset-actions \{ margin-top: auto;/);
+  assert.match(css, /\.asset-sticker-body strong \{[\s\S]*?-webkit-line-clamp: 2;/);
+  const features = fs.readFileSync(new URL('../ui/pages/features.js', import.meta.url), 'utf8');
+  assert.match(features, /<span title="\$\{esc\(entry\.desc\)\}">/, '截断后全文要留在 title 里');
+});
+
+test('会话记忆详情：先给状态与摘要，结构化字段收进二级折叠', () => {
+  const memory = fs.readFileSync(new URL('../ui/pages/memory.js', import.meta.url), 'utf8');
+  assert.match(memory, /class="memory-state \$\{handoff \? 'is-live' : ''\}"/);
+  assert.match(memory, /class="memory-summary/);
+  assert.match(memory, /当前没有交接/);
+  assert.match(memory, /<details class="memory-advanced"/);
+  assert.match(memory, /会话级 handoff \/ 工作状态/);
+  assert.match(css, /\.memory-summary \{/);
+  assert.match(css, /\.memory-handoff \.field-row \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/);
+});
+
+test('窄屏的「列表 + 详情」视图上下堆叠，不把详情压成竖排文字', () => {
+  // 390px 实测：列表固定 320px，详情只剩 ~40px（"← 选择会话查看…" 一个字一行）。
+  assert.match(css, /@media \(max-width: 600px\) \{[\s\S]*?#view-chats, #view-memory, #view-people-memory \{ flex-direction: column; overflow-y: auto; \}/);
+  assert.match(css, /#view-chats > \.list-pane, #view-memory > \.list-pane, #view-people-memory > \.list-pane \{[^}]*width: 100%;[^}]*max-height: 40vh;/s);
+  assert.match(css, /#view-chats > \.detail-pane, #view-memory > \.detail-pane, #view-people-memory > \.detail-pane \{[^}]*display: block;[^}]*width: 100%;/s);
+});
+
+test('把 .modal 并入玻璃表面时，降级清单与折射扫描也要同步', () => {
+  // 不支持 backdrop-filter 的浏览器会退回实心表面；漏了 .modal 就等于浅色下 56% 透底
+  const fallback = /@supports not \(\(backdrop-filter[\s\S]*?html\[data-glass\] \.list-pane \{/.exec(css);
+  assert.ok(fallback, '要有无 backdrop-filter 的降级块');
+  assert.ok(fallback[0].includes('html[data-glass] .modal,'), '降级块要包含 .modal');
+  const refract = fs.readFileSync(new URL('../ui/core/glass-refract.js', import.meta.url), 'utf8');
+  assert.match(refract, /'\.model-modal', '\.modal', 'dialog'/,
+    'REFRACT_SELECTOR 要与 CSS 玻璃表面清单保持一致');
+});
+
+test('新建自定义卡是空表单：角色设定不复制当前卡', () => {
+  const start = persona.indexOf('function openPersonaCreateModal');
+  const end = persona.indexOf('\nfunction ', start + 10);
+  const body = persona.slice(start, end === -1 ? undefined : end);
+  assert.ok(start >= 0 && body.includes('new-persona-text'), '要找到新建卡弹窗');
+  assert.doesNotMatch(body, /cfg-roletext|cfg-customrules/,
+    '新建卡不能把当前卡正文/附加规则带进来（看起来像复制了一张卡）');
+  assert.match(body, /id="new-persona-text"[^>]*><\/textarea>/);
+  assert.match(body, /id="new-persona-rules"[^>]*><\/textarea>/);
 });

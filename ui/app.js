@@ -26,6 +26,7 @@ import {
 } from './core/format.js';
 import { QARegistry } from './core/registry.js';
 import { applyIcons, iconSvg } from './core/icons.js';
+import { initSelectMenus } from './core/select-menu.js';
 import { appearanceAttrs, appearancePatch, appearanceVars, resolveAppearance } from './core/appearance.js';
 import { applyWithReveal } from './core/theme-transition.js';
 // 侧栏那两个"参照控制台"的效果（悬停展开的图标条 + 会滑动的选中块）：实现在 core/side-nav.js
@@ -1221,6 +1222,8 @@ async function init() {
   // 先在配置就绪之前把轮询跑起来（兜底间隔，见下面 startListPoller 的注释）——
   // 放到这里而不是模块顶层，是因为模块求值期读 state 会踩 TDZ。
   startListPoller();
+  // 原生 select 的展开列表接管成主题内的 listbox（幂等，一次性委托）
+  initSelectMenus();
   // 主题：先按本地偏好应用（index.html 的内联脚本已做过一次，这里同步按钮图标），
   // 再用后端配置覆盖（若用户换了设备，以后端为准）。
   applyTheme(getThemePref());

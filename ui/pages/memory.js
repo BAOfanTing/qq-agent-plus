@@ -117,28 +117,72 @@ async function loadMemoryDetail(chatKey) {
     const handoffMeta = handoff
       ? `更新于 ${fmtTime(handoff.updatedAt)} · 过期于 ${fmtTime(handoff.expiresAt)}${handoff.sourceSessionId ? ` · 来源 ${esc(handoff.sourceSessionId)}` : ''}`
       : '当前没有会话交接状态';
+    // 结构化字段默认收起：它们是机器人自己维护的（六个空 textarea 铺满第一屏，用户看到的
+    // 就是"一堵输入框"，既不知道为什么要填、也不知道哪些该留空）。有内容时才展开。
+    const advancedOpen = Boolean(handoff) && [
+      handoff?.hypotheses, handoff?.evidence, handoff?.facts,
+      handoff?.decisions, handoff?.rejectedDirections, handoff?.openQuestions
+    ].some((value) => Array.isArray(value) && value.length);
+    const summaryCard = handoff
+      ? `<div class="memory-summary">
+          <div class="memory-summary-main">
+            <span class="memory-summary-kicker">当前话题</span>
+            <strong>${esc(handoff.topic || '未填写话题')}</strong>
+            <p>${esc(handoff.summary || '没有填写上下文摘要')}</p>
+          </div>
+          <div class="memory-summary-meta">${handoffMeta}</div>
+        </div>`
+      : `<div class="memory-summary is-empty">
+          <div class="memory-summary-main">
+            <span class="memory-summary-kicker">当前没有交接</span>
+            <strong>上下文被压缩或重启后，机器人不会从旧话题接着聊</strong>
+            <p>机器人通常会在需要时自己写一份；你也可以在下面手动填。保存后，下次唤醒会把这段内容作为「上次会话交接」放进提示词。</p>
+          </div>
+        </div>`;
     const handoffHtml = `
-      <details class="collapsible memory-handoff" open>
-        <summary>会话交接状态</summary>
+      <details class="collapsible memory-handoff">
+        <summary>${handoff ? '编辑交接内容' : '新建一份交接'}</summary>
         <div class="coll-body">
-          <div class="field-row">
-            <div class="field"><label>当前话题</label><input type="text" id="mh-topic" maxlength="200" value="${esc(handoff?.topic || '')}" /></div>
-            <div class="field"><label>有效时间（分钟）</label><input type="number" id="mh-ttl" min="5" max="10080" value="${esc(ttlMinutes)}" /></div>
-          </div>
-          <div class="field"><label>已知上下文</label><textarea id="mh-summary" maxlength="1200">${esc(handoff?.summary || '')}</textarea></div>
-          <div class="field-row">
-            <div class="field"><label>待验证假设（一行一条）</label><textarea id="mh-hypotheses">${esc(listText(handoff?.hypotheses))}</textarea></div>
-            <div class="field"><label>关键证据（一行一条）</label><textarea id="mh-evidence">${esc(listText(handoff?.evidence))}</textarea></div>
-          </div>
-          <div class="field-row">
-            <div class="field"><label>已确认事实（一行一条）</label><textarea id="mh-facts">${esc(listText(handoff?.facts))}</textarea></div>
-            <div class="field"><label>已作决定（一行一条）</label><textarea id="mh-decisions">${esc(listText(handoff?.decisions))}</textarea></div>
-          </div>
-          <div class="field-row">
-            <div class="field"><label>已排除方向（一行一条）</label><textarea id="mh-rejected">${esc(listText(handoff?.rejectedDirections))}</textarea></div>
-            <div class="field"><label>未解决问题（一行一条）</label><textarea id="mh-questions">${esc(listText(handoff?.openQuestions))}</textarea></div>
-          </div>
-          <div class="field"><label>下一步意图</label><textarea id="mh-next-step" maxlength="400">${esc(handoff?.nextStep || '')}</textarea></div>
+          <section class="memory-section">
+            <div class="memory-section-head">
+              <h3>概要</h3>
+              <p>一句话说明在聊什么，以及这份状态多久后失效。</p>
+            </div>
+            <div class="field-row memory-row-topic">
+              <div class="field"><label>当前话题</label><input type="text" id="mh-topic" maxlength="200" value="${esc(handoff?.topic || '')}" placeholder="例如：在聊新版本发布" /></div>
+              <div class="field"><label>有效时间（分钟）</label><input type="number" id="mh-ttl" min="5" max="10080" value="${esc(ttlMinutes)}" /><small class="memory-field-hint">到期后这段交接不再生效</small></div>
+            </div>
+          </section>
+          <section class="memory-section">
+            <div class="memory-section-head">
+              <h3>上下文摘要</h3>
+              <p>一两句话说清聊到哪儿了、已经决定了什么。这段会直接进模型提示词。</p>
+            </div>
+            <div class="field"><textarea id="mh-summary" rows="3" maxlength="1200" placeholder="例如：在讨论 0.9.3 的发布范围，已决定先修移动端表格，不再加新功能">${esc(handoff?.summary || '')}</textarea></div>
+          </section>
+          <details class="memory-advanced" ${advancedOpen ? 'open' : ''}>
+            <summary>结构化细节（可选）</summary>
+            <p class="memory-field-hint">通常由机器人自己维护；手动补时一行一条，没有就留空。</p>
+            <div class="field-row">
+              <div class="field"><label>待验证假设</label><textarea id="mh-hypotheses" placeholder="一行一条">${esc(listText(handoff?.hypotheses))}</textarea></div>
+              <div class="field"><label>关键证据</label><textarea id="mh-evidence" placeholder="一行一条">${esc(listText(handoff?.evidence))}</textarea></div>
+            </div>
+            <div class="field-row">
+              <div class="field"><label>已确认事实</label><textarea id="mh-facts" placeholder="一行一条">${esc(listText(handoff?.facts))}</textarea></div>
+              <div class="field"><label>已作决定</label><textarea id="mh-decisions" placeholder="一行一条">${esc(listText(handoff?.decisions))}</textarea></div>
+            </div>
+            <div class="field-row">
+              <div class="field"><label>已排除方向</label><textarea id="mh-rejected" placeholder="一行一条">${esc(listText(handoff?.rejectedDirections))}</textarea></div>
+              <div class="field"><label>未解决问题</label><textarea id="mh-questions" placeholder="一行一条">${esc(listText(handoff?.openQuestions))}</textarea></div>
+            </div>
+          </details>
+          <section class="memory-section">
+            <div class="memory-section-head">
+              <h3>下一步</h3>
+              <p>机器人下次开口时打算做什么；没有计划就留空。</p>
+            </div>
+            <div class="field"><textarea id="mh-next-step" rows="2" maxlength="400" placeholder="例如：等作者回复后确认发布时间">${esc(handoff?.nextStep || '')}</textarea></div>
+          </section>
           <div class="memory-handoff-actions">
             <span id="mh-status" class="muted">${handoffMeta}</span>
             <button class="btn btn-danger" id="mh-clear" ${handoff ? '' : 'disabled'}>清除</button>
@@ -147,7 +191,7 @@ async function loadMemoryDetail(chatKey) {
         </div>
       </details>`;
     const membersHtml = kind === 'group'
-      ? `<div class="field" style="margin:8px 0"><button class="btn btn-small" id="mem-load-members-btn">拉取群成员列表（编辑备注）</button><span id="mem-members-status" class="muted"></span></div><div id="mem-members"></div>`
+      ? `<div class="field memory-members-tools" style="margin:8px 0"><button class="btn btn-small" id="mem-load-members-btn">拉取群成员列表（编辑备注）</button><span id="mem-members-status" class="muted"></span></div><div id="mem-members"></div>`
       : '';
     const rows = members.map((m) => {
       const who = notes[String(m.userId)] || m.name || m.userId || '某人';
@@ -178,17 +222,21 @@ async function loadMemoryDetail(chatKey) {
     }
     detail.innerHTML = `
       <div class="detail-header">
-        <h2>${esc(formatChatTitle(chatKey, chatNameOf(chatKey)))} 的记忆</h2>
+        <div class="memory-title-row">
+          <h2>${esc(formatChatTitle(chatKey, chatNameOf(chatKey)))} 的会话记忆</h2>
+          <span class="memory-state ${handoff ? 'is-live' : ''}">${handoff ? '交接进行中' : '暂无交接'}</span>
+        </div>
         <div class="sub">
-          <span>每个群友一个文件：data/memory/${esc(chatKey.replace(':', '_'))}/&lt;QQ&gt;.json</span>
+          <span>会话级 handoff / 工作状态（按 chatKey 隔离）</span>
           <button class="btn btn-small" id="mem-add-imp-btn">＋ 添加印象</button>
           <button class="btn btn-small" id="mem-consolidate-btn" ${busy ? 'disabled' : ''}>${busy ? '整理中…' : '整理本群记忆'}</button>
           ${consolidateStatusHtml}
         </div>
       </div>
+      ${summaryCard}
       ${handoffHtml}
       ${membersHtml}
-      ${rows || '<div class="muted" style="padding:10px">还没有任何群友印象（可点右上角「＋ 添加印象」手动记，或点「整理本群记忆」让模型从聊天记录里提炼）。</div>'}
+      ${rows || '<div class="muted memory-members-empty" style="padding:10px">还没有任何群友印象（可点右上角「＋ 添加印象」手动记，或点「整理本群记忆」让模型从聊天记录里提炼）。</div>'}
     `;
     const handoffPath = `/api/memory-files/${chatKey.replace(':', '_')}/handoff`;
     const lines = (id) => ($(id)?.value || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);

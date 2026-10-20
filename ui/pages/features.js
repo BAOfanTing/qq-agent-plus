@@ -73,8 +73,8 @@ function renderStickerAssets(data) {
           : '<span class="muted">无图片</span>'}
       </div>
       <div class="asset-sticker-body">
-        <strong title="${esc(entry.id)}">${esc(title)}</strong>
-        ${entry.desc && entry.localNote ? `<span>${esc(entry.desc)}</span>` : ''}
+        <strong title="${esc(title)}">${esc(title)}</strong>
+        ${entry.desc && entry.localNote ? `<span title="${esc(entry.desc)}">${esc(entry.desc)}</span>` : ''}
         ${tags ? `<div class="asset-tags">${tags}</div>` : ''}
         <small>${entry.source === 'qq' ? 'QQ 收藏' : entry.source === 'ai' ? 'AI 收藏' : '手动'} · 使用 ${fmtTok(entry.useCount)} 次</small>
         <div class="asset-actions">

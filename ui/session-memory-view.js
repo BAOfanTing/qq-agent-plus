@@ -11,6 +11,8 @@
       #view-memory #mem-consolidate-status,
       #view-memory #mem-load-members-btn,
       #view-memory #mem-members,
+      #view-memory .memory-members-tools,
+      #view-memory .memory-members-empty,
       #view-memory #memory-detail > .collapsible:not(.memory-handoff) {
         display:none !important;
       }

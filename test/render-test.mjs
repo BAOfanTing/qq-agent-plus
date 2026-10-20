@@ -3990,7 +3990,8 @@ try {
     const afterStale = String(detail.innerHTML || '');
     sandbox.fetch = originalFetch;
 
-    const rendered = /的记忆/.test(afterFresh);                        // 防止用例空转（成功路径真跑到了）
+    // 标题 2026-10-19 改成「… 的会话记忆」：哨兵跟着标题走，别再用旧文案"的记忆"空转
+    const rendered = /的会话记忆/.test(afterFresh);                     // 防止用例空转（成功路径真跑到了）
     const ok = rendered && afterStale === afterFresh;
     ok ? pass++ : fail++;
     console.log('  ' + (ok ? 'OK   ' : 'FAIL ')

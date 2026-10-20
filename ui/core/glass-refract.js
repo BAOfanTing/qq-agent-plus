@@ -31,7 +31,7 @@
     没有 backdrop-filter 的格子白算位移图、还占 REFRACT_MAX_SURFACES 名额，真正的表面反而不折射。 */
 const REFRACT_SELECTOR = [
   '#topbar', '#sidebar', '.settings-sidebar', '.panel', '.kpi-grid', '.opt-card',
-  '.usage-card', '.plat-card', '.tool-card', '.model-modal', 'dialog', '.list-pane'
+  '.usage-card', '.plat-card', '.tool-card', '.model-modal', '.modal', 'dialog', '.list-pane'
 ].join(',');
 
 const REFRACT_MAX_SURFACES = 14;     // 同时折射的元素上限（每次 reconcile 取前 N 个）

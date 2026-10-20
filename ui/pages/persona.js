@@ -566,11 +566,11 @@ function openPersonaCreateModal() {
       </div>
       <div class="field" style="flex:1;min-width:0">
         <label>角色设定</label>
-        <textarea id="new-persona-text" class="persona-role-text" style="min-height:220px" placeholder="人设文本">${esc($('#cfg-roletext')?.value || '')}</textarea>
+        <textarea id="new-persona-text" class="persona-role-text" style="min-height:220px" placeholder="写一张新角色卡：身份、说话方式、称呼、雷点……"></textarea>
       </div>
       <div class="field" style="flex:1;min-width:0">
         <label>管理员附加规则（可选）</label>
-        <textarea id="new-persona-rules" style="min-height:90px" placeholder="可选：追加到系统提示的规则">${esc($('#cfg-customrules')?.value || '')}</textarea>
+        <textarea id="new-persona-rules" style="min-height:90px" placeholder="可选：追加到系统提示的规则"></textarea>
       </div>`,
     foot: `<button class="btn" id="persona-add-cancel">取消</button>
            <button class="btn btn-primary" id="persona-add-apply">确认添加</button>`
