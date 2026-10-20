@@ -530,3 +530,12 @@ test('收藏配额记账：成功扣一次、取不到图退还（事前原子�
   const afterFail = manager.collectQuota.snapshot();
   assert.equal((afterFail.chats[chatKey] || 0) - (base.chats[chatKey] || 0), 1, '失败的那次要退还（净消耗仍为 1）');
 });
+
+test('控制台预览失效的收藏表情：返回 404，不把 STICKER_LINK_DEAD 记成系统异常', () => {
+  const app = fs.readFileSync(new URL('../src/console/app.js', import.meta.url), 'utf8');
+  const at = app.indexOf("router.add('GET', '/api/assets/stickers/image'");
+  assert.ok(at > 0, '图片路由结构变了就更新这条用例');
+  const slice = app.slice(at, at + 1800);
+  assert.match(slice, /error\?\.code === 'STICKER_LINK_DEAD'\) return json\(res, 404/,
+    '失效链只是预览失败，直接 404；抛出去会在异常面板留红项');
+});

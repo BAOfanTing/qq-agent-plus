@@ -2325,7 +2325,14 @@ export function createApp({
       return;
     }
     if (sticker?.source === 'ai') {
-      sticker = await stickers.findForSend(id);
+      // 收藏表情的远程链接过期时 findForSend 会抛 STICKER_LINK_DEAD。控制台预览一张已失效的
+      // 收藏图不是系统错误，不能记进异常面板（会在错误页留一条红项）；返回 404 让界面显示坏图。
+      try {
+        sticker = await stickers.findForSend(id);
+      } catch (error) {
+        if (error?.code === 'STICKER_LINK_DEAD') return json(res, 404, { error: '表情图片已失效' });
+        throw error;
+      }
     }
     if (!sticker?.url) return json(res, 404, { error: '表情图片不存在' });
     // 远程表情图片（QQ 表情 URL 里带 md5、内容恒定）：ETag + 一天浏览器缓存。
