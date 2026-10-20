@@ -365,6 +365,32 @@ function renderControlHub(data = {}) {
         </a>`;
       }).join('')}
     </div>
+    <section class="control-section" id="control-qq-login">
+      <div class="control-section-title">
+        <div><h3>QQ 登录</h3><span class="muted">扫码在 SnowLuma 远程桌面里完成</span></div>
+        <a class="btn btn-primary btn-small" href="${esc(serviceUrl(6081))}" target="_blank" rel="noreferrer">打开扫码登录</a>
+      </div>
+      <div class="control-service-copy" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span id="control-qq-state" class="chip">检测中…</span>
+        <span class="muted">打开远程桌面 → 扫码登录 QQ → 回到这里看到「OneBot 已连接」。</span>
+      </div>
+      <details class="hint" style="margin-top:8px">
+        <summary>扫码失败 / 登录后还是未连接？</summary>
+        <ul style="margin:6px 0 0 18px;padding:0;line-height:1.7">
+          <li>二维码过期：刷新远程桌面页面重新扫码。</li>
+          <li>提示设备或风控验证：在远程桌面里按提示完成，不要频繁重复登录。</li>
+          <li>登录成功但 OneBot 未连接：检查「设置 → OneBot」的地址与令牌，或重启协议端。</li>
+          <li>远程桌面密码：见安装结束打印的 <code>deployment-access.txt</code> 里的 noVNC password。</li>
+        </ul>
+      </details>
+    </section>
+    <section class="control-section">
+      <div class="control-section-title">
+        <div><h3>一键体检</h3><span class="muted">控制台 / 协议端 / 入站 / 磁盘 / 更新状态</span></div>
+        <button type="button" class="btn btn-small" id="control-health-run">开始体检</button>
+      </div>
+      <div id="control-health-result" class="control-result muted" role="status" aria-live="polite">点「开始体检」检查当前运行状态。</div>
+    </section>
     <section class="control-section">
       <div class="control-section-title">
         <div><h3>更新部署</h3><span class="muted">${esc(update.repository || '-')} · ${esc(update.branch || 'main')}</span></div>
@@ -474,11 +500,50 @@ function renderControlHub(data = {}) {
   updateControlHubFields(box, statuses, update);
 }
 
+async function runControlHealth() {
+  const btn = $('#control-health-run');
+  const box = $('#control-health-result');
+  if (!btn || !box) return;
+  btn.disabled = true;
+  box.className = 'control-result muted';
+  box.textContent = '正在体检…（最多十几秒）';
+  try {
+    const result = await api('/api/health/check', { method: 'POST', body: '{}' });
+    const checks = Array.isArray(result?.checks) ? result.checks : [];
+    if (result?.error) {
+      box.className = 'control-result error';
+      box.textContent = `体检失败：${result.error}`;
+      return;
+    }
+    if (!checks.length) {
+      box.className = 'control-result error';
+      box.textContent = '体检没有返回检查项，请查看服务日志。';
+      return;
+    }
+    const failed = checks.filter((check) => !check.ok);
+    if (result.healthy) {
+      box.className = 'control-result success';
+      box.textContent = `体检通过：${checks.length} 项都正常。`;
+      return;
+    }
+    box.className = 'control-result error';
+    box.innerHTML = `<div>发现 ${failed.length} 项异常：</div>
+      <ul class="feed">${failed.map((check) => `
+        <li><span class="chip bad">异常</span><span>${esc(check.name)}${check.detail ? `：${esc(check.detail)}` : ''}</span></li>`).join('')}</ul>`;
+  } catch (error) {
+    box.className = 'control-result error';
+    box.textContent = `体检失败：${error.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // 首次建结构后绑定一次事件即可（DOM 不再重建，不需要重复绑）
 function bindControlHubHandlers() {
   const box = $('#control-page');
   if (!box) return;
   $('#control-refresh')?.addEventListener('click', () => loadControlHub({ force: true }));
+  $('#control-health-run')?.addEventListener('click', runControlHealth);
   $('#auto-update-save')?.addEventListener('click', () => saveAutoUpdateSettings(false));
   $('#auto-update-run')?.addEventListener('click', runManualUpdate);
   $('#auto-update-resume')?.addEventListener('click', () => saveAutoUpdateSettings(true));
@@ -519,6 +584,19 @@ function updateControlHubFields(box, statuses, update) {
   // 部署重启期间 integrations 拉取失败重建页面后，入口可能一直留在页面上（与"未部署"的卡片自相矛盾）。
   const legacyEntry = box.querySelector('[data-hub-legacy-entry="bridge"]');
   if (legacyEntry) legacyEntry.classList.toggle('hidden', !legacyServiceDeployed(statuses, 'bridge'));
+
+  // QQ 登录状态：控制页的扫码入口旁边要能直接看到"登没登上"，不然用户扫码后
+  // 还得回总览看 OneBot 状态。
+  const onebot = state.status?.onebot || {};
+  const qqState = document.getElementById('control-qq-state');
+  if (qqState) {
+    const nick = onebot.self?.nickname ? String(onebot.self.nickname) : '';
+    const text = onebot.connected
+      ? `OneBot 已连接${nick ? ` · ${nick}` : ''}`
+      : (onebot.everConnected ? 'OneBot 未连接（曾连上过）' : 'OneBot 还没连上');
+    setText(qqState, text);
+    qqState.className = `chip ${onebot.connected ? 'ok' : (onebot.everConnected ? 'warn' : '')}`;
+  }
 
   // 部署状态徽标
   const badge = box.querySelector('[data-hub-deploy-state]');
@@ -1327,13 +1405,17 @@ async function init() {
   // 发现新版本提示：打开控制台时查一次（后端缓存 30 分钟），失败静默
   checkUpdateNotice().catch(() => {});
 
-  // 首启引导：关键配置（模型/白名单）没填就直接带去设置页
+  // 首启引导：关键配置（模型/白名单）没填时留在总览，让「开始使用」清单告诉用户
+  // 还差哪几步，而不是直接甩进设置页（那样用户只看到一堆表单，不知道先填哪个）。
   try {
     // 复用上面那次 /api/config 的结果，少一次请求（首屏更快）
     const cfg = state.config || await api('/api/config');
-    const ready = !!cfg.api.model && ((cfg.allow.groups?.length || cfg.allow.private?.length) || cfg.allowAllWhenEmpty);
+    const allowReady = (Array.isArray(cfg.allow?.groups) && cfg.allow.groups.length > 0)
+      || (Array.isArray(cfg.allow?.private) && cfg.allow.private.length > 0)
+      || cfg.allowAllWhenEmpty === true;
+    const ready = Boolean(cfg.api?.model) && allowReady;
     if (!ready) {
-      switchTab('settings');
+      switchTab('overview');
       connectSSE();
       refreshStatus();
       setInterval(refreshStatus, refreshIntervalMs(15000));

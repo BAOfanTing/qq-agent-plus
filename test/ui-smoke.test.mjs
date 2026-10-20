@@ -602,6 +602,67 @@ test('真实 DOM 冒烟：总览的跳转入口指向对的目标（分区键与
   } finally { window.happyDOM?.abort?.(); }
 });
 
+test('真实 DOM 冒烟：总览「开始使用」清单列出五项，缺项入口能切到目标页', { skip: SKIP }, async () => {
+  const { window, errors } = loadPage();
+  await settle();
+  try {
+    const doc = window.document;
+    window.switchTab('overview');
+    await settle(150);
+
+    const list = doc.querySelector('.setup-list');
+    assert.ok(list, '配置未齐时总览要显示「开始使用」清单');
+    const text = String(list.textContent);
+    for (const label of ['模型 API', 'OneBot 连接', 'QQ 登录', '聊天白名单', '运行模式']) {
+      assert.ok(text.includes(label), `清单缺少「${label}」`);
+    }
+    const qqButton = [...list.querySelectorAll('[data-setup-tab="control"]')].find((el) => el.textContent.includes('扫码'));
+    assert.ok(qqButton, 'QQ 未登录时要有「去扫码」入口');
+    qqButton.click();
+    await settle(120);
+    assert.equal(doc.getElementById('view-control')?.classList.contains('active'), true,
+      '「去扫码」应切到控制页');
+    assert.deepEqual(errors, [], `总览首启体检出现未捕获错误：${errors.join(' | ')}`);
+  } finally { window.happyDOM?.abort?.(); }
+});
+
+test('真实 DOM 冒烟：控制页有 QQ 登录引导与一键体检，体检结果能显示失败项', { skip: SKIP }, async () => {
+  const { window, errors } = loadPage();
+  await settle();
+  try {
+    const doc = window.document;
+    window.switchTab('control');
+    await settle(150);
+
+    const qq = doc.getElementById('control-qq-login');
+    assert.ok(qq, '控制页要有 QQ 登录引导');
+    assert.match(qq.textContent, /扫码登录/);
+    assert.match(qq.textContent, /二维码过期/);
+
+    const healthButton = doc.getElementById('control-health-run');
+    assert.ok(healthButton, '控制页要有一键体检入口');
+    const originalFetch = window.fetch;
+    window.fetch = async (url, options) => {
+      if (String(url).includes('/api/health/check')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            healthy: false,
+            checks: [{ name: '控制台', ok: false, detail: '测试失败' }]
+          })
+        };
+      }
+      return originalFetch(url, options);
+    };
+    healthButton.click();
+    await settle(150);
+    assert.match(doc.getElementById('control-health-result').textContent, /发现 1 项异常/);
+    assert.match(doc.getElementById('control-health-result').textContent, /控制台：测试失败/);
+    assert.deepEqual(errors, [], `控制页体检出现未捕获错误：${errors.join(' | ')}`);
+  } finally { window.happyDOM?.abort?.(); }
+});
+
 test('真实 DOM 冒烟：总览的异常列表用服务端取值（warning/acknowledged 不漏英文、色块不丢）', { skip: SKIP }, async () => {
   // 服务端的 severity 是 info|warning|error|critical、state 是 open|acknowledged|resolved，
   // 总览曾经自己写了一份 warn/acked 的小表 → 界面上直接印出英文 "warning"/"acknowledged"，
