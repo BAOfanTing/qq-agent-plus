@@ -267,7 +267,7 @@ export const DEFAULT_CONFIG = {
     botName: '小鲸鱼',
     selfNickname: '',                       // 在群里的展示名（留空用 QQ 昵称）
     roleText: PERSONAS.xiaojingyu.text,     // 默认人设：原版"小鲸鱼"角色卡（适配版）
-    behaviorProfile: 'legacy',             // legacy | grounded，选择模板时一起切换
+    behaviorProfile: 'legacy',             // legacy | grounded | card，选择模板时一起切换
     participation: 'medium',                // low | medium | high —— 参与度参考
     customRules: '',                        // 追加自定义规则（可选）
     // 选中的内置卡 id（roles/*.md 的登记名）。非空表示"正文跟着卡文件走"：
@@ -1086,7 +1086,7 @@ export function normalizePersonaPerChat(raw) {
     if (botName) entry.botName = botName;
     const selfNickname = text(value.selfNickname, PERSONA_OVERRIDE_NAME_CAP);
     if (selfNickname) entry.selfNickname = selfNickname;
-    if (['legacy', 'grounded'].includes(value.behaviorProfile)) entry.behaviorProfile = value.behaviorProfile;
+    if (['legacy', 'grounded', 'card'].includes(value.behaviorProfile)) entry.behaviorProfile = value.behaviorProfile;
     if (['low', 'medium', 'high'].includes(value.participation)) entry.participation = value.participation;
     const customRules = text(value.customRules, PERSONA_OVERRIDE_RULE_CAP);
     if (customRules) entry.customRules = customRules;

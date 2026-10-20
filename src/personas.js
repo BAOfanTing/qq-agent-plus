@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 
 export function normalizeBehaviorProfile(value) {
   const profile = value ?? 'legacy';
-  if (!['legacy', 'grounded'].includes(profile)) throw new Error('Invalid persona behavior profile');
+  // legacy = 原版群友、grounded = 自然可靠、card = 角色卡优先。
+  // card：平台只保留安全与工具/记忆等机制，语气、节奏、句式交给角色卡（Issue #40）。
+  if (!['legacy', 'grounded', 'card'].includes(profile)) throw new Error('Invalid persona behavior profile');
   return profile;
 }
 
@@ -85,7 +87,11 @@ export function resolvePersona(cfg, chatKey) {
     const template = builtinPersonaTemplate(templateId);
     if (template) {
       merged.roleText = template.text;
-      if (overlay.behaviorProfile === undefined) merged.behaviorProfile = template.behaviorProfile || 'legacy';
+      // 档位跟着卡走是"猫娘正文 + legacy 档"那种混合体的防线；但角色卡优先是管理员的
+      // 全局选择（只想留安全/机制），按群换一张内置卡不应该把整个群悄悄退回平台语气。
+      if (overlay.behaviorProfile === undefined && base.behaviorProfile !== 'card') {
+        merged.behaviorProfile = template.behaviorProfile || 'legacy';
+      }
     } else {
       merged.roleText = base.roleText;
     }
@@ -101,7 +107,7 @@ export function resolvePersona(cfg, chatKey) {
  * 现在的约定：卡文件是唯一来源 —— 控制台选卡时把模板 id 一起存下来
  * （手写正文或选自定义卡会清空 id），载入配置时发现正文与文件不一致就按文件刷新。
  *
- * 只刷正文，不碰 behaviorProfile：档位（legacy / grounded）是实例自己的行为开关，
+ * 只刷正文，不碰 behaviorProfile：档位（legacy / grounded / card）是实例自己的行为开关，
  * 在控制台选卡时一起设置；这里悄悄改掉会让"只改档位"的调用被卡文件顶回去。
  *
  * 认不出的 id（老版本删掉/改过名的卡、外部手写进来的值）会被清成未绑定 ——

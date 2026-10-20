@@ -436,7 +436,7 @@ export function buildToolDefs() {
   return [
     {
       name: 'send_message',
-      description: '发送消息到当前聊天（本工具只能发到本次会话对应的群/私聊）。messages 传字符串=发一条；传字符串数组=分多条发送（推荐，更像真人）。只有需要明确"我回的是哪条"时才传 replyToMessageId 引用；需要点名某人才传 atUserId。不要在字符串内部用空格分句。',
+      description: '发送消息到当前聊天（本工具只能发到本次会话对应的群/私聊）。messages 传字符串=发一条；传字符串数组=分多条发送（推荐）。只有需要明确"我回的是哪条"时才传 replyToMessageId 引用；需要点名某人才传 atUserId。不要在字符串内部用空格分句。',
       parameters: {
         type: 'object',
         properties: {
@@ -454,7 +454,9 @@ export function buildToolDefs() {
           if (targetError) return err(targetError);
           const result = await ctx.sender.sendTextBatch(ctx.chatKey, messages, {
             runId: ctx.session.leaseId, signal: ctx.signal,
-            preserveCode: ctx.behaviorProfile === 'grounded',
+            // grounded 与 card（角色卡优先）都不做"空格/换行重排"：卡自己决定句式，
+            // 平台只保证代码块与缩进不被拆坏（card 档不套平台语气，但技术内容仍是内容）。
+            preserveCode: ctx.behaviorProfile === 'grounded' || ctx.behaviorProfile === 'card',
             replyToMessageId: normalizeMid(args.replyToMessageId) || null,
             atUserId: normalizeMid(args.atUserId) || null
           });
@@ -1967,7 +1969,7 @@ export function buildToolDefs() {
     },
     {
       name: 'send_voice',
-      description: '把一段文字合成语音发到当前会话（想"说"而不是"打"时用）。只适合短句 1~3 句（120 字以内最自然，硬上限 200 字）；**必须写成口语**：带语气词和标点（「哎——」「不是吧？」「……行吧行吧」），破折号/省略号/问号能带出停顿与起伏，书面句会念得很平、像播报。别整段朗读、别频繁用（平时打字更像真人）。',
+      description: '把一段文字合成语音发到当前会话（想"说"而不是"打"时用）。只适合短句 1~3 句（120 字以内最自然，硬上限 200 字）；**必须写成口语**：带语气词和标点（「哎——」「不是吧？」「……行吧行吧」），破折号/省略号/问号能带出停顿与起伏，书面句会念得很平、像播报。别整段朗读、别频繁用（平时优先打字）。',
       parameters: {
         type: 'object',
         properties: { text: { type: 'string', description: '要说的内容（≤200 字，口语短句）' } },

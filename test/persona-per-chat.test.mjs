@@ -132,3 +132,19 @@ test('坏卡 id 清理不能误删单独的参与度/档位覆盖', () => {
   applyPersonaPerChatTemplates(cfg);
   assert.deepEqual(cfg.personaPerChat['group:300'], { participation: 'high', behaviorProfile: 'grounded' });
 });
+
+test('全局是角色卡优先时，按群换内置卡不会把该群悄悄退回平台语气', () => {
+  const cfg = {
+    persona: { ...base, behaviorProfile: 'card' },
+    personaPerChat: { 'group:100': { templateId: 'wenrou_peiliao' } }
+  };
+  const resolved = resolvePersona(cfg, 'group:100');
+  assert.equal(resolved.roleText, PERSONAS.wenrou_peiliao.text, '正文仍跟卡走');
+  assert.equal(resolved.behaviorProfile, 'card', '全局档位是管理员的显式选择，换卡不应改回去');
+  // 显式给了别的档位时仍以显式为准
+  const explicit = resolvePersona({
+    persona: { ...base, behaviorProfile: 'card' },
+    personaPerChat: { 'group:100': { templateId: 'wenrou_peiliao', behaviorProfile: 'grounded' } }
+  }, 'group:100');
+  assert.equal(explicit.behaviorProfile, 'grounded');
+});

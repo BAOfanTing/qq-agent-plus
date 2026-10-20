@@ -209,3 +209,66 @@ test('液态玻璃档的侧栏样式与高对比真的生效（这两个 token �
   assert.match(css, /\[data-theme='light'\]\[data-contrast='high'\]\[data-glass='liquid'\] \{ --glass-fill: var\(--bg-2\); \}/,
     '液态档填色写死 rgba，高对比必须直接改 --glass-fill');
 });
+
+test('二级侧栏在亮色玻璃下接近白面板（sticky 表头是不透明白条）', () => {
+  // 56% 的玻璃底会把壁纸的绿色透上来，而 .list-head 是 --bg-2 的不透明白条：
+  // 上面一条白、下面一片绿，像两块拼的（2026-10-19 用户反馈"会话界面左侧边栏颜色违和"）。
+  assert.match(css, /html\[data-theme='light'\]\[data-glass='liquid'\] \.list-pane,\s*html\[data-theme='light'\]\[data-glass='liquid'\] \.settings-sidebar \{[^}]*--glass-fill: rgba\(250, 250, 250, \.84\);/s);
+  assert.match(css, /\.list-head \{[^}]*background: var\(--bg-2\);/s, '表头仍要不透明，才能盖住滚动的行');
+  // 84% 是声明在元素自身上的，会盖过 html 上的高对比规则；高对比要同层再声明一次
+  assert.match(css, /html\[data-theme='light'\]\[data-contrast='high'\]\[data-glass='liquid'\] \.list-pane,\s*html\[data-theme='light'\]\[data-contrast='high'\]\[data-glass='liquid'\] \.settings-sidebar \{[^}]*--glass-fill: var\(--bg-2\);/s);
+});
+
+test('会话列表的暖色收口：生命周期改冷紫、机器人声线改冷青', () => {
+  // 用户反馈列表里那块棕黄（"本轮已发言"）与主题不协调：--voice 原来是黄铜，
+  // 生命周期模式的橙色触发字也在同一屏。现在三档模式是 绿/蓝/紫，声线是冷青。
+  assert.match(css, /\.mode-lifecycle \{ --mode-color: #8b5cf6; --mode-soft: rgba\(139, 92, 246, \.12\); \}/);
+  assert.match(css, /\[data-theme='dark'\] \.mode-lifecycle \{ --mode-color: #a78bfa;/);
+  assert.match(css, /--voice: #2dd4bf;/);
+  assert.match(css, /--voice: #0f766e;/);
+  assert.doesNotMatch(css, /--voice: #d9a441|--voice: #8a5a06/, '黄铜声线已退役');
+});
+
+test('人物印象的表头与数据同向对齐（数字列右、操作列右）', () => {
+  // 实测生产：thead 的「会话/消息」左对齐、对应 td 是 .r 右对齐，数字贴在列右缘、标题留在列左缘。
+  assert.match(features, /<th class="r">会话<\/th><th class="r">消息<\/th>/);
+  assert.match(features, /<th>画像备注<\/th><th class="actions-col">操作<\/th>/);
+  assert.match(features, /<th>最近更新<\/th><th class="actions-col">操作<\/th>/, '旧印象表的操作列也要跟按钮同向');
+  // 黑话/黑话研究表的数字列与操作列同样要同向
+  assert.match(features, /<th class="r">出现<\/th><th class="r">证据<\/th><th class="actions-col">操作<\/th>/);
+  assert.match(features, /<th>状态<\/th><th class="actions-col">操作<\/th>/);
+  assert.match(css, /\.asset-table th\.actions-col \{ text-align: right; \}/);
+  assert.match(css, /@media \(max-width: 600px\) \{ \.asset-table th\.actions-col \{ text-align: left; \} \}/);
+});
+
+test('亮色玻璃里有边界的盒子要看得见：--card-line', () => {
+  assert.match(css, /\[data-theme='light'\]\[data-glass\] \{[^}]*--card-line: var\(--border\);/s, '无 color-mix 时回退');
+  assert.match(css, /--card-line: color-mix\(in srgb, var\(--text\) 30%, var\(--border\)\);/);
+  const block = /\[data-theme='light'\]\[data-glass\] \.asset-summary-item,[\s\S]*?border-color: var\(--card-line\);[\s\S]*?\n\}/.exec(css);
+  assert.ok(block, '卡片/表格/空状态要套 --card-line');
+  for (const sel of ['.asset-table-wrap', '.context-call-table-wrap', '.control-service', '.control-key-list',
+    '.usage-table', '.usage-card', '.usage-note', '.tool-card', '.kpi-grid', '.plugin-card', '.opt-card',
+    '.plat-card', '.price-card', '.conversation-mode-option', '.persona-card', '.persona-detail',
+    '.scheme-card', '.modal', '.model-modal', '.empty-hint']) {
+    assert.ok(block[0].includes(sel), `${sel} 也要有可见描边`);
+  }
+  assert.match(css, /--ctl-line: color-mix\(in srgb, var\(--text\) 30%, var\(--border\)\);/,
+    '输入框/开关仍用更重的控件线，别被卡片线顶掉');
+});
+
+test('人物印象的表壳要能滚动：max-height 不能被 overflow:hidden 变成截断', () => {
+  // 实测 14 行：scrollHeight 1076 / clientHeight 569，hidden 下后面几行既看不到也滚不到。
+  assert.match(css, /\.asset-table-wrap \{[^}]*max-height: calc\(100vh - 330px\);[^}]*overflow: auto;/s);
+  assert.match(css, /\.asset-table-wrap, \.context-call-table-wrap \{ border-radius: var\(--r-card\); border: 1px solid var\(--border\); overflow: auto; \}/);
+});
+
+test('复制内置卡做自定义副本时不能被判回内置卡', () => {
+  const persona = fs.readFileSync(new URL('../ui/pages/persona.js', import.meta.url), 'utf8');
+  // 同文命中时自定义优先（否则保存后绑定到内置卡文件、副本跟着卡文件变且删不掉）
+  assert.match(persona, /exacts\.find\(\(\[, p\]\) => !p\.builtin\) \|\| exacts\[0\]/);
+  // 新建流程显式把新卡的 id（custom_<末位>）交给草稿
+  assert.match(persona, /custom_\$\{customCount - 1\}/);
+  assert.match(persona, /applyPersonaDraft\(\{ name, text, customRules, behaviorProfile \}, newId\)/);
+  // 全局是角色卡优先时，点内置卡换正文不把策略退回卡自带档位
+  assert.match(persona, /keepCard = state\.config\?\.persona\?\.behaviorProfile === 'card'/);
+});

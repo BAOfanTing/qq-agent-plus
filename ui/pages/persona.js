@@ -13,9 +13,26 @@ import { $, esc } from '../core/dom.js';
 import { perChatOptions } from './persona-per-chat.js';
 import { personaDescCache, state } from '../core/state.js';
 function findPersonaTemplateId(roleText, behaviorProfile = 'legacy', customRules = '') {
-  return Object.entries(state.personaTemplates || {}).find(([, p]) =>
+  const entries = Object.entries(state.personaTemplates || {});
+  const exacts = entries.filter(([, p]) =>
     p.text === roleText && (p.behaviorProfile || 'legacy') === behaviorProfile
-      && (p.customRules || '') === customRules)?.[0] || '';
+      && (p.customRules || '') === customRules);
+  // "复制内置卡做自定义副本"时正文/档位/规则全一样：内置卡排在前面，若按顺序取第一条，
+  // 自定义副本永远选不中，保存后还会绑到内置卡文件上（卡文件一改副本跟着变，且删不掉）。
+  // 同文命中时自定义优先。
+  const exact = exacts.find(([, p]) => !p.builtin) || exacts[0];
+  if (exact) return exact[0];
+  // 档位是实例级选择（尤其是「角色卡优先」）：内置卡正文 + 另一档仍是这张卡 ——
+  // 否则卡库显示"自定义正文"、详情说"已解绑"，而 templateId 其实还绑着卡文件，正文照样跟着文件走。
+  const byText = entries.find(([, p]) =>
+    p.builtin && p.text === roleText && (p.customRules || '') === customRules);
+  return byText ? byText[0] : '';
+}
+
+/** 交流策略的显示名（三档：原版群友 / 自然可靠 / 角色卡优先）。 */
+function profileLabel(value) {
+  const v = String(value || 'legacy');
+  return v === 'grounded' ? '自然可靠' : v === 'card' ? '角色卡优先' : '原版群友';
 }
 
 function currentPersonaId() {
@@ -115,7 +132,7 @@ function syncPersonaButtons() {
   const title = $('#persona-view-title');
   if (title) title.textContent = tpl?.name || (hasText ? (templatesKnown ? '自定义正文' : '角色设定') : '（还没设置角色设定）');
   const profileChip = $('#persona-view-profile');
-  if (profileChip) profileChip.textContent = draft.behaviorProfile === 'grounded' ? '自然可靠' : '原版群友';
+  if (profileChip) profileChip.textContent = profileLabel(draft.behaviorProfile);
   const bindChip = $('#persona-view-binding');
   if (bindChip) {
     const boundId = String((state.config?.persona?.templateId) || '');
@@ -154,14 +171,19 @@ function syncPersonaButtons() {
 }
 
 function applyPersonaDraft(tpl, id = '') {
+  // 「角色卡优先」是管理员的全局选择：点一张内置卡换正文，不应该把交流策略悄悄退回
+  // 卡自带的 legacy/grounded（按群路径已按同一口径保护）。想换策略用上面的下拉即可。
+  const keepCard = state.config?.persona?.behaviorProfile === 'card'
+    || personaDraftState().behaviorProfile === 'card';
+  const profile = keepCard ? 'card' : (tpl.behaviorProfile || 'legacy');
   $('#cfg-roletext').value = tpl.text;
   $('#cfg-customrules').value = tpl.customRules || '';
-  $('#cfg-behavior-profile').value = tpl.behaviorProfile || 'legacy';
+  $('#cfg-behavior-profile').value = profile;
   state.personaEditingSection = -1;
   state.personaEditNote = '';
   // 记下"草稿是从哪张卡来的"：没保存之前 config 里还是旧绑定，
   // 「恢复本节 / 恢复整张卡」必须按草稿这张卡来，否则会把两张卡拼在一起。
-  personaDraftCardId = id || findPersonaTemplateId(tpl.text, tpl.behaviorProfile || 'legacy', tpl.customRules || '');
+  personaDraftCardId = id || findPersonaTemplateId(tpl.text, profile, tpl.customRules || '');
   syncPersonaButtons();
 }
 
@@ -411,7 +433,7 @@ function renderPersonaGrid(c, draft = {}) {
           ${isInUse ? '<span class="chip ok">使用中</span>' : (isDraft ? '<span class="chip">草稿中</span>' : '')}
         </div>
         <div class="pc-meta">
-          <span class="pc-tag">${tpl.behaviorProfile === 'grounded' ? '自然可靠' : '原版群友'}</span>
+          <span class="pc-tag">${profileLabel(tpl.behaviorProfile)}</span>
           <span class="pc-src">${tpl.builtin ? '内置 · 跟随卡文件' : '自定义'}</span>
         </div>
         <div class="pc-desc">${esc(desc)}</div>
@@ -473,8 +495,9 @@ function renderPersonaSection(c) {
       <div class="field"><label>群内展示名（可选）</label><input type="text" id="cfg-selfnick" value="${esc(c.persona.selfNickname || '')}" /></div>
       <div class="field"><label>交流策略</label>
         <select id="cfg-behavior-profile">
-          <option value="legacy" ${c.persona.behaviorProfile !== 'grounded' ? 'selected' : ''}>原版群友</option>
+          <option value="legacy" ${c.persona.behaviorProfile !== 'grounded' && c.persona.behaviorProfile !== 'card' ? 'selected' : ''}>原版群友</option>
           <option value="grounded" ${c.persona.behaviorProfile === 'grounded' ? 'selected' : ''}>自然可靠</option>
+          <option value="card" ${c.persona.behaviorProfile === 'card' ? 'selected' : ''}>角色卡优先</option>
         </select></div>
       <div class="field"><label>参与度</label>
         <select id="cfg-participation">
@@ -485,14 +508,14 @@ function renderPersonaSection(c) {
     </div>
     <div class="hint persona-identity-hint">
       <div><strong>机器人名字</strong>：账号名字，<strong>不随角色卡切换</strong>（换卡只换上面的正文）；群里显示的是「群内展示名」或 QQ 群名片。</div>
-      <div><strong>交流策略</strong>：「原版群友」允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据。嫌它冲或想让它听话，选后者。角色设定里写了相反的脾气时，以角色设定为准（优先级更高）；参与度（安静/普通/活跃）不受角色设定影响。</div>
+      <div><strong>交流策略</strong>：「原版群友」允许装傻、随口应付、不有求必应；「自然可靠」不装傻、说话有据；<strong>「角色卡优先」</strong>只保留安全与工具/记忆机制，语气、口吻、节奏完全交给角色设定 —— 换了几张卡味道还是一样时选它。原版/自然可靠两档里，角色设定写了相反脾气时以角色设定为准；参与度（安静/普通/活跃）在角色卡优先档只决定开口频率，不规定语气。</div>
     </div>
-    <div class="field"><label>管理员附加规则（可选；排在所有平台规则之后 —— 想压过默认风格就写这里）</label>
+    <div class="field"><label>管理员附加规则（可选；排在安全规则之后 —— 补充角色卡没写到的边界与机制）</label>
       <div class="pd-tags" id="persona-rule-chips">
         ${PERSONA_RULE_EXAMPLES.map((rule) => `<button type="button" class="pd-tag rule-chip" data-rule="${esc(rule)}">＋ ${esc(rule)}</button>`).join('')}
       </div>
       <textarea id="cfg-customrules" class="persona-role-text" style="min-height:100px" placeholder="例如：别装傻、别反问，不接话就安静；称呼固定用「老板」；被怼只淡淡带过">${esc(c.persona.customRules || '')}</textarea>
-      <div class="hint">冲突时优先级：安全规则 &gt; 这里 &gt; 角色设定 &gt; 平台默认风格。角色的口吻/称呼/脾气写在「角色设定」里就行，这里的硬要求会盖过平台默认风格。上面几个例子点一下就加进去，可以再改。</div></div>
+      <div class="hint">优先级：安全规则始终最高。其余按「交流策略」：原版群友 / 自然可靠下是 这里 &gt; 角色设定 &gt; 平台默认风格；角色卡优先下是 工具/记忆等机制 &gt; 这里 &gt; 角色设定（没有平台默认风格）。角色的口吻/称呼/脾气写在「角色设定」里就行。上面几个例子点一下就加进去，可以再改。</div></div>
     ${renderPersonaPerChat(c)}
     <div class="hint">改完记得点页面最下面那条<strong>「保存设置」</strong>（一直悬在底部）——它保存的就是这一页的人设。</div>`;
 }
@@ -536,8 +559,9 @@ function openPersonaCreateModal() {
       <div class="field" style="flex:1;min-width:0">
         <label>交流策略</label>
         <select id="new-persona-profile">
-          <option value="legacy" ${$('#cfg-behavior-profile')?.value !== 'grounded' ? 'selected' : ''}>原版群友</option>
+          <option value="legacy" ${$('#cfg-behavior-profile')?.value !== 'grounded' && $('#cfg-behavior-profile')?.value !== 'card' ? 'selected' : ''}>原版群友</option>
           <option value="grounded" ${$('#cfg-behavior-profile')?.value === 'grounded' ? 'selected' : ''}>自然可靠</option>
+          <option value="card" ${$('#cfg-behavior-profile')?.value === 'card' ? 'selected' : ''}>角色卡优先</option>
         </select>
       </div>
       <div class="field" style="flex:1;min-width:0">
@@ -560,13 +584,18 @@ function openPersonaCreateModal() {
     if (!name) { $('#persona-pick-hint').textContent = '人设名称不能为空'; return; }
     if (!text) { $('#persona-pick-hint').textContent = '角色设定不能为空'; return; }
     try {
-      await api('/api/persona-templates', {
+      const res = await api('/api/persona-templates', {
         method: 'POST',
         body: JSON.stringify({ name, text, customRules, behaviorProfile })
       });
+      // POST 返回的是"追加后的自定义卡列表"：新卡固定在最后一张，id 就是 custom_<末位>。
+      // 显式把 id 交给草稿 —— 否则"复制一张内置卡"会因正文/档位/规则全等而被匹配回内置卡，
+      // 保存时绑定到卡文件、卡文件一改副本跟着变，且删除按钮不认它。
+      const customCount = Array.isArray(res?.templates) ? res.templates.length : 0;
       closeModelModal(overlay);
       await loadSettings();
-      applyPersonaDraft({ name, text, customRules, behaviorProfile });
+      const newId = customCount > 0 ? `custom_${customCount - 1}` : '';
+      applyPersonaDraft({ name, text, customRules, behaviorProfile }, newId);
       $('#persona-pick-hint').textContent = `人设「${name}」已添加。记得点底部的「保存设置」使当前填写生效。`;
     } catch (e) {
       $('#persona-pick-hint').textContent = `添加失败：${e.message}`;

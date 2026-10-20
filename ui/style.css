@@ -24,9 +24,11 @@
    这个控制台的物理类比不是 SaaS 仪表盘，是「值班台 / 通报板」：原材料是一群人在群里说话、
    一个机器人半夜替你说几句、每次说话花掉的钱、以及"它是不是开始跑偏了"。
 
-   ▸ `--voice`（黄铜）是**全站唯一的暖色**，且只代表一件事：**这是机器人说的**。
+   ▸ `--voice`（冷青）是**唯一代表「这是机器人说的」的强调色**，不是第二个主题色。
      它出现在上下文里的机器人回合、会话列表的"已发言"徽章、归档表里它自己发的消息，
      以及总览页"机器人"那张卡的图标。这一笔只花在一处才有意义 —— 别拿它当第二个强调色。
+     （2026-10-19：原来是黄铜；亮色下 #8a5a06 在会话列表里是一块块棕黄，与靛蓝/冷色壁纸
+     不协调，用户点名要换。换成冷青后仍是唯一身份色，但落在主题的冷色区间里。）
 
    ▸ **底色保持原值，不动。** 2026-10-09 试过一版"更冷、更中性"的底（#0f141b 系列，
      把蓝味抽掉，理由是"深海军蓝＝默认款"、且中性底能让黄铜更突出），实测后**退回**，
@@ -34,7 +36,7 @@
        · 它明度几乎没变（ΔL* < 1.5），真正变的是彩度 —— 也就是说用户说不出哪里变了，
          只觉得"哪里不对"，这是最难解释的一类改动；
        · 暗色的 `--muted` 对比度从 7.52 掉到 6.43（量过），而暗色正是实际在用的那套；
-       · 身份那点收益主要来自 `--voice` 本身，黄铜压在旧深蓝底上一样跳；
+       · 身份那点收益主要来自 `--voice` 本身，冷青压在旧深蓝底上一样跳；
        · 仓库本来就有 `dark-intensity` 与主题微调两条轴，底色深浅/冷暖是**用户**的决定，
          不该由默认值替他选。
      一句话："更好看"不是可测量的改进，而它影响每一屏。要改请先问。
@@ -52,7 +54,7 @@
   --border: #22304d;
   --text: #e7edf8;
   --muted: #96a5bf;
-  --voice: #d9a441;              /* 黄铜。只给"机器人说的"，别挪作他用 */
+  --voice: #2dd4bf;              /* 冷青（原黄铜）。只给"机器人说的"，别挪作他用 */
   --accent: #4c8dff;
   --green: #2fd07a;
   --red: #ff6b6b;
@@ -89,7 +91,7 @@
   --border: #e0e7f2;
   --text: #14202f;
   --muted: #5b6b83;
-  --voice: #8a5a06;              /* 亮色下的黄铜：压暗才压得住白底（在卡片上 5.9:1）。
+  --voice: #0f766e;              /* 亮色下的冷青（原黄铜 #8a5a06）：压暗才压得住白底。
                                     底色与上面那六项一律保持原值，见顶部那段说明。 */
   --accent: #2f6fe4;
   --green: #1f9d55;
@@ -511,7 +513,11 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .session-activity { font-size: var(--fs-xs); color: var(--accent); }
 .mode-legacy { --mode-color: var(--green); --mode-soft: rgba(63, 206, 122, .11); }
 .mode-threaded { --mode-color: var(--accent); --mode-soft: rgba(91, 140, 255, .12); }
-.mode-lifecycle { --mode-color: var(--orange); --mode-soft: rgba(255, 180, 84, .12); }
+/* 生命周期模式原来用橙色：亮色下 --orange 是 #c97a12，配 12% 暖底，在列表里就是一条条棕黄，
+   与靛蓝强调色和冷色壁纸不搭（2026-10-19 用户反馈"棕黄色不协调"）。换成冷紫：
+   三档仍是绿 / 蓝 / 紫三个能区分的色相，且都在主题的冷色区间里。暗色用亮一档的紫。 */
+.mode-lifecycle { --mode-color: #8b5cf6; --mode-soft: rgba(139, 92, 246, .12); }
+[data-theme='dark'] .mode-lifecycle { --mode-color: #a78bfa; --mode-soft: rgba(167, 139, 250, .14); }
 .mode-chip,
 .thread-pill {
   max-width: 100%;
@@ -545,7 +551,8 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   background: var(--mode-soft);
   font-size: var(--fs-sm);
 }
-.session-mode-name { color: var(--mode-color); font-weight: 700; }
+/* 原始 --mode-color 在浅色下（紫 #8b5cf6）约 3.5:1，12px 粗体仍偏淡；与 .mode-chip / 时间线标题同口径压深一档。 */
+.session-mode-name { color: color-mix(in srgb, var(--mode-color) 82%, var(--text)); font-weight: 700; }
 .session-mode-state { font-weight: 600; }
 .session-mode-detail { color: var(--muted); min-width: 0; }
 .session-mode-ref { color: var(--faint); font-family: var(--mono); font-size: var(--fs-xs); white-space: nowrap; }
@@ -815,7 +822,7 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   border-bottom: 1px solid var(--border);
 }
 .context-msg-system .context-msg-head { color: var(--accent); }
-/* 机器人自己的回合：一道 2px 铜色左沿 + 铜色标签。全上下文视图里“哪几段是它说的”一眼可扫，
+/* 机器人自己的回合：一道 2px 冷青左沿 + 冷青标签。全上下文视图里“哪几段是它说的”一眼可扫，
    不需要读标签文字；system 仍走强调蓝（它代表“系统/规则”，不是“它说的”）。 */
 .context-msg-assistant { border-left: 2px solid var(--voice); }
 .context-msg-assistant .context-msg-head { color: color-mix(in srgb, var(--voice) 88%, var(--text)); }
@@ -986,7 +993,7 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .archive-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .archive-table .t { color: var(--muted); white-space: nowrap; font-family: var(--mono); font-size: var(--fs-xs); }
 .archive-table .w { white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
-.archive-table .w.self { color: var(--voice); }   /* 它自己发的消息 = 铜色（原来错用了强调蓝）*/
+.archive-table .w.self { color: var(--voice); }   /* 它自己发的消息 = 冷青（原来错用了强调蓝）*/
 .archive-table .unread td { background: rgba(255,180,84,.05); }
 .archive-table .text { word-break: break-word; white-space: pre-wrap; }
 
@@ -2201,6 +2208,9 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 }
 .asset-table td small { display: block; margin-top: 3px; color: var(--faint); }
 .asset-table .r { text-align: right; }
+/* 操作列：桌面端与 .asset-actions(flex-end) 右缘对齐；窄屏按钮改 flex-start，表头同步靠左。 */
+.asset-table th.actions-col { text-align: right; }
+@media (max-width: 600px) { .asset-table th.actions-col { text-align: left; } }
 .asset-table tr:last-child td { border-bottom: 0; }
 
 @media (max-width: 600px) {
@@ -2954,9 +2964,9 @@ body {
 .status-waiting {
   background: rgba(47, 208, 122, .09); border-color: rgba(47, 208, 122, .28); color: color-mix(in srgb, var(--green) 80%, var(--text));
 }
-/* 「已发言」＝这个机器人在本轮里说了话 —— `--voice`（全站唯一暖色）的落点之一（2026-10-09 值班台）。
-   用 color-mix 从 --voice 现算，明暗两套色板自动跟（亮色下 --voice 是压暗的黄铜）。
-   刻意的区分：铜色**不表示“状态好”**，只表示“这是它说的” —— 等待/运行/出错/中止仍是各自的语义色。
+/* 「已发言」＝这个机器人在本轮里说了话 —— `--voice`（冷青）的落点之一（2026-10-09 值班台）。
+   用 color-mix 从 --voice 现算，明暗两套色板自动跟（亮色下 --voice 是压暗的冷青）。
+   刻意的区分：青色**不表示“状态好”**，只表示“这是它说的” —— 等待/运行/出错/中止仍是各自的语义色。
    它原来跟 waiting 挤在一条绿色规则里；文件前段另有一份旧副本（16%/88%）被本处完整覆盖成
    死声明，2026-10-09 复核已删 —— token 改在死副本上会"改了没反应"。 */
 .status-done {
@@ -2993,7 +3003,10 @@ body {
 .usage-table tbody tr:hover, .asset-table tbody tr:hover, .incident-table tbody tr:hover,
 .member-table tbody tr:hover, .model-rows-table tbody tr:hover, .context-call-table tbody tr:hover,
 .archive-table tbody tr:hover, .identity-pilot-table tbody tr:hover { background: var(--hover); }
-.asset-table-wrap, .context-call-table-wrap { border-radius: var(--r-card); border: 1px solid var(--border); overflow: hidden; }
+/* 圆角靠滚动容器裁切即可；不要在第二轮把 overflow 设成 hidden —— 会把 2183 那层的
+   max-height 变成"截断"：人物印象 14 行时 scrollHeight 1076 / clientHeight 569，
+   后面几行既看不到也滚不到（2026-10-19 审查实测）。auto 同时保住横向滚动。 */
+.asset-table-wrap, .context-call-table-wrap { border-radius: var(--r-card); border: 1px solid var(--border); overflow: auto; }
 
 /* ── 对话框 / 登录卡 / 加载页 ── */
 /* 弹窗类才需要压暗背景；启动提示是浮层，不压暗（否则进控制台会整屏闪一下） */
@@ -3486,7 +3499,7 @@ dialog { margin: auto; max-height: 88vh; }
 }
 .kpi-head { display: flex; align-items: center; gap: 7px; color: var(--muted); }
 .kpi-ico { display: inline-flex; color: var(--accent); }
-/* "机器人"那张卡的图标走铜色 —— 它是这张台面上"那个会说话的东西"的身份证，与 --voice 同口径 */
+/* "机器人"那张卡的图标走冷青 —— 它是这张台面上"那个会说话的东西"的身份证，与 --voice 同口径 */
 #kpi-bot .kpi-ico { color: var(--voice); }
 .kpi-label { font-size: var(--fs-sm); }
 .kpi-value { margin-top: 7px; font-family: var(--mono); font-size: var(--fs-2xl); font-weight: 650; line-height: 1.15; display: flex; align-items: center; gap: 6px; }
@@ -4968,6 +4981,21 @@ html[data-glass='outline'] {
   --glass-fill: rgba(250, 250, 250, .56);
   --glass-sat: 125%;
 }
+/* 二级侧栏（会话/存档/记忆的列表栏、设置左栏）：它们的 sticky 表头是**不透明的**
+   --bg-2 白条，56% 的玻璃底会把壁纸的绿色透上来 —— 上面一条白、下面一片绿，像两块拼的
+   （2026-10-19 用户反馈"会话界面左侧边栏颜色违和"）。把这两块提到 84%，表头与列表底色
+   只差几个色阶，整块读作一张白面板；壁纸仍留一点影子。主侧栏不跟 —— 它是导航轨，
+   保持 56% 的透感。 */
+html[data-theme='light'][data-glass='liquid'] .list-pane,
+html[data-theme='light'][data-glass='liquid'] .settings-sidebar {
+  --glass-fill: rgba(250, 250, 250, .84);
+}
+/* 上面两条把 --glass-fill 声明在元素自身上，会盖过 html 上的高对比规则（继承 vs 自身声明）；
+   高对比要求这两块也回到不透明，所以用同一层选择器再声明一次。 */
+html[data-theme='light'][data-contrast='high'][data-glass='liquid'] .list-pane,
+html[data-theme='light'][data-contrast='high'][data-glass='liquid'] .settings-sidebar {
+  --glass-fill: var(--bg-2);
+}
 [data-theme='light'][data-glass] {
   --glass-edge: rgba(255, 255, 255, .90);
   --glass-spec-top: rgba(255, 255, 255, 1);
@@ -4977,6 +5005,42 @@ html[data-glass='outline'] {
   --glass-shadow:
     0 1px 1px rgba(16, 24, 40, .06),
     0 12px 30px -10px rgba(16, 24, 40, .16);
+  /* 卡片/表格的描边。--border (#e0e7f2) 贴白卡只有 1.24:1，亮壁纸上这些框几乎看不见
+     （2026-10-19 用户反馈"浅色界面某些框的对比度不明显"）。与控件线同级（text 30%，
+     约 2.3:1）；22% 实测只有 1.94:1，仍偏淡。只给"有边界、需要看出是个盒子"的表面；
+     分节线仍用 --border。 */
+  --card-line: var(--border);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  [data-theme='light'][data-glass] {
+    --card-line: color-mix(in srgb, var(--text) 30%, var(--border));
+  }
+}
+/* "有边界、要看出是个盒子"的表面统一走 --card-line；表格内部行线、面板分节线保持 --border。
+   白玻璃边（--glass-edge）在这些盒子上贴白底看不见，所以在亮色玻璃下让位给这条描边。 */
+[data-theme='light'][data-glass] .asset-summary-item,
+[data-theme='light'][data-glass] .asset-table-wrap,
+[data-theme='light'][data-glass] .context-call-table-wrap,
+[data-theme='light'][data-glass] .control-service,
+[data-theme='light'][data-glass] .control-key-list,
+[data-theme='light'][data-glass] .usage-table,
+[data-theme='light'][data-glass] .usage-card,
+[data-theme='light'][data-glass] .usage-note,
+[data-theme='light'][data-glass] .tool-card,
+[data-theme='light'][data-glass] .kpi-grid,
+[data-theme='light'][data-glass] .plugin-card,
+[data-theme='light'][data-glass] .opt-card,
+[data-theme='light'][data-glass] .plat-card,
+[data-theme='light'][data-glass] .price-card,
+[data-theme='light'][data-glass] .conversation-mode-option,
+[data-theme='light'][data-glass] .persona-card,
+[data-theme='light'][data-glass] .persona-detail,
+[data-theme='light'][data-glass] .scheme-card,
+[data-theme='light'][data-glass] .modal,
+[data-theme='light'][data-glass] .model-modal,
+[data-theme='light'][data-glass] .empty-hint,
+[data-theme='light'][data-glass] .context-empty {
+  border-color: var(--card-line);
 }
 /* 高对比模式：把不透明度拉满，可读性优先，材质让位 */
 html[data-contrast='high'][data-glass] { --glass-tint: 97%; }

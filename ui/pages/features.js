@@ -94,7 +94,7 @@ function renderSlangAssets(data) {
   if (!entries.length) return '<div class="empty-hint">黑话库为空</div>';
   const statusText = { candidate: '候选', confirmed: '已确认', rejected: '已拒绝' };
   return `<div class="asset-table-wrap"><table class="asset-table">
-    <thead><tr><th>词条</th><th>含义</th><th>状态</th><th>出现</th><th>证据</th><th>操作</th></tr></thead>
+    <thead><tr><th>词条</th><th>含义</th><th>状态</th><th class="r">出现</th><th class="r">证据</th><th class="actions-col">操作</th></tr></thead>
     <tbody>${entries.map((entry) => `<tr>
       <td><strong>${esc(entry.content)}</strong>${entry.risk ? `<small>${esc(entry.risk)}</small>` : ''}</td>
       <td>${esc(entry.meaning || '-')}${entry.usage ? `<small>${esc(entry.usage)}</small>` : ''}</td>
@@ -116,7 +116,7 @@ function renderSlangResearch(data) {
   const entries = data?.discoveries || [];
   if (!entries.length) return '<div class="empty-hint">当前没有黑话研究记录</div>';
   return `<div class="asset-table-wrap"><table class="asset-table">
-    <thead><tr><th>词条</th><th>来源</th><th>证据</th><th>研究结论</th><th>状态</th><th>操作</th></tr></thead>
+    <thead><tr><th>词条</th><th>来源</th><th>证据</th><th>研究结论</th><th>状态</th><th class="actions-col">操作</th></tr></thead>
     <tbody>${entries.map((entry) => {
       const evidence = (entry.evidence || []).slice(-2)
         .map((item) => item.text).filter(Boolean).join('；');
@@ -268,7 +268,7 @@ function renderIdentityAssets(data) {
   const people = data?.entries || [];
   if (!people.length) return '<div class="empty-hint">统一身份库为空</div>';
   return `<div class="asset-table-wrap"><table class="asset-table">
-    <thead><tr><th>QQ</th><th>首选名称</th><th>别名</th><th>会话</th><th>消息</th><th>好友</th><th>画像备注</th><th>操作</th></tr></thead>
+    <thead><tr><th>QQ</th><th>首选名称</th><th>别名</th><th class="r">会话</th><th class="r">消息</th><th>好友</th><th>画像备注</th><th class="actions-col">操作</th></tr></thead>
     <tbody>${people.map((person) => {
       const aliases = [...new Set((person.aliases || []).map((item) =>
         typeof item === 'string' ? item : item?.alias).filter(Boolean))];
@@ -298,7 +298,7 @@ function renderMemoryAssets(data) {
   const capped = total > entries.length
     ? `<div class="hint">共 ${total} 条，按最近更新只列前 ${entries.length} 条。</div>` : '';
   return `${capped}<div class="asset-table-wrap"><table class="asset-table">
-    <thead><tr><th>会话</th><th>人物</th><th>印象</th><th>最近更新</th><th>操作</th></tr></thead>
+    <thead><tr><th>会话</th><th>人物</th><th>印象</th><th>最近更新</th><th class="actions-col">操作</th></tr></thead>
     <tbody>${entries.map((entry, index) => `<tr>
       <td>${esc(formatChatTitle(entry.chatKey, chatNameOf(entry.chatKey)))}</td>
       <td><strong>${esc(entry.name || entry.userId)}</strong><small><code>${esc(entry.userId)}</code></small></td>
