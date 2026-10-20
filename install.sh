@@ -2,7 +2,7 @@
 # 一键安装入口（"小白版"）：把能默认的都默认掉，全程零提问。
 #
 # 它只是 deploy-all.sh 的一层薄封装：
-#   1) 用大白话做前置检查（别 root 跑、脚本要和整仓在一起）；
+#   1) 用大白话做前置检查（root 交给 root-install.sh 降权；脚本要和整仓在一起）；
 #   2) 以 --yes 调 deploy-all.sh（端口/目录/凭据全走默认，Docker 缺失时自动装）；
 #   3) 模型配置默认跳过（留到网页控制台里配：有服务预设和连通性测试，比命令行好填）——
 #      要现在就配就传 --model-base-url / --model-api-key / --model，或设同名环境变量；
@@ -17,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 DEPLOY_ALL="$SCRIPT_DIR/deploy-all.sh"
 
 info() { printf '%s\n' "$*"; }
+warn() { printf '警告：%s\n' "$*" >&2; }
 die() { printf '\n[一键安装] %s\n' "$*" >&2; exit 1; }
 
 # ── 前置检查：全部给出"下一步怎么做"，别只报错 ──────────────────────────────
@@ -24,11 +25,13 @@ case "${BASH_VERSINFO[0]:-0}" in
   0|1|2|3) die "需要 bash 4 以上（当前 ${BASH_VERSION:-unknown}）。请用 bash install.sh 运行。" ;;
 esac
 
+# root 不是问题，但机器人不该以 root 跑：交给 root 包装层创建/复用普通服务用户，
+# 完成 Docker、docker 组、linger、目录属主这些 root 才能做的事，再以服务用户重跑本脚本。
 if [[ "$(id -u)" == "0" ]]; then
-  die '请不要用 root 运行：装出来的服务挂在当前用户名下，root 装完普通账号用不了。
-  用你的普通账号（比如 ubuntu、debian）重新登录后再跑一次：
-      bash install.sh
-  （脚本只在装 Docker、开 linger 时按需用 sudo，届时可能让你输一次密码。）'
+  ROOT_INSTALLER="$SCRIPT_DIR/scripts/root-install.sh"
+  [[ -f "$ROOT_INSTALLER" ]] \
+    || die "缺少 scripts/root-install.sh；请使用完整仓库，或改用普通用户运行 bash install.sh"
+  exec bash "$ROOT_INSTALLER" "$@"
 fi
 
 if [[ ! -f "$DEPLOY_ALL" ]]; then
@@ -37,6 +40,31 @@ if [[ ! -f "$DEPLOY_ALL" ]]; then
       git clone https://github.com/sakurawwwxh/qq-agent-plus.git
       cd qq-agent-plus
       bash install.sh"
+fi
+
+# ── 机器规格提示：不阻断安装，但别让 1C1G 机器装完就 OOM ────────────────────
+# SnowLuma 里是 Chromium，再叠 Node 与 ffmpeg；1GB 内存的 VPS 很容易在扫码/回复时被 OOM。
+STACK_DIR="${QQ_AGENT_STACK_DIR:-/mnt/data/qq-agent}"
+PREV_ARG=""
+for arg in "$@"; do
+  if [[ "$PREV_ARG" == "--root-dir" ]]; then STACK_DIR="$arg"; fi
+  PREV_ARG="$arg"
+done
+if [[ -r /proc/meminfo ]]; then
+  MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+  if [[ -n "$MEM_KB" ]] && (( MEM_KB > 0 && MEM_KB < 1800000 )); then
+    warn "内存约 $((MEM_KB / 1024))MB，低于建议的 2GB。SnowLuma/Chromium 可能 OOM；建议 2 核 2GB 以上，或加 swap。"
+  fi
+fi
+CPU_COUNT="$(nproc 2>/dev/null || true)"
+if [[ -n "$CPU_COUNT" ]] && (( CPU_COUNT < 2 )); then
+  warn "只有 $CPU_COUNT 个 CPU 核心；建议至少 2 核，否则扫码登录和模型回复会明显变慢。"
+fi
+DISK_CHECK_DIR="$(dirname "$STACK_DIR")"
+[[ -d "$DISK_CHECK_DIR" ]] || DISK_CHECK_DIR=/
+FREE_KB="$(df -Pk "$DISK_CHECK_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
+if [[ -n "$FREE_KB" ]] && (( FREE_KB < 8 * 1024 * 1024 )); then
+  warn "部署盘剩余约 $((FREE_KB / 1024))MB，低于建议的 8GB；镜像、日志和媒体文件可能把磁盘写满。"
 fi
 
 # ── 模型配置：显式给了就不跳过，否则留到控制台里配 ──────────────────────────
@@ -129,8 +157,17 @@ printf '③ 把要用它的群加进白名单：控制台「设置 → 聊天白
 if [[ "$MODE" == "observe" ]]; then
   printf '   （机器人默认「观察」模式只看不说话；确认没问题后在控制台首页把运行模式切到「启用」。）\n'
 fi
-printf '\n打不开上面的地址？云服务器需要在安全组放行这几个端口（TCP）：\n'
-printf '   %s 控制台 / %s 协议端后台 / %s 扫码登录\n' "$CONSOLE_PORT" "$SNOWLUMA_PORT" "$NOVNC_PORT"
+printf '\n打不开上面的地址？\n'
+printf '   %s 控制台：只对你的 IP / VPN 放行，或走 SSH 隧道。\n' "$CONSOLE_PORT"
+printf '   %s 协议端后台 / %s 扫码登录：建议不要直接开公网，用 SSH 隧道：\n' "$SNOWLUMA_PORT" "$NOVNC_PORT"
+printf '     ssh -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s <用户>@<服务器>\n' \
+  "$CONSOLE_PORT" "$CONSOLE_PORT" "$SNOWLUMA_PORT" "$SNOWLUMA_PORT" "$NOVNC_PORT" "$NOVNC_PORT"
+printf '   然后浏览器打开 http://127.0.0.1:%s\n' "$CONSOLE_PORT"
 printf '   全套凭据也在：%s\n' "$ACCESS_FILE"
-printf '\n出问题先看日志：\n   bash %s/app/manage.sh logs\n' "$ROOT_GUESS"
+if [[ "${QQ_AGENT_ROOT_INSTALL_WRAPPED:-}" == "1" ]]; then
+  printf '\n出问题先看日志：\n   sudo qq-agent-manage logs\n'
+  printf '（服务用户是 qqagent；机器人进程不是 root）\n'
+else
+  printf '\n出问题先看日志：\n   bash %s/app/manage.sh logs\n' "$ROOT_GUESS"
+fi
 printf '============================================================\n'

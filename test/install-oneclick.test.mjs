@@ -1,7 +1,7 @@
 // 一键安装入口（install.sh）的行为用例：
 //   1) 零问答：以 --yes 调 deploy-all.sh，模型配置默认跳过（--skip-model-config）；
 //   2) 显式给了模型参数/环境变量就不跳过（透传）；
-//   3) root 直接拒（并说明用普通账号怎么跑），不会走到 deploy-all.sh；
+//   3) root 交给 root-install.sh 做降权准备，不会直接执行 deploy-all.sh；
 //   4) deploy-all.sh 失败时退出码透传 + 给日志路径；成功时打印"接下来三步"（控制台带
 //      令牌的链接、扫码入口、白名单、安全组端口），这些值要从凭据文件里真实取到；
 //   5) 同目录缺 deploy-all.sh 时告诉用户怎么拿完整仓库。
@@ -33,6 +33,8 @@ function fixture(t, { withDeployAll = true } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qq-oneclick-')));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.copyFileSync(path.join(repo, 'install.sh'), path.join(dir, 'install.sh'));
+  fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+  fs.copyFileSync(path.join(repo, 'scripts/root-install.sh'), path.join(dir, 'scripts/root-install.sh'));
   if (withDeployAll) fs.writeFileSync(path.join(dir, 'deploy-all.sh'), STUB);
   const argsFile = path.join(dir, 'args.txt');
   return { dir, argsFile };
@@ -68,8 +70,12 @@ test('零问答装配：--yes + 默认跳过模型配置，装完打印接下来
   assert.match(r.stdout, /http:\/\/10\.0\.0\.5:46081/);
   assert.match(r.stdout, /12345678/);
   assert.match(r.stdout, /聊天白名单/);
-  assert.match(r.stdout, /43210 控制台 \/ 45099 协议端后台 \/ 46081 扫码登录/,
-    '安全组清单里的端口要从实际地址取（非默认端口时要跟着走）');
+  assert.match(r.stdout, /43210 控制台/,
+    '安全组提示里的控制台端口要从实际地址取（非默认端口时要跟着走）');
+  assert.match(r.stdout, /45099 协议端后台/);
+  assert.match(r.stdout, /46081 扫码登录/);
+  assert.match(r.stdout, /ssh -L 43210:127\.0\.0\.1:43210/,
+    '协议端/扫码端口建议走 SSH 隧道，不要把三个端口都开公网');
   assert.match(r.stdout, /manage\.sh logs/);
   assert.match(r.stdout, /观察/, 'observe 模式要提示去控制台切「启用」');
 });
@@ -107,16 +113,22 @@ test('显式模型参数/环境变量会透传且不再跳过模型配置', { sk
   assert.deepEqual(stubArgs(b), ['--yes'], '环境变量给了 Key 也不跳过（Key 的值随环境进子进程，不出现在参数里）');
 });
 
-test('root 直接拒：不会执行 deploy-all.sh，并给出普通账号怎么跑', { skip }, (t) => {
+test('root 自动进入降权准备：不会直接执行 deploy-all.sh', { skip }, (t) => {
   const f = fixture(t);
   const binDir = path.join(f.dir, 'bin');
   fs.mkdirSync(binDir, { recursive: true });
   fs.writeFileSync(path.join(binDir, 'id'), '#!/bin/sh\necho 0\n', { mode: 0o755 });
-  const r = run(f, [], { PATH: `${binDir}${path.delimiter}${process.env.PATH}` });
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /请不要用 root 运行/);
-  assert.match(r.stderr, /普通账号/);
-  assert.equal(fs.existsSync(f.argsFile), false, 'root 检查必须发生在调 deploy-all.sh 之前');
+  const r = run(f, [], {
+    PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+    // 测试环境不是 root：只让 root 包装层打印计划，绝不创建用户/改系统
+    QQ_AGENT_ROOT_INSTALL_TEST: '1'
+  });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /root 安装准备/);
+  assert.match(r.stdout, /服务用户：qqagent/);
+  assert.match(r.stdout, /机器人将以它运行，不是 root/);
+  assert.match(r.stdout, /以 qqagent 执行 install\.sh/);
+  assert.equal(fs.existsSync(f.argsFile), false, 'root 包装层不能直接执行 deploy-all.sh');
 });
 
 test('deploy-all.sh 失败：退出码透传并给出日志路径；不会假装成功打印三步', { skip }, (t) => {

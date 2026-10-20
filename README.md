@@ -148,14 +148,37 @@ docker compose up -d
 （带登录令牌的控制台链接、扫码登录入口、白名单），模型 Key 与群号在网页控制台里填即可。
 SnowLuma 已包含 OneBot，无需另行安装 NapCat 或 Lagrange。
 
-安装与运行都不使用 root：脚本会直接拒绝 root 身份，请以普通用户执行（只在安装 Docker 与
-开启 linger 时按需调用 `sudo`）。
+**root 可以直接执行**。安装器会把机器人降权到一个普通服务用户（默认 `qqagent`），
+不会让机器人进程以 root 运行；如果是从普通用户 `sudo` 执行，则沿用该用户。root 只负责
+装 Docker、把服务用户加入 `docker` 组、开启 linger 和准备目录。装完后 root 用
+`sudo qq-agent-manage logs` 看日志，普通用户仍可直接用 `manage.sh`。
+
+注意：服务用户会被加入 `docker` 组，这是控制台“更新协议端”的前提；`docker` 组在 Linux 上
+等价于宿主 root（可挂载宿主文件系统）。这里降的是应用进程身份，不是完整沙箱。如果你不需要
+控制台更新协议端，可以在部署后把该用户移出 `docker` 组并手工管理 SnowLuma。
+
+开始前建议先确认机器规格：
+
+| 项目 | 建议 |
+| --- | --- |
+| 系统 | Ubuntu 22.04/24.04、Debian 12、Rocky/Alma 9 等带 systemd 的 Linux |
+| CPU | 2 核起；1 核会明显拖慢扫码登录和模型回复 |
+| 内存 | 2GB 起；1GB 很容易在 SnowLuma/Chromium 启动时 OOM |
+| 磁盘 | 10GB 空闲，本机盘；SQLite 不支持 NFS/SMB |
+| 网络 | 能访问 GitHub；Docker 镜像有国内镜像站兜底 |
+| 账号 | root 或带 sudo 的普通用户；一个 QQ 号 |
+| 模型 | OpenAI Chat Completions 兼容的地址、Key、模型名（可装完再配） |
 
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
+sudo bash install.sh     # root 或 sudo 都可以；服务会自动降权到普通用户
+# 如果当前就是普通用户：
 bash install.sh
 ```
+
+GitHub 克隆慢或不通时，改用 Release 页面下载的源码包（或可信镜像站），解压后进入目录再执行
+上面的命令；`install.sh` 需要完整仓库，不能只下载一个脚本文件。
 
 需要边装边选（部署目录/端口/凭据/模型）时用交互式安装器 `deploy-all.sh`——它与 `install.sh`
 是同一个安装器，只是把问题问出来而不是走默认值：
@@ -172,8 +195,18 @@ bash deploy-all.sh
 
 OneBot HTTP `3000` 与 WebSocket `3001` 默认仅绑定 `127.0.0.1`，不暴露到局域网。安装器不要求填写
 本机 IP，完成后自动检测并打印访问地址。生成的凭据保存于 `/mnt/data/qq-agent/deployment-access.txt`，
-权限为 `0600`。脚本不修改 UFW、firewalld 或云安全组；需要跨主机访问时，仅应向可信局域网或 VPN
-放行上述三个入口，不得将 noVNC 或 OneBot 暴露到公网。
+权限为 `0600`。脚本不修改 UFW、firewalld 或云安全组。
+
+**端口建议**：`3210` 控制台只对你的 IP 或 VPN 放行；`5099` 协议端后台和 `6081` 扫码登录
+建议不要直接开公网，用 SSH 隧道：
+
+```bash
+ssh -L 3210:127.0.0.1:3210 -L 5099:127.0.0.1:5099 -L 6081:127.0.0.1:6081 <用户>@<服务器>
+# 然后打开 http://127.0.0.1:3210
+```
+
+如果你还没有模型 Key：先去一个 OpenAI Chat Completions 兼容的服务商申请，装完在控制台的
+「设置 → 模型 API」里选预设、填 Key、点「测试连通性」即可；也可以先装、之后再配。
 
 交互式安装会询问模型 Base URL、模型名、API Key 与 QQ 白名单（**Key 留空＝跳过**，之后在网页
 控制台「设置 → 模型 API」里配——一键安装默认走的就是这条）。基础设施启动后，打开脚本输出的

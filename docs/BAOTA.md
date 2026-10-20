@@ -24,7 +24,7 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 `proxy_buffering`，否则控制台的事件流将停止更新。
 
 **`qqagent` 用户与 root 部署**
-`deploy-all.sh` 开头直接拒绝 root（`((EUID == 0))` 即退出），`docs/LINUX.md` 的 Requirements 亦要求以服务用户身份部署。
+`install.sh` 可以直接用 root 执行，它会先把服务降权到 `qqagent`（或 `SUDO_USER`）；`deploy-all.sh` 本身仍拒绝 root（`((EUID == 0))` 即退出）。
 更常见的运维问题是：以 root 执行 `manage.sh` 时查询的是 root 自身的 user manager，
 因而误报「服务不存在」，而服务实际运行正常。
 
@@ -46,13 +46,13 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 `manage.sh` 硬编码 `systemctl --user` / `journalctl --user`（`scripts/manage.mjs`），
 自动更新由配套的 user timer 承担。改用 PM2 会绕过以下机制：部署前代码快照与失败回滚、
 健康检查、unit 中的 `Restart=on-failure` 与 `NoNewPrivileges`，以及 Release 驱动的自动更新。
-此外，`deploy-all.sh` 开头明确拒绝 root（`((EUID == 0))` 即退出），`docs/LINUX.md` 的 Requirements 亦要求以服务用户身份部署。
+此外，`deploy-all.sh` 开头仍拒绝 root（`((EUID == 0))` 即退出）；`install.sh` 现在可以直接用 root 执行，它会先把服务降权到 `qqagent`（或 `SUDO_USER`）再调用安装器。
 
 ## 部署差异对照
 
 | 项目的假设 | 宝塔面板默认 | 处理方式 |
 | --- | --- | --- |
-| 以非 root 服务用户部署 | 全程以 root 操作 | 创建 `qqagent` 用户，通过 SSH 登录后执行脚本 |
+| 以非 root 服务用户运行 | 面板默认以 root 操作 | 直接 `sudo bash install.sh`：安装器自动创建 `qqagent` 并降权；也可手工建普通用户后执行 |
 | `systemctl --user` 可用 | 网页终端/非登录会话缺 `XDG_RUNTIME_DIR`（用户管理器其实在跑） | 脚本会自动补该变量；`/run/user/<uid>` 不存在时先 `sudo loginctl enable-linger <user>`；SSH 或文末 root 方案同样可行 |
 | 依赖 `rsync`（硬检查）、`xz`（解压 Node） | 精简模板通常缺失 | 先执行 `apt install` |
 | 脚本不改动防火墙，仅绑定 `127.0.0.1` | 面板「安全」页管理 ufw/iptables | 默认使用 SSH 隧道，无需放行端口 |
@@ -199,7 +199,7 @@ proxy_send_timeout 3600s;
 
 ## 六、全栈部署（SnowLuma / OneBot / Docker）
 
-`deploy-all.sh` 拒绝 root 身份，需按以下顺序操作：
+最简单的做法是以 root 执行 `install.sh`，它会自动创建/复用 `qqagent` 并降权，不需要手工切用户。如果要手工控制服务用户，按以下顺序操作：
 
 1. 先在宝塔「Docker」管理器中安装 Docker 与 Compose v2，避免脚本再通过 apt 安装第二套；
 2. 执行 `usermod -aG docker qqagent`，然后**重新登录** `qqagent`（组变更需在新会话中生效）；
@@ -278,5 +278,6 @@ bash deploy.sh \
 ```
 
 代价如下：机器人以 root 身份常驻（unit 中的 `NoNewPrivileges`、`UMask=0077` 仍然生效，
-但进程身份为 root）；`deploy-all.sh` 依然拒绝 root，因此**全栈模式不支持该方案**，只能以
-非 root 用户安装。存在独立服务用户时，应采用第四节所述方式。
+但进程身份为 root）。`deploy-all.sh` 依然拒绝 root；全栈安装请用 root 执行 `install.sh`，
+它会先把服务降权到 `qqagent`（或 `SUDO_USER`）再调用安装器，不会让机器人以 root 运行。
+存在独立服务用户时，应采用第四节所述方式。

@@ -171,14 +171,32 @@ link with the login token embedded, the QQ login page, and where to set the chat
 model key and group IDs are filled in later in the web console. SnowLuma already contains OneBot;
 NapCat and Lagrange must not be installed on top of it.
 
-Installation and runtime must not use root: the script refuses to run as root, so use a regular user
-(it calls `sudo` only when installing Docker or enabling linger).
+The installer may be started as root. It creates or reuses a dedicated non-root service account
+(default `qqagent`, or `SUDO_USER`), installs Docker, adds that account to the `docker` group,
+enables linger, and then re-runs the installer as that user. The bot process itself never runs as
+root. `deploy-all.sh` still requires a regular user.
+
+The service account is added to the `docker` group, which is required by the console protocol-update
+button. On Linux the `docker` group is equivalent to host root (members can mount host paths); this
+drops the application process identity, not the Docker privilege. Remove the account from that group
+and manage SnowLuma manually if you do not need the update button.
 
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
+sudo bash install.sh    # root or sudo; the service is dropped to a non-root user
+# or, as a regular user:
 bash install.sh
 ```
+
+If cloning from GitHub is slow or blocked, download the source archive from the Release page (or a
+trusted mirror), extract it and run the same commands. `install.sh` needs the full repository, not
+a single copied script.
+
+Recommended host: 2 CPU cores, 2GB RAM and 10GB free local disk. A 1GB host can run out of memory
+while SnowLuma/Chromium starts; SQLite must not live on NFS or SMB.
+
+
 
 When you prefer to answer the questions (deployment directory, ports, credentials, model), use the
 interactive installer instead — it is the same installer with the questions asked instead of

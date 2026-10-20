@@ -62,6 +62,11 @@ jobs:
           for f in "${shells[@]}"; do bash -n "$f"; done
           echo "Shell 语法检查通过（${#shells[@]} 个）"
 
+      # root 安装路径的只读冒烟：确认 install.sh 不会以 root 直接跑 deploy-all.sh，
+      # 而是进入 root-install.sh 的降权预检。这一步不创建用户、不改系统。
+      - name: 一键安装 root 包装层预检（--check-only）
+        run: sudo bash install.sh --check-only
+
       - name: 未定义调用扫描（严格模式）
         run: node src/ops.js scan --strict
 
