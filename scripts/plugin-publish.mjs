@@ -1,16 +1,20 @@
 #!/usr/bin/env node
-// 发布一个插件：打包 → 自测 → 落进索引仓库 → 更新索引条目 → 校验 → （可选）打 tag/Release/提交。
+// 发布一个插件：打包 → 自测 → 落进索引仓库 → 更新索引条目 → 校验 → （可选）传资产/提交/推送。
 //
 // 为什么要有这一条：上架流程原来是四步手工（打包、复制包、改 index.json、挂 Release），
 // 而"市场"要长期维护，作者与维护者的成本必须压到一条命令。
 //
-// 默认**只准备、不动远端**（把包放进索引仓库工作副本、更新 index.json、跑校验、打印下一步要执行
-// 的 git/gh 命令）；加 --push 才真的提交、打 tag、建 Release、推。默认不推是刻意的：推上去是
-// 对外可见的动作，不该由一次手滑决定。
+// 包挂在索引仓库的**滚动 Release**（tag 固定 `packages`）上：加插件、升版本都不再新建 Release。
+// 索引仓库的 CI 会在 main 收到 `plugins/**` 变更后把缺的包补传上去；--push 也会先传一遍，
+// 免得"索引已公开、资产还没到"的那段窗口里装的人 404。
 //
-// --push 的顺序也是刻意的：**先建 Release/上传资产，再推索引**。索引里的 downloadUrl 一旦公开就被
-// 使用者的"一键安装"用上了，如果反过来（先推索引、Release 建失败）所有装了它的人都会 404，
-// 只能再推一次修复；先建 Release 则失败时什么都没有对外发生（本地提交还在，重跑即可）。
+// 默认**只准备、不动远端**（把包放进索引仓库工作副本、更新 index.json、跑校验、打印下一步要执行
+// 的 git 命令）；加 --push 才真的传资产、提交、推送。默认不推是刻意的：推上去是对外可见的动作，
+// 不该由一次手滑决定。
+//
+// --push 的顺序也是刻意的：**先上传资产，再推索引**。索引里的 downloadUrl 一旦公开就被使用者
+// 的"一键安装"用上了，如果反过来（先推索引、资产传失败）所有装了它的人都会 404，只能再推一次修复；
+// 先传资产则失败时什么都没有对外发生（本地提交还在，重跑即可）。
 //
 // 用法：
 //   node scripts/plugin-publish.mjs examples/plugins/weather --index-repo ../qq-agent-plugins
@@ -36,12 +40,12 @@ const has = (name) => args.includes(`--${name}`);
 const run = (cmd, argv, options = {}) => spawnSync(cmd, argv, { encoding: 'utf8', ...options });
 
 if (!dir) {
-  console.error(`用法：node scripts/plugin-publish.mjs <插件目录> --index-repo <索引仓库工作副本> [--tag vX.Y.Z] [--push]
+  console.error(`用法：node scripts/plugin-publish.mjs <插件目录> --index-repo <索引仓库工作副本> [--tag packages] [--push]
 
   可选：--base-url 仓库地址 --homepage 链接 --changelog-url 链接 --icon 图标地址
         --category 分类 --tags a,b --min-version 0.8.5 --readme 文件（默认读插件目录的 README.md）
         --clear-revoked（新版本要重新上架，而该条目当前在撤回名单里时必须显式给）
-  默认只准备（不动远端）；--push 才会提交 + 建 Release/传资产 + 推索引。`);
+  默认只准备（不动远端）；--push 才会传资产 + 提交 + 推索引（CI 也会补传缺的包）。`);
   process.exit(2);
 }
 
@@ -102,18 +106,11 @@ const tagFromEntry = (item) => String(item?.downloadUrl || item?.tarball || item
   .match(/\/download\/([^/]+)\//)?.[1] || '';
 const existing = index.plugins.find((item) => item.id === packed.id);
 const existingTag = tagFromEntry(existing);
-// 默认 tag 的取法：**沿用本条已有的那个**，没有才看仓库里用得最多的那个，最后才用插件版本号。
-// 不让默认一直是 `v<插件版本>`：既有条目都挂在同一个批次 Release 上（v1.1.0），裸命令更新会把
-// downloadUrl 改写成 `.../download/v1.0.0/...` —— 那个 Release 不存在，装的人直接 404。
-const tagCounts = new Map();
-for (const item of index.plugins) {
-  const one = tagFromEntry(item);
-  if (one) tagCounts.set(one, (tagCounts.get(one) || 0) + 1);
-}
-const batchTag = [...tagCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
-const tag = flag('tag', '') || existingTag || batchTag || `v${packed.version}`;
-if (existingTag && flag('tag', '') && flag('tag') !== existingTag) {
-  console.log(`· 注意：${packed.id} 原来挂在 ${existingTag}，这次指定了 ${flag('tag')}（该条 downloadUrl 会跟着改）`);
+// 所有包共用索引仓库的一个滚动 Release（tag 固定 `packages`）。加插件、升版本都不再新建 Release，
+// 也就没有了"这个条目挂在哪个批次 tag 上"的问题。`--tag` 只留给特殊/外部索引仓库。
+const tag = flag('tag', 'packages');
+if (existingTag && existingTag !== tag) {
+  console.log(`· 注意：${packed.id} 原来挂在 ${existingTag}，这次改成 ${tag}（该条 downloadUrl 会跟着改）`);
 }
 // 下载地址的前缀（`https://github.com/<owner>/<repo>`）。优先 `--base-url`，否则**从索引仓库的
 // git remote 推导** —— 别拿目录名猜：`--index-repo /tmp/index-scratch` 会推出
@@ -249,15 +246,16 @@ if (relToExamples && !relToExamples.startsWith('..') && !path.isAbsolute(relToEx
   }
 }
 
-// ④ 自检（索引仓库自带的那份：结构 + 仓库内产物 + 真下载核对）
-//    --push 时这一步是**硬闸门**：不过就不许推（Release 已经建好，包在上面，先修问题）
+// ④ 自检（索引仓库自带的那份：结构 + 仓库内产物 + sha256；--remote 才做真下载核对）
+//    准备阶段只做离线核对：新包还没传到 Release，远端核对必然失败。
+//    --push 在上传资产之后会让它带上真下载核对，作为**硬闸门**。
 const verify = () => run(process.execPath, [path.join(indexRepo, 'scripts', 'verify-index.mjs')], { cwd: indexRepo });
-const before = verify();
+const before = run(process.execPath, [path.join(indexRepo, 'scripts', 'verify-index.mjs'), '--no-remote'], { cwd: indexRepo });
 const verifyOut = `${before.stdout ?? ''}${before.stderr ?? ''}`.trim().split('\n').slice(-4).join('\n');
 if (before.status !== 0) {
-  console.log(`⚠ 索引自检没通过（Release/资产还没建时这是正常的：发布流程会先建它再推）\n${verifyOut}`);
+  console.log(`⚠ 索引离线自检没通过（先修结构 / 产物 / sha256）\n${verifyOut}`);
 } else {
-  console.log(`✓ 索引自检通过\n${verifyOut}`);
+  console.log(`✓ 索引离线自检通过\n${verifyOut}`);
 }
 
 // ⑤ 下一步（默认只打印；--push 才动手）
@@ -267,9 +265,9 @@ const steps = [
   `cd ${indexRepo}`,
   `git ${addArgs.join(' ')}`,
   `git commit -m "plugin: ${entry.id} v${entry.version}"`,
-  `gh release upload ${tag} plugins/packages/${fileName} --clobber   # 没有这个 Release 时：gh release create ${tag} --target main plugins/packages/${fileName}`,
+  `gh release upload ${tag} plugins/packages/${fileName}   # 已存在时省略；缺 Release 时：gh release create ${tag} --target main --latest=false`,
   `git push origin ${branch}`,
-  'node scripts/verify-index.mjs   # 真下载核对（推之前就该跑一遍）'
+  'node scripts/verify-index.mjs   # 资产传完后做真下载核对'
 ];
 if (branch !== 'main') {
   steps.push(`# 当前在 ${branch} 分支：推上去后到 GitHub 提 PR；不要在功能分支上推 main（推的是没变的 main，等于白推）`);
@@ -291,33 +289,50 @@ if (String(staged.stdout || '').trim()) {
     }
   }
 } else {
-  console.log('· 索引与包没有变化（可能是上次已提交），跳过提交，继续 Release/推送');
+  console.log('· 索引与包没有变化（可能是上次已提交），跳过提交，继续传资产/推送');
 }
-// 资产先于索引对外可见（见文件头）：这一步失败 = 远端什么都没变，重跑就行
+// 资产先于索引对外可见（见文件头）：这一步失败 = 远端什么都没变，重跑就行。
+// 所有包共用一个滚动 Release；**已存在的同名资产不覆盖**（覆盖会把下载计数清零，
+// 索引里的 sha256 也会和远端对不上——换内容请升版本）。
 const releaseExists = run('gh', ['release', 'view', tag], { cwd: indexRepo }).status === 0;
-const release = releaseExists
-  ? run('gh', ['release', 'upload', tag, `plugins/packages/${fileName}`, '--clobber'], { cwd: indexRepo })
-  : run('gh', ['release', 'create', tag, `plugins/packages/${fileName}`, '--target', 'main',
-    '--title', `${entry.name} v${entry.version}`, '--notes', `${entry.name} v${entry.version}`], { cwd: indexRepo });
-if (release.status !== 0) {
-  console.error(`✗ 处理 Release 失败：${(release.stderr || release.stdout || '').trim()}`);
-  console.error('  索引**没有推送**（远端什么都没变；本地已提交，修完直接重跑即可）。');
-  process.exit(1);
+if (!releaseExists) {
+  const created = run('gh', ['release', 'create', tag, '--target', 'main',
+    '--title', '插件包（滚动）',
+    '--notes', '插件包资产（滚动）。CI 会把 plugins/packages/ 里的包同步到这里；索引里的 downloadUrl 固定指向本 Release。不要手动删除。',
+    '--latest=false'], { cwd: indexRepo });
+  if (created.status !== 0) {
+    console.error(`✗ 建滚动 Release 失败：${(created.stderr || created.stdout || '').trim()}`);
+    console.error('  索引**没有推送**（本地已提交，修完直接重跑即可）。');
+    process.exit(1);
+  }
+  console.log(`✓ 已建滚动 Release：${tag}`);
 }
-console.log(`✓ Release/资产就绪：${tag}`);
+const assetList = run('gh', ['release', 'view', tag, '--json', 'assets', '--jq', '.assets[].name'], { cwd: indexRepo });
+const assetExists = String(assetList.stdout || '').split('\n').map((s) => s.trim()).includes(fileName);
+if (assetExists) {
+  console.log(`· 资产 ${fileName} 已在 Release 里，跳过上传`);
+} else {
+  const release = run('gh', ['release', 'upload', tag, `plugins/packages/${fileName}`], { cwd: indexRepo });
+  if (release.status !== 0) {
+    console.error(`✗ 上传资产失败：${(release.stderr || release.stdout || '').trim()}`);
+    console.error('  索引**没有推送**（远端什么都没变；本地已提交，修完直接重跑即可）。');
+    process.exit(1);
+  }
+  console.log(`✓ 资产已上传：${tag}/${fileName}`);
+}
 const prePush = verify();
 if (prePush.status !== 0) {
   console.error(`✗ 推送前的索引自检没通过，**没有推**：\n${`${prePush.stdout ?? ''}${prePush.stderr ?? ''}`.trim().split('\n').slice(-6).join('\n')}`);
-  console.error(`  修完后重跑即可；不想留刚才建的 Release：gh release delete ${tag} --yes`);
+  console.error('  修完后重跑即可（已上传的资产会跳过，不会重复上传）。');
   process.exit(1);
 }
 const push = run('git', ['push', 'origin', branch], { cwd: indexRepo });
 if (push.status !== 0) {
   console.error(`✗ git push 失败：${(push.stderr || push.stdout || '').trim()}`);
-  console.error(`  索引没推上去，Release 已在（${tag}，资产在里面）—— 修完网络/权限后重跑 git push origin ${branch} 即可。`);
+  console.error(`  索引没推上去，资产已在（${tag}）—— 修完网络/权限后重跑 git push origin ${branch} 即可。`);
   process.exit(1);
 }
-console.log(`✓ 已提交 + Release/资产 + 推送索引：${entry.id} v${entry.version}（tag ${tag}）`);
+console.log(`✓ 已提交 + 资产就绪 + 推送索引：${entry.id} v${entry.version}（tag ${tag}）`);
 const finalVerify = verify();
 if (finalVerify.status !== 0) {
   console.error('✗ 发布后复核没过 —— 索引已经公开了，按上面的报错立刻补一个修复提交（或 git revert HEAD && git push origin main）');

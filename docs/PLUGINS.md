@@ -319,9 +319,12 @@ downloadUrl, sha256, tags }`）加进一份索引 JSON（形状见"怎么装"）
 1. 打包：`node scripts/plugin-pack.mjs examples/plugins/<你的插件>`
    —— **自测必须先过**（用宿主自己的安装器真装一遍）；
    想先在自己机器上装一遍看效果：`node src/ops.js plugins install <包>.tar.gz`；
-2. 把包提交进索引仓库的 `plugins/packages/`，并挂到该仓库的一个 Release（tag 用 `v<版本>`）；
-3. 在索引仓库的 `plugins/index.json` 加一条（`downloadUrl` 指 Release；`sha256` 用第 1 步打印的值），
-   跑 `node scripts/verify-index.mjs`（结构 + 仓库内产物 + **真下载核对**）；
+2. 把包提交进索引仓库的 `plugins/packages/`（**不用新建 Release**：该仓库的 CI 会把缺的包同步到
+   固定的滚动 Release `packages` 上）；
+3. 在索引仓库的 `plugins/index.json` 加一条（`downloadUrl` 指向
+   `…/releases/download/packages/<文件名>`；`sha256` 用第 1 步打印的值），
+   跑 `node scripts/verify-index.mjs --no-remote`（结构 + 仓库内产物 + sha256；新包还没上 Release，
+   远端核对由合并后的 CI 做）；
 4. 回到**本仓库**把 `plugins/official-packages.json` 里那个插件的期望值同步过去
    —— 它是两边的"对齐锚"：本仓库的用例拿"现打源码的 sha256"跟它比，
    **改了源码忘了重打包会立刻变红**（这条护栏在索引搬走之后换了个形式留在了本仓库）；
@@ -329,17 +332,17 @@ downloadUrl, sha256, tags }`）加进一份索引 JSON（形状见"怎么装"）
 
 **收尾其实只有一条命令**：`node scripts/plugin-publish.mjs examples/plugins/<你的插件> --index-repo <索引仓库工作副本>` ——
 打包 + 自测（不过就不许上架）→ 把包放进索引仓库 → 更新索引条目（**合并而不是覆盖**，保住原有的
-`publisher` / `signature` / `mirrors` / `downloads`，也绝不清掉 `revoked`）→ 跑索引自检 →
-打印要执行的 git/gh 命令。加 `--push` 才会真的提交、建 Release/传资产、推索引。
+`publisher` / `signature` / `mirrors` / `downloads`，也绝不清掉 `revoked`）→ 跑离线自检 →
+打印要执行的 git 命令。加 `--push` 才会真的传资产、提交、推索引。
 
 三条刻意的设计，都是被实际问题逼出来的：
 
-- **默认 tag 沿用这一条原来挂的那个 Release**（没有才看仓库里用得最多的那个）。每个插件一个 tag
-  看起来更整齐，但一条条挂在不同 Release 上时，`v<插件版本>` 会让 `downloadUrl` 指向一个不存在的
-  Release，装的人直接 404。
-- **`--push` 先建 Release、传资产，最后才推索引**：索引里的地址一旦公开就被"一键安装"用上了，
-  反过来（先推索引、Release 建失败）所有使用者都会 404，只能再推一次修复；先建 Release 则失败时
-  远端什么都没变（本地提交还在，重跑即可）。推送前的自检也是**硬闸门**，不过就不推。
+- **所有包共用一个滚动 Release（tag 固定 `packages`）**：加插件、升版本都不再发 Release。
+  资产只增不删（旧条目还指着旧版本），同版本号不换内容——换内容请升版本，否则同名覆盖会把
+  下载计数清零、索引里的 sha256 也会对不上。
+- **`--push` 先传资产，最后才推索引**：索引里的地址一旦公开就被"一键安装"用上了，反过来（先推索引、
+  资产传失败）所有使用者都会 404，只能再推一次修复；先传资产则失败时远端什么都没变（本地提交还在，
+  重跑即可）。推送前的自检（含真下载核对）是**硬闸门**，不过就不推。
 - **要改已经下架条目的状态必须显式给 `--clear-revoked`**：撤回是维护动作，不能被一次例行发布
   悄悄清掉（那等于下架的插件又变成可安装）。
 - 提交用**显式文件清单**（`plugins/index.json` + 这一个包），不用 `git add -A`：一次中断过的准备、
