@@ -102,7 +102,7 @@ set /a tries+=1
 curl -s -o nul --max-time 2 "http://127.0.0.1:%CONSOLE_PORT%/" >nul 2>&1
 if not errorlevel 1 goto ready
 if %tries% geq 45 goto stalled
-timeout /t 1 >nul
+%SystemRoot%\System32	imeout.exe /t 1 >nul
 goto waitloop
 
 :ready
@@ -122,7 +122,7 @@ exit /b 0
 
 :nocurl
 echo （本机没有 curl，改用固定等待 8 秒）
-timeout /t 8 >nul
+%SystemRoot%\System32	imeout.exe /t 8 >nul
 if "%MODE%"=="test" (
   taskkill /f /t /fi "WINDOWTITLE eq QQ Agent Tunnel TEST" >nul 2>&1
   echo TEST_OK: 隧道已建立（未验证控制台响应；测试模式，隧道已清理）
