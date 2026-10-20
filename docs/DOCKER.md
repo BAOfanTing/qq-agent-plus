@@ -44,8 +44,9 @@ docker compose exec agent cat /data/console-access.txt
 然后按顺序：
 
 1. 打开控制台 → 设置 → 模型 API，填 Base URL、Key、模型名。
-2. 打开 `http://127.0.0.1:5099` 扫码登录 QQ（协议端 WebUI 的初始密码见 SnowLuma 日志；
-   也可以用 `docker compose logs snowluma` 找）。
+2. 扫码登录 QQ：打开 noVNC `http://127.0.0.1:6081`，密码是 `VNC_PASSWD`（留空时
+   SnowLuma 首次启动会随机生成并打印在日志里，见 `docker compose logs snowluma`）。
+   `5099` 是 SnowLuma WebUI（协议端设置），不是扫码页。
 3. 控制台 → 聊天设置/白名单，加入要参与的群。
 4. 在群里 @ 机器人一句，确认能回。
 
@@ -53,17 +54,18 @@ docker compose exec agent cat /data/console-access.txt
 
 - **宿主机 uid 不是 1000**：SnowLuma 默认按 `SNOWLUMA_UID/GID=1000` 写数据；用
   `SNOWLUMA_UID=$(id -u) SNOWLUMA_GID=$(id -g) docker compose up -d` 对齐。
-- **noVNC 密码**：`VNC_PASSWD` 默认 `qqagent`，正式用请改掉（noVNC 只绑 127.0.0.1，
-  但密码不该留默认值）。
+- **noVNC 密码**：`VNC_PASSWD` 留空时 SnowLuma 会随机生成并打印在首次启动日志里；
+  也可以显式设置。不要使用公开的固定默认值。
 - **自定义宿主端口**：`QQ_AGENT_PORT`、`SNOWLUMA_WEBUI_HOST_PORT`、`NOVNC_PORT` 可以改，
   但控制台里的服务链接仍按 3210/5099/6081 拼接；改了端口请手动调整链接或保持默认。
-- **OneBot 令牌（可选）**：如果在 SnowLuma 里设置了令牌，给两个服务都传同一个
-  `ONEBOT_TOKEN`，否则 Agent 会因鉴权失败连不上。
+- **OneBot 令牌**：full stack 不需要手动配置。Agent 启动时会从只读挂载的
+  `snowluma-data/config/onebot*.json` 读取 SnowLuma 生成的 accessToken，并写进自己的配置。
+  使用**外部协议端**时，才需要设 `QQ_AGENT_ONEBOT_ACCESS_TOKEN` / `QQ_AGENT_ONEBOT_HTTP_TOKEN`。
 
 控制台与协议端 WebUI 都只绑宿主机 `127.0.0.1`。远程访问用 SSH 隧道：
 
 ```bash
-ssh -L 3210:127.0.0.1:3210 -L 5099:127.0.0.1:5099 user@server
+ssh -L 3210:127.0.0.1:3210 -L 5099:127.0.0.1:5099 -L 6081:127.0.0.1:6081 user@server
 ```
 
 然后在本机浏览器打开 `http://127.0.0.1:3210`。
@@ -95,7 +97,8 @@ docker run -d --name qq-agent \
 这种模式下控制台里的协议端 WebUI / noVNC 探活仍指向 compose 网络里的服务名，会显示离线；
 把 `SNOWLUMA_INTERNAL_URL`、`QQ_AGENT_NOVNC_URL` 指到实际可访问的地址，或直接忽略这两个方块。
 
-令牌同样用 `docker logs qq-agent` 看；想自己指定就加 `-e QQ_AGENT_CONSOLE_TOKEN=<你的令牌>`。
+令牌用 `docker exec qq-agent cat /data/console-access.txt` 查看；也可以加
+`-e QQ_AGENT_PRINT_TOKEN=1` 让令牌打印到日志，或自己指定 `-e QQ_AGENT_CONSOLE_TOKEN=<令牌>`。
 
 ## 3. 配置从哪来
 
@@ -170,10 +173,11 @@ QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3 docker compose up -d agen
 1. 停旧服务：`systemctl --user stop qq-agent-linux.service`。
 2. 把旧数据目录（默认 `/data/qq-agent/data`）整个拷到 compose 目录下的 `./data`。
 3. `sudo chown -R 1000:1000 ./data`。
-4. 起容器：`docker compose up -d agent`。
-5. 如果旧配置里的 OneBot 地址是 `127.0.0.1:339x`，确认 compose 里设置了
-   `QQ_AGENT_ONEBOT_WS_URL=ws://snowluma:3001` 与 `QQ_AGENT_ONEBOT_HTTP_URL=http://snowluma:3000`
-   （默认值就是这两个），启动引导会把它写进配置。
+4. 如果旧全栈的协议端容器还叫 `qq-agent-snowluma`，先停掉并删除（`docker rm -f qq-agent-snowluma`）；
+   把 SnowLuma 的数据/客户端目录迁到 `./snowluma-data`、`./snowluma-client-config`、`./snowluma-client-data`。
+5. 起**完整** compose：`docker compose up -d`。不要只 `up agent`——Agent 默认指向 compose 里的
+   `snowluma` 服务。若保留外部协议端，设 `QQ_AGENT_ONEBOT_WS_URL=ws://<可达地址>:3001` 与
+   HTTP 地址后再 `docker compose up -d agent`；旧协议端不能只绑 127.0.0.1。
 6. 打开控制台确认会话、记忆、提醒都在；在群里发一句测试。
 
 ## 7. 镜像发布与下载（维护者）
@@ -245,10 +249,11 @@ ffmpeg 层有构建缓存，后续版本主要重新传应用层；首次推送�
 
 1. 确认 Docker 工作流已经在默认分支上（`main`）。
 2. GitHub → Actions → Docker → Run workflow：
-   - `version`：例如 `0.9.3`；
-   - `push_cn`：勾选（配置了 CN_* 时）。
-3. CI 会跑 verify/smoke，构建 amd64+arm64，推 GHCR 的 `0.9.3`/`sha-...`，
-   再复制到国内镜像（正式 tag 才有 `0.9` 与 `latest`）。**手动运行不会移动 `latest`**，
+   - `version`：留空只推 `sha-...`；要推版本就填一个**新**版本号（已存在的 tag 默认拒绝覆盖；
+     确需覆盖勾选 `overwrite`）；
+   - `push_cn`：勾选（填了版本才会复制到国内镜像）。
+3. CI 会跑 verify/smoke，构建 amd64+arm64，推 GHCR 的 `0.9.3`/`sha-...`；
+   正式稳定 tag 才会有 `0.9` 与 `latest`。**手动运行不会移动 `latest`**，
    避免把未发布的构建变成默认版本。
 
 本机不需要 `docker pull`、`docker build` 或 `docker push`；本地镜像可以随时删掉。

@@ -316,10 +316,12 @@ export class AutoUpdateManager {
     if (container) {
       // 不读 systemd、不看 pending：容器里的更新状态由镜像 tag 决定，控制台只展示
       // "由 compose 管理"与当前配置，不把宿主机的旧状态误报成"卡住/失败"。
-      let containerRevision = '';
+      // 容器里的"当前版本"就是镜像里的 package.json 版本；不要把旧卷的
+      // deployed-revision（裸机提交 SHA）当成当前版本显示。
+      let imageVersion = '';
       try {
-        containerRevision = fs.readFileSync(path.join(this.dataDir, 'deployed-revision'), 'utf8').trim();
-      } catch { /* 容器里通常没有这个文件 */ }
+        imageVersion = String(JSON.parse(fs.readFileSync(path.join(this.appDir, 'package.json'), 'utf8')).version || '').trim();
+      } catch { /* 测试/裁剪镜像可能没有 package.json */ }
       return {
         installed: false,
         managedBy: 'docker',
@@ -345,7 +347,7 @@ export class AutoUpdateManager {
         lastCheckAt: 0,
         completedAt: 0,
         autoDisabled: false,
-        currentRevision: containerRevision || state.currentRevision
+        currentRevision: imageVersion
       };
     }
     const intervalMs = Math.max(1, Number(settings.intervalHours) || 6) * 60 * 60 * 1000;

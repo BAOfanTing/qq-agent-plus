@@ -1,6 +1,7 @@
 name: Docker
 
-# tag push 发布版本 tag 与 latest；手动 workflow_dispatch 只推 sha-...，不会移动 latest。
+# tag push 发布版本 tag；稳定版才移动 latest。手动 workflow_dispatch 默认只推 sha-...，
+# 填新的版本号且该 tag 不存在时才推版本 tag，避免覆盖已发布版本。
 # 发布前先跑单元测试与 lint：镜像会被用户直接拉取运行，不能绕过发布闸门。
 on:
   push:
@@ -9,13 +10,17 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '要构建的版本 tag（默认 0.9.3；手动运行不会移动 latest）'
+        description: '要构建的版本 tag；留空只推 sha-...。已存在的版本会被拒绝覆盖'
         required: false
-        default: '0.9.3'
+        default: ''
       push_cn:
         description: '同时复制到国内镜像（需要 CN_* 变量与密钥）'
         type: boolean
         default: true
+      overwrite:
+        description: '允许覆盖已存在的版本 tag（慎用）'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -70,6 +75,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse to overwrite an existing version tag
+        if: inputs.version != '' && inputs.overwrite != true
+        run: |
+          if docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::tag ${{ inputs.version }} already exists; delete it explicitly or use a new version"
+            exit 1
+          fi
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
@@ -79,7 +91,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
             type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
           labels: |
             org.opencontainers.image.title=QQ Agent Plus
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -106,7 +118,7 @@ jobs:
   # 推荐阿里云 ACR 个人版（免费、可公开拉取）或腾讯云 TCR。
   publish-cn:
     needs: build
-    if: vars.CN_REGISTRY != '' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.push_cn == true))
+    if: vars.CN_REGISTRY != '' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.push_cn == true && inputs.version != ''))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -118,12 +130,11 @@ jobs:
           USERNAME: ${{ secrets.CN_REGISTRY_USERNAME }}
           PASSWORD: ${{ secrets.CN_REGISTRY_PASSWORD }}
         run: |
-          if [ -n "$USERNAME" ] && [ -n "$PASSWORD" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "未配置 CN_REGISTRY_USERNAME / CN_REGISTRY_PASSWORD，跳过国内镜像推送"
+          if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+            echo "::error::CN_REGISTRY is configured but CN_REGISTRY_USERNAME / CN_REGISTRY_PASSWORD are missing"
+            exit 1
           fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
       - if: steps.cn.outputs.enabled == 'true'
         name: Install skopeo
         run: |
@@ -146,9 +157,11 @@ jobs:
           DST="${CN_REGISTRY}/${CN_NAMESPACE}/${CN_IMAGE_NAME:-qq-agent-plus}"
           VERSION="${VERSION_INPUT:-${GITHUB_REF_NAME#v}}"
           MAJOR_MINOR="$(printf '%s' "$VERSION" | awk -F. '{print $1"."$2}')"
-          # 手动运行只推 VERSION（GHCR 上没有 0.9 这个 tag）；正式 tag 才带 0.9 与 latest
+          # 手动运行只推 VERSION；正式稳定 tag 才带 0.9 与 latest（预发布不带）
           TAGS="${VERSION}"
-          if [ "${{ github.ref_type }}" = "tag" ]; then TAGS="${TAGS} ${MAJOR_MINOR} latest"; fi
+          if [ "${{ github.ref_type }}" = "tag" ] && [ "${VERSION#*-}" = "$VERSION" ]; then
+            TAGS="${TAGS} ${MAJOR_MINOR} latest"
+          fi
 
           printf '%s' "$GHCR_TOKEN" | skopeo login ghcr.io --username "$GHCR_USER" --password-stdin
           printf '%s' "$CN_REGISTRY_PASSWORD" | skopeo login "$CN_REGISTRY" --username "$CN_REGISTRY_USERNAME" --password-stdin

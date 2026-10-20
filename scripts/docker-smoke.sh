@@ -72,12 +72,13 @@ fetch('http://127.0.0.1:3210/api/auto-update/run',{
 }).then(r=>process.exit(r.status===409?0:1)).catch(()=>process.exit(1))
 " "$TOKEN" || fail "容器内 /api/auto-update/run 没有返回 409"
 
-# 6) 数据目录归 node（uid 1000），配置 0600
+# 6) 数据目录归 node（uid 1000）、目录 0700，配置 0600
 docker exec "$NAME" sh -c 'test "$(stat -c %u /data)" = "1000"' || fail "/data 属主不是 1000"
+docker exec "$NAME" sh -c 'test "$(stat -c %a /data)" = "700"' || fail "/data 权限不是 0700"
 docker exec "$NAME" sh -c 'test "$(stat -c %a /data/config.json)" = "600"' || fail "config.json 权限不是 0600"
 
-# 7) docker stop 优雅退出（compose 里是 30s，这里给 20s）
-docker stop -t 20 "$NAME" >/dev/null
+# 7) docker stop 优雅退出（应用内部收尾期限 25s，这里与 compose 的 30s 对齐）
+docker stop -t 30 "$NAME" >/dev/null
 CODE=$(docker inspect "$NAME" --format '{{.State.ExitCode}}')
 [ "$CODE" = "0" ] || fail "SIGTERM 后退出码为 $CODE（期望 0）"
 

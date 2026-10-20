@@ -106,8 +106,61 @@ function assertWritable(dir) {
 }
 
 /**
+ * 从 SnowLuma 的 onebot*.json 读取 accessToken。
+ *
+ * SnowLuma 不读 ONEBOT_TOKEN 环境变量；它首次启动会在 `<data>/config/onebot.json`
+ * 里生成随机 accessToken。full-stack compose 把该目录只读挂进 Agent，这里同步过去，
+ * 否则 WS/HTTP 都会 401。
+ */
+function readOneBotTokenFrom(dir) {
+  let names = [];
+  try {
+    names = fs.readdirSync(dir).filter((name) => name === 'onebot.json' || /^onebot_\d+\.json$/.test(name));
+  } catch {
+    return '';
+  }
+  for (const name of names) {
+    try {
+      const config = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+      const networks = plainObject(config.networks);
+      for (const key of ['httpServers', 'wsServers']) {
+        const list = Array.isArray(networks[key]) ? networks[key] : [];
+        for (const server of list) {
+          const token = nonEmpty(server?.accessToken);
+          if (token) return token;
+        }
+      }
+      const direct = nonEmpty(config.accessToken);
+      if (direct) return direct;
+    } catch { /* 可能正在写盘，下一轮再读 */ }
+  }
+  return '';
+}
+
+function sleepSync(ms) {
+  if (!(ms > 0)) return;
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch { /* 极少数运行时不支持，放弃等待 */ }
+}
+
+/** 等 SnowLuma 首次启动把 onebot.json 写出来（默认最多 30 秒；外部协议端不设该目录）。 */
+export function readSnowlumaOneBotToken(env = process.env) {
+  const dir = nonEmpty(env.QQ_AGENT_SNOWLUMA_CONFIG_DIR);
+  if (!dir) return '';
+  const waitMs = Math.max(0, Number(env.QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS ?? 30000) || 0);
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const token = readOneBotTokenFrom(dir);
+    if (token) return token;
+    if (Date.now() >= deadline) return '';
+    sleepSync(300);
+  }
+}
+
+/**
  * 把环境变量应用到配置对象（就地修改）。只认下面这些键；其余配置保持原样。
- * @returns {{changed:boolean, tokenSource:'env'|'config'|'generated', token:string, warnings:string[]}}
+ * @returns {{changed:boolean, tokenSource:'env'|'config'|'generated', onebotTokenSource:'env'|'snowluma'|'config'|'none', token:string, warnings:string[]}}
  */
 export function applyBootstrapEnv(config, env = process.env, { generate = true } = {}) {
   const warnings = [];
@@ -170,6 +223,21 @@ export function applyBootstrapEnv(config, env = process.env, { generate = true }
   if (envHttpToken && (forceAll || !nonEmpty(onebot.httpAccessToken))) onebot.httpAccessToken = envHttpToken;
   else if (envHttpToken && !forceAll) ignored.push('QQ_AGENT_ONEBOT_HTTP_TOKEN');
 
+  // OneBot 令牌来源（优先级）：显式环境变量 > SnowLuma 配置 > 已有配置 > 空。
+  // SnowLuma 的配置是 full-stack 的唯一真相：即使旧 data/config.json 里有一个过期令牌，
+  // 也要以 SnowLuma 当前生成的为准，否则登录后仍然 401。
+  let onebotTokenSource = (envAccess || envHttpToken) ? 'env' : 'config';
+  if (!envAccess && !envHttpToken) {
+    const snowlumaToken = readSnowlumaOneBotToken(env);
+    if (snowlumaToken) {
+      onebot.accessToken = snowlumaToken;
+      onebot.httpAccessToken = snowlumaToken;
+      onebotTokenSource = 'snowluma';
+    } else if (!nonEmpty(onebot.accessToken) && !nonEmpty(onebot.httpAccessToken)) {
+      onebotTokenSource = 'none';
+    }
+  }
+
   // 可选：用环境变量完成模型配置（适合"完全无控制台"的声明式部署）。
   // 与令牌同一口径：只填空位；控制台里配过的值不覆盖。
   const envApiBase = nonEmpty(env.QQ_AGENT_API_BASE_URL);
@@ -188,7 +256,7 @@ export function applyBootstrapEnv(config, env = process.env, { generate = true }
       + '（要强制用环境变量覆盖，设 QQ_AGENT_FORCE_ENV=1 后重启一次）。');
   }
 
-  return { tokenSource, token: server.token, warnings };
+  return { tokenSource, token: server.token, onebotTokenSource, warnings };
 }
 
 /** 控制台访问信息落盘（0600）：日志里不再打印令牌，用户用 docker exec cat 查看。 */
@@ -218,6 +286,13 @@ export function bootstrap({ dataDir = DEFAULT_DATA_DIR, env = process.env, now =
   assertWritable(dataDir);
   const configPath = path.join(dataDir, 'config.json');
   const read = readConfigFile(configPath, now);
+  // 全新 Docker 部署默认 active：observe 会让"配置完白名单 @ 一句"毫无反应。
+  // 已有配置里用户自己选的 observe 保留；也可以用 QQ_AGENT_RUNTIME_MODE 指定。
+  if (!read.existed) {
+    const runtime = ensureSection(read.config, 'runtime');
+    const requested = nonEmpty(env.QQ_AGENT_RUNTIME_MODE);
+    runtime.mode = ['active', 'observe'].includes(requested) ? requested : 'active';
+  }
   const before = JSON.stringify(read.config);
   const applied = applyBootstrapEnv(read.config, env);
   const changed = before !== JSON.stringify(read.config);
@@ -234,6 +309,8 @@ export function bootstrap({ dataDir = DEFAULT_DATA_DIR, env = process.env, now =
     parseError: read.parseError || '',
     token: applied.token,
     tokenSource: applied.tokenSource,
+    onebotTokenSource: applied.onebotTokenSource,
+    runtimeMode: plainObject(read.config.runtime).mode || '',
     warnings: applied.warnings,
     apiConfigured: Boolean(nonEmpty(api.baseUrl) && nonEmpty(api.model)),
     serverHost: plainObject(read.config.server).host,
@@ -262,6 +339,16 @@ function printBanner(result, log = console.log) {
     log(`[docker] 控制台：${url}`);
   }
   log(`[docker] OneBot：ws=${result.onebotWsUrl} http=${result.onebotHttpUrl}`);
+  if (result.onebotTokenSource === 'snowluma') {
+    log('[docker] OneBot 令牌：已从 SnowLuma 配置（/snowluma-config/onebot*.json）同步');
+  } else if (result.onebotTokenSource === 'env') {
+    log('[docker] OneBot 令牌：来自环境变量');
+  } else if (result.onebotTokenSource === 'config') {
+    log('[docker] OneBot 令牌：来自 data/config.json');
+  } else {
+    log('[docker] OneBot 令牌：未配置（SnowLuma 登录后若仍连不上，重启 agent 或检查 /snowluma-config/onebot.json）');
+  }
+  log(`[docker] 运行模式：${result.runtimeMode || '（默认）'}${result.runtimeMode === 'observe' ? '（观察模式：不会回复）' : ''}`);
   if (!result.apiConfigured) {
     log('[docker] 模型尚未配置：打开控制台 → 设置 → 模型 API，填入 Base URL、Key 与模型名');
   }

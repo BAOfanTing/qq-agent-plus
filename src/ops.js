@@ -1432,6 +1432,7 @@ function appendGuardLog(logFile, lines) {
 
 function cmdGuard(args) {
   if (wantsHelp(args)) { say(HELP.guard); return 0; }
+  if (isContainerRuntime()) { badWarn(containerUpdateHint()); return 1; }
   warnCount = 0;
   const cfg = config({});
   const limit = Math.max(1, intOpt(args, '--threshold', intEnv('QQ_AGENT_PROC_LIMIT', 800)));
@@ -1595,6 +1596,7 @@ function cleanupTmp(dir) {
 
 async function cmdDeploy(args) {
   if (wantsHelp(args)) { say(HELP.deploy); return 0; }
+  if (isContainerRuntime()) { badWarn(containerUpdateHint()); return 1; }
   const cfg = config({ dir: optValue(args, '--root-dir', null) });
   const srcDir = path.resolve(optValue(args, '--dir', envStr('QQ_AGENT_SRC_DIR', path.join(os.homedir(), 'qq-agent-src'))));
   const image = envStr('SNOWLUMA_IMAGE', SNOWLUMA_BASELINE_IMAGE);
@@ -2101,6 +2103,7 @@ WantedBy=timers.target
 
 function cmdInstallTimers(args) {
   if (wantsHelp(args)) { say(HELP['install-timers']); return 0; }
+  if (isContainerRuntime()) { badWarn(containerUpdateHint()); return 1; }
   const cfg = config({});
   const unitDir = envStr('QQ_AGENT_SYSTEMD_DIR', path.join(os.homedir(), '.config', 'systemd', 'user'));
   const units = unitFiles(cfg);

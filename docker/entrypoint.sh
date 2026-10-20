@@ -17,6 +17,9 @@ if [ "$(id -u)" = "0" ]; then
   # NFS root-squash / 只读卷等场景 chown 会失败：不在这里中断，交给 bootstrap 的写测试
   # 给出带宿主机修法的错误。
   chown -R node:node "$DATA_DIR" 2>/dev/null || true
+  # 数据目录只给 node 自己：SQLite 与 session 文件默认 0644，multi-user 宿主机上
+  # 其他用户可以读聊天记录。bare-metal 部署同样把数据目录设成 0700。
+  chmod 700 "$DATA_DIR" 2>/dev/null || true
   if command -v gosu >/dev/null 2>&1; then
     exec gosu node "$0" "$@"
   elif command -v setpriv >/dev/null 2>&1; then
@@ -35,5 +38,7 @@ fi
 
 # 非 root：引导脚本负责首次配置与令牌，然后 exec 成应用进程（PID 1 直接是 node，
 # docker stop 的 SIGTERM 能走到 server.js 的优雅退出）。
+# umask 077：config.json / SQLite / session 新建文件默认 0600，不靠每个写入点各自 chmod。
+umask 077
 node /app/scripts/docker-bootstrap.mjs
 exec node /app/src/server.js

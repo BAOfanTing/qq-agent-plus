@@ -220,3 +220,76 @@ test('bootstrap：环境变量只播种一次；FORCE 才覆盖已有值', () =>
   saved = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
   assert.equal(saved.server.token, 'third');
 });
+
+test('全新 Docker 配置默认 active；显式 observe 才观察', () => {
+  const dir = tmpDir();
+  const fresh = bootstrap({ dataDir: dir, env: {}, now: 1 });
+  let saved = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+  assert.equal(saved.runtime.mode, 'active');
+  assert.equal(fresh.runtimeMode, 'active');
+
+  const dir2 = tmpDir();
+  bootstrap({ dataDir: dir2, env: { QQ_AGENT_RUNTIME_MODE: 'observe' }, now: 1 });
+  saved = JSON.parse(fs.readFileSync(path.join(dir2, 'config.json'), 'utf8'));
+  assert.equal(saved.runtime.mode, 'observe');
+});
+
+test('已有配置里用户选的 observe 不会被重启覆盖', () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ runtime: { mode: 'observe' } }));
+  const result = bootstrap({ dataDir: dir, env: {}, now: 1 });
+  assert.equal(result.runtimeMode, 'observe');
+});
+
+test('从 SnowLuma 配置同步 OneBot 令牌；环境变量优先', () => {
+  const root = tmpDir();
+  const snowDir = path.join(root, 'snowluma-config');
+  fs.mkdirSync(snowDir, { recursive: true });
+  fs.writeFileSync(path.join(snowDir, 'onebot.json'), JSON.stringify({
+    networks: {
+      httpServers: [{ accessToken: 'snow-token' }],
+      wsServers: [{ accessToken: 'snow-token' }]
+    }
+  }));
+
+  const dataDir = path.join(root, 'data');
+  const result = bootstrap({
+    dataDir,
+    env: { QQ_AGENT_SNOWLUMA_CONFIG_DIR: snowDir, QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: '0' },
+    now: 1
+  });
+  const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+  assert.equal(saved.onebot.accessToken, 'snow-token');
+  assert.equal(saved.onebot.httpAccessToken, 'snow-token');
+  assert.equal(result.onebotTokenSource, 'snowluma');
+
+  // 旧配置里的过期令牌要被 SnowLuma 当前令牌替换
+  const dataDir2 = path.join(root, 'data2');
+  fs.mkdirSync(dataDir2, { recursive: true });
+  fs.writeFileSync(path.join(dataDir2, 'config.json'), JSON.stringify({
+    onebot: { accessToken: 'stale-token', httpAccessToken: 'stale-token' }
+  }));
+  bootstrap({
+    dataDir: dataDir2,
+    env: { QQ_AGENT_SNOWLUMA_CONFIG_DIR: snowDir, QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: '0' },
+    now: 1
+  });
+  const saved2 = JSON.parse(fs.readFileSync(path.join(dataDir2, 'config.json'), 'utf8'));
+  assert.equal(saved2.onebot.accessToken, 'snow-token');
+
+  // 显式环境变量优先于 SnowLuma
+  const dataDir3 = path.join(root, 'data3');
+  const result3 = bootstrap({
+    dataDir: dataDir3,
+    env: {
+      QQ_AGENT_SNOWLUMA_CONFIG_DIR: snowDir,
+      QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: '0',
+      QQ_AGENT_ONEBOT_ACCESS_TOKEN: 'env-token',
+      QQ_AGENT_ONEBOT_HTTP_TOKEN: 'env-token'
+    },
+    now: 1
+  });
+  const saved3 = JSON.parse(fs.readFileSync(path.join(dataDir3, 'config.json'), 'utf8'));
+  assert.equal(saved3.onebot.accessToken, 'env-token');
+  assert.equal(result3.onebotTokenSource, 'env');
+});

@@ -32,3 +32,9 @@ docker-compose.yml
 docker-compose.*.yml
 Dockerfile
 .dockerignore
+# 宿主部署脚本不进镜像：容器里跑它们只会写半成品 / 调 systemd
+deploy.sh
+deploy-all.sh
+install.sh
+manage.sh
+console-tunnel.bat

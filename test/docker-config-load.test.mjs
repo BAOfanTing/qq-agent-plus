@@ -29,6 +29,8 @@ test('容器引导写出的最小配置能被真实 loadConfig 合并出完整�
   assert.equal(cfg.server.port, 3210);
   assert.equal(cfg.onebot.wsUrl, 'ws://snowluma:3001');
   assert.equal(cfg.onebot.httpUrl, 'http://snowluma:3000');
+  // 全新 Docker 部署默认 active（否则配置完白名单也不会回复）
+  assert.equal(cfg.runtime.mode, 'active');
   // 默认值仍然被合并进来（最小配置没有写这些段）
   assert.ok(cfg.persona && typeof cfg.persona.botName === 'string' && cfg.persona.botName.length > 0);
   assert.ok(cfg.api && typeof cfg.api === 'object');

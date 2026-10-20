@@ -38,7 +38,8 @@ test('.dockerignore：不把 node_modules、数据、测试与构建上下文垃
   // 本地 compose 跑过之后，这些目录/文件可能带着令牌或 QQ 登录态；漏一个就会进镜像层。
   for (const entry of [
     '.env', '.env.*', 'snowluma', 'snowluma-data', 'snowluma-client-config',
-    'snowluma-client-data', 'backups', 'console-access.txt', 'docker-compose.yml'
+    'snowluma-client-data', 'backups', 'console-access.txt', 'docker-compose.yml',
+    'deploy.sh', 'deploy-all.sh', 'install.sh', 'manage.sh', 'console-tunnel.bat'
   ]) {
     assert.ok(
       dockerignore.split('\n').map((line) => line.trim()).includes(entry),
@@ -61,10 +62,15 @@ test('compose：控制台只绑 127.0.0.1、根文件系统只读、不挂 docke
   assert.match(compose, /QQ_AGENT_ONEBOT_HTTP_URL: \$\{[^}]+:-http:\/\/snowluma:3000\}/);
   assert.match(compose, /SNOWLUMA_INTERNAL_URL: \$\{[^}]+:-http:\/\/snowluma:5099\}/);
   assert.match(compose, /QQ_AGENT_NOVNC_URL: \$\{[^}]+:-http:\/\/snowluma:6081\/\}/);
-  // OneBot 令牌两侧都要接：SnowLuma 侧 ONEBOT_TOKEN，Agent 侧 WS/HTTP 令牌
-  assert.match(compose, /ONEBOT_TOKEN: \$\{ONEBOT_TOKEN:-/);
-  assert.match(compose, /QQ_AGENT_ONEBOT_ACCESS_TOKEN: \$\{ONEBOT_TOKEN:-/);
-  assert.match(compose, /QQ_AGENT_ONEBOT_HTTP_TOKEN: \$\{ONEBOT_TOKEN:-/);
+  // OneBot 令牌：只读挂载 SnowLuma 配置自动同步；外部协议端才用显式环境变量
+  assert.match(compose, /\.\/snowluma-data\/config:\/snowluma-config:ro/);
+  assert.match(compose, /QQ_AGENT_SNOWLUMA_CONFIG_DIR: \/snowluma-config/);
+  assert.match(compose, /QQ_AGENT_ONEBOT_ACCESS_TOKEN: \$\{QQ_AGENT_ONEBOT_ACCESS_TOKEN:-/);
+  assert.match(compose, /QQ_AGENT_ONEBOT_HTTP_TOKEN: \$\{QQ_AGENT_ONEBOT_HTTP_TOKEN:-/);
+  assert.doesNotMatch(compose, /ONEBOT_TOKEN:/);
+  // 媒体临时文件上限 96/200MB，64MB 会 ENOSPC
+  assert.match(compose, /\/tmp:size=1g/);
+  assert.match(compose, /VNC_PASSWD: \$\{VNC_PASSWD:-\}/);
   assert.match(compose, /stop_grace_period: 30s/);
   assert.doesNotMatch(compose, /docker\.sock/);
   assert.doesNotMatch(compose, /"0\.0\.0\.0:\$\{QQ_AGENT_PORT/);
@@ -72,6 +78,8 @@ test('compose：控制台只绑 127.0.0.1、根文件系统只读、不挂 docke
 
 test('入口脚本：chown 后降权，最终 exec 成 node（PID 1 能收 SIGTERM）', () => {
   assert.match(entrypoint, /chown -R node:node/);
+  assert.match(entrypoint, /chmod 700 "\$DATA_DIR"/);
+  assert.match(entrypoint, /umask 077/);
   assert.match(entrypoint, /exec gosu node/);
   assert.match(entrypoint, /exec node \/app\/src\/server\.js/);
   assert.match(entrypoint, /docker-bootstrap\.mjs/);
@@ -83,6 +91,13 @@ test('入口脚本：chown 后降权，最终 exec 成 node（PID 1 能收 SIGTE
 test('容器启动不再把旧部署标记误报成"部署中断"', () => {
   const server = read('src/server.js');
   assert.match(server, /function reportInterruptedDeploy\(\) \{[\s\S]{0,600}?if \(isContainerRuntime\(\)\) return;/);
+});
+
+test('ops 的宿主部署命令在容器里明确拒绝', () => {
+  const ops = read('src/ops.js');
+  for (const fn of ['cmdDeploy', 'cmdInstallTimers', 'cmdGuard']) {
+    assert.match(ops, new RegExp(`function ${fn}\\([^)]*\\)\\s*\\{[\\s\\S]{0,200}?isContainerRuntime\\(\\)`));
+  }
 });
 
 test('发布工作流：多架构构建并推 GHCR', () => {

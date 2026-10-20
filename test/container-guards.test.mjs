@@ -57,6 +57,7 @@ test('AutoUpdateManager：容器里不探测 systemd、不提供手动更新、�
     targetVersion: '0.9.2',
     notification: { pending: true, text: '旧的更新失败通知' }
   }));
+  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ version: '9.9.9' }));
   let systemctlCalls = 0;
   let notifyCalls = 0;
   const manager = new AutoUpdateManager({
@@ -81,6 +82,7 @@ test('AutoUpdateManager：容器里不探测 systemd、不提供手动更新、�
   assert.equal(status.status, 'idle', '旧 failed 状态不能泄漏到容器控制台');
   assert.equal(status.error, '');
   assert.equal(status.targetVersion, '');
+  assert.equal(status.currentRevision, '9.9.9', '容器里应显示镜像版本，不是旧 deployed-revision');
   assert.match(status.hint, /docker compose pull/);
 
   // OneBot 连上时 console/app.js 会调 resumeNotifications：容器里不能发旧失败通知
