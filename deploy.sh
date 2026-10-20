@@ -106,6 +106,14 @@ if [[ "$ROOT_CANON" != "$INSTALL_CANON" && "$ROOT_CANON" == "$INSTALL_CANON/"* ]
   printf 'The source repository must not be nested inside the installation path\n' >&2
   exit 2
 fi
+# 数据目录 = 安装目录时，下面按相对路径排除数据的逻辑会退化成只排除 /data/，而源码树里没有
+# data/ —— 第二次部署的 `rsync -a --delete` 会把 config.json / SQLite / 会话全删掉。
+# 这是"传了两个参数看起来都合理"的组合，必须在任何改动之前拒绝（与 rsync --delete 同一口径）。
+DATA_CANON="$(canon_path "$DATA_DIR")" || { printf 'Cannot normalize the data path: %s\n' "$DATA_DIR" >&2; exit 2; }
+if [[ "$DATA_CANON" == "$INSTALL_CANON" ]]; then
+  printf 'The data directory must be different from the installation directory: rsync --delete would wipe it\n' >&2
+  exit 2
+fi
 # 网页终端 / su / sudo -u 等非登录会话不设置 XDG_RUNTIME_DIR：systemctl --user 会报
 # "Failed to connect to bus"，哪怕用户管理器在跑（2026-10-12 报道在生产机复现：只差这一个
 # 环境变量）。目录存在就补上；用户自己的值不动。控制台触发的部署由 ops.js 注入，不受影响。
@@ -324,11 +332,35 @@ RSYNC_PRESERVE=(
   # rsync 是 `-a --delete` 从 checkout 根同步的，根目录多什么就会被部署什么）
   --exclude='/.auto-update-test-*/'
 )
-if [[ "$DATA_DIR" == "$INSTALL_DIR/"* ]]; then
-  DATA_REL="${DATA_DIR#"$INSTALL_DIR"/}"
+# 用**规范化**后的路径算相对路径：原始写法带 `/./`、`/x/../`、尾斜杠或符号链接时，
+# 字符串前缀比较会失败 → 排除规则匹配不到真实目录 → `rsync --delete` 把数据删掉
+#（2026-10-19 复审 P1）。DATA_CANON/INSTALL_CANON 在上面的路径守卫里已算好。
+#
+# 原始条目单独保护：数据目录可能是安装目录里指向别处的**符号链接**（数据盘独立），
+# 此时 DATA_CANON 落在安装目录之外，下面的 canonical 分支保护不到这个链接本身。
+# 规则**不能带尾斜杠**：rsync 的 `dir/` 只匹配目录，符号链接在删扫时按普通文件分类，
+# 带斜杠的规则匹配不到它（2026-10-19 复核实测语义）。同时排除条目与内容。
+DATA_REL=""
+if [[ "$DATA_CANON" == "$INSTALL_CANON/"* ]]; then
+  DATA_REL="${DATA_CANON#"$INSTALL_CANON"/}"
   RSYNC_PRESERVE+=(--exclude="/$DATA_REL/")
 else
   RSYNC_PRESERVE+=(--exclude=/data/)
+fi
+# 原始条目单独保护：数据目录可能是安装目录里指向别处的符号链接（数据盘独立），
+# 此时 DATA_CANON 落在安装目录之外，上面的 canonical 分支保护不到这个链接本身。
+# 规则不能带尾斜杠（rsync 的 `dir/` 只匹配目录，符号链接按普通文件分类）。
+DATA_TRIMMED="$DATA_DIR"
+while [[ "$DATA_TRIMMED" == */ ]]; do DATA_TRIMMED="${DATA_TRIMMED%/}"; done
+# 只归一化**父目录**：要保住最后一段的原始名字（它可能就是符号链接，realpath 会跟过去）。
+DATA_PARENT="$(canon_path "$(dirname -- "$DATA_TRIMMED")")"
+DATA_TRIMMED="${DATA_PARENT%/}/$(basename -- "$DATA_TRIMMED")"
+INSTALL_TRIMMED="$(canon_path "$INSTALL_DIR")"
+if [[ "$DATA_TRIMMED" == "$INSTALL_TRIMMED/"* ]]; then
+  RAW_REL="${DATA_TRIMMED#"$INSTALL_TRIMMED"/}"
+  if [[ -n "$RAW_REL" && ( -z "$DATA_REL" || "$RAW_REL/" != "$DATA_REL/" ) ]]; then
+    RSYNC_PRESERVE+=(--exclude="/$RAW_REL" --exclude="/$RAW_REL/**")
+  fi
 fi
 RSYNC_SOURCE=("${RSYNC_PRESERVE[@]}" --exclude=/node_modules/)
 

@@ -538,10 +538,42 @@ export function indexResultForDisplay(fresh, lastGood) {
  * 规则粒度：条目本身是一个版本，`revoked` 撤这一版；整插件下架 = `id`（或给每条都标）。
  * `revokedVersions` 记录历史版本 —— 作者发新版后条目上的 `revoked` 会消失，但旧版仍要被挡。
  */
-export function createIndexRevokedCache() {
+export function createIndexRevokedCache({ file = '' } = {}) {
   // 来源名 -> 该来源的规则。没有 report 的旧调用方走"整份重建"分支。
   const perSource = new Map();
   let rules = [];
+  // 撤回名单必须跨进程存活：只在内存里的话，重启时索引恰好拉不到（限流/网络/raw 被墙），
+  // 被集中下架的插件会重新跑起来，kill switch 最长失效 6 小时（2026-10-19 全项目审查 P2）。
+  if (file) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (saved?.version === 1 && saved.perSource && typeof saved.perSource === 'object') {
+        for (const [key, list] of Object.entries(saved.perSource)) {
+          if (Array.isArray(list)) perSource.set(String(key), list.filter((item) => typeof item === 'string'));
+        }
+        rules = [...new Set([...perSource.values()].flat())];
+      }
+    } catch (error) {
+      // 文件损坏时不能无声 fail-open：改名留档并打日志，便于发现"kill switch 消失了"。
+      if (error?.code !== 'ENOENT') {
+        try {
+          const broken = `${file}.broken-${Date.now()}`;
+          fs.renameSync(file, broken);
+          console.error(`[plugins] 撤回名单缓存损坏，已按空名单启动（原文件改名 ${broken}）：${error?.message ?? error}`);
+        } catch { /* 改名失败也继续启动 */ }
+      }
+    }
+  }
+  const persist = () => {
+    if (!file) return;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify({ version: 1, perSource: Object.fromEntries(perSource) }), { mode: 0o600 });
+      fs.renameSync(tmp, file);
+      fs.chmodSync(file, 0o600);
+    } catch { /* 落盘失败不影响本次规则 */ }
+  };
 
   const rulesOf = (entry) => {
     if (!entry?.id) return [];
@@ -556,8 +588,29 @@ export function createIndexRevokedCache() {
   return {
     /** 用一次索引拉取结果更新；返回更新后的规则（全失败时原样返回旧规则）。 */
     update(result = {}) {
-      const reports = Array.isArray(result.sources) ? result.sources : [];
+      const hasReports = Array.isArray(result.sources);
+      const reports = hasReports ? result.sources : [];
       const anySourceOk = reports.some((item) => item.ok);
+
+      // 来源被移除是明确意图，即使本次全部来源失败也要生效：否则被删掉的来源还能继续
+      // 封锁本机插件，直到它某次拉取成功（最长 6 小时），甚至永久（来源清空时）。
+      // 但"哪些来源还配置着"必须由调用方显式给（configured），不能从失败报告里反推：
+      // 旧调用方/失败报告可能只有 name 没有 url，按报告删会误删仍然配置着的来源的规则
+      //（2026-10-19 复审：这条一开始就是这么写坏的，被既有 fail-closed 用例抓住）。
+      const configuredList = Array.isArray(result.configured) ? result.configured.map(String) : null;
+      const configured = configuredList
+        ? new Set(configuredList)
+        : (anySourceOk
+          ? new Set(reports.flatMap((item) => [item.url, item.name]).filter(Boolean).map(String))
+          : null);
+      if (configured) {
+        for (const key of [...perSource.keys()]) {
+          if (key && !configured.has(key)) perSource.delete(key);
+        }
+        rules = [...new Set([...perSource.values()].flat())];
+        persist();
+      }
+
       // 没有 report 时按旧口径判断（保持对既有调用方的兼容）
       if (!anySourceOk && reports.length) return rules;   // 拉不动 ≠ 没撤回
       if (!anySourceOk && !reports.length && !Array.isArray(result.plugins)) return rules;
@@ -571,11 +624,8 @@ export function createIndexRevokedCache() {
         perSource.set('', next);
       } else {
         // 按 **URL** 做键而不是展示名：两个来源都叫「官方索引」（默认源 + 一个同名 fork）
-        // 时，用名字做键会让后者的规则永远覆盖/丢失前者（2026-10-17 审查 P2）
-        const configured = new Set(reports.map((item) => String(item.url || item.name || '')));
-        for (const key of [...perSource.keys()]) {
-          if (key && !configured.has(key)) perSource.delete(key);   // 来源被移除：规则一并失效
-        }
+        // 时，用名字做键会让后者的规则永远覆盖/丢失前者（2026-10-17 审查 P2）。
+        // 已移除来源的键在上面统一删过了。
         for (const item of reports) {
           if (!item.ok) continue;                        // 这个来源这次没拉到：保住它上次的规则
           const key = String(item.url || item.name || '');
@@ -587,6 +637,7 @@ export function createIndexRevokedCache() {
         }
       }
       rules = [...new Set([...perSource.values()].flat())];
+      persist();
       return rules;
     },
     rules: () => rules,

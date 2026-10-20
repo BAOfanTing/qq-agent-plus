@@ -365,13 +365,34 @@ export class SessionRegistry {
         unpricedRuns = Number(data.unpricedRuns) || 0;
       }
     } catch { /* 无记录 */ }
-    // 加上运行中的
+    // 加上运行中的。token 与**估算金额**都要加：只加 token 时，并发运行的会话在结束落盘前
+    // 不计入当日花费，日预算会被"在途数 × 单次预算"地超出（2026-10-19 全项目审查 P2）。
+    // 与 #mergeTodayUsage 同一套估价口径：会话结束时会再按同一份 usage 合并一次，
+    // 但那时它已从 this.current 移除，不会重复计。
     for (const s of this.current.values()) {
-      promptTokens += s.usage.promptTokens;
-      completionTokens += s.usage.completionTokens;
-      totalTokens += s.usage.totalTokens;
-      cachedTokens += Number(s.usage.cachedTokens) || 0;
+      const usage = s.usage || {};
+      const total = Number(usage.totalTokens) || 0;
+      promptTokens += Number(usage.promptTokens) || 0;
+      completionTokens += Number(usage.completionTokens) || 0;
+      totalTokens += total;
+      cachedTokens += Number(usage.cachedTokens) || 0;
       webSearchCount += Number(s.webSearchCount) || 0;
+      try {
+        const cfgNow = getConfig();
+        const est = estimateCost({
+          promptTokens: Number(usage.promptTokens) || 0,
+          completionTokens: Number(usage.completionTokens) || 0,
+          totalTokens: total,
+          cachedTokens: Number(usage.cachedTokens) || 0
+        }, {
+          model: s.model || cfgNow.api?.model,
+          at: Date.now(),
+          vendor: s.vendor || vendorOfConfig(cfgNow)
+        });
+        const cost = Number(est?.cost) || 0;
+        estimatedYuan += cost;
+        if (total > 0 && !(cost > 0)) unpricedRuns += 1;
+      } catch { /* 估价失败不影响 token 统计（最坏情况＝这项当天少算） */ }
     }
     return { dayKey, promptTokens, completionTokens, totalTokens, cachedTokens, runs, webSearchCount, estimatedYuan, unpricedRuns };
   }

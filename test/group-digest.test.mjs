@@ -105,3 +105,35 @@ test('日报卡片：开关关掉 / 老 sender 没有 sendForwardCard → 回落
   assert.deepEqual(texts2[0].messages, ['群里在聊啥'], '没有卡片能力就回落文本，不能抛错');
   assert.equal(out2.results[0].asCard, false, 'asCard 要如实报"没走卡片"（2026-10-07 复审 P3）');
 });
+
+test('观察模式挡下的群不记当日完成，恢复后可以补跑', async () => {
+  // 同一文件的用例共享 DATA_DIR；先清掉前面用例写下的"今天已跑过"
+  fs.rmSync(path.join(root, 'group-digest-state.json'), { force: true });
+  const f = fixture({ mode: 'observe' });
+  await f.manager.runOnce();
+  const stateFile = path.join(root, 'group-digest-state.json');
+  const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : null;
+  assert.equal(state?.doneChats?.includes('group:1') || false, false, '被挡下的群不能记完成');
+
+  updateConfig({
+    ...DEFAULT_CONFIG,
+    runtime: { ...DEFAULT_CONFIG.runtime, mode: 'active' },
+    allow: { groups: ['1'] },
+    groupDigest: { ...DEFAULT_CONFIG.groupDigest, enabled: true, chats: ['group:1'] }
+  });
+  await f.manager.runOnce({ skipDone: true });
+  assert.equal(f.stats.sent, 1, '恢复 active 后应补发，而不是被 already-sent-today 跳过');
+});
+
+test('关闭群日报后，自动补跑（skipDone）不再发送', async () => {
+  const f = fixture({ mode: 'active' });
+  updateConfig({
+    ...DEFAULT_CONFIG,
+    runtime: { ...DEFAULT_CONFIG.runtime, mode: 'active' },
+    allow: { groups: ['1'] },
+    groupDigest: { ...DEFAULT_CONFIG.groupDigest, enabled: false, chats: ['group:1'] }
+  });
+  const out = await f.manager.runOnce({ skipDone: true });
+  assert.equal(out.skipped, 'disabled');
+  assert.equal(f.stats.sent, 0, '功能已关闭，孤儿补跑不能发消息');
+});

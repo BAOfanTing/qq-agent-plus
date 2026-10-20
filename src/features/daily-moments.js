@@ -14,6 +14,7 @@ import { safeFetchBinary, validateImageUrl } from '../llm/safe-fetch.js';
 import { convertGifToStillStrip } from '../tools/image-downsample.js';
 import { sanitizeUserText } from '../core/util.js';
 import { displayNameOf } from '../core/display-name.js';
+import { visibleImpressions } from '../core/memory-visibility.js';
 import { webFetch, webSearch } from '../llm/web-search.js';
 import { buildMomentSystemPrompt, momentPersonaHash, MOMENT_PROMPT_VERSION } from '../llm/moment-prompt.js';
 import { assertTimeAllowed, isTimeActive, watchTimeWindow, withTimeScope } from '../core/time-gate.js';
@@ -1077,7 +1078,10 @@ export class DailyMomentsManager {
         messages,
         memories: group.members.slice(0, 20).map((member) => ({
           name: cleanText(member.name || '群友', 60),
-          impressions: member.impressions.slice(-3).map((item) => cleanText(item.content, 220))
+          // 与记忆读侧同一口径：perChat / hidePrivateInGroup 下，私聊来源的印象不能因为
+          // 「这个人也在本群说过话」就被写进公开说说（2026-10-19 全项目审查 P2）。
+          impressions: visibleImpressions(member.impressions, group.chatKey)
+            .slice(-3).map((item) => cleanText(item.content, 220))
         })),
         // 交接文本是模型从群消息整理出来的（很可能原样搬了群友的话），而它是**另一条**注入路径：
         // 整个 snapshot.groups 会被 JSON.stringify 进写说说的提示词（见下面 userPrompt 的拼装），

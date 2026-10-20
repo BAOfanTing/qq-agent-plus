@@ -599,3 +599,61 @@ test('纪事体重写有单独一轮预算：提交正好落在最后一轮也�
   assert.equal(rounds, 3, '被退回后要给重写单独一轮，不能因为轮次预算用尽把当天发布卡死');
   assert.equal(record.content, '报了一天时，最后那次是一抬头就到了。');
 });
+
+test('每日动态的群记忆遵守 memory.visibility', async () => {
+  const now = Date.now();
+  const cfg = structuredClone(DEFAULT_CONFIG);
+  cfg.runtime.mode = 'active';
+  cfg.allow.groups = ['1'];
+  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: true, minMessagesPerGroup: 1, allowImages: false };
+  cfg.memory = { ...cfg.memory, visibility: { mode: 'perChat', hidePrivateInGroup: true } };
+  setRuntimeConfig(cfg);
+  let userPrompt = '';
+  const manager = new DailyMomentsManager({
+    store: {
+      listChats: () => ['group:1'],
+      recent: () => [{ mid: '1', ts: now - 60_000, self: false, senderName: 'A', text: '你好', media: [] }]
+    },
+    memory: {
+      members: () => [{
+        name: 'A',
+        impressions: [
+          { content: '私聊里的秘密', sourceChatKeys: ['private:9'] },
+          { content: '群里的公开印象', sourceChatKeys: ['group:1'] }
+        ]
+      }],
+      getHandoff: () => null
+    },
+    stickers: { sync: async () => ({ entries: [] }), findForSend: async () => null },
+    onebot: { getMsg: async () => ({ message: [] }), call: async () => ({}) },
+    resolveChatName: async () => '测试群',
+    complete: async ({ messages }) => {
+      userPrompt = String(messages[1]?.content || '');
+      return {
+        model: 'test-model',
+        message: {
+          content: null,
+          tool_calls: [{
+            id: 'call-1', type: 'function',
+            function: {
+              name: 'submit_daily_moment',
+              arguments: JSON.stringify({
+                decision: 'skip', reason: '测试', content: '', imageIds: [],
+                groupSummaries: [{ chatKey: 'group:1', summary: '测试摘要' }]
+              })
+            }
+          }]
+        },
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+      };
+    },
+    now: () => now,
+    random: () => 0,
+    stateFile: path.join(root, 'dm-privacy.json'),
+    log: () => {}
+  });
+
+  await manager.runNow({ publish: false });
+  assert.equal(userPrompt.includes('私聊里的秘密'), false, '私聊来源的印象不能进公开说说');
+  assert.equal(userPrompt.includes('群里的公开印象'), true, '本群来源的印象照常可用');
+});

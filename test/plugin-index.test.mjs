@@ -439,3 +439,62 @@ test('撤回名单在运行中变化会重排：启动时 5 秒竞速失败也�
   assert.match(app, /if \(replaced\) await pluginRegistry\.reconfigure\(\)/,
     '只有真的换过目录才需要恢复重排');
 });
+
+test('撤回名单落盘：重启后索引拉不到也沿用（kill switch 不随进程消失）', () => {
+  const file = path.join(dataDir, 'revoked-cache-test.json');
+  const first = createIndexRevokedCache({ file });
+  first.update({
+    sources: [{ url: 'https://example.com/index.json', ok: true }],
+    revoked: [{ url: 'https://example.com/index.json', rules: ['demo-plugin@1.0.0'] }]
+  });
+  assert.deepEqual(first.rules(), ['demo-plugin@1.0.0']);
+  assert.equal(fs.existsSync(file), true, '规则要落盘');
+
+  const second = createIndexRevokedCache({ file });
+  assert.deepEqual(second.rules(), ['demo-plugin@1.0.0'], '新进程从磁盘恢复');
+  const afterFailure = second.update({
+    sources: [{ url: 'https://example.com/index.json', ok: false }],
+    revoked: []
+  });
+  assert.deepEqual(afterFailure, ['demo-plugin@1.0.0'], '索引拉不动时沿用上次规则');
+});
+
+test('移除索引来源后规则立即失效（即使其余来源都拉不到）', () => {
+  const file = path.join(dataDir, 'revoked-remove-test.json');
+  const cache = createIndexRevokedCache({ file });
+  cache.update({
+    sources: [{ url: 'https://a.example/index.json', ok: true }],
+    revoked: [{ url: 'https://a.example/index.json', rules: ['demo@1.0.0'] }]
+  });
+  assert.deepEqual(cache.rules(), ['demo@1.0.0']);
+
+  const afterRemove = cache.update({
+    sources: [{ url: 'https://b.example/index.json', ok: false }],
+    revoked: [],
+    configured: ['https://b.example/index.json']
+  });
+  assert.deepEqual(afterRemove, [], 'A 已被移除，不能继续用 A 的规则（即使 B 拉不到）');
+
+  assert.deepEqual(cache.update({ sources: [], configured: [] }), [], '清空所有来源也不保留旧规则');
+});
+
+test('清空索引来源后，启动路径也会清空撤回规则', () => {
+  const app = fs.readFileSync(new URL('../src/console/app.js', import.meta.url), 'utf8');
+  assert.match(app, /indexRevokedCache\.update\(\{ sources: \[\], configured: \[\] \}\)/,
+    '无来源分支要清空规则并落盘');
+  const warmAt = app.indexOf('const warmPluginIndexForRevocation');
+  assert.ok(warmAt > 0, 'warmPluginIndexForRevocation 的结构变了就更新这条用例');
+  const slice = app.slice(warmAt, warmAt + 800);
+  assert.ok(slice.includes('await loadPluginIndex()'),
+    '启动预热在无来源时也要走 loadPluginIndex，否则磁盘里的旧规则会继续拒载插件');
+});
+
+test('撤回名单缓存损坏时改名留档，并按空名单启动', () => {
+  const file = path.join(dataDir, 'revoked-corrupt-test.json');
+  fs.writeFileSync(file, '{not-json');
+  const cache = createIndexRevokedCache({ file });
+  assert.deepEqual(cache.rules(), []);
+  assert.equal(fs.existsSync(file), false, '坏文件被改名');
+  assert.ok(fs.readdirSync(dataDir).some((name) => name.startsWith('revoked-corrupt-test.json.broken-')),
+    '要留下坏文件供排查');
+});

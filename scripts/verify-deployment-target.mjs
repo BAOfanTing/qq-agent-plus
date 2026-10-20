@@ -97,6 +97,13 @@ try {
   const problems = [];
   const reject = (msg) => problems.push(msg);
 
+  // 数据目录就是安装目录：deploy.sh 的 rsync --delete 会把数据当源码树的一部分清掉。
+  // 放在记录比对之前：这个组合本身就不合法，跟 .deployment.json 里记了什么无关。
+  if (path.resolve(args.installDir) === path.resolve(args.dataDir)) {
+    reject('数据目录不能与安装目录相同：更新时的 rsync --delete 会把 config.json / SQLite 等数据删掉'
+      + '（可以放在安装目录内，如 INSTALL_DIR/data，或放在安装目录之外，但不能就是安装目录本身）');
+  }
+
   if (!fs.existsSync(metaPath)) {
     const owned = installerOwnedEntries(args.installDir, args.dataDir);
     const foreign = dirHasFiles(args.installDir, owned);

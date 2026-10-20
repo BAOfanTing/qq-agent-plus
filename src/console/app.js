@@ -584,7 +584,7 @@ export function createApp({
    * 索引里被撤回的条目（`id@版本`）：注册表据此拒载 —— 集中下架，不用每台机器改配置。
    * 缓存语义（"拉取失败时沿用旧名单，失败不许清空"）在 createIndexRevokedCache 里，那里有用例钉着。
    */
-  const indexRevokedCache = createIndexRevokedCache();
+  const indexRevokedCache = createIndexRevokedCache({ file: path.join(DATA_DIR, 'plugin-index-revoked.json') });
   // 上次成功读到的索引（失败时回落到它；见 indexResultForDisplay 的注释）
   let lastGoodPluginIndex = null;
   // 插件宿主是否已经起过。索引加载晚于 start（启动时那 5 秒竞速输了，但请求还在后台跑）
@@ -2549,7 +2549,18 @@ export function createApp({
   const loadPluginIndex = async ({ applyRevocation = true } = {}) => {
     const sources = pluginIndexSources();
     const key = sources.map((item) => `${item.name}|${item.url}`).join(' ');
-    if (!sources.length) return { plugins: [], skipped: [], sources: [] };
+    if (!sources.length) {
+      // 用户把索引来源清空（完全离线）：已移除来源的撤回规则不应继续生效。
+      const before = indexRevokedRules().slice().sort().join('\n');
+      indexRevokedCache.update({ sources: [], configured: [] });
+      const after = indexRevokedRules().slice().sort().join('\n');
+      if (applyRevocation && pluginsStarted && after !== before) {
+        void pluginRegistry.reconfigure()
+          .then(() => log('[plugins] 索引来源已清空，撤回名单已更新，插件已按新名单重排'))
+          .catch((error) => log('[plugins] 按新撤回名单重排失败：', error?.message ?? error));
+      }
+      return { plugins: [], skipped: [], sources: [] };
+    }
     if (pluginIndexCache.key === key && Date.now() - pluginIndexCache.at < 10 * 60_000) return pluginIndexCache.result;
     // 索引地址是用户填的 URL → 走 safe-fetch（内网/SSRF/体积/超时都在里面）
     // hostVersion 用于兼容门控（条目标了 minVersion 时判断本机够不够），不是网络参数
@@ -2576,7 +2587,11 @@ export function createApp({
     // 名单变化要立刻反映到正在跑的插件上：启动时那次加载可能输给了 5 秒竞速（请求仍在后台跑），
     // 页面打开/定时刷新也可能在运行中拿到新名单 —— 只在下一轮 start 才生效等于 kill switch 失效。
     const rulesBefore = indexRevokedRules().slice().sort().join('\n');
-    indexRevokedCache.update(fresh);
+    indexRevokedCache.update({
+      ...fresh,
+      // 显式告诉缓存"现在配置着哪些来源"：全部拉取失败时也能正确移除已删来源的规则。
+      configured: sources.map((item) => String(item.url || item.name || ''))
+    });
     const rulesAfter = indexRevokedRules().slice().sort().join('\n');
     if (applyRevocation && pluginsStarted && rulesAfter !== rulesBefore) {
       void pluginRegistry.reconfigure()
@@ -2592,7 +2607,12 @@ export function createApp({
    * 网络抖动不该拖慢启动：最多等 ms 毫秒，拉不到就按本地配置先起，定时刷新会补。
    */
   const warmPluginIndexForRevocation = async (ms = 5000) => {
-    if (!pluginIndexSources().length) return 'no-source';
+    if (!pluginIndexSources().length) {
+      // 无来源也要走一次 loadPluginIndex：它会清空已移除来源的撤回规则；否则重启后
+      // 仍按上一次磁盘里的旧规则拒载插件（2026-10-19 复核 P2）。
+      await loadPluginIndex().catch(() => 'failed');
+      return 'no-source';
+    }
     let timer = null;
     const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve('timeout'), ms); timer.unref?.(); });
     try {

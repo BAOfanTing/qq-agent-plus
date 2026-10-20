@@ -83,6 +83,9 @@ export class GroupDigestManager {
   #scheduleDefer() {
     if (this.deferAttempts >= DEFER_MAX) return;   // 放弃当天，等下一个计划日
     this.deferAttempts += 1;
+    // 覆盖句柄前先清旧的：手动「立即运行」+ 自动补跑可能各排一个，旧的会变成孤儿，
+    // 关闭功能后 stop() 清不到它，30 分钟后仍可能发日报（2026-10-19 复审 P2）。
+    if (this.deferTimer) clearTimeout(this.deferTimer);
     this.deferTimer = setTimeout(() => {
       this.deferTimer = null;
       withTrace(newTraceId(), () => this.runOnce({ skipDone: true })).catch((error) => this.log('[group-digest] 补跑出错:', error));
@@ -138,6 +141,9 @@ export class GroupDigestManager {
   async runOnce({ skipDone = false } = {}) {
     if (this.running) return { skipped: 'already-running' };
     const cfg = this.#cfg();
+    // 自动补跑（skipDone）必须尊重 enabled：关闭功能时 stop() 可能已经错过某个在途补跑，
+    // 手动「立即运行」不传 skipDone，仍按显式意图执行（2026-10-19 复审 P2）。
+    if (skipDone && !cfg.enabled) return { skipped: 'disabled' };
     if (!cfg.chats.length) return { skipped: 'no-chats' };
     this.running = true;
     const results = [];
@@ -149,8 +155,13 @@ export class GroupDigestManager {
         try {
           const r = await this.#digestOne(chatKey, cfg);
           results.push({ chatKey, ...r });
-          done.add(chatKey);
-          this.#writeProgress(done);
+          // 被观察/暂停/白名单挡下的群不算"今天已完成"：否则 30 分钟后的补跑会把它们
+          // 当 already-sent-today 跳过，当天日报永久丢失（2026-10-19 全项目审查 P2）。
+          const blocked = r.ok === false && String(r.error || '').includes('观察/暂停');
+          if (!blocked) {
+            done.add(chatKey);
+            this.#writeProgress(done);
+          }
         } catch (error) {
           const msg = String(error?.message ?? error).slice(0, 200);
           results.push({ chatKey, ok: false, error: msg });
@@ -158,15 +169,12 @@ export class GroupDigestManager {
         }
       }
       this.lastRun = { at: this.now(), results };
-      // 全部群都被"观察/暂停/白名单"挡下 ≠ 今天跑过：不写当日标记、30 分钟后重试
-      //（静默段/暂停通常几小时内恢复；2026-10-12 审查）。只要有一个群真跑过，就记当日完成。
-      const allBlocked = results.length > 0
-        && results.every((r) => r.ok === false && String(r.error || '').includes('观察/暂停'));
-      if (allBlocked) {
+      // 有群被观察/暂停挡下：30 分钟后重试（skipDone 会跳过已经发成功的群，只补没发的）。
+      const anyBlocked = results.some((r) => r.ok === false && String(r.error || '').includes('观察/暂停'));
+      if (anyBlocked) {
         this.#scheduleDefer();
       } else {
         this.deferAttempts = 0;
-        this.#writeProgress(done);
       }
       return { ok: true, results };
     } finally {

@@ -105,6 +105,24 @@ test('deploy.sh：路径嵌套双向都拒、TMP_DIR 进 EXIT trap、抢锁走�
   assert.match(source, /rm -rf -- "\$TAKEOVER_DIR"/, '互斥要跟着 trap 一起收');
 });
 
+test('deploy.sh：数据目录排除按规范化路径计算（防 rsync --delete 删数据）', () => {
+  const source = fs.readFileSync(path.join(repo, 'deploy.sh'), 'utf8');
+  assert.ok(source.includes('DATA_CANON="$(canon_path "$DATA_DIR")"'), '数据目录要先归一化');
+  assert.ok(source.includes('if [[ "$DATA_CANON" == "$INSTALL_CANON" ]]; then'), '相同目录必须拒绝');
+  assert.ok(source.includes('if [[ "$DATA_CANON" == "$INSTALL_CANON/"* ]]; then'), '嵌套判断要用规范路径');
+  assert.ok(source.includes('DATA_REL="${DATA_CANON#"$INSTALL_CANON"/}"'), '相对路径要从规范路径算');
+  assert.equal(source.includes('DATA_REL="${DATA_DIR#"$INSTALL_DIR"/}"'), false,
+    '不能再按原始字符串截：/./、/x/../、尾斜杠会让排除规则匹配不到真实目录');
+  // 符号链接数据目录：原始条目必须用不带尾斜杠的规则（带斜杠只匹配目录，链接会被删）
+  assert.ok(source.includes('RSYNC_PRESERVE+=(--exclude="/$RAW_REL" --exclude="/$RAW_REL/**")'),
+    '原始条目要按文件/链接口径排除，并保护其中内容');
+  assert.equal(source.includes('--exclude="/$RAW_REL/"'), false, '原始条目排除不能带尾斜杠');
+  assert.ok(source.includes('while [[ "$DATA_TRIMMED" == */ ]]; do DATA_TRIMMED="${DATA_TRIMMED%/}"; done'),
+    '数据路径的尾斜杠要剥掉，否则 --install-dir 带 / 时符号链接保护失效');
+  assert.ok(source.includes('RAW_REL="${DATA_TRIMMED#"$INSTALL_TRIMMED"/}"'),
+    'RAW_REL 要用去尾斜杠后的路径截取');
+});
+
 // 2026-10-01 第五轮审查 P1/P2：修锁的时候不能把锁修成新的死锁。
 //  · 互斥目录自己也要有陈旧兜底：SIGKILL/OOM/掉电不执行 trap，互斥永久遗留时，
 //    之后每次接管都会死在"retry in a moment"上；
