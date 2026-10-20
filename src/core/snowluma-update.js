@@ -566,6 +566,28 @@ export function createSnowlumaUpdater(options = {}) {
       lastResult = result;
       return result;
     }
+
+    // 目录校验：QQ_AGENT_SNOWLUMA_DIR 配成部署根目录时，这里看到的是全栈 compose
+    //（含 agent 服务）。再往下会 pull/up 起第二个 Agent、和 systemd 抢 3210、共用 ./data。
+    // 只认服务列表，不靠文件名；读不到服务列表时 fail-closed。
+    const servicesRes = await compose('config', '--services');
+    const services = String(servicesRes.stdout || '').split(/\s+/).filter(Boolean);
+    if (!servicesRes.ok) {
+      const detail = `无法读取协议端 compose 的服务列表（${dir}/docker-compose.yml）：${describeDockerFailure(servicesRes.stderr || servicesRes.stdout, 'compose config 失败')}`;
+      log(`[snowluma] ${detail}`);
+      const result = { ok: false, stage: 'preflight', error: detail, from, to: target, restored: true, viaSudo: usedSudoDocker, log: [detail] };
+      lastResult = result;
+      return result;
+    }
+    if (services.includes('agent')) {
+      const detail = `这个目录看起来是全栈 compose（含 agent 服务），不是协议端项目：${dir}。`
+        + '请把 QQ_AGENT_SNOWLUMA_DIR 指到 snowluma 子目录，避免控制台更新协议端时拉起第二个 Agent。';
+      log(`[snowluma] ${detail}`);
+      const result = { ok: false, stage: 'preflight', error: detail, from, to: target, restored: true, viaSudo: usedSudoDocker, log: [detail] };
+      lastResult = result;
+      return result;
+    }
+
     const backup = backupComposeFiles(dir, Date.now(), { log });
     const envFile = path.join(dir, '.env');
     const originalEnv = fs.readFileSync(envFile, 'utf8');

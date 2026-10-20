@@ -331,6 +331,16 @@ RSYNC_PRESERVE=(
   # 更新器跑测试时会在 checkout 根建这两个目录（runner 会在 rsync 前删掉，这里再兜一层：
   # rsync 是 `-a --delete` 从 checkout 根同步的，根目录多什么就会被部署什么）
   --exclude='/.auto-update-test-*/'
+  # Docker 全栈是另一种部署方式，不是 systemd 安装树的一部分。不铺进安装目录，
+  # 既是避免用户误跑 root docker-compose，也是保护安装目录里用户自己的同名文件
+  #（排除规则同时挡住 rsync --delete）。
+  --exclude=/docker-compose.yml
+  --exclude='/docker-compose.*.yml'
+  --exclude=/Dockerfile
+  --exclude=/.dockerignore
+  --exclude=/docker/
+  --exclude='/scripts/docker-*.mjs'
+  --exclude='/scripts/docker-*.sh'
 )
 # 用**规范化**后的路径算相对路径：原始写法带 `/./`、`/x/../`、尾斜杠或符号链接时，
 # 字符串前缀比较会失败 → 排除规则匹配不到真实目录 → `rsync --delete` 把数据删掉

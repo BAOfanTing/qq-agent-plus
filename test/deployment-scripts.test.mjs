@@ -478,3 +478,18 @@ test('deploy.sh 调用 verify-deployment-target.mjs（C7 强校验真实接入�
   assert.match(sh, /verify-deployment-target[.]mjs/, 'deploy.sh 应调用校验脚本');
   assert.match(sh, /DEPLOY_REPOSITORY/, 'deploy.sh 应支持 --repository 透传');
 });
+
+test('deploy.sh：systemd 安装树不铺 Docker 全栈文件', () => {
+  const sh = fs.readFileSync(path.join(repo, 'deploy.sh'), 'utf8');
+  for (const rule of [
+    '--exclude=/docker-compose.yml',
+    "--exclude='/docker-compose.*.yml'",
+    '--exclude=/Dockerfile',
+    '--exclude=/.dockerignore',
+    '--exclude=/docker/',
+    "--exclude='/scripts/docker-*.mjs'",
+    "--exclude='/scripts/docker-*.sh'"
+  ]) {
+    assert.ok(sh.includes(rule), `deploy.sh 缺少 Docker 文件排除：${rule}`);
+  }
+});
