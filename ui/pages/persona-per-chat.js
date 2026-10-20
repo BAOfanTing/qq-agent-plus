@@ -44,7 +44,7 @@ function perChatOptions(entry, templates = []) {
  * @param templates [[id, template], …]
  * @returns 新的 personaPerChat（整份）
  */
-function buildPerChatPatch(rows, currentMap = {}, templates = []) {
+function buildPerChatPatch(rows, currentMap = {}, templates = [], globalProfile = '') {
   const out = {};
   for (const { key, value } of rows) {
     if (!/^(group|private):\d+$/.test(String(key || ''))) continue;
@@ -86,7 +86,10 @@ function buildPerChatPatch(rows, currentMap = {}, templates = []) {
         delete out[key].changedAt;
         continue;
       }
-      const next = { ...dropCardFields(oldEntry), roleText: tpl.text, behaviorProfile: tpl.behaviorProfile || 'legacy' };
+      const next = { ...dropCardFields(oldEntry), roleText: tpl.text };
+      // 全局是「角色卡优先」时，按群选一张自定义卡不能把该群悄悄退回 legacy/grounded：
+      // 不写 behaviorProfile，交给 resolvePersona 继承全局档位。
+      if (globalProfile !== 'card') next.behaviorProfile = tpl.behaviorProfile || 'legacy';
       if (tpl.customRules) next.customRules = tpl.customRules;
       out[key] = next;
     }

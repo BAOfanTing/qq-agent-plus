@@ -88,7 +88,7 @@
         if (typeof patch.bgColor === 'string') st.setProperty('--bg-solid', patch.bgColor);
         if (typeof patch.bgFrom === 'string') st.setProperty('--bg-from', patch.bgFrom);
         if (typeof patch.bgTo === 'string') st.setProperty('--bg-to', patch.bgTo);
-        st.setProperty('--bg-angle', (Number(patch.bgAngle) || 135) + 'deg');
+        st.setProperty('--bg-angle', (Number.isFinite(Number(patch.bgAngle)) ? Number(patch.bgAngle) : 135) + 'deg');
         var tweaks = patch.tweaks && typeof patch.tweaks === 'object' ? patch.tweaks : {};
         for (var tk in tweaks) {
           // 白名单：localStorage 里的东西不可信，只认主题微调那六个变量

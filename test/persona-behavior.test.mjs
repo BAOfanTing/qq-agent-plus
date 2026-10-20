@@ -140,6 +140,8 @@ test('角色卡优先档：只留安全与机制，语气/节奏交给角色卡�
     '单条多数 ≤30 字', '回话别只做点评', '顺手把自己的那半句补上',
     '回复保持简短，符合群友语感', '"？"/"人呢"/"算了"',
     '可以短、可以敷衍', '装傻要像在演', '像真人手贱一下', '平时打字更像真人',
+    '也不用秒回', '拿不准就轻描淡写回一句', '优先想一下有没有贴切的表情',
+    '内容要写成口语，带语气词与标点', '内容要写成口语、带语气词',
     '流口水的猫', '【表情包策略：像真人一样用', '大约每 3~5 轮', '真人不会用空格分句',
     '真人不会每条都点', '别只甩图', '可以自然接一句'
   ]) {
@@ -151,6 +153,7 @@ test('角色卡优先档：只留安全与机制，语气/节奏交给角色卡�
   // 工具描述也不能在 card 档里替平台规定"更像自然聊天"
   const toolsSrc = fs.readFileSync(new URL('../src/tools/tools-core.js', import.meta.url), 'utf8');
   assert.equal(toolsSrc.includes('更像自然聊天'), false);
+  assert.equal(toolsSrc.includes('必须写成口语'), false, '语音工具描述不能替 card 档规定语气');
   // 空角色正文：card 档不能没有任何身份段（否则模型回落到通用助手/客服口径）
   const cfgEmpty = structuredClone(DEFAULT_CONFIG);
   cfgEmpty.admin.ownerUin = '123456789';   // 管理员段只在配了 ownerUin 时注入

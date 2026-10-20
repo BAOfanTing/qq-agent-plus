@@ -114,13 +114,21 @@ test('deploy.sh：数据目录排除按规范化路径计算（防 rsync --delet
   assert.equal(source.includes('DATA_REL="${DATA_DIR#"$INSTALL_DIR"/}"'), false,
     '不能再按原始字符串截：/./、/x/../、尾斜杠会让排除规则匹配不到真实目录');
   // 符号链接数据目录：原始条目必须用不带尾斜杠的规则（带斜杠只匹配目录，链接会被删）
-  assert.ok(source.includes('RSYNC_PRESERVE+=(--exclude="/$RAW_REL" --exclude="/$RAW_REL/**")'),
+  assert.ok(source.includes('RAW_REL_ESC="$(rsync_escape "$RAW_REL")"'),
+    '原始条目要先转义 rsync 通配符');
+  assert.ok(source.includes('--exclude="/$RAW_REL_ESC" --exclude="/$RAW_REL_ESC/**"'),
     '原始条目要按文件/链接口径排除，并保护其中内容');
   assert.equal(source.includes('--exclude="/$RAW_REL/"'), false, '原始条目排除不能带尾斜杠');
   assert.ok(source.includes('while [[ "$DATA_TRIMMED" == */ ]]; do DATA_TRIMMED="${DATA_TRIMMED%/}"; done'),
     '数据路径的尾斜杠要剥掉，否则 --install-dir 带 / 时符号链接保护失效');
-  assert.ok(source.includes('RAW_REL="${DATA_TRIMMED#"$INSTALL_TRIMMED"/}"'),
-    'RAW_REL 要用去尾斜杠后的路径截取');
+  assert.ok(source.includes('DATA_TRIMMED="$(realpath -ms -- "$DATA_TRIMMED")"'),
+    '不跟随符号链接的规范化：/./、/x/../、重复斜杠都要收干净，但保留链接名');
+  assert.ok(source.includes('for RAW_PART in "${RAW_PARTS[@]}"'),
+    '原始路径的祖先要逐层检查符号链接');
+  assert.ok(source.includes('[[ -L "$INSTALL_DIR/$RAW_PREFIX" ]]'),
+    '符号链接祖先必须整条排除，否则 rsync --delete 会删掉链接本身');
+  assert.ok(source.includes('rsync_escape()'),
+    '数据目录名里的 * ? [ 要转义，不能当 rsync 通配符');
 });
 
 // 2026-10-01 第五轮审查 P1/P2：修锁的时候不能把锁修成新的死锁。

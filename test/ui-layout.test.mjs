@@ -249,7 +249,7 @@ test('亮色玻璃里有边界的盒子要看得见：--card-line', () => {
   for (const sel of ['.asset-table-wrap', '.context-call-table-wrap', '.control-service', '.control-key-list',
     '.usage-table', '.usage-card', '.usage-note', '.tool-card', '.kpi-grid', '.plugin-card', '.opt-card',
     '.plat-card', '.price-card', '.conversation-mode-option', '.persona-card', '.persona-detail',
-    '.scheme-card', '.modal', '.model-modal', '.empty-hint']) {
+    '.scheme-card', '.memory-summary', '.memory-advanced', '.memory-handoff', '.modal', '.model-modal', '.empty-hint']) {
     assert.ok(block[0].includes(sel), `${sel} 也要有可见描边`);
   }
   assert.match(css, /--ctl-line: color-mix\(in srgb, var\(--text\) 30%, var\(--border\)\);/,
@@ -268,9 +268,12 @@ test('复制内置卡做自定义副本时不能被判回内置卡', () => {
   assert.match(persona, /exacts\.find\(\(\[, p\]\) => !p\.builtin\) \|\| exacts\[0\]/);
   // 新建流程显式把新卡的 id（custom_<末位>）交给草稿
   assert.match(persona, /custom_\$\{customCount - 1\}/);
-  assert.match(persona, /applyPersonaDraft\(\{ name, text, customRules, behaviorProfile \}, newId\)/);
-  // 全局是角色卡优先时，点内置卡换正文不把策略退回卡自带档位
-  assert.match(persona, /keepCard = state\.config\?\.persona\?\.behaviorProfile === 'card'/);
+  assert.match(persona, /applyPersonaDraft\(\{ name, text, customRules, behaviorProfile \}, newId, \{ forceProfile: behaviorProfile \}\)/);
+  // 点卡只填正文/规则：草稿是 card，或用户刚把下拉改成别的档（与已保存值不同）→ 保留草稿；
+  // 不再看已保存配置，否则「已保存 card → 改成 legacy → 点卡」会把 legacy 吞掉。
+  assert.match(persona, /const draftProfile = personaDraftState\(\)\.behaviorProfile;/);
+  assert.match(persona, /const keepDraft = draftProfile === 'card' \|\| state\.personaProfileTouched === true;/);
+  assert.doesNotMatch(persona, /keepCard = state\.config/);
 });
 
 test('模态框用更厚的前景填色：浅色液态下页面文字不透过输入框', () => {

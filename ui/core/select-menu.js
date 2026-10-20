@@ -35,7 +35,10 @@ const disabledOf = (option) => Boolean(
 
 function close({ focus = false } = {}) {
   const select = owner;
-  if (menu) menu.remove();
+  if (menu) {
+    try { if (menu.hasAttribute('popover')) menu.hidePopover(); } catch { /* 已经关了 */ }
+    menu.remove();
+  }
   menu = null;
   owner = null;
   options = [];
@@ -67,7 +70,7 @@ function move(step) {
 }
 
 function choose(entry) {
-  if (!entry || entry.option.disabled) return;
+  if (!entry || disabledOf(entry.option)) return;
   const select = owner;
   close();
   if (!select || !select.isConnected) return;
@@ -131,7 +134,20 @@ function open(select) {
     return;
   }
 
-  document.body.appendChild(box);
+  // 原生 <dialog> 的 showModal 在 top layer：追加到 body 的 fixed 菜单会被 dialog 与其
+  // ::backdrop 盖住，而且 dialog 外是 inert，选项点不到。优先用 Popover API（同一个
+  // top layer）；不支持 Popover 的老浏览器退回"挂进 dialog 内部"。
+  const dialog = select.closest('dialog[open]');
+  if (typeof box.showPopover === 'function') {
+    box.setAttribute('popover', 'manual');
+    document.body.appendChild(box);
+    try { box.showPopover(); } catch {
+      box.removeAttribute('popover');
+      (dialog || document.body).appendChild(box);
+    }
+  } else {
+    (dialog || document.body).appendChild(box);
+  }
   menu = box;
   select.setAttribute('aria-controls', box.id);
   select.setAttribute('aria-expanded', 'true');
@@ -162,8 +178,8 @@ function open(select) {
   box.style.left = `${Math.round(left)}px`;
   box.style.top = `${Math.round(top)}px`;
 
-  const selected = options.findIndex((entry) => entry.index === select.selectedIndex && !entry.option.disabled);
-  setActive(selected >= 0 ? selected : options.findIndex((entry) => !entry.option.disabled));
+  const selected = options.findIndex((entry) => entry.index === select.selectedIndex && !disabledOf(entry.option));
+  setActive(selected >= 0 ? selected : options.findIndex((entry) => !disabledOf(entry.option)));
 }
 
 function bind() {
@@ -222,8 +238,12 @@ function bind() {
       const now = Date.now();
       typeahead = now - typeaheadAt < 600 ? typeahead + event.key.toLowerCase() : event.key.toLowerCase();
       typeaheadAt = now;
+      // 焦点还在原生 select 上：不拦的话浏览器自带的 typeahead 会直接改 value 并触发
+      // change，菜单随即被关掉 —— 用户看到的是"输字母没反应、设置却变了"。
+      event.preventDefault();
+      event.stopPropagation();
       const hit = options.find((entry) =>
-        !entry.option.disabled && labelOf(entry.option).toLowerCase().startsWith(typeahead));
+        !disabledOf(entry.option) && labelOf(entry.option).toLowerCase().startsWith(typeahead));
       if (hit) setActive(options.indexOf(hit));
     }
   }, true);

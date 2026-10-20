@@ -17,7 +17,7 @@ test('人设页有「按群人设」区块，行按会话渲染并可选择卡',
 
 test('保存按群人设：整份替换 + 装配逻辑走纯函数', () => {
   const save = read('ui/pages/settings-save.js');
-  assert.ok(save.includes('buildPerChatPatch(rows, c.personaPerChat || {}, Object.entries(state.personaTemplates || {}))'),
+  assert.ok(save.includes("buildPerChatPatch(rows, c.personaPerChat || {}, Object.entries(state.personaTemplates || {}), c.persona?.behaviorProfile || '')"),
     '保存要走 persona-per-chat.js 的纯函数（行为用例直接覆盖它）');
   assert.ok(save.includes('patch.personaPerChat = {'), '按群人设要单独成段提交');
   assert.ok(save.includes('__replace__'), '要用 __replace__ 才能把改回跟随全局的行删掉');

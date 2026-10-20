@@ -623,7 +623,7 @@ async function saveConfig({ quiet = false } = {}) {
       value: row.querySelector('.per-chat-select')?.value || ''
     }));
     patch.personaPerChat = {
-      __replace__: buildPerChatPatch(rows, c.personaPerChat || {}, Object.entries(state.personaTemplates || {}))
+      __replace__: buildPerChatPatch(rows, c.personaPerChat || {}, Object.entries(state.personaTemplates || {}), c.persona?.behaviorProfile || '')
     };
   }
 

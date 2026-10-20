@@ -4123,10 +4123,15 @@ html[data-sidebar-style='accent'] #sidebar {
 #sidebar .side-head .brand-mark { box-shadow: 0 0 0 1px var(--accent-side-border); }
 
 /* ── 6. 高对比模式：加粗边框、提亮次要文字（放在色板之后，同权重靠顺序取胜） ── */
-:root[data-contrast='high'] {
-  --border: color-mix(in srgb, var(--text) 30%, var(--bg));
-  --muted: color-mix(in srgb, var(--text) 80%, var(--bg));
-  --faint: color-mix(in srgb, var(--text) 62%, var(--bg));
+/* color-mix 放进 @supports：不支持它的浏览器不能拿到一个非法自定义属性值 ——
+   那会让用到 var() 的整条声明失效（边框消失、文字掉回默认色），与高对比的目标相反。
+   不支持时沿用主题原有的 --border/--muted/--faint。 */
+@supports (color: color-mix(in srgb, red, blue)) {
+  :root[data-contrast='high'] {
+    --border: color-mix(in srgb, var(--text) 30%, var(--bg));
+    --muted: color-mix(in srgb, var(--text) 80%, var(--bg));
+    --faint: color-mix(in srgb, var(--text) 62%, var(--bg));
+  }
 }
 :root[data-contrast='high'] .panel,
 :root[data-contrast='high'] .kpi,
@@ -4728,6 +4733,9 @@ input[type='number'] { font-variant-numeric: tabular-nums; }
 .select-menu {
   position: fixed;
   z-index: 400;
+  /* Popover 的 UA 默认样式会带 inset:0 / margin:auto；清掉，位置由 JS 的 left/top 定。 */
+  inset: auto;
+  margin: 0;
   box-sizing: border-box;
   max-width: min(360px, calc(100vw - 16px));
   max-height: 300px;
@@ -5206,6 +5214,9 @@ html[data-theme='light'][data-contrast='high'][data-glass='liquid'] .settings-si
 [data-theme='light'][data-glass] .persona-card,
 [data-theme='light'][data-glass] .persona-detail,
 [data-theme='light'][data-glass] .scheme-card,
+[data-theme='light'][data-glass] .memory-summary,
+[data-theme='light'][data-glass] .memory-advanced,
+[data-theme='light'][data-glass] .memory-handoff,
 [data-theme='light'][data-glass] .modal,
 [data-theme='light'][data-glass] .model-modal,
 [data-theme='light'][data-glass] .empty-hint,
@@ -5218,7 +5229,8 @@ html[data-contrast='high'][data-glass] { --glass-tint: 97%; --glass-modal-fill: 
 /* 液态档的填色是写死的 rgba，不读 --glass-tint —— 上面两条对它无效（默认材质就是液态，
    等于高对比对默认用户失效）。这里直接把 --glass-fill 拉满。 */
 html[data-contrast='high'][data-glass='liquid'] {
-  --glass-fill: color-mix(in srgb, var(--bg-2) 97%, transparent);
+  /* 高对比要的就是不透明；直接给实色，不依赖 color-mix。 */
+  --glass-fill: var(--bg-2);
   --glass-modal-fill: var(--bg-2);
 }
 [data-theme='light'][data-contrast='high'][data-glass='liquid'] { --glass-fill: var(--bg-2); --glass-modal-fill: var(--bg-2); }

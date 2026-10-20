@@ -139,3 +139,55 @@ test('点外面关闭；select 被 disabled 时不接管', { skip: SKIP }, async
     assert.equal(document.querySelector('.select-menu'), null, 'disabled 的 select 不弹自定义列表');
   });
 });
+
+test('disabled optgroup 里的选项不可选（样式灰掉之外，写回也要拦住）', { skip: SKIP }, async () => {
+  await withPage((window) => {
+    const { document } = window;
+    const select = document.createElement('select');
+    select.innerHTML = '<optgroup label="锁定" disabled><option value="x">X</option></optgroup><option value="y" selected>Y</option>';
+    document.body.appendChild(select);
+    fire(window, select, 'pointerdown');
+    const options = [...document.querySelectorAll('.select-option')];
+    assert.equal(options[0].getAttribute('aria-disabled'), 'true');
+    fire(window, options[0], 'click');
+    assert.equal(select.value, 'y', 'disabled optgroup 里的项不能写回');
+  });
+});
+
+test('首字母跳转只移动高亮，不直接改 select 的值', { skip: SKIP }, async () => {
+  await withPage((window) => {
+    const { document } = window;
+    const select = document.createElement('select');
+    select.innerHTML = '<option value="a">Alpha</option><option value="b" selected>Beta</option><option value="c">Charlie</option>';
+    document.body.appendChild(select);
+    select.focus();
+    fire(window, select, 'keydown', { key: 'Enter' });
+    const event = new window.KeyboardEvent('keydown', { key: 'c', bubbles: true, cancelable: true });
+    select.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true, '要拦掉原生 select 的 typeahead');
+    assert.equal(select.value, 'b', '输入字母时 value 不能变');
+    assert.match(document.querySelector('.select-option.is-active')?.textContent || '', /Charlie/);
+    fire(window, select, 'keydown', { key: 'Enter' });
+    assert.equal(select.value, 'c', 'Enter 才写回');
+  });
+});
+
+test('原生 dialog 里的 select 也能打开并选中（菜单不能留在 dialog 后面）', { skip: SKIP }, async () => {
+  await withPage((window) => {
+    const { document } = window;
+    const dialog = document.createElement('dialog');
+    const select = document.createElement('select');
+    select.innerHTML = '<option value="a">A</option><option value="b" selected>B</option>';
+    dialog.appendChild(select);
+    document.body.appendChild(dialog);
+    try { dialog.showModal(); } catch { /* happy-dom 可能没有实现 top layer */ }
+    fire(window, select, 'pointerdown');
+    const menu = document.querySelector('.select-menu');
+    assert.ok(menu, 'dialog 内也要出现菜单');
+    assert.ok(menu.closest('dialog') === dialog || menu.parentElement === document.body,
+      '菜单要么挂在 dialog 内，要么用 popover 进 top layer');
+    const option = [...menu.querySelectorAll('.select-option')][0];
+    fire(window, option, 'click');
+    assert.equal(select.value, 'a');
+  });
+});

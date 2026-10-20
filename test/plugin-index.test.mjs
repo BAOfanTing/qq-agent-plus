@@ -435,6 +435,7 @@ test('撤回名单在运行中变化会重排：启动时 5 秒竞速失败也�
   assert.match(app, /loadPluginIndex\(\{ applyRevocation: false \}\)/, '启用路由自己会重排，别让加载再排一次');
   assert.match(app, /pluginsStarted = true;/, '启动成功后置位');
   assert.match(app, /if \(body\.enabled === true\) await loadPluginIndex\(\{ applyRevocation: false \}\)/, '启用前先尽力拿一次名单');
+  assert.match(app, /loadPluginIndex\(\{ applyRevocation: false \}\)\.then/, '6 小时定时刷新只重排一次');
   // 安装失败但没动过目录时不要重排（重排会停掉所有插件、打断在途工具调用）
   assert.match(app, /if \(replaced\) await pluginRegistry\.reconfigure\(\)/,
     '只有真的换过目录才需要恢复重排');
@@ -482,6 +483,8 @@ test('清空索引来源后，启动路径也会清空撤回规则', () => {
   const app = fs.readFileSync(new URL('../src/console/app.js', import.meta.url), 'utf8');
   assert.match(app, /indexRevokedCache\.update\(\{ sources: \[\], configured: \[\] \}\)/,
     '无来源分支要清空规则并落盘');
+  assert.match(app, /pluginIndexCache = \{ key: '', at: 0, result: \{ plugins: \[\], skipped: \[\], sources: \[\] \} \}/,
+    '无来源分支还要清 10 分钟缓存，否则加回同一来源会跳过撤回名单更新');
   const warmAt = app.indexOf('const warmPluginIndexForRevocation');
   assert.ok(warmAt > 0, 'warmPluginIndexForRevocation 的结构变了就更新这条用例');
   const slice = app.slice(warmAt, warmAt + 800);

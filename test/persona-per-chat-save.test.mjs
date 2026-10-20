@@ -98,3 +98,17 @@ test('非法 chatKey 不写入；同一个 key 只保留最后一行', () => {
   ], {}, templates);
   assert.deepEqual(out, { 'group:123': { templateId: 'xiaojingyu' } });
 });
+
+test('全局「角色卡优先」时，按群选自定义卡不能把该群退回卡自带档位', () => {
+  const out = buildPerChatPatch(
+    [{ key: 'group:123', value: 'custom:custom_0' }],
+    {},
+    templates,
+    'card'
+  );
+  assert.deepEqual(out['group:123'], { roleText: '自定义A正文', customRules: 'A 的规则' },
+    '不写 behaviorProfile，交给 resolvePersona 继承全局 card');
+  // 全局不是 card 时仍按卡自带档位写入（旧行为不变）
+  const out2 = buildPerChatPatch([{ key: 'group:123', value: 'custom:custom_0' }], {}, templates, 'legacy');
+  assert.equal(out2['group:123'].behaviorProfile, 'grounded');
+});

@@ -253,7 +253,7 @@ function resolveAppearance(ui = {}) {
 
   const radius = clamp(Number(src.radius) || DEFAULTS.radius, 0.6, 1.45);
   const zoom = clamp(Number(src.zoom) || DEFAULTS.zoom, 0.8, 1.3);
-  const bgAngle = clamp(Math.round(Number(src.bgAngle)) || DEFAULTS.bgAngle, 0, 360);
+  const bgAngle = clamp(Number.isFinite(Number(src.bgAngle)) ? Math.round(Number(src.bgAngle)) : DEFAULTS.bgAngle, 0, 360);
 
   return {
     // 明暗：v3 的字段叫 mode；v2 存在 ui.theme 上（服务端默认值里也是 theme），两个都认，

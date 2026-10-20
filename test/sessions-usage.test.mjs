@@ -15,6 +15,13 @@ const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js
 const { todayKey } = await import('../src/core/util.js');
 
 test('todayUsage 计入在途会话的估算金额', () => {
+  // 固定时钟：deepseek-flash 有峰谷价、todayKey 还会跨午夜；两次调用恰好跨过边界时
+  // 估价/日期会变，断言必红（2026-10-20 审查 P3）。选周二上午 10:00（北京时间），
+  // 不在任何切换点附近。
+  const fixedNow = Date.parse('2026-10-20T02:00:00Z');
+  const realNow = Date.now;
+  Date.now = () => fixedNow;
+  try {
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.api.model = 'deepseek-flash';
   setRuntimeConfig(cfg);
@@ -40,4 +47,7 @@ test('todayUsage 计入在途会话的估算金额', () => {
   const after = reg.todayUsage(todayKey());
   assert.ok(Math.abs(after.estimatedYuan - before.estimatedYuan) < 1e-9,
     `在途估价与结束落盘不一致：before=${before.estimatedYuan} after=${after.estimatedYuan}`);
+  } finally {
+    Date.now = realNow;
+  }
 });

@@ -144,11 +144,13 @@ test('首屏脚本的强调色优先级：自定义 > 预设 > 默认蓝（自�
 
 test('首屏脚本的取值与模块 appearanceVars 对齐（同一份 patch，两边给同样的值）', async () => {
   const { appearanceVars } = await import('../ui/core/appearance.js');
-  const patch = { accent: '#ff8800', radius: 1.2, zoom: 0.85, bgColor: '#010203', bgFrom: '#111111', bgTo: '#222222', bgAngle: 45 };
-  const boot = runBoot(patch).vars;
-  const mod = appearanceVars(resolveAppearance(patch));
-  for (const key of ['--accent', '--accent-side', '--accent-fg', '--r-scale', '--zoom', '--bg-solid', '--bg-from', '--bg-to', '--bg-angle']) {
-    assert.equal(boot.get(key), mod[key], `${key} 两处不一致：首屏 ${boot.get(key)} vs 模块 ${mod[key]}`);
+  for (const bgAngle of [45, 0]) {
+    const patch = { accent: '#ff8800', radius: 1.2, zoom: 0.85, bgColor: '#010203', bgFrom: '#111111', bgTo: '#222222', bgAngle };
+    const boot = runBoot(patch).vars;
+    const mod = appearanceVars(resolveAppearance(patch));
+    for (const key of ['--accent', '--accent-side', '--accent-fg', '--r-scale', '--zoom', '--bg-solid', '--bg-from', '--bg-to', '--bg-angle']) {
+      assert.equal(boot.get(key), mod[key], `bgAngle=${bgAngle} 时 ${key} 两处不一致：首屏 ${boot.get(key)} vs 模块 ${mod[key]}`);
+    }
   }
 });
 

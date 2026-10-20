@@ -340,10 +340,23 @@ RSYNC_PRESERVE=(
 # 此时 DATA_CANON 落在安装目录之外，下面的 canonical 分支保护不到这个链接本身。
 # 规则**不能带尾斜杠**：rsync 的 `dir/` 只匹配目录，符号链接在删扫时按普通文件分类，
 # 带斜杠的规则匹配不到它（2026-10-19 复核实测语义）。同时排除条目与内容。
+# rsync 的 exclude 是模式语言：数据目录名里出现 * ? [ 时会被当成通配符，
+# 例如 data[1] 的规则会匹配 data1/，真正的 data[1]/ 反而没被排除、被 --delete 删掉。
+# 路径本身仍然合法，所以这里转义而不是拒绝。
+rsync_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\*/\\*}"
+  s="${s//\?/\\?}"
+  s="${s//\[/\\[}"
+  printf '%s' "$s"
+}
+
 DATA_REL=""
 if [[ "$DATA_CANON" == "$INSTALL_CANON/"* ]]; then
   DATA_REL="${DATA_CANON#"$INSTALL_CANON"/}"
-  RSYNC_PRESERVE+=(--exclude="/$DATA_REL/")
+  DATA_REL_ESC="$(rsync_escape "$DATA_REL")"
+  RSYNC_PRESERVE+=(--exclude="/$DATA_REL_ESC/")
 else
   RSYNC_PRESERVE+=(--exclude=/data/)
 fi
@@ -352,14 +365,34 @@ fi
 # 规则不能带尾斜杠（rsync 的 `dir/` 只匹配目录，符号链接按普通文件分类）。
 DATA_TRIMMED="$DATA_DIR"
 while [[ "$DATA_TRIMMED" == */ ]]; do DATA_TRIMMED="${DATA_TRIMMED%/}"; done
-# 只归一化**父目录**：要保住最后一段的原始名字（它可能就是符号链接，realpath 会跟过去）。
-DATA_PARENT="$(canon_path "$(dirname -- "$DATA_TRIMMED")")"
-DATA_TRIMMED="${DATA_PARENT%/}/$(basename -- "$DATA_TRIMMED")"
+# 用 realpath -ms 做**不跟随符号链接**的规范化：它会把 /./、/x/../、重复斜杠和
+# 尾斜杠收干净，但保留最后一段（以及路径中间）的链接名字。旧写法只归一化父目录，
+# 遇到「父目录本身是符号链接」时后半段原始路径直接落到安装目录之外，保护整段失效。
+if command -v realpath >/dev/null 2>&1; then
+  DATA_TRIMMED="$(realpath -ms -- "$DATA_TRIMMED")"
+else
+  DATA_PARENT="$(canon_path "$(dirname -- "$DATA_TRIMMED")")"
+  DATA_TRIMMED="${DATA_PARENT%/}/$(basename -- "$DATA_TRIMMED")"
+fi
 INSTALL_TRIMMED="$(canon_path "$INSTALL_DIR")"
 if [[ "$DATA_TRIMMED" == "$INSTALL_TRIMMED/"* ]]; then
   RAW_REL="${DATA_TRIMMED#"$INSTALL_TRIMMED"/}"
+  # 祖先里的符号链接也要保护：数据目录 /srv/app/storage/data、storage 是链接时，
+  # 只排除最后一段 data 仍然会让 rsync --delete 把 storage 这个链接删掉。
+  RAW_PREFIX=""
+  IFS='/' read -r -a RAW_PARTS <<< "$RAW_REL"
+  for RAW_PART in "${RAW_PARTS[@]}"; do
+    [[ -n "$RAW_PART" ]] || continue
+    RAW_PREFIX="${RAW_PREFIX:+$RAW_PREFIX/}$RAW_PART"
+    if [[ -L "$INSTALL_DIR/$RAW_PREFIX" ]]; then
+      RAW_PREFIX_ESC="$(rsync_escape "$RAW_PREFIX")"
+      RSYNC_PRESERVE+=(--exclude="/$RAW_PREFIX_ESC" --exclude="/$RAW_PREFIX_ESC/**")
+      break
+    fi
+  done
   if [[ -n "$RAW_REL" && ( -z "$DATA_REL" || "$RAW_REL/" != "$DATA_REL/" ) ]]; then
-    RSYNC_PRESERVE+=(--exclude="/$RAW_REL" --exclude="/$RAW_REL/**")
+    RAW_REL_ESC="$(rsync_escape "$RAW_REL")"
+    RSYNC_PRESERVE+=(--exclude="/$RAW_REL_ESC" --exclude="/$RAW_REL_ESC/**")
   fi
 fi
 RSYNC_SOURCE=("${RSYNC_PRESERVE[@]}" --exclude=/node_modules/)

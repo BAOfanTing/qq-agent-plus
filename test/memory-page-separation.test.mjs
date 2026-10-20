@@ -40,4 +40,5 @@ test('session memory page suppresses person-memory controls and keeps handoff vi
   assert.match(session, /\.collapsible:not\(\.memory-handoff\)/);
   assert.match(session, /人物长期记忆已独立到“人物记忆”页/);
   assert.match(session, /会话级 handoff \/ 工作状态/);
+  assert.match(session, /正在整理/, '整理中的行不能被改写成「暂无会话交接」');
 });

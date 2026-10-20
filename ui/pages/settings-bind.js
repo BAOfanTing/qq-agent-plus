@@ -1556,6 +1556,8 @@ function bindSettingsPersonaAndVision() {
     $(selector)?.addEventListener('input', syncPersonaButtons);
     $(selector)?.addEventListener('change', syncPersonaButtons);
   }
+  // 用户手动改交流策略后，点卡只换正文、不把刚选的档位吞掉（applyPersonaDraft 会消费并清掉）
+  $('#cfg-behavior-profile')?.addEventListener('change', () => { state.personaProfileTouched = true; });
   // 角色正文：整段正文每敲一键都要重画分节视图（约 10ms），打字时按 140ms 合并成一次；
   // 失焦/提交立刻同步，不会留下过期视图。
   $('#cfg-roletext')?.addEventListener('input', () => {

@@ -2553,6 +2553,9 @@ export function createApp({
       // 用户把索引来源清空（完全离线）：已移除来源的撤回规则不应继续生效。
       const before = indexRevokedRules().slice().sort().join('\n');
       indexRevokedCache.update({ sources: [], configured: [] });
+      // 缓存也必须一起清：否则 10 分钟内把同一来源加回来时，下面那行缓存命中会直接返回
+      // 旧结果、跳过 indexRevokedCache.update —— 撤回名单保持为空，kill switch 失效。
+      pluginIndexCache = { key: '', at: 0, result: { plugins: [], skipped: [], sources: [] } };
       const after = indexRevokedRules().slice().sort().join('\n');
       if (applyRevocation && pluginsStarted && after !== before) {
         void pluginRegistry.reconfigure()
@@ -2629,7 +2632,9 @@ export function createApp({
     pluginIndexRefreshTimer = setInterval(() => {
       if (getConfig().plugins?.enabled !== true) return;
       const before = [...indexRevokedRules()].sort().join('\n');
-      void loadPluginIndex().then(() => {
+      // applyRevocation:false：定时器自己比较前后并只重排一次。loadPluginIndex 内部默认
+      // 也会重排，叠加起来会让所有插件被完整重启两遍。
+      void loadPluginIndex({ applyRevocation: false }).then(() => {
         const after = [...indexRevokedRules()].sort().join('\n');
         if (after === before) return null;
         return pluginRegistry.reconfigure()

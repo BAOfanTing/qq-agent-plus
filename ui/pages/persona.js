@@ -170,12 +170,15 @@ function syncPersonaButtons() {
   }
 }
 
-function applyPersonaDraft(tpl, id = '') {
-  // 「角色卡优先」是管理员的全局选择：点一张内置卡换正文，不应该把交流策略悄悄退回
-  // 卡自带的 legacy/grounded（按群路径已按同一口径保护）。想换策略用上面的下拉即可。
-  const keepCard = state.config?.persona?.behaviorProfile === 'card'
-    || personaDraftState().behaviorProfile === 'card';
-  const profile = keepCard ? 'card' : (tpl.behaviorProfile || 'legacy');
+function applyPersonaDraft(tpl, id = '', { forceProfile = '' } = {}) {
+  // 点卡只负责正文/附加规则；交流策略是实例级选择：
+  //   · 草稿已经是 card，或用户手动动过下拉 → 保留草稿选择；
+  //   · 没动过下拉 → 用卡自带的档位。
+  // 用"用户是否动过下拉"而不是"草稿值和已保存值不同"：后者会把「点了一张 grounded 卡，
+  // 再点回原版卡」也当成手动改档，导致原版卡带不回 legacy。
+  const draftProfile = personaDraftState().behaviorProfile;
+  const keepDraft = draftProfile === 'card' || state.personaProfileTouched === true;
+  const profile = forceProfile || (keepDraft ? draftProfile : (tpl.behaviorProfile || 'legacy'));
   $('#cfg-roletext').value = tpl.text;
   $('#cfg-customrules').value = tpl.customRules || '';
   $('#cfg-behavior-profile').value = profile;
@@ -184,6 +187,8 @@ function applyPersonaDraft(tpl, id = '') {
   // 记下"草稿是从哪张卡来的"：没保存之前 config 里还是旧绑定，
   // 「恢复本节 / 恢复整张卡」必须按草稿这张卡来，否则会把两张卡拼在一起。
   personaDraftCardId = id || findPersonaTemplateId(tpl.text, profile, tpl.customRules || '');
+  // 这张卡已经应用完，下次点卡重新按卡自带档位走（除非用户又手动改了下拉）
+  state.personaProfileTouched = false;
   syncPersonaButtons();
 }
 
@@ -595,7 +600,7 @@ function openPersonaCreateModal() {
       closeModelModal(overlay);
       await loadSettings();
       const newId = customCount > 0 ? `custom_${customCount - 1}` : '';
-      applyPersonaDraft({ name, text, customRules, behaviorProfile }, newId);
+      applyPersonaDraft({ name, text, customRules, behaviorProfile }, newId, { forceProfile: behaviorProfile });
       $('#persona-pick-hint').textContent = `人设「${name}」已添加。记得点底部的「保存设置」使当前填写生效。`;
     } catch (e) {
       $('#persona-pick-hint').textContent = `添加失败：${e.message}`;
