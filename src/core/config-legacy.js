@@ -700,7 +700,8 @@ export const DEFAULT_CONFIG = {
     // ── 外观（2026-10-08 v3，七轴）────────────────────────────────────────────
     // 主题：'dark' | 'light' | 'system'（system = 跟随系统偏好）。
     // 前端以 localStorage 为准做到即时生效，这里只是跨设备/重装后保留用。
-    theme: 'dark',
+    // 默认浅色（2026-10-19：项目默认外观 = 浅色 + 液态玻璃）。
+    theme: 'light',
     darkIntensity: 'soft',    // 深色强度：soft | oled（纯黑）
     scheme: 'default',        // 表面色板：default | slate | nord | forest | rose
     accentPreset: 'indigo',   // 强调色预设 id（见 ui/core/appearance.js 的 ACCENTS）
@@ -711,6 +712,9 @@ export const DEFAULT_CONFIG = {
     // true = 常驻展开。与参照实现同名同义（它的 appearance.sidebarPinned）。
     sidebarPinned: false,
     background: 'none',       // 整页背景：none | solid | gradient
+    // 材质：off | frost | liquid | acrylic | outline。默认液态玻璃（2026-10-19）；
+    // 与 ui/core/appearance.js 的 DEFAULTS.glass 同一口径，未存过的配置按这里走。
+    glass: 'liquid',
     bgColor: '#0b1220',
     bgFrom: '#4c8dff',
     bgTo: '#a78bfa',

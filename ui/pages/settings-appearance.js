@@ -295,7 +295,7 @@ function bindAppearanceControls() {
     : '');
 
   const readUI = () => ({
-    mode: segVal('appearance-mode', 'dark'),
+    mode: segVal('appearance-mode', 'light'),
     darkIntensity: segVal('appearance-darkintensity', 'soft'),
     scheme: document.querySelector('#appearance-schemes .scheme-card.on')?.dataset.scheme || 'default',
     // 预设 id 读容器上的 data-current（"记住的选择"），**不是**视觉上亮着的那一格：
@@ -308,7 +308,7 @@ function bindAppearanceControls() {
     sidebarStyle: segVal('appearance-sidebarstyle', 'follow'),
     sidebarPinned: el('cfg-sidebar-pinned')?.checked === true,
     background: segVal('appearance-bg', 'none'),
-    glass: segVal('appearance-glass', 'off'),
+    glass: segVal('appearance-glass', 'liquid'),
     refract: el('cfg-refract')?.checked === true,
     bgColor: el('cfg-bgcolor')?.value || '',
     bgFrom: el('cfg-bgfrom')?.value || '',

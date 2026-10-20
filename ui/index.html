@@ -19,8 +19,9 @@
   </script>
   <script>
     /* 主题预置：在样式生效前就定好 data-theme，避免首屏闪白/闪黑。
-       优先级：localStorage 里的显式选择 > 系统偏好 > 暗色。
-       这里只做"应用"，真正的切换逻辑与持久化在 app.js。 */
+       优先级：localStorage 里的显式选择 > 上次同步到的后端值 > 显式"跟随系统" > 默认浅色。
+       默认浅色是 2026-10-19 定的（项目默认外观 = 浅色 + 液态玻璃）；这里只做"应用"，
+       真正的切换逻辑与持久化在 app.js。 */
     (function () {
       try {
         var saved = localStorage.getItem('qqa-theme') || '';
@@ -28,14 +29,19 @@
         // 启动完成再被后端覆盖"——那一下整屏换色就是用户看到的"闪"。
         var server = localStorage.getItem('qqa-theme-server') || '';
         var sys = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        // 优先级：本机显式选择 > 上次从后端同步到的值 > "跟随系统" > 系统实际取值
+        // 优先级：本机显式选择（浅/深）> 显式"跟随系统"取当前系统值 > 上次同步到的后端值
+        // （浅/深直接用；"跟随系统"同样取当前系统值）> 默认浅色。
+        // "跟随系统"必须排在缓存的后端值前面：否则用户明确选了跟随系统、而缓存里还是上次的
+        // 某个值，首屏会先画成缓存值、等模块按系统解析后再换一次（闪一下）。
         var theme = (saved === 'light' || saved === 'dark') ? saved
+          : (saved === 'system') ? sys
           : (server === 'light' || server === 'dark') ? server
-          : (saved === 'system' ? sys : (saved || sys));
-        if (theme !== 'light' && theme !== 'dark') theme = 'dark';
+          : (server === 'system') ? sys
+          : 'light';
+        if (theme !== 'light' && theme !== 'dark') theme = 'light';
         document.documentElement.setAttribute('data-theme', theme);
       } catch (e) {
-        document.documentElement.setAttribute('data-theme', 'dark');
+        document.documentElement.setAttribute('data-theme', 'light');
       }
 
       /* 外观预置：把上次存的外观（形状 = ui/core/appearance.js 的 appearancePatch）在样式生效前
@@ -94,9 +100,10 @@
           'dark-intensity': patch.darkIntensity,
           'accent-scope': patch.accentScope,
           'sidebar-style': patch.sidebarStyle,
-          background: patch.background,
-          // 材质：默认（实心）不设属性，与 appearance.js 的 appearanceAttrs 同口径
-          glass: patch.glass === 'off' || !patch.glass ? '' : patch.glass,
+          background: patch.background || 'none',
+          // 材质：项目默认液态玻璃（2026-10-19）；'off' 才不设属性，与 appearance.js 的
+          // appearanceAttrs 同口径。首屏就必须给上 —— 壁纸规则挂在 [data-glass='liquid'] 上。
+          glass: patch.glass === 'off' ? '' : (patch.glass || 'liquid'),
           // 边缘折射：默认关；与 appearanceAttrs 同口径（'1' 才设）
           refract: patch.refract === true ? '1' : '',
           font: patch.font,

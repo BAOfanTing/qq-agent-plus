@@ -28,7 +28,7 @@ function bootScript() {
 }
 
 /** 在假 DOM 里跑一遍那段脚本，回传它写了哪些内联变量与 data-* 属性。 */
-function runBoot(patch, themePref = 'dark') {
+function runBoot(patch, themePref = 'dark', serverPref = '') {
   const vars = new Map();
   const attrs = new Map();
   const document = {
@@ -45,6 +45,7 @@ function runBoot(patch, themePref = 'dark') {
   };
   const store = new Map([
     ['qqa-theme', themePref],
+    ['qqa-theme-server', serverPref],
     ['qqa-appearance', JSON.stringify(patch)]
   ]);
   const localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
@@ -149,4 +150,15 @@ test('首屏脚本的取值与模块 appearanceVars 对齐（同一份 patch，�
   for (const key of ['--accent', '--accent-side', '--accent-fg', '--r-scale', '--zoom', '--bg-solid', '--bg-from', '--bg-to', '--bg-angle']) {
     assert.equal(boot.get(key), mod[key], `${key} 两处不一致：首屏 ${boot.get(key)} vs 模块 ${mod[key]}`);
   }
+});
+
+test('首屏主题优先级：本机选择 > 显式跟随系统 > 后端缓存 > 默认浅色', () => {
+  // 假 window.matchMedia 的 matches 恒为 false → 系统偏好按 dark 算
+  assert.equal(runBoot({}, '').attrs.get('data-theme'), 'light', '没有任何偏好时默认浅色');
+  assert.equal(runBoot({}, 'light', 'dark').attrs.get('data-theme'), 'light', '本机显式选择优先');
+  assert.equal(runBoot({}, 'system', 'light').attrs.get('data-theme'), 'dark',
+    '显式"跟随系统"要排在缓存的后端值之前（否则会先画缓存值再换成系统值）');
+  assert.equal(runBoot({}, '', 'dark').attrs.get('data-theme'), 'dark', '没本机选择时才用后端缓存');
+  assert.equal(runBoot({}, '', 'system').attrs.get('data-theme'), 'dark',
+    '后端选的是"跟随系统"时首屏也要按系统值画（否则 dark 系统上每次加载都闪一下浅色）');
 });

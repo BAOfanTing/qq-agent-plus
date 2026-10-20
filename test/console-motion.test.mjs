@@ -160,6 +160,7 @@ test('开关的覆盖范围包含外观面板（.opt-row-ctrl），且轨道用 
   assert.equal(/border:\s*1px solid/.test(segBlock[0]), false, '分段轨道不许用 1px border（取整误差会让滑块对不齐）');
   // 描边色走 --ctl-line（= 掺主文字色的加深版边框）：亮色下 --border 贴白卡只有 1.24:1，
   // 分段轨道的槽、开关的槽、未选中的单选圈都靠它表达，用裸 --border 等于看不见控件。
+  // 30%：22% 在白卡上够用，但玻璃档正文直接压在亮壁纸上时 1px 描边会被泛光吃掉（2026-10-19）。
   assert.ok(/box-shadow: inset 0 0 0 1px var\(--ctl-line\)/.test(segBlock[0]), '描边要用 inset box-shadow 画');
-  assert.ok(/--ctl-line: color-mix\(in srgb, var\(--text\) 22%, var\(--border\)\)/.test(css), '要有统一的控制件轮廓色 --ctl-line');
+  assert.ok(/--ctl-line: color-mix\(in srgb, var\(--text\) 30%, var\(--border\)\)/.test(css), '要有统一的控制件轮廓色 --ctl-line');
 });

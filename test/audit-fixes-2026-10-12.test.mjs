@@ -327,6 +327,10 @@ test('P3 锚点：UI 三条修复点（E3 自愈 / E4 启动外观 / E5 展开�
   assert.ok(usage.includes(`if (!$('#usage-page [data-field="runs"]')) return loadUsageView({ force: true });`), 'E3：没骨架要强制重建');
   const app = src('ui/app.js');
   assert.ok(app.includes('applyAppearance({ ...cfg0.ui, mode: effectiveTheme, theme: undefined })'), 'E4：启动回放全部外观轴（主题除外）');
+  // 2026-10-19：同一口径也要覆盖"进设置页"那条路 —— 否则顶栏切成浅色后点设置，
+  // 会被服务端配置里旧的 mode 盖回深色（用户实测的 bug）。
+  assert.ok(app.includes('applyAppearance({ ...(cfg?.ui || {}), mode: getThemePref(), theme: undefined })'),
+    '设置页回放外观时也必须保留本地主题偏好');
   const moments = src('ui/pages/moments.js');
   assert.ok(moments.includes('const summariesOpen = Boolean('), 'E5：展开态要被记住');
   assert.ok(moments.indexOf('details.open = true;') > moments.indexOf('const summariesOpen'), 'E5：重建后要恢复展开态');

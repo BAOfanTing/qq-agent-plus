@@ -254,6 +254,7 @@ function bindSettingsSaveAndSections() {
       await saveConfig();
       const res = $('#cfg-save-result');
       res.textContent = '已保存 ✓';
+      res.title = res.textContent;   // 胶囊里的状态行会省略，完整文案挂在 title 上
       res.classList.remove('saved-flash');
       void res.offsetWidth;
       res.classList.add('saved-flash');
@@ -277,6 +278,7 @@ function bindSettingsSaveAndSections() {
         const again = $('#cfg-save-result');
         if (again) {
           again.textContent = '已保存 ✓';
+          again.title = again.textContent;
           again.classList.remove('saved-flash');
           void again.offsetWidth;
           again.classList.add('saved-flash');
@@ -284,7 +286,9 @@ function bindSettingsSaveAndSections() {
       }).catch(() => {});
       startListPoller();   // 刷新间隔可能刚被改过，用新值重启轮询
     } catch (e) {
-      $('#cfg-save-result').textContent = `保存失败：${e.message}`;
+      const res = $('#cfg-save-result');
+      res.textContent = `保存失败：${e.message}`;
+      res.title = res.textContent;
     }
   });
 

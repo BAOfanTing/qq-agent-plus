@@ -18,6 +18,7 @@ import {
   syncGraduatedFeatureNavigation
 } from '../core/dom-util.js';
 import { $, $$, esc } from '../core/dom.js';
+import { iconSvg } from '../core/icons.js';
 import { chatNameOf, clampInt, fmtTime, fmtTok, formatChatTitle } from '../core/format.js';
 import { state } from '../core/state.js';
 function assetStateText(active, exists, activeText = '运行中') {
@@ -633,7 +634,7 @@ function renderAssetObservatory() {
   box.innerHTML = `
     <div class="asset-head">
       <div><h2>AI 资产观测</h2><span class="muted">更新于 ${overview.generatedAt ? esc(fmtTime(overview.generatedAt)) : '-'}</span></div>
-      <button type="button" class="icon-btn" id="asset-refresh" title="刷新当前资产" aria-label="刷新当前资产">↻</button>
+      <button type="button" class="btn btn-small" id="asset-refresh" title="刷新当前资产" aria-label="刷新当前资产">${iconSvg('refresh', { size: 15 })}<span>刷新</span></button>
     </div>
     ${renderAssetSummary(overview)}
     <div class="asset-toolbar">
@@ -1005,7 +1006,7 @@ function renderIdentityFeaturePageImpl(status, identities, memories, options = {
   const __html = `
     <div class="asset-head">
       <div><h2>人物统一印象</h2><span class="muted" id="identity-feature-state">${status.active ? `运行中 · 最近索引 ${status.lastIndexedAt ? esc(fmtTime(status.lastIndexedAt)) : '-'}` : status.enabled ? `启动失败${status.error ? `：${esc(status.error)}` : ''}` : '当前已停用'}</span></div>
-      <button type="button" class="icon-btn" id="identity-feature-refresh" title="刷新人物与旧印象" aria-label="刷新人物与旧印象">↻</button>
+      <button type="button" class="btn btn-small" id="identity-feature-refresh" title="刷新人物与旧印象" aria-label="刷新人物与旧印象">${iconSvg('refresh', { size: 15 })}<span>刷新</span></button>
     </div>
     <div class="asset-summary">
       <div class="asset-summary-item"><span>统一人物</span><strong>${fmtTok(status.people)}</strong><small>按 QQ 号跨会话聚合</small></div>
@@ -1073,7 +1074,7 @@ function renderFriendFeaturePageImpl(c, status) {
   const __html = `
     <div class="asset-head">
       <div><h2>好友管理</h2><span class="muted" id="friend-feature-state">${status.active ? '统一身份库运行中' : status.enabled ? '统一身份库启动失败' : '人物统一印象已停用'}</span></div>
-      <button type="button" class="icon-btn" id="friend-feature-refresh" title="刷新好友工作流" aria-label="刷新好友工作流">↻</button>
+      <button type="button" class="btn btn-small" id="friend-feature-refresh" title="刷新好友工作流" aria-label="刷新好友工作流">${iconSvg('refresh', { size: 15 })}<span>刷新</span></button>
     </div>
     <div class="asset-summary">
       <div class="asset-summary-item"><span>主动候选待审批</span><strong>${fmtTok(proposalCounts.pending)}</strong><small>管理员批准后发送</small></div>
@@ -1222,7 +1223,7 @@ function renderSlangFeaturePage(c, status) {
   const __html = `
     <div class="asset-head">
       <div><h2>黑话研究</h2><span class="muted">${status.active ? `运行中 · 待研究 ${fmtTok(status.pendingResearch)} · 待入库 ${fmtTok(status.pendingAdmission)}` : status.enabled ? `启动失败${status.error ? `：${esc(status.error)}` : ''}` : '当前已停用'}</span></div>
-      <button type="button" class="icon-btn" id="slang-feature-refresh" title="刷新黑话状态" aria-label="刷新黑话状态">↻</button>
+      <button type="button" class="btn btn-small" id="slang-feature-refresh" title="刷新黑话状态" aria-label="刷新黑话状态">${iconSvg('refresh', { size: 15 })}<span>刷新</span></button>
     </div>
     <section class="control-section">
       <div class="control-section-title">
@@ -1333,7 +1334,7 @@ function renderIncidentFeaturePageImpl(c, status, incidents = [], options = {}) 
   const __html = `
     <div class="asset-head">
       <div><h2>异常</h2><span class="muted">${status.active ? '异常处理试点运行中' : status.exists ? '试点已停用，保留只读日志' : '异常处理试点尚未启用'}</span></div>
-      <button type="button" class="icon-btn" id="incident-feature-refresh" title="刷新异常" aria-label="刷新异常">↻</button>
+      <button type="button" class="btn btn-small" id="incident-feature-refresh" title="刷新异常" aria-label="刷新异常">${iconSvg('refresh', { size: 15 })}<span>刷新</span></button>
     </div>
     <div class="asset-summary">
       <div class="asset-summary-item"><span>待处理</span><strong>${fmtTok(counts.open)}</strong><small>尚未确认或解决</small></div>

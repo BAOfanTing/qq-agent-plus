@@ -85,9 +85,9 @@ const BACKGROUNDS = [
  * 这与 sidebarPinned / showBadges 那几个开关的取值口径一致。
  */
 const GLASS = [
-  { id: 'off', label: '实心', hint: '不透明表面（默认）' },
+  { id: 'off', label: '实心', hint: '不透明表面' },
   { id: 'frost', label: '磨砂', hint: '轻微模糊，最克制的一档' },
-  { id: 'liquid', label: '液态玻璃', hint: '强模糊 + 提饱和提亮 + 渐变高光边' },
+  { id: 'liquid', label: '液态玻璃', hint: '强模糊 + 提饱和提亮 + 渐变高光边（默认）' },
   { id: 'acrylic', label: '亚克力', hint: '大模糊 + 降饱和 + 细颗粒' },
   { id: 'outline', label: '描边', hint: '几乎不填色，靠一条亮边划出边界' }
 ];
@@ -134,7 +134,9 @@ const TWEAK_KEYS = TWEAK_VARS.map((v) => v.key);
 const TWEAK_SET = new Set(TWEAK_KEYS);
 
 const DEFAULTS = {
-  mode: 'dark',
+  // 项目默认外观 = 浅色 + 液态玻璃（2026-10-19 定版）：新装/清空偏好后的第一眼就是壁纸衬底
+  // + 玻璃表面那套。已有用户存过的明暗与材质优先（localStorage / ui.theme），不会被打回。
+  mode: 'light',
   darkIntensity: 'soft',
   scheme: 'default',
   accentPreset: 'indigo',
@@ -145,7 +147,8 @@ const DEFAULTS = {
   // true = 常驻展开。命名与参照实现一致（它的 appearance.sidebarPinned 就是这个意思）。
   sidebarPinned: false,
   background: 'none',
-  glass: 'off',
+  // 材质默认液态玻璃：它要透的壁纸随 `background: none` 一起给（见 style.css 的 liquid 衬底）。
+  glass: 'liquid',
   // 边缘折射（实验）：默认关。它要按元素尺寸现算位移图并挂 SVG 滤镜，属于「看起来值不值」的功能，
   // 不该默认塞给所有人（原理与三条降级见 ui/core/glass-refract.js 顶部）。
   refract: false,

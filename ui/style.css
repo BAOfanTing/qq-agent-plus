@@ -344,9 +344,10 @@ html.boot-show .loading-overlay { opacity: 1; }
    总览的 KPI/卡片头图标、刷新按钮、顶栏主题按钮都是直接调 iconSvg() 的，没有 .ico 包装 ——
    只写 `.ico svg` 时它们会退回 SVG 默认的 fill:black，深色下 1.22:1。 */
 .ico svg, .ico-svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.tab .ico { opacity: .85; }
+.tab .ico { opacity: .85; transition: transform 220ms var(--ease-spring), opacity var(--dur-base) var(--ease-in-out); }
 .tab:hover .ico { opacity: 1; }
-.tab.active .ico { opacity: 1; color: var(--accent); }
+.tab.active .ico { opacity: 1; color: var(--accent); transform: scale(1.08); }
+.tab:active .ico { transform: scale(.94); }
 .tab:not(.active):hover { background: var(--hover); color: var(--text); }
 /* 选中态的底色/左缘条现在归 .side-pill（会滑动，见「一级导航」区块），这里不再重复定义 ——
    原来这里那一版会与滑块叠成两层色。字重由下面 .tab.active { font-weight: 600 } 负责。 */
@@ -395,15 +396,37 @@ html.boot-show .loading-overlay { opacity: 1; }
 /* ── 布局 ── */
 #layout { flex: 1; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
 .view { display: none; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+/* 页签切换的入场（2026-10-19，对齐参考实现的 spring 观感）：
+   位移 10px + 轻微缩小，360ms 收尾。display:none → flex 会重启动画，所以每次切页都会跑。
+   动画期间的 transform 会让 position:fixed 的子元素暂时以视图为包含块 —— 时长只有 360ms，
+   且这一层没有常驻 transform（to 帧就是 none），不影响粘性栏/弹窗。 */
 .view.active { display: flex; }
+/* 总览的卡片依次浮起：纯位移、每块错开 45ms。**不加 opacity 从 0 起** ——
+   2026-10-09 实测过：切页后有一段同步渲染，若起始帧是透明，用户会先看到空白。
+   只给直接子元素，避免深层节点一起动。页签本身的入场见下方「视图切换」一节。 */
+.view.active .overview-pane > * { animation: riseIn 420ms var(--ease-out-quart) both; }
+.view.active .overview-pane > *:nth-child(2) { animation-delay: 45ms; }
+.view.active .overview-pane > *:nth-child(3) { animation-delay: 90ms; }
+.view.active .overview-pane > *:nth-child(4) { animation-delay: 135ms; }
+.view.active .overview-pane > *:nth-child(5) { animation-delay: 180ms; }
+@keyframes riseIn {
+  from { transform: translateY(10px); }
+  to { transform: none; }
+}
+html[data-motion] .view.active .overview-pane > * { animation: none; }
 
 .list-pane {
   width: 320px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
+  /* 列表行 hover 时有 translateX(2px)（见文件末尾的外观 v4 动效块）。overflow-y: auto 会把
+     overflow-x 一起算成 auto，于是鼠标划过任意一行，列表底部就冒出一条横向滚动条 ——
+     2026-10-19 在「会话记忆」实测复现。列表本来就不该横向滚，直接裁掉。 */
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--bg-2);
 }
+.list-head:has(> #session-count:empty) { display: none; }
 /* 列表头：字号从 11px 提到 12px 并加字重，此前过小且与正文层级脱节 */
 .list-head {
   padding: 11px 14px;
@@ -414,9 +437,19 @@ html.boot-show .loading-overlay { opacity: 1; }
   top: 0;
   background: var(--bg-2);
   z-index: 2;
+  /* 父级 .list-pane 是圆角玻璃；sticky 头的方角会从圆角里"戳"出来，留下一个缺口。
+     跟随父级圆角（父级没有圆角时 inherit 也是 0，不改变其他布局）。 */
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
 }
+/* 表头文字要躲开 18px 的圆角弧线；列表行同步到同一左缘，否则表头与内容差 6px。 */
+html[data-glass='liquid'] .list-head { padding-left: 20px; padding-right: 20px; }
+html[data-glass='liquid'] .session-item,
+html[data-glass='liquid'] .chat-item { padding-left: 20px; padding-right: 20px; }
+html[data-glass='liquid'] .session-item.selected,
+html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 
-.detail-pane { flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 20px 24px; }
+.detail-pane { flex: 1; min-width: 0; overflow-x: hidden; overflow-y: auto; padding: 22px 26px 40px; }
 /* 空状态：用 flex 居中而非固定 vh 偏移，窗口高度变化时始终居中 */
 .empty-hint {
   color: var(--muted);
@@ -999,6 +1032,9 @@ html.boot-show .loading-overlay { opacity: 1; }
   background: none; border: none; text-align: left;
   color: var(--muted); padding: 8px 12px; border-radius: var(--r-sm);
   cursor: pointer; font-size: var(--fs-md); width: 100%;
+  /* line-height: normal 会按字形度量算行高：中文 ≈1.43、纯拉丁文字（「OneBot」）≈1.2，
+     同一列菜单里那一行会矮 4px（实测 31.3 vs 35.3）。给一个数值口径，中文/拉丁同高。 */
+  line-height: 1.4;
 }
 /* 选中项的底色交给滑块 —— 否则滑块滑过来时旧格子还留着自己那一层底色 */
 .settings-menu-item:not(.active):hover { background: var(--bg-3); color: var(--text); box-shadow: none; }
@@ -1033,7 +1069,9 @@ html.boot-show .loading-overlay { opacity: 1; }
   grid-template-columns: minmax(0, 860px);
   justify-content: center;
   align-content: start;
-  padding: 22px 26px 40px;
+  /* 底部不留内边距：这一页的最后一个元素永远是保存条，留着 40px 会在它下面露出一条
+     与应用圆角不一致的空白带（"圆角有间隙"）。保存条自己带 12px 上下内边距。 */
+  padding: 22px 26px 0;
 }
 .settings-pane h3 { margin: 22px 0 12px; font-size: var(--fs-md); color: var(--accent); }
 .settings-pane h3:first-child { margin-top: 0; }
@@ -1290,9 +1328,13 @@ html.boot-show .loading-overlay { opacity: 1; }
 .model-rows-table { width: 100%; table-layout: fixed; border-collapse: collapse; margin-bottom: 6px; }
 .model-rows-table th { text-align: left; font-size: var(--fs-xs); color: var(--muted); font-weight: 400; padding: 4px 8px; }
 .model-rows-table td { padding: 6px 8px; vertical-align: middle; }
-.model-rows-table th:first-child, .model-rows-table td:first-child { width: 46%; padding-left: 0; }
+/* 表头首格要留出表格圆角的安全区，同时和下面输入框里的文字（border 0 + input padding 10）
+   对齐；数据格保持 0，输入框自己贴齐这一列的左边。 */
+.model-rows-table th:first-child { width: 46%; padding-left: 10px; }
+.model-rows-table td:first-child { width: 46%; padding-left: 0; }
 .model-rows-table th:nth-child(2), .model-rows-table td:nth-child(2) { width: 46%; }
-.model-rows-table th:last-child, .model-rows-table td:last-child { width: 8%; text-align: right; padding-right: 0; }
+.model-rows-table th:last-child { width: 8%; text-align: right; padding-right: 10px; }
+.model-rows-table td:last-child { width: 8%; text-align: right; padding-right: 0; }
 .model-rows-table input { width: 100%; background: var(--bg-2); border: 1px solid var(--border); color: var(--text); border-radius: var(--r-sm); padding: 8px 10px; font-size: var(--fs-sm); outline: none; }
 .model-rows-table input:focus { border-color: var(--accent); }
 
@@ -1460,12 +1502,46 @@ html.boot-show .loading-overlay { opacity: 1; }
   .time-control-settings .field { min-width: 0; }
 }
 /* 保存条：渲染在内容末尾 + 贴底悬浮，长页面里从顶部就能看到、一直悬在视口底部，
-   滚到底时正好落在内容末尾。全站只有一个保存按钮（分区里不再各放一个）。 */
+   滚到底时正好落在内容末尾。全站只有一个保存按钮（分区里不再各放一个）。
+   2026-10-19 用户反馈"单独占一块、固定在屏幕上，太生硬"：原来它是贴着面板左右和下缘的一条
+   直角玻璃带（顶边一条 1px 直线 + 上投影），看起来像页脚。现在不做"条"了 ——
+   改成**渐进模糊（progressive blur）**：没有边框、没有底色块，内容滚到底部时被逐渐糊掉、
+   淡出，按钮浮在这层雾里。视觉上是一条柔和的下沉带，而不是页面被切成两截。
+   用 mask 让模糊与底色一起从下往上淡出，所以看不到任何矩形边缘。 */
 .save-bar {
-  position: sticky; bottom: 0; z-index: 2;
-  background: var(--bg); padding: 12px 0; border-top: 1px solid var(--border);
-  display: flex; gap: 10px; align-items: center;
-  box-shadow: 0 -6px 16px -8px rgba(0, 0, 0, .45);
+  position: sticky; bottom: 0; z-index: 3;
+  margin: 0;
+  padding: 34px 0 16px;
+  display: flex; gap: 10px; align-items: center; justify-content: flex-end;
+  border: 0;
+  background: linear-gradient(to top,
+      color-mix(in srgb, var(--bg) 86%, transparent) 0%,
+      color-mix(in srgb, var(--bg) 55%, transparent) 60%,
+      transparent 100%);
+  backdrop-filter: blur(7px) saturate(140%);
+  -webkit-backdrop-filter: blur(7px) saturate(140%);
+  -webkit-mask-image: linear-gradient(to top, #000 55%, transparent 100%);
+  mask-image: linear-gradient(to top, #000 55%, transparent 100%);
+  box-shadow: none;
+  /* 上半截是"看不见的雾"：必须让点击穿过去，否则会挡住底下正在滚动的输入框。
+     雾里唯一该响应点击的是按钮（状态文字只是文本）。 */
+  pointer-events: none;
+}
+.save-bar > .btn { pointer-events: auto; order: 2; flex: 0 0 auto; }
+/* 状态文字可长可短（"已保存 ✓" / "保存失败：…"）：让它能在条里缩短并省略，
+   完整内容挂 title（见 settings-bind.js）。不给 min-width: 0 的话 nowrap 的 flex 项不肯收缩。 */
+#cfg-save-result {
+  order: 1;
+  min-width: 0;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  /* 父级 .save-bar 是 pointer-events: none 的"雾"：状态文字必须把指针事件拿回来，
+     否则保存失败的错误既不能选中复制，title 的原生 tooltip 也不会出现。 */
+  pointer-events: auto;
+  user-select: text;
 }
 
 /* ── 动效 ── */
@@ -1828,7 +1904,9 @@ html.boot-show .loading-overlay { opacity: 1; }
   min-height: 66px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  /* 卡片角色（同一页的 .update-deploy-summary 也是卡片）：用 --r-card，别落回 --r-sm。
+     --r-sm 是"小件"档，卡片用它会和下面对照表差 4px 圆角。 */
+  border-radius: var(--r-card);
   background: var(--bg-2);
   color: var(--text);
   text-decoration: none;
@@ -1873,7 +1951,7 @@ html.boot-show .loading-overlay { opacity: 1; }
 .control-section-title span { display: block; font-size: var(--fs-xs); }
 .control-key-list {
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-card);
   overflow: hidden;
   background: var(--bg-2);
 }
@@ -1920,8 +1998,11 @@ html.boot-show .loading-overlay { opacity: 1; }
   margin-top: 12px;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
+  /* 四格各自有 --bg-2 底色：不给外层圆角就是一条方角白条，与旁边的圆角卡片同屏很扎眼 */
+  border-radius: var(--r-card);
+  overflow: hidden;
 }
-.update-deploy-summary > div { min-width: 0; padding: 10px 12px; }
+.update-deploy-summary > div { min-width: 0; padding: 12px 14px; }
 .update-deploy-summary > div + div { border-left: 1px solid var(--border); }
 .update-deploy-summary span,
 .update-deploy-summary strong { display: block; overflow-wrap: anywhere; }
@@ -1991,7 +2072,7 @@ html.boot-show .loading-overlay { opacity: 1; }
   min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-card);
   background: var(--bg-2);
   color: var(--text);
   text-align: left;
@@ -2023,6 +2104,9 @@ html.boot-show .loading-overlay { opacity: 1; }
   padding: 2px;
   border: 1px solid var(--border);
   background: var(--bg-2);
+  /* 分段控件：外壳圆角 + 裁掉子按钮的方角（否则选中块会在两端戳出直角） */
+  border-radius: var(--r-sm);
+  overflow: hidden;
 }
 .asset-kinds button {
   border: 0;
@@ -2152,10 +2236,27 @@ html.boot-show .loading-overlay { opacity: 1; }
 .usage-h3 { font-size: var(--fs-md); font-weight: 600; margin: 22px 0 8px; color: var(--muted); }
 /* 表格基础：统一一份（此前有两处定义、padding 还不一致，合并后取更舒适的行高） */
 .usage-table {
-  width: 100%; border-collapse: collapse; font-size: var(--fs-sm);
+  width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-sm);
   background: var(--bg-2);
-  border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden;
 }
+/* border-collapse: collapse 时 border-radius 不生效（表头底色仍是方的，四个角会戳出白角）。
+   改成 separate + 0 间距后，把四角交给首末行/列单元格 —— 视觉与 collapse 一致，圆角才是圆的。
+   单元格的角比外框少 1px：外框有 1px 描边，内层用同一个值会在描边内侧多出一点白边。 */
+.usage-table > thead > tr:first-child > th:first-child,
+.usage-table > tr:first-child > :first-child { border-top-left-radius: calc(var(--r-card) - 1px); }
+.usage-table > thead > tr:first-child > th:last-child,
+.usage-table > tr:first-child > :last-child { border-top-right-radius: calc(var(--r-card) - 1px); }
+.usage-table > tbody > tr:last-child > :first-child,
+.usage-table > tr:last-child > :first-child { border-bottom-left-radius: calc(var(--r-card) - 1px); }
+.usage-table > tbody > tr:last-child > :last-child,
+.usage-table > tr:last-child > :last-child { border-bottom-right-radius: calc(var(--r-card) - 1px); }
+/* 设置页的模型表同样是"圆角面板里一张方角白表" */
+.model-rows-table { border-collapse: separate; border-spacing: 0; border-radius: var(--r-sm); overflow: hidden; }
+.model-rows-table > thead > tr:first-child > th:first-child { border-top-left-radius: calc(var(--r-sm) - 1px); }
+.model-rows-table > thead > tr:first-child > th:last-child { border-top-right-radius: calc(var(--r-sm) - 1px); }
+.model-rows-table > tbody > tr:last-child > :first-child { border-bottom-left-radius: calc(var(--r-sm) - 1px); }
+.model-rows-table > tbody > tr:last-child > :last-child { border-bottom-right-radius: calc(var(--r-sm) - 1px); }
 .usage-table th, .usage-table td {
   padding: 8px 12px; text-align: left;
   border-bottom: 1px solid var(--border);
@@ -2607,7 +2708,8 @@ button.uu-chip:hover { border-color: var(--accent); color: var(--text); }
   padding: 12px 14px;
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
-  border-radius: var(--r-input);
+  /* 面板角色 → --r-card；原先用 --r-input(10)，与同页的 .usage-card(12) 相差 2px。 */
+  border-radius: var(--r-card);
 }
 .ug-title { font-size: var(--fs-md); font-weight: 600; margin-bottom: 8px; }
 .ug-options { display: flex; flex-direction: column; gap: 6px; }
@@ -2823,9 +2925,15 @@ body {
 .control-pane, .usage-card, .price-card, .context-inspector, .conversation-mode-shell {
   border-radius: var(--r-xl);
 }
-.chat-item, .session-item, .pick-item, .settings-menu-item, .tool-card, .chat-item:hover, .session-item:hover, .pick-item:hover, .settings-menu-item:hover {
+/* 这一条原来把 `--hover` 同时写给了元素本身和 :hover 两份选择器（`.chat-item, …, .chat-item:hover, …`）——
+   结果每一行列表、每一个设置菜单项都常驻一层灰底，浅色液态玻璃下压在彩色壁纸上就是一条条灰砖
+   （2026-10-19 用户反馈"会话界面颜色生硬"）。底色只该在悬停时出现：静态行交给 .list-pane 的玻璃底
+   和 1px 分隔线，选中态另有一套 --accent-soft。 */
+.chat-item:hover, .session-item:hover, .pick-item:hover, .settings-menu-item:hover {
   background: var(--hover); box-shadow: var(--shadow-sm);
 }
+/* 工具卡有自己的 --bg-2 表面：悬停用实一档的 --bg-3，不要拿半透明的 --hover 盖掉它 */
+.tool-card:hover { background: var(--bg-3); }
 .chat-item.selected, .session-item.selected, .settings-menu-item.active {
   background: var(--accent-soft);
   border-left: 3px solid var(--accent);
@@ -3151,6 +3259,9 @@ input[type=checkbox], input[type=radio] {
 /* 密码框 + 「显示 / 隐藏」按钮（登录框、SnowLuma 改密钥那三格；设置页里同款的用内联 flex） */
 .pw-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
 .pw-row > input { flex: 1; min-width: 0; }
+/* 输入框 40px、旁边的「显示」只有 34px：同一行里两个控件的上下缘错开 3px。字段行里的
+   按钮（「获取列表」「测试连通性」）都是 40px，这里跟上同一口径。 */
+.pw-row > .btn { height: 40px; }
 
 /* 其余长文本字段（URL 等）：不再铺满整行，但保留比普通字段更宽的宽度 */
 #cfg-price-remote-url, #new-baseurl, #auto-update-branch-advanced { max-width: 520px; }
@@ -3344,7 +3455,9 @@ dialog { margin: auto; max-height: 88vh; }
      · 强调色只用在：选中态、关键 chip、图表柱；其余一律中性灰。
    这些类（.panel/.kpi/.stat/.meter/.feed/.bars）不只总览页用，后续页面统一往这套上靠。
 */
-.overview-pane { flex: 1; min-width: 0; overflow-y: auto; padding: 20px 22px 28px; }
+/* 与「控制 / 资产 / 用量 / 插件」同一套内边距：这几页是并列的一级页签，切页时标题与
+   卡片如果各差 4px，看起来就是整列内容在左右跳。（2026-10-19 实测：总览 20/22，其余 22/26） */
+.overview-pane { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 40px; }
 
 .pane-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .pane-head h2 { margin: 0; font-size: var(--fs-xl); font-weight: 650; letter-spacing: .01em; }
@@ -3385,9 +3498,11 @@ dialog { margin: auto; max-height: 88vh; }
 
 /* 内容块＝细线分节（不再是"每块一张卡"）。横向内边距归零、只留纵向节奏；
    因此密度档位对 .panel 也只改纵向（见下面 [data-density] 那两条）。 */
-.panel { border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; padding: 14px 0 15px; margin-bottom: 0; }
+.panel { border: 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; padding: 14px 18px 15px; margin-bottom: 0; }
 .grid-2 > .panel { margin-bottom: 0; }
 .panel-head { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 11px; }
+/* 带图标的标题：图标占 16px + 9px 间距，正文再缩进 25px 就和标题左缘对齐（此前正文是贴边的）。 */
+.panel:has(.panel-ico) .panel-body { padding-left: 25px; }
 .panel-ico { display: inline-flex; color: var(--muted); margin-top: 1px; }
 .panel-titles { min-width: 0; flex: 1; }
 .panel-titles h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
@@ -3454,13 +3569,14 @@ dialog { margin: auto; max-height: 88vh; }
 #shell { zoom: var(--zoom, 1); }
 
 [data-density='compact'] .kpi { padding: 10px 12px 11px; }
-[data-density='compact'] .panel { padding: 10px 0 11px; }
+[data-density='compact'] .panel { padding: 10px 18px 11px; }
 [data-density='compact'] .tab { padding: 6px 10px; }
-[data-density='compact'] .overview-pane { padding: 14px 16px 20px; }
+/* 密度档的横向内边距也跟插件页对齐（15/17 与 26/30）：否则同一个密度档下切页仍会横跳。 */
+[data-density='compact'] .overview-pane { padding: 15px 17px 22px; }
 [data-density='roomy'] .kpi { padding: 16px 18px 17px; }
-[data-density='roomy'] .panel { padding: 17px 0 18px; }
+[data-density='roomy'] .panel { padding: 17px 18px 18px; }
 [data-density='roomy'] .tab { padding: 10px 12px; }
-[data-density='roomy'] .overview-pane { padding: 24px 28px 32px; }
+[data-density='roomy'] .overview-pane { padding: 26px 30px 34px; }
 [data-density='roomy'] .feed li { padding: 9px 0; }
 
 /* （.tab 的权威定义在壳层区；.kpi/.panel 是"表面内分格/细线分节"，圆角与阴影都不归卡片组 ——
@@ -3553,6 +3669,10 @@ input[type='range'] { accent-color: var(--accent); height: 20px; }
   --r-card: calc(12px * var(--r-scale));
   --r-lg: calc(12px * var(--r-scale));
   --r-xl: calc(16px * var(--r-scale));
+  /* 液态玻璃档的浮动壳：侧栏/顶栏/设置正文各自一档（都跟 --r-scale 走） */
+  --r-float: calc(20px * var(--r-scale));
+  --r-bar: calc(16px * var(--r-scale));
+  --r-sheet: calc(18px * var(--r-scale));
   /* 胶囊：几何上不随 --r-scale 变（它就是"两端全圆"），所以刻意不进 calc */
   --r-pill: 999px;
 
@@ -3590,8 +3710,10 @@ body { font-size: var(--fs-lg); line-height: var(--lh-base); }
   box-shadow: var(--shadow-card);
 }
 /* 卡片内边距走标度（16px），比原来的 13~15 松一档 */
-.panel { padding: var(--sp-4) 0; }
+.panel { padding: var(--sp-4) 18px; }
 .kpi { padding: var(--sp-3) var(--sp-4) var(--sp-4); }
+/* .kpi-grid 的圆角是 18px：首格图标若仍按 16px 内缩，会落进圆角弧线里（实测贴角）。 */
+html[data-glass] .kpi { padding-left: 20px; padding-right: 20px; }
 .kpi-value { font-size: var(--fs-2xl); }
 .pane-head h2 { font-size: var(--fs-xl); }
 .panel-titles h3 { font-size: var(--fs-md); }
@@ -3735,7 +3857,9 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus
     --accent-ring: color-mix(in srgb, var(--accent) 40%, transparent);
     --accent-side-soft: color-mix(in srgb, var(--accent-side) 12%, transparent);
     --accent-side-border: color-mix(in srgb, var(--accent-side) 36%, transparent);
-    --ctl-line: color-mix(in srgb, var(--text) 22%, var(--border));
+    /* 22% 是"白卡背景"下的最小值；液态玻璃档正文直接压在壁纸上，亮部（壁纸右上角的
+       白色泛光）会把 1px 描边吃掉，输入框只剩半截边（2026-10-19 实测「异常」页数字框）。 */
+    --ctl-line: color-mix(in srgb, var(--text) 30%, var(--border));
   }
 }
 
@@ -3772,6 +3896,30 @@ html[data-background='gradient'] body {
   background-repeat: no-repeat;
   background-size: cover;
 }
+/* 液态玻璃的衬底（2026-10-19 对照参考实现返工）：APK 里那套玻璃之所以好看，是它整屏
+   浮在一张壁纸上 —— 边缘折射、饱和度、模糊都需要"有东西可透"。控制台默认是纯色深底，
+   面板底下什么都没有，所以之前怎么调都像实心卡片。
+   只在「材质=液态玻璃」且「背景=无」时铺这张图；用户显式选了纯色/渐变就尊重他的选择。
+   body 上压一层半透明纯色（不是渐变）：暗色下保证文字可读，浅色下是白纱。 */
+html[data-glass='liquid'][data-background='none'] {
+  background-color: #0b1220;
+  background-image: url('/assets/liquid-wallpaper.png');
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  /* 固定住：滚动的是内容，不是壁纸；玻璃下面的东西才会相对移动、折射才看得出来 */
+  background-attachment: fixed;
+}
+html[data-glass='liquid'][data-background='none'] body {
+  /* 深色主题下要压得比浅色更狠：白字直接压在这张亮蓝/青的壁纸上，靠 60% 出头的
+     纯色纱保证正文对比度；面板自己还有 40% 表面色，两层叠起来才是参考实现的暗玻璃。 */
+  background-color: rgba(4, 8, 15, .70);
+  background-image: none;
+}
+[data-theme='light'][data-glass='liquid'][data-background='none'] body {
+  background-color: rgba(250, 252, 255, .58);
+}
+
 /* 暗角：单独一层压在最后，把四角收掉 —— 平铺到底的渐变会让页面"发散的松" */
 html[data-background='gradient'] body::after,
 html[data-background='solid'] body::after {
@@ -4565,8 +4713,17 @@ dialog.closing::backdrop { animation: backdropOut var(--dur-overlay-out) var(--e
    而动画的 0% 是不透明 0 —— 于是那段时间用户看到的**是空白**。采样值：
      t=0/151/182/214ms 全为 opacity 0，t=248ms 才 0.98。
    也就是说它比"直接硬切"更糟：硬切至少立刻看到内容。
-   参照实现这边也不给页面内容做入场动画（路由切换是即时的），所以这里保持硬切。 */
-.view.active { animation: none; }
+   参照实现这边也不给页面内容做入场动画（路由切换是即时的），所以这里保持硬切。
+
+   2026-10-19 复核：用户要的是"切页有过渡"。照原来的测量结论，opacity 从 0 起会先白一帧 ——
+   那就**只动 transform**：8px 上浮 + 0.4% 放大，320ms 收尾。内容从第一帧就是可见的，
+   不会回到当年那个空白；位移也是 12px 以内，符合本文件开头的动效尺度。 */
+.view.active { animation: viewIn var(--dur-slower) var(--ease-out-quart); }
+@keyframes viewIn {
+  from { transform: translateY(8px) scale(.996); }
+  to { transform: none; }
+}
+html[data-motion='off'] .view.active { animation: none; }
 
 /* ── 3. 弹窗外壳（.model-modal-overlay）──
    原来是 `fadeIn 180ms` + `popIn 260ms var(--ease-spring)`：进场带弹簧过冲（弹窗会"弹"一下），
@@ -4711,22 +4868,68 @@ html[data-glass='frost'] {
   --glass-spec-top: rgba(255, 255, 255, .40);
   --glass-inner: inset 0 -12px 24px -14px rgba(0, 0, 0, .42);
 }
-/* 液态玻璃：通透清晰 + 最亮的边。低模糊是刻意的 —— 液体玻璃要"看得透"，
-   糊起来就变成磨砂了。强烈建议配「背景 → 渐变」，它要透的就是那层渐变。 */
+/* 液态玻璃：照参考实现（Kyant0/AndroidLiquidGlass 的 drawBackdrop 参数）来：
+   · vibrancy() → saturate(150%)
+   · blur(8dp) + lens(24dp, 24dp) → 8px 模糊 + 24px 折射带/位移
+   · 表面色：暗色 #121212 @40%，浅色 #FAFAFA @40%（onDrawSurface drawRect(containerColor)）
+   · Highlight 0.5dp（一条细亮线）、InnerShadow 24dp @15%、Shadow 24dp @10%
+   它要透的是「壁纸」—— 见上面的 liquid 衬底规则；不是一层装饰渐变。 */
 html[data-glass='liquid'] {
-  --glass-blur: 1px;
-  --glass-sat: 175%;
-  --glass-contrast: 1.22;
-  --glass-bright: 1.06;
-  --glass-tint: 58%;
-  --glass-edge: rgba(255, 255, 255, .34);
-  --glass-spec-top: rgba(255, 255, 255, .85);
-  --glass-spec-bot: rgba(255, 255, 255, .22);
-  --glass-spec-side: rgba(255, 255, 255, .26);
-  --glass-inner: inset 0 -16px 32px -14px rgba(0, 0, 0, .58);
+  --glass-blur: 12px;
+  --glass-sat: 150%;
+  --glass-contrast: 1;
+  --glass-bright: 1;
+  --glass-tint: 0%;
+  --glass-fill: rgba(18, 18, 18, .42);
+  --glass-edge: transparent;
+  --glass-spec-top: rgba(255, 255, 255, .90);
+  --glass-spec-bot: rgba(255, 255, 255, .08);
+  --glass-spec-side: rgba(255, 255, 255, .16);
+  --glass-inner: inset 0 20px 24px -20px rgba(0, 0, 0, .28);
+  --glass-grain: none;
   --glass-shadow:
-    0 4px 8px rgba(0, 0, 0, .26),
-    0 20px 48px -14px rgba(0, 0, 0, .60);
+    0 4px 24px rgba(0, 0, 0, .10),
+    0 1px 2px rgba(0, 0, 0, .18);
+}
+/* 浮动玻璃壳：参考实现的底栏/控件都是"离边悬浮的胶囊"，不是贴着屏幕边缘的实心栏。
+   只在液态玻璃档把左栏与顶栏从页面边缘浮起来；其余材质保持原来的贴边布局。 */
+html[data-glass='liquid'] #shell { padding: 10px; gap: 10px; }
+html[data-glass='liquid'] #sidebar { border-right: 0; border-radius: var(--r-float); }
+/* 顶栏只装状态 chip，就让它缩成右上角的一条浮条 —— 拉满整行会是一大块空玻璃。 */
+html[data-glass='liquid'] #topbar {
+  border-bottom: 0;
+  border-radius: var(--r-bar);
+  margin-bottom: 8px;
+  align-self: flex-end;
+  width: max-content;
+  max-width: 100%;
+  padding: 6px 10px;
+}
+/* 设置页的正文是一整列表单：给它一层**不带 backdrop-filter** 的半透明纸面。
+   不能把它加成玻璃表面 —— 里面的保存条自己就是玻璃，父子两层 backdrop-filter 会让
+   子层采样到空的 backdrop root（2026-10-09 实测：整条发白、折射全丢）。 */
+html[data-glass='liquid'] .settings-pane {
+  background-color: color-mix(in srgb, var(--bg) 62%, transparent);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-sheet);
+  box-shadow: var(--glass-shadow);
+}
+/* 大表面给更大的圆角：参考实现的卡片/弹层都不是小圆角（跟随用户的圆角档位缩放） */
+html[data-glass='liquid'] .kpi-grid,
+html[data-glass='liquid'] .panel,
+html[data-glass='liquid'] .opt-card,
+html[data-glass='liquid'] .list-pane,
+html[data-glass='liquid'] .settings-sidebar { border-radius: var(--r-sheet); }
+/* 参考实现的按钮是胶囊：液态玻璃档把按钮/图标按钮统一成 pill（输入框仍是圆角矩形 ——
+   Coolapk 的输入框也不是胶囊，两者混用才像"控件"而不是"一堆药丸"）。 */
+html[data-glass='liquid'] .btn,
+html[data-glass='liquid'] .icon-btn { border-radius: var(--r-pill); }
+/* 按压回弹：参考实现的按钮按下会缩到 ~0.94 再弹回（spring）。只给"真有鼠标"的设备。 */
+@media (hover: hover) and (pointer: fine) {
+  .btn:active:not(:disabled),
+  .icon-btn:active:not(:disabled),
+  .settings-menu-item:active,
+  .seg button:active:not(:disabled) { transform: scale(.96); }
 }
 /* 亚克力：最糊 + 最实 + 一层噪点。灰阶中性，适合长时间盯着看。
    噪点的作用是打散大面积半透明的**色带**，不是装饰 —— 暗色底上色带很明显。 */
@@ -4756,7 +4959,15 @@ html[data-glass='outline'] {
   --glass-inner: inset 0 -12px 26px -16px rgba(0, 0, 0, .40);
 }
 /* 亮色：白表面上的"白色高光"看不见 —— 那里改用更亮的白边交代厚度；
-   阴影也必须更轻，否则浅色下的卡片会显脏。 */
+   阴影也必须更轻，否则浅色下的卡片会显脏。
+   2026-10-19：亮色壁纸的饱和色带比参考实现（照片壁纸）更宽、更艳，40% 白底会让同一组白卡
+   在左边泛绿、右边泛蓝（插件页最明显：卡片底色一格格变）。亮色把填充提到 56% 并降一档
+   vibrancy（150→125%），卡片回到中性白、插件图标自己的色相才读得准；暗色壁纸没有这个
+   问题，保持在参考实现的 40% / 150%。 */
+[data-theme='light'][data-glass='liquid'] {
+  --glass-fill: rgba(250, 250, 250, .56);
+  --glass-sat: 125%;
+}
 [data-theme='light'][data-glass] {
   --glass-edge: rgba(255, 255, 255, .90);
   --glass-spec-top: rgba(255, 255, 255, 1);
@@ -4770,6 +4981,12 @@ html[data-glass='outline'] {
 /* 高对比模式：把不透明度拉满，可读性优先，材质让位 */
 html[data-contrast='high'][data-glass] { --glass-tint: 97%; }
 [data-theme='light'][data-contrast='high'][data-glass] { --glass-tint: 100%; }
+/* 液态档的填色是写死的 rgba，不读 --glass-tint —— 上面两条对它无效（默认材质就是液态，
+   等于高对比对默认用户失效）。这里直接把 --glass-fill 拉满。 */
+html[data-contrast='high'][data-glass='liquid'] {
+  --glass-fill: color-mix(in srgb, var(--bg-2) 97%, transparent);
+}
+[data-theme='light'][data-contrast='high'][data-glass='liquid'] { --glass-fill: var(--bg-2); }
 
 /* 玻璃表面：一条规则覆盖全部"大表面"。所有档位差异都走上面的 token，
    所以新增一档材质不用动这里。
@@ -4871,8 +5088,8 @@ html[data-glass='liquid'] .list-pane::after {
   padding: var(--glass-lens);
   border-radius: inherit;
   pointer-events: none;
-  backdrop-filter: blur(1.5px) saturate(210%) brightness(1.22);
-  -webkit-backdrop-filter: blur(1.5px) saturate(210%) brightness(1.22);
+  backdrop-filter: blur(2px) saturate(220%) brightness(1.35) contrast(1.12);
+  -webkit-backdrop-filter: blur(2px) saturate(220%) brightness(1.35) contrast(1.12);
   /* 两层同一块黑，靠 mask-composite: exclude 做差集 —— 只留 padding 那一圈 */
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
@@ -4892,10 +5109,57 @@ html[data-motion='off'][data-glass='liquid'] .list-pane::after {
   display: none;
 }
 
+/* 液态玻璃不再叠一圈"发亮的模糊环带"：苹果/社区的玻璃边缘是折射 + 一条镜面高光，
+   不是一块发光磨砂环。边缘交给 SDF 折射与顶部 inset 高光，环带只会把它做成塑料边。 */
+html[data-glass='liquid'] #topbar::after,
+html[data-glass='liquid'] .kpi-grid::after,
+html[data-glass='liquid'] .opt-card::after,
+html[data-glass='liquid'] .usage-card::after,
+html[data-glass='liquid'] .plat-card::after,
+html[data-glass='liquid'] .tool-card::after,
+html[data-glass='liquid'] .model-modal::after,
+html[data-glass='liquid'] dialog::after,
+html[data-glass='liquid'] .list-pane::after {
+  display: none;
+}
+
 .opt-row[data-inert='1'] { opacity: .5; }
 /* 折射开关在材质=实心时置灰（.opt-row[data-inert]），这里只负责它的观感：
    置灰靠 opacity + 原生 disabled 的 cursor；不加这一条也"能看懂"，但看着像坏掉的开关。 */
 .opt-row[data-inert='1'] .opt-row-ctrl { cursor: not-allowed; }
+
+/* ── 顶栏脱离文档流：所有页签的面板与主侧栏共用同一条顶线 ──
+   顶栏只装一排状态 chip、右对齐，本来就是"浮在内容上的胶囊"；但它一直占着文档流的一行，
+   于是所有正文都被压下去 64px。设置页最扎眼：主侧栏从 10px 起，设置左栏和正文从 74px 起，
+   两条左缘错开一整行（2026-10-19 用户反馈"显得生硬"）。
+   让它绝对定位，正文容器把顶部让出 88px（顶栏 54 + 上下留白）——**面板本身**从顶线开始，
+   内容在顶栏下面。
+   ⚠️ 两个边界（2026-10-19 审查）：
+   ① 顶栏宽了会压住左侧的列表栏/设置左栏 —— 用 max-width 把它限制在右侧，
+      给左边留 348px（列表 320 + 间距 / 设置左栏 220）；窗口 1280、侧栏展开时实测
+      原本会压进列表 98px。chip 本身可收缩 + 省略，不会撑破。
+   ② ≤900px 是"侧栏在上、内容全宽"的堆叠布局：列表栏整行、没有 88px 让位，顶栏必须回到
+      文档流里，否则一定盖住列表头。整块只在 ≥901px 生效。 */
+#workspace { position: relative; }
+@media (min-width: 901px) {
+  html[data-glass='liquid'] #topbar {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    margin: 0;
+    z-index: 40;
+    max-width: calc(100% - 348px);
+  }
+  html[data-glass='liquid'] .overview-pane,
+  html[data-glass='liquid'] .control-pane,
+  html[data-glass='liquid'] .asset-pane,
+  html[data-glass='liquid'] .usage-pane,
+  html[data-glass='liquid'] .plugins-pane,
+  html[data-glass='liquid'] .detail-pane,
+  html[data-glass='liquid'] #view-settings .settings-pane { padding-top: 88px; }
+  /* 顶栏脱离流后，横幅会顶到 workspace 的最上沿、右半截被顶栏盖住 —— 让它从顶栏下面开始 */
+  html[data-glass='liquid'] #banner:not(.hidden) { margin-top: 72px; }
+}
 
 /* 侧栏样式只换"填色"这一个 token，整块背景与描边不用重写 */
 html[data-glass][data-sidebar-style='panel'] #sidebar {
@@ -4904,6 +5168,23 @@ html[data-glass][data-sidebar-style='panel'] #sidebar {
 html[data-glass][data-sidebar-style='accent'] #sidebar {
   --glass-fill: color-mix(in srgb, var(--accent-side) 12%,
     color-mix(in srgb, var(--bg-2) var(--glass-tint), transparent));
+}
+/* 液态玻璃的 --glass-tint 是 0（填色由写死的 --glass-fill 直接给），上面两条会算出
+   "100% 透明"——默认材质改成液态玻璃后，"浅色面板"会变成一块没有底的侧栏。
+   这里给液态档单独一份保留比例：浅色同 56%、暗色同 42%（与该档的 --glass-fill 对齐）。 */
+html[data-glass='liquid'][data-sidebar-style='panel'] #sidebar {
+  --glass-fill: color-mix(in srgb, var(--bg-3) 56%, transparent);
+}
+[data-theme='dark'][data-glass='liquid'][data-sidebar-style='panel'] #sidebar {
+  --glass-fill: color-mix(in srgb, var(--bg-3) 42%, transparent);
+}
+html[data-glass='liquid'][data-sidebar-style='accent'] #sidebar {
+  --glass-fill: color-mix(in srgb, var(--accent-side) 14%,
+    color-mix(in srgb, var(--bg-2) 56%, transparent));
+}
+[data-theme='dark'][data-glass='liquid'][data-sidebar-style='accent'] #sidebar {
+  --glass-fill: color-mix(in srgb, var(--accent-side) 14%,
+    color-mix(in srgb, var(--bg-2) 42%, transparent));
 }
 /* 不支持 backdrop-filter（老浏览器 / 部分 Linux 桌面浏览器）：退回实心表面。
    不退回的话，半透明底会直接糊在背景渐变上，文字对比度跟着掉 —— 宁可不玻璃。 */
@@ -5021,12 +5302,22 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
 
    保留的是这一页自己的东西：状态轨（活着没有）、两条风险标记、相对时间、详情两栏与相关插件。
 */
-.plugins-pane { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 30px; }
+.plugins-pane { flex: 1; min-width: 0; overflow-y: auto; padding: 22px 26px 40px; }
 /* 整页内容限宽并居中：1920 屏上原来页头/卡片都贴着左边，右边空出 750px ——
    用户 2026-10-17 的「内容全堆在左侧」就是这个。与「用量」页的 .usage-wrap 同一套口径。 */
 .plugins-pane > * { max-width: 1200px; margin-inline: auto; }
 [data-density='compact'] .plugins-pane { padding: 15px 17px 22px; }
 [data-density='roomy'] .plugins-pane { padding: 26px 30px 34px; }
+
+/* 滚动条宽 10px（见文件末尾的 ::-webkit-scrollbar 口径）。内容够长的页面会因此比不够长的
+   页面少 10px 可用宽度 —— 同一列卡片在切页时右缘横跳。stable 让每个主滚动容器都**始终**
+   预留同一条沟：有没有滚动条，内容的左右缘都一样。（列表/详情/设置正文早就是这条口径。） */
+.overview-pane,
+.control-pane,
+.asset-pane,
+.usage-pane,
+.plugins-pane,
+#view-settings { scrollbar-gutter: stable; }
 
 /* ── 页头：标题 + 信任声明在左，总开关与隔离说明收在右（admin 不占市场的位置）── */
 .plugin-page-head { display: flex; align-items: flex-start; gap: 24px; margin-bottom: 18px; }
@@ -5107,7 +5398,7 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
 .plugin-facet {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   background: none; border: 0; cursor: pointer; font: inherit; font-size: var(--fs-sm); color: var(--muted);
-  padding: 4px 8px; border-radius: var(--r-sm); text-align: left; min-height: 28px;
+  padding: 6px 12px; border-radius: var(--r-sm); text-align: left; min-height: 28px;
   transition: background-color var(--dur-interaction) var(--ease-in-out), color var(--dur-interaction) var(--ease-in-out);
 }
 .plugin-facet:hover { background: var(--bg-3); color: var(--text); }

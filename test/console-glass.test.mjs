@@ -34,17 +34,18 @@ function surfaceRule() {
   return CSS.slice(open, CSS.indexOf('\n}', open));
 }
 
-test('材质轴：五档，默认实心，坏值回默认', () => {
+test('材质轴：五档，默认液态玻璃，坏值回默认', () => {
   assert.deepEqual(GLASS.map((g) => g.id), ['off', 'frost', 'liquid', 'acrylic', 'outline']);
   for (const g of GLASS) {
     assert.equal(typeof g.label, 'string');
     assert.ok(g.label.length > 0, `${g.id} 要有中文标签（分段控件直接显示它）`);
   }
-  assert.equal(DEFAULTS.glass, 'off', '默认必须是实心：玻璃是"选进来的"，不是"默认给的"');
-  assert.equal(resolveAppearance({}).glass, 'off');
+  // 2026-10-19 用户定版：项目默认外观 = 浅色 + 液态玻璃（此前是"实心，玻璃选进来才给"）
+  assert.equal(DEFAULTS.glass, 'liquid', '默认液态玻璃');
+  assert.equal(resolveAppearance({}).glass, 'liquid');
   for (const g of GLASS) assert.equal(resolveAppearance({ glass: g.id }).glass, g.id);
-  assert.equal(resolveAppearance({ glass: 'glass' }).glass, 'off', '不认识的 id 回默认');
-  assert.equal(resolveAppearance({ glass: 42 }).glass, 'off');
+  assert.equal(resolveAppearance({ glass: 'glass' }).glass, 'liquid', '不认识的 id 回默认');
+  assert.equal(resolveAppearance({ glass: 42 }).glass, 'liquid');
 });
 
 test('CSS：每一档材质都有自己的 token 块（新增一档只加 token + 表项，不动表面规则）', () => {
@@ -55,13 +56,21 @@ test('CSS：每一档材质都有自己的 token 块（新增一档只加 token 
     assert.ok(/--glass-blur:/.test(b) || /--glass-tint:/.test(b),
       `材质 ${id} 的 token 块看起来是空的`);
   }
-  const blurOf = (id) => Number((glassBlock(id).match(/--glass-blur:\s*(\d+)px/) || [])[1] || 0);
+  const blurOf = (id) => Number((glassBlock(id).match(/--glass-blur:\s*([\d.]+)px/) || [])[1] || 0);
   const tintOf = (id) => Number((glassBlock(id).match(/--glass-tint:\s*(\d+)%/) || [])[1] || 0);
-  for (const id of ['frost', 'liquid', 'acrylic', 'outline']) {
+  for (const id of ['frost', 'acrylic', 'outline']) {
     assert.ok(blurOf(id) > 0 && tintOf(id) > 0, `${id} 要显式给出模糊与通透度`);
   }
+  // 液态玻璃（参考实现 Kyant0/AndroidLiquidGlass 的 drawBackdrop 口径）：
+  // vibrancy（saturate 150%）+ blur(8dp) + lens(40px, 40px)，表面色 #121212 @42%。
+  assert.ok(blurOf('liquid') >= 4 && blurOf('liquid') <= 12,
+    `液态玻璃要保留 8px 级模糊（实际 blur=${blurOf('liquid')}px）`);
+  assert.equal(tintOf('liquid'), 0, '液态玻璃的 --glass-tint 必须是 0（填充由 --glass-fill 单独给）');
+  assert.ok(/--glass-fill:\s*rgba\(18, 18, 18, \.42\)/.test(glassBlock('liquid')),
+    '液态玻璃的表面色对齐参考实现：#121212 @42%（深色）');
+  assert.ok(/--glass-grain:\s*none/.test(glassBlock('liquid')), '液态玻璃不加装饰渐变/噪点');
   // 三档的分工是“清→糊”，不是一个方向的阶梯：
-  //   液态玻璃最清晰（低模糊 + 低不透明度，它要“看得透”）；磨砂在中间；亚克力最糊最实。
+  //   液态玻璃最清晰；磨砂在中间；亚克力最糊最实。
   assert.ok(blurOf('liquid') < blurOf('frost') && blurOf('frost') < blurOf('acrylic'),
     `模糊要按“清晰→糊”排（实际 liquid=${blurOf('liquid')} frost=${blurOf('frost')} acrylic=${blurOf('acrylic')}）`);
   assert.ok(tintOf('liquid') < tintOf('frost') && tintOf('frost') < tintOf('acrylic'),
@@ -84,12 +93,20 @@ test('CSS：玻璃表面 = 通透填充 + 实心描边 + 三条 inset 高光 + �
   assert.ok(/contrast\(var\(--glass-contrast\)\) brightness\(var\(--glass-bright\)\)/.test(rule),
     '要有 contrast/brightness 链 —— 苹果那块玻璃的“透亮感”主要来自这里，不是来自模糊');
   assert.ok(/-webkit-backdrop-filter:/.test(rule), '要带 -webkit- 前缀');
-  // 亮度只允许轻抬（社区是 1.05）：抬多了就是把背景整体洗白，卡片会“发白”而不是“变玻璃”
+  // 亮度只允许轻抬（社区是 1.05）：抬多了就是把背景整体洗白，卡片会“发白”而不是“变玻璃”。
+  // 液态玻璃在暗底上用 1.15 —— 它没有磨砂模糊，靠提亮把背后的内容“抬”上来。
   const brights = [...CSS.matchAll(/--glass-bright:\s*([\d.]+)/g)].map((m) => Number(m[1]));
-  assert.ok(brights.length > 0 && brights.every((b) => b >= 1 && b <= 1.10),
-    `brightness 必须在 1~1.10（实际 ${brights.join(', ')}）`);
-  const contrast = Number((CSS.match(/--glass-contrast:\s*([\d.]+)/) || [])[1]);
-  assert.ok(contrast >= 1.1 && contrast <= 1.3, `contrast 应在 1.1~1.3（实际 ${contrast}）`);
+  assert.ok(brights.length > 0 && brights.every((b) => b >= 1 && b <= 1.20),
+    `brightness 必须在 1~1.20（实际 ${brights.join(', ')}）`);
+  // 对比度：磨砂/亚克力靠它出“透亮感”，但液态玻璃必须留在 1（它不该压暗/压亮背后的内容，
+  // 那会把暗色页压成黑块）。
+  const baseContrast = Number((glassBlock('base').match(/--glass-contrast:\s*([\d.]+)/) || [])[1] || 1);
+  const contrastOf = (id) => Number((glassBlock(id).match(/--glass-contrast:\s*([\d.]+)/) || [])[1] || baseContrast);
+  for (const id of ['frost', 'acrylic']) {
+    assert.ok(contrastOf(id) >= 1.1 && contrastOf(id) <= 1.3,
+      `${id} 的 contrast 应在 1.1~1.3（实际 ${contrastOf(id)}）`);
+  }
+  assert.equal(contrastOf('liquid'), 1, '液态玻璃不改对比度（暗底上会压成黑块）');
   // ③ 描边必须是**单色实心 border**
   assert.ok(/border:\s*1px solid var\(--glass-edge\)/.test(rule), '描边要用单色实心 border');
   // ④ 高光：顶部亮弧 + 底部回光 + 左右细边，三层 inset
@@ -115,12 +132,12 @@ test('CSS：禁止回去用“透明 border + background-clip: border-box 的渐
     '表面规则附近要留下这个坑的说明，否则下一个人会当成“少了渐变描边”再加回去');
 });
 
-test('CSS：液态玻璃要“透”不要“糊”（照社区实现：模糊极小，靠边缘与滤镜链）', () => {
-  // 这一条是 2026-10-09 看过社区实现（github.com/shuding/liquid-glass）之后加的：
-  // 苹果那块玻璃是透的；之前我们给 liquid 上 16~44px 模糊，等于把它做成了磨砂玻璃，
-  // 再怎调参数也不会有“玻璃”感。
+test('CSS：液态玻璃要“透”不要“糊”（模糊只到参考实现的 8dp 量级）', () => {
+  // 2026-10-09 看社区实现（shuding/liquid-glass）时把 liquid 的模糊砍到接近 0；
+  // 2026-10-19 对照 APK 的实际参数（Kyant0/AndroidLiquidGlass：blur(8dp) + lens()）
+  // 改回 8px —— 摩卡/亚克力仍然必须是“糊”的那两档。
   const blurOf = (id) => Number((glassBlock(id).match(/--glass-blur:\s*([\d.]+)px/) || [])[1]);
-  assert.ok(blurOf('liquid') <= 2, `液态玻璃的模糊应当接近 0（实际 ${blurOf('liquid')}px）`);
+  assert.ok(blurOf('liquid') <= 12, `液态玻璃的模糊应停在 8px 量级（实际 ${blurOf('liquid')}px）`);
   assert.ok(blurOf('outline') <= 2, `描边玻璃同理（实际 ${blurOf('outline')}px）`);
   assert.ok(blurOf('frost') >= 12 && blurOf('acrylic') >= 30,
     '磨砂/亚克力才应该是“糊”的那两档 —— 三档的分工是清晰度');
@@ -141,29 +158,56 @@ test('CSS：背景是有层次的合成，不是一条两色线性渐变', () =>
     '默认渐变要是低饱和夜景色，不是 #4c8dff → #a78bfa 那张');
 });
 
-test('CSS：液态玻璃有“只在边缘生效”的折射带（苹果那套的关键）', () => {
+test('CSS：液态玻璃用边缘折射 + 镜面高光，不再叠发光环带', () => {
   const css = CSS;
-  assert.ok(/--glass-lens:\s*11px/.test(css), '缺折射带宽度 token');
-  const ring = css.slice(css.indexOf("html[data-glass='liquid'] #topbar::after"));
-  assert.ok(/padding:\s*var\(--glass-lens\)/.test(ring), '折射带用 padding 划定环宽');
-  assert.ok(/mask-composite:\s*exclude/.test(ring) && /-webkit-mask-composite:\s*xor/.test(ring),
-    '要靠 mask 做差集只留外圈 —— 少了它就会盖住整个卡片');
-  assert.ok(/mask:\s*linear-gradient\(#000 0 0\) content-box, linear-gradient\(#000 0 0\)/.test(ring),
-    'mask 的两层要分别是 content-box 与整块');
-  assert.ok(/pointer-events:\s*none/.test(ring), '折射带不许挡点击');
-  assert.ok(/backdrop-filter:\s*blur\(1\.5px\) saturate\(210%\) brightness\(1\.22\)/.test(ring),
-    '折射带要自己对背景采一次样（更亮更饱和）');
-  // 环宽必须小于卡片内边距，否则会盖到正文上
-  const lens = Number((css.match(/--glass-lens:\s*(\d+)px/) || [])[1]);
-  assert.ok(lens > 0 && lens <= 12, `折射带 ${lens}px 超出安全范围（会盖住正文）`);
-  // 整块位移那条路已经否掉了，不许回来。2026-10-09 修正口径：边缘折射的实现就是经
-  // `var(--glass-refract, )` 在运行时拼出 url(#滤镜) —— 守卫要禁的是"直接写 url() 的整块位移"，
-  // 同时钉住折射只能走 var 这一条通路（原来那条断言读起来像"任何 url() 都禁"，与实现相抵）。
+  const liquid = glassBlock('liquid');
+  // 参考实现 drawBackdrop：vibrancy + blur(8dp) + lens() + 40% 表面色。
+  assert.ok(/--glass-blur:\s*12px/.test(liquid), '液态玻璃按参考实现的面板档保留 12px 模糊');
+  assert.ok(/--glass-sat:\s*150%/.test(liquid), 'vibrancy() 在 CSS 里就是 saturate(150%)');
+  assert.ok(/--glass-fill:\s*rgba\(18, 18, 18, \.42\)/.test(liquid),
+    '暗色表面色对齐参考实现 #121212 @42%');
+  assert.ok(/--glass-grain:\s*none/.test(liquid), '不加装饰渐变');
+  assert.ok(/--glass-edge:\s*transparent/.test(liquid),
+    '参考实现不画实心描边，边缘由镜面高光 + 折射交代');
+  // 旧的“发亮模糊环带”必须被明确关掉，而不是继续叠在表面上。
+  // 取每一处环带规则的块体，最后一处是默认关闭（前面还有 data-motion='off' 的那份）。
+  const ringBlocks = [...css.matchAll(/html\[data-glass='liquid'\] \.list-pane::after\s*\{([\s\S]*?)\n\}/g)]
+    .map((m) => m[1]);
+  assert.ok(ringBlocks.length >= 2, '找不到液态玻璃的环带规则');
+  assert.match(ringBlocks.at(-1), /display:\s*none/, '环带必须被默认关闭，不能继续叠在玻璃表面上');
+  // 折射仍走 var 通路，且不许直接写 url()。
   const directUrl = css.match(/backdrop-filter:[^;]*url\(/g) || [];
   assert.deepEqual(directUrl, [],
     '不许在 backdrop-filter 里直接写 url()：形状不对（苹果只在边缘折射）且按宽高比拉伸会不均匀');
   assert.ok(/backdrop-filter:\s*var\(--glass-refract,\s*\)/.test(css),
     '边缘折射必须经 var(--glass-refract, ) 拼装（关掉时回退为空，不残留 url）');
+  // 边缘效果由 SDF 折射模块提供：按参考实现的两档 lens（小控件 12/24、面板 24/48）选档，
+  // 剖面用 circleMap；色散 ±6%（RefractionWithDispersion）；depthEffect 保持默认关闭。
+  const refract = fs.readFileSync(path.join(UI, 'core', 'glass-refract.js'), 'utf8');
+  assert.ok(/REFRACT_LENS_SMALL\s*=\s*\{\s*band:\s*12,\s*amount:\s*24\s*\}/.test(refract),
+    '小控件档要对齐 lens(12dp, 24dp)');
+  assert.ok(/REFRACT_LENS_LARGE\s*=\s*\{\s*band:\s*24,\s*amount:\s*48\s*\}/.test(refract),
+    '面板档要对齐 lens(24dp, 48dp)');
+  assert.ok(/REFRACT_DISPERSION\s*=\s*0\.06/.test(refract),
+    '色散要留 ±6% 的通道位移（APK 的 RefractionWithDispersion）');
+  assert.ok(/REFRACT_DEPTH_EFFECT\s*=\s*0\b/.test(refract),
+    '参考实现 drawBackdrop 默认 depthEffect = false');
+  assert.ok(/circleMap/.test(refract), '边缘剖面要用 circleMap');
+  assert.ok(/feColorMatrix/.test(refract) && /feComposite/.test(refract),
+    '色散要靠三通道采样的 SVG 滤镜链（feColorMatrix + feComposite）');
+});
+
+test('CSS/资源：液态玻璃的衬底只在「背景=无」时启用，且壁纸文件必须在仓库里', () => {
+  // 参考实现整屏浮在壁纸上；没有衬底，折射/模糊/饱和全都没有东西可作用。
+  assert.ok(/html\[data-glass='liquid'\]\[data-background='none'\] \{[\s\S]{0,240}?url\('\/assets\/liquid-wallpaper\.png'\)/.test(CSS),
+    '液态玻璃 + 背景=无 时要把壁纸铺在 html 上');
+  assert.ok(/html\[data-glass='liquid'\]\[data-background='none'\] body \{[\s\S]{0,200}?rgba\(4, 8, 15, \.70\)/.test(CSS),
+    '深色主题要在 body 上压一层纯色纱（不是渐变）保证正文对比度');
+  assert.ok(fs.existsSync(path.join(UI, 'assets', 'liquid-wallpaper.png')),
+    '壁纸资源缺失 → 控制台会退化成纯色底，玻璃又看不出来');
+  // 只和 liquid / none 两个轴绑定：用户显式选了纯色或渐变时不许覆盖他的背景。
+  assert.equal(/html\[data-glass='liquid'\] \{[\s\S]*?liquid-wallpaper/.test(CSS), false,
+    '壁纸规则不能无条件挂在 liquid 上，必须同时要求 data-background=none');
 });
 
 test('CSS：玻璃表面清单只收最外层，绝不同时收父子两层', () => {
@@ -223,8 +267,8 @@ test('材质会被持久化（appearancePatch 漏了它 = 刷新即打回实心�
 });
 
 test('首屏脚本认得材质轴（漏了就是"先画实心、模块跑起来再变玻璃"的一次闪烁）', () => {
-  assert.ok(/glass:\s*patch\.glass === 'off'/.test(BOOT),
-    'ui/index.html 的首屏外观预置脚本要处理 glass —— 否则这一轴首屏不生效');
+  assert.ok(/glass:\s*patch\.glass === 'off' \? '' : \(patch\.glass \|\| 'liquid'\)/.test(BOOT),
+    '首屏脚本要处理 glass，并且缺省时按默认液态玻璃给（否则首屏先画实心、模块起来再变玻璃）');
 });
 
 test('CSS：折叠面板的展开与收起都走高度过渡，且保留降级', () => {
@@ -289,7 +333,7 @@ test('CSS：KPI 数字用等宽数字（计数动画时宽度才不抖）', () =
 
 test('设置页有材质控件，且读值与其它轴同口径（segVal）', () => {
   assert.ok(/seg\('appearance-glass', GLASS, cur\.glass/.test(PANEL), '外观面板要渲染材质分段控件');
-  assert.ok(/glass: segVal\('appearance-glass', 'off'\)/.test(PANEL),
+  assert.ok(/glass: segVal\('appearance-glass', 'liquid'\)/.test(PANEL),
     'readUI 要读回材质，否则"改了没保存 → 切走再切回"会把用户的档位打回实心');
   assert.ok(/REVEAL_SEGS[\s\S]{0,220}?'appearance-glass'/.test(PANEL),
     '材质是"整页换个样子"的离散切换，要进走波纹的名单');

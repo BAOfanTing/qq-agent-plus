@@ -3,7 +3,8 @@
 // 为什么单独成模块：这是 ui/ 里第一个"按元素尺寸现算、再挂到 backdrop-filter 上"的效果 ——
 // 要 canvas、SVG 滤镜、ResizeObserver 与一整套降级；塞进 app.js 只会让那个文件更难读。
 //
-// 原理（照社区那份实现 github.com/shuding/liquid-glass 的做法，不是自创）：
+// 原理（照社区那份实现 github.com/shuding/liquid-glass 的做法，不是自创；
+// 位移曲线与 depthEffect 对齐 APK 里用的 Kyant0/AndroidLiquidGlass 的 AGSL lens()）：
 //   ① 每个玻璃表面按自己的尺寸开一张 canvas，逐像素算一个**圆角矩形有符号距离场（SDF）**；
 //   ② 取 SDF 的梯度当法线，只在外圈一带把采样点往内推 —— 中间梯度为 0，所以中间完全不位移；
 //   ③ 位移向量归一化后编码进 R/G 通道（128＝不位移），toDataURL 喂给 feImage；
@@ -36,8 +37,16 @@ const REFRACT_SELECTOR = [
 const REFRACT_MAX_SURFACES = 14;     // 同时折射的元素上限（每次 reconcile 取前 N 个）
 const REFRACT_MAX_MAP_PX = 300;      // 位移图长边上限：够表达边缘，又不至于让 toDataURL 变慢
 const REFRACT_MIN_SIDE = 56;         // 小于这个尺寸不值得折射（边缘带都比元素宽了）
-const REFRACT_BAND_PX = 20;          // 折射带宽度（元素空间像素）
-const REFRACT_STRENGTH_PX = 16;      // 最大位移量（像素）。feDisplacementMap 的 scale 由它反推
+// 参考实现（Kyant0/AndroidLiquidGlass，酷安在用）的 lens 有两档量级：
+//   底栏/小控件 lens(12dp, 24dp)，选中药丸与大面板 lens(24dp, 48dp)。
+// 这里按元素短边选档，并且**保留绝对像素值**：位移图编码时 scale 与位移同源，
+// 缩图不会改变视觉强度。曲线不是线性的 —— 见 refractRenderMap 里的 circleMap。
+const REFRACT_LENS_SMALL = { band: 12, amount: 24 };   // 短边 < 120px：按钮、药丸
+const REFRACT_LENS_LARGE = { band: 24, amount: 48 };   // 面板、弹层
+const REFRACT_DEPTH_EFFECT = 0;      // 0~1：SDF 法线里混入径向分量的比例（APK 的 depthEffect）
+// 色散：把 R/G/B 三个通道按 ±6% 的位移量分开采样（APK 的 RefractionWithDispersion）。
+// 参考实现是 7 次采样；这里用 3 个通道就够肉眼看出边缘的彩边，成本也低。
+const REFRACT_DISPERSION = 0.06;
 const REFRACT_RESCAN_MS = 300;
 /**
  * 滤镜表上限。拖窗口尺寸时每变几个像素就是一个新几何 = 一张新位移图 + 一个新 SVG 滤镜，
@@ -151,10 +160,13 @@ function refractEnsureSvg(doc) {
 }
 
 /**
- * 造位移图：只在外圈 REFRACT_BAND_PX 之内位移，中间为 0。
+ * 造位移图：只在外圈 refraction band（12px 或 24px，按元素短边选档）之内位移，中间为 0。
  * 两遍走：先算原始位移取最大值（归一化要用），再编码 —— 与社区实现同一步骤。
  */
 function refractRenderMap(doc, { width, height, radius }) {
+  const lens = Math.min(width, height) < 120 ? REFRACT_LENS_SMALL : REFRACT_LENS_LARGE;
+  const band = lens.band;
+  const amount = lens.amount;
   const scale = Math.min(1, REFRACT_MAX_MAP_PX / Math.max(width, height));
   const mw = Math.max(8, Math.round(width * scale));
   const mh = Math.max(8, Math.round(height * scale));
@@ -178,17 +190,33 @@ function refractRenderMap(doc, { width, height, radius }) {
       const x = (px + 0.5) * stepX;
       const i = (py * mw + px) * 2;
       const depth = -refractRoundedRectSdf(x - halfW, y - halfH, halfW, halfH, rr);  // 正值＝在内部
-      if (depth <= 0 || depth >= REFRACT_BAND_PX) continue;                          // 外面 / 太深：不位移
-      const t = 1 - depth / REFRACT_BAND_PX;                                          // 边缘 1 → 带内缘 0
+      if (depth <= 0 || depth >= band) continue;                                      // 外面 / 太深：不位移
+      // Kyant AndroidLiquidGlass 的 circleMap：edge=1 → 带内缘=0，曲线是凸的，
+      // 位移集中在最外一圈，而不是像线性剖面那样均匀铺满整条带。
+      const rawT = 1 - depth / band;
+      const t = 1 - Math.sqrt(Math.max(0, 1 - rawT * rawT));
       // 数值梯度当法线（梯度指向外），取负往内推
       const e = 0.75;
       const gx = refractRoundedRectSdf(x + e - halfW, y - halfH, halfW, halfH, rr)
         - refractRoundedRectSdf(x - e - halfW, y - halfH, halfW, halfH, rr);
       const gy = refractRoundedRectSdf(x - halfW, y + e - halfH, halfW, halfH, rr)
         - refractRoundedRectSdf(x - halfW, y - e - halfH, halfW, halfH, rr);
-      const len = Math.hypot(gx, gy) || 1;
-      const dx = -(gx / len) * REFRACT_STRENGTH_PX * t;
-      const dy = -(gy / len) * REFRACT_STRENGTH_PX * t;
+      let nx = gx / (Math.hypot(gx, gy) || 1);
+      let ny = gy / (Math.hypot(gx, gy) || 1);
+      // depthEffect：在 SDF 法线里混入一小段径向分量（从元素中心指向当前像素），
+      // 边缘因此不只是"横向掰"，而有一点穹顶/厚度。APK 的 lens(depthEffect=true) 同款。
+      if (REFRACT_DEPTH_EFFECT > 0) {
+        const cx = x - halfW;
+        const cy = y - halfH;
+        const clen = Math.hypot(cx, cy) || 1;
+        nx += REFRACT_DEPTH_EFFECT * (cx / clen);
+        ny += REFRACT_DEPTH_EFFECT * (cy / clen);
+        const nlen = Math.hypot(nx, ny) || 1;
+        nx /= nlen;
+        ny /= nlen;
+      }
+      const dx = -nx * amount * t;
+      const dy = -ny * amount * t;
       raw[i] = dx;
       raw[i + 1] = dy;
       const m = Math.max(Math.abs(dx), Math.abs(dy));
@@ -258,9 +286,61 @@ function refractEnsureFilter(doc, geom) {
   }
   feImage.setAttribute('href', href);
   feDisplacementMap.setAttribute('scale', String(dispScale));
+  feDisplacementMap.setAttribute('result', 'refractBase');
+
+  // 色散（APK 的 RefractionWithDispersion）：同一位移图用三档 scale 各采样一次，
+  // 分别只保留 R/G/B，再用 arithmetic 相加。中间的 G 档就是原来的位移量，
+  // 红/蓝各偏 ±6% —— 边缘会有一圈很细的彩边，正是参考实现里玻璃的观感。
+  const dispR = doc.createElementNS(NS, 'feDisplacementMap');
+  const dispB = doc.createElementNS(NS, 'feDisplacementMap');
+  for (const [node, k, result] of [
+    [dispR, 1 + REFRACT_DISPERSION, 'refractR'],
+    [dispB, 1 - REFRACT_DISPERSION, 'refractB'],
+  ]) {
+    node.setAttribute('in', 'SourceGraphic');
+    node.setAttribute('in2', 'map');
+    node.setAttribute('xChannelSelector', 'R');
+    node.setAttribute('yChannelSelector', 'G');
+    node.setAttribute('scale', String(dispScale * k));
+    node.setAttribute('result', result);
+  }
+  const channelOnly = (name, rows) => {
+    const m = doc.createElementNS(NS, 'feColorMatrix');
+    m.setAttribute('in', name);
+    m.setAttribute('type', 'matrix');
+    m.setAttribute('values', rows);
+    return m;
+  };
+  const red = channelOnly('refractR', '1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0');
+  const green = channelOnly('refractBase', '0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0');
+  const blue = channelOnly('refractB', '0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0');
+  red.setAttribute('result', 'refractRed');
+  green.setAttribute('result', 'refractGreen');
+  blue.setAttribute('result', 'refractBlue');
+  const addRG = doc.createElementNS(NS, 'feComposite');
+  addRG.setAttribute('in', 'refractRed');
+  addRG.setAttribute('in2', 'refractGreen');
+  addRG.setAttribute('operator', 'arithmetic');
+  addRG.setAttribute('k2', '1');
+  addRG.setAttribute('k3', '1');
+  addRG.setAttribute('result', 'refractRG');
+  const addB = doc.createElementNS(NS, 'feComposite');
+  addB.setAttribute('in', 'refractRG');
+  addB.setAttribute('in2', 'refractBlue');
+  addB.setAttribute('operator', 'arithmetic');
+  addB.setAttribute('k2', '1');
+  addB.setAttribute('k3', '1');
+  addB.setAttribute('result', 'refractOut');
 
   filter.appendChild(feImage);
   filter.appendChild(feDisplacementMap);
+  filter.appendChild(dispR);
+  filter.appendChild(dispB);
+  filter.appendChild(red);
+  filter.appendChild(green);
+  filter.appendChild(blue);
+  filter.appendChild(addRG);
+  filter.appendChild(addB);
   svg.appendChild(filter);
   const rec = { id, feImage, feDisplacementMap, key, filter };
   refractFilters.set(key, rec);

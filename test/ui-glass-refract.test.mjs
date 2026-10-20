@@ -171,6 +171,37 @@ test('位移图编码：中心不位移（128 中性点）、贴边有位移且�
   assert.ok(Number(out.dispScale) > 0, 'dispScale 要带回给滤镜层');
 });
 
+test('位移剖面用 circleMap：边缘最强，半带处迅速衰减（不是线性铺满整条带）', () => {
+  const canvases = [];
+  const doc = {
+    createElement(tag) {
+      assert.equal(tag, 'canvas');
+      const c = {
+        width: 0, height: 0, _img: null,
+        getContext: () => ({
+          createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+          putImageData: (img) => { c._img = img; }
+        }),
+        toDataURL: () => 'data:image/png;base64,ZmFrZQ=='
+      };
+      canvases.push(c);
+      return c;
+    }
+  };
+  // 400x200 → 位移图 300x150（长边上限 300），1 元素像素 = 0.75 图像素
+  refractRenderMap(doc, { width: 400, height: 200, radius: 12 });
+  const c = canvases[0];
+  const img = c._img;
+  const at = (x, y) => (y * c.width + x) * 4;
+  const midY = Math.floor(c.height / 2);
+  const edgeDev = Math.abs(img.data[at(0, midY)] - 128);
+  const halfDev = Math.abs(img.data[at(9, midY)] - 128);   // 元素上距左边 12px = 半带
+  assert.ok(edgeDev > 0, '贴边必须有位移');
+  assert.ok(halfDev > 0, '半带处仍应有一点位移');
+  assert.ok(halfDev < edgeDev * 0.4,
+    `circleMap 应在半带处快速衰减（edge=${edgeDev} half=${halfDev}）——线性剖面会接近 0.5`);
+});
+
 test('圆角矩形 SDF：圆角处按圆弧算（直角的角是 +44，圆角后是 +4）', () => {
   const halfW = 200;
   const halfH = 100;

@@ -80,13 +80,18 @@ function refreshStatus(...args) { return QARegistry.dispatch('refreshStatus', ..
 function renderLifecycleOverview(...args) { return QARegistry.dispatch('renderLifecycleOverview', ...args); }
 function loadFriendFeaturePage(...args) { return QARegistry.dispatch('loadFriendFeaturePage', ...args); }
 
-/** 读取当前主题设置（localStorage 优先，其次系统偏好）。 */
+/** 读取当前主题设置（localStorage 优先，其次上次同步到的后端值，再其次默认浅色）。 */
 function getThemePref() {
   try {
     const v = localStorage.getItem('qqa-theme');
     if (THEME_VALUES.includes(v)) return v;
+    // 与首屏脚本同一优先级：没有本机显式选择时，用上次同步下来的后端值（否则首屏按它画、
+    // 模块却按默认浅色纠正，等于闪一下）。'system' 也认 —— 交给 resolveTheme 按系统解析。
+    const server = localStorage.getItem('qqa-theme-server');
+    if (THEME_VALUES.includes(server)) return server;
   } catch { /* 隐私模式下 localStorage 可能不可用 */ }
-  return 'dark';
+  // 与 DEFAULTS.mode / index.html 的首屏脚本同一口径（2026-10-19：默认浅色）
+  return 'light';
 }
 
 /** 应用主题到 <html>，并同步按钮图标。 */
@@ -1015,8 +1020,12 @@ async function loadSettings() {
     return;
   }
   state.config = cfg;
-  // 外观以服务端为准再套一次（localStorage 那份只是"打开就生效"的快速通道）
-  applyAppearance(cfg?.ui || {});
+  // 外观以服务端为准再套一次（localStorage 那份只是"打开就生效"的快速通道）。
+  // ⚠️ 但**明暗不能跟着服务端回放**：顶栏的主题按钮只写 localStorage（不落服务端配置），
+  //    进设置页时若直接 applyAppearance(cfg.ui)，服务端存着的旧 mode 会把它盖回去 ——
+  //    表现为"浅色模式下点设置自动变深色"（2026-10-19 用户实测）。与启动时同口径：
+  //    其余轴按服务端，mode 用当前本地偏好，theme 传 undefined 防止它再覆盖一次。
+  applyAppearance({ ...(cfg?.ui || {}), mode: getThemePref(), theme: undefined });
   syncGraduatedFeatureNavigation(cfg);
   state.providers = provData.providers || [];
   state.visionResults = visionData.results || {};

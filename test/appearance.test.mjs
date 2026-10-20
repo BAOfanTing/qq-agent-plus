@@ -140,12 +140,13 @@ test('appearanceAttrs：属性名与取值语义（动效 off 压过 reduced；�
   ].sort());
   assert.equal('data-theme' in plain, false, 'data-theme 归 applyTheme 管，不在这里重复设');
   assert.equal(plain.motion, '');
-  // 材质默认是“实心”＝不设属性（CSS 侧就不需要一条“关掉玻璃”的规则）；选了才发值
-  assert.equal(plain.glass, '', '默认实心 → 不给 data-glass');
+  // 材质默认是液态玻璃（2026-10-19 定的项目默认外观）；只有显式选“实心”才不设属性
+  assert.equal(plain.glass, 'liquid', '默认液态玻璃 → data-glass=liquid');
+  assert.equal(appearanceAttrs(resolveAppearance({ glass: 'off' })).glass, '', '选实心才不设属性');
   assert.equal(appearanceAttrs(resolveAppearance({ glass: 'frost' })).glass, 'frost');
   assert.equal(appearanceAttrs(resolveAppearance({ glass: 'liquid' })).glass, 'liquid',
     '材质是“空串＝不设”那几个开关里的一员，取值口径得与 side-rail / hide-badges 一致');
-  assert.equal(appearanceAttrs(resolveAppearance({ glass: '液态' })).glass, '',
+  assert.equal(appearanceAttrs(resolveAppearance({ glass: '液态' })).glass, 'liquid',
     '不认识的材质 id 要回默认（不能把一个手改坏的值写到 <html> 上）');
   // 边缘折射：默认关，开了才发 '1'（与 side-rail / hide-badges 同口径）
   assert.equal(plain.refract, '', '默认不开折射');
@@ -213,4 +214,14 @@ test('选项表都是 {id,label} 形状，且 id 唯一（渲染与保存都按 
   }
   for (const a of ACCENTS) assert.ok(/^#[0-9a-f]{6}$/i.test(a.hex), `强调色 ${a.id} 的 hex 不合法`);
   for (const s of SCHEMES) assert.ok(s.hint, `色板 ${s.id} 缺 hint`);
+});
+
+// ── 默认外观（2026-10-19 定版：浅色 + 液态玻璃）──
+test('默认外观三处真源一致：DEFAULTS 与服务端默认配置模板', async () => {
+  const fs = await import('node:fs');
+  assert.equal(DEFAULTS.mode, 'light', '项目默认明暗 = 浅色');
+  assert.equal(DEFAULTS.glass, 'liquid', '项目默认材质 = 液态玻璃');
+  const legacy = fs.readFileSync(new URL('../src/core/config-legacy.js', import.meta.url), 'utf8');
+  assert.match(legacy, /\n    theme: 'light',/, '服务端默认配置模板的 ui.theme 也要是浅色');
+  assert.match(legacy, /\n    glass: 'liquid',/, '模板要写明默认材质（缺键会被 deepMerge 补成这里的值）');
 });
