@@ -60,6 +60,7 @@ docker compose exec agent cat /data/console-access.txt
   但控制台里的服务链接仍按 3210/5099/6081 拼接；改了端口请手动调整链接或保持默认。
 - **OneBot 令牌**：full stack 不需要手动配置。Agent 启动时会从只读挂载的
   `snowluma-data/config/onebot*.json` 读取 SnowLuma 生成的 accessToken，并写进自己的配置。
+  首次启动最多等 30 秒；如果 Protocol 端还没写出配置文件，日志会提示，登录后重启 agent 即可同步。
   使用**外部协议端**时，才需要设 `QQ_AGENT_ONEBOT_ACCESS_TOKEN` / `QQ_AGENT_ONEBOT_HTTP_TOKEN`。
 
 控制台与协议端 WebUI 都只绑宿主机 `127.0.0.1`。远程访问用 SSH 隧道：
