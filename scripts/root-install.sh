@@ -248,7 +248,7 @@ package_for() {
 
 MISSING=()
 PACKAGES=()
-for cmd in curl tar sha256sum rsync realpath ss xz; do
+for cmd in curl tar sha256sum rsync realpath ss xz git; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     MISSING+=("$cmd")
     PACKAGES+=("$(package_for "$cmd")")
@@ -290,9 +290,9 @@ if ! docker compose version >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     install_packages docker-compose-v2 || install_packages docker-compose-plugin || true
   elif command -v dnf >/dev/null 2>&1; then
-    install_packages docker-compose-plugin || true
+    install_packages docker-compose-plugin || install_packages docker-compose || true
   elif command -v yum >/dev/null 2>&1; then
-    install_packages docker-compose-plugin || true
+    install_packages docker-compose-plugin || install_packages docker-compose || true
   elif command -v zypper >/dev/null 2>&1; then
     install_packages docker-compose || true
   elif command -v pacman >/dev/null 2>&1; then
@@ -300,7 +300,7 @@ if ! docker compose version >/dev/null 2>&1; then
   fi
 fi
 docker compose version >/dev/null 2>&1 \
-  || die 'Docker Engine 已安装，但 Docker Compose v2 不可用。Debian 12 官方仓库只有 v1；请按 docs/DOCKER.md 配置 Docker 官方 apt 仓库，或手工安装 docker-compose-plugin 后重试。'
+  || die 'Docker Engine 已安装，但 Docker Compose v2 不可用。Debian 12 / Rocky / Alma 9 stock 仓库不提供 v2；请按 docs/DOCKER.md 配置 Docker 官方仓库，或手工安装 docker-compose-plugin 后重试。Fedora 用 docker-compose 包。'
 
 getent group docker >/dev/null 2>&1 \
   || die '系统里没有 docker 组；rootless Docker 不在这个安装器的支持范围内'
@@ -330,7 +330,7 @@ else
   while IFS= read -r entry; do
     [[ -n "$entry" ]] || continue
     case "$(basename -- "$entry")" in
-      app|data|snowluma|src|backup|deployment-access.txt|console-access.txt)
+      app|data|snowluma|src|backup|deployment-access.txt|console-access.txt|.deploy-all.lock)
         ;;
       *)
         die "部署根目录已有未知内容：$entry（请换一个空目录，或先人工确认）"

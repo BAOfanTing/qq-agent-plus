@@ -1601,8 +1601,10 @@ async function cmdDeploy(args) {
   const cfg = config({ dir: optValue(args, '--root-dir', null) });
   const srcDir = path.resolve(optValue(args, '--dir', envStr('QQ_AGENT_SRC_DIR', path.join(os.homedir(), 'qq-agent-src'))));
   const image = envStr('SNOWLUMA_IMAGE', SNOWLUMA_BASELINE_IMAGE);
-  const obHttp = envStr('QQ_AGENT_ONEBOT_HTTP_PORT', '3390');
-  const obWs = envStr('QQ_AGENT_ONEBOT_WS_PORT', '3391');
+  // 与 install.sh 全栈默认一致（3000/3001）；旧的 3390/3391 会让既有全栈安装
+  // 在 check-stack-update 处被判成“OneBot 端点不一致”。
+  const obHttp = envStr('QQ_AGENT_ONEBOT_HTTP_PORT', '3000');
+  const obWs = envStr('QQ_AGENT_ONEBOT_WS_PORT', '3001');
   const baseUrl = envStr('QQ_AGENT_MODEL_BASE_URL');
   const model = envStr('QQ_AGENT_MODEL');
   const dryRun = hasFlag(args, '--dry-run');

@@ -137,6 +137,14 @@ AGENT_TOKEN="${AGENT_TOKEN:-${QQ_AGENT_AGENT_TOKEN:-}}"
 ONEBOT_TOKEN="${ONEBOT_TOKEN:-${QQ_AGENT_ONEBOT_TOKEN:-}}"
 SNOWLUMA_PASSWORD="${SNOWLUMA_PASSWORD:-${QQ_AGENT_SNOWLUMA_PASSWORD:-}}"
 SNOWLUMA_TOTP="${SNOWLUMA_TOTP:-${QQ_AGENT_SNOWLUMA_TOTP:-}}"
+# ops deploy 用 0600 临时文件传模型 Key，不走子进程环境；这里要认这个入口。
+if [[ -z "$MODEL_API_KEY" && -n "${QQ_AGENT_MODEL_KEY_FILE:-}" ]]; then
+  [[ -r "$QQ_AGENT_MODEL_KEY_FILE" ]] || {
+    printf 'Error: QQ_AGENT_MODEL_KEY_FILE 不存在或不可读：%s\n' "$QQ_AGENT_MODEL_KEY_FILE" >&2
+    exit 1
+  }
+  MODEL_API_KEY="$(tr -d '\r\n' < "$QQ_AGENT_MODEL_KEY_FILE")"
+fi
 VNC_PASSWORD="${VNC_PASSWORD:-${QQ_AGENT_VNC_PASSWORD:-}}"
 
 die() {
@@ -149,6 +157,7 @@ die() {
 # 容器可能已经写过东西，所以目录只用 rmdir：非空会失败，正好保留现场。
 FRESH_STACK_CLEANUP=false
 STACK_LOCK_DIR=""
+STACK_LOCK_OWNED=false
 cleanup_fresh_stack() {
   [[ "$FRESH_STACK_CLEANUP" == true ]] || return 0
   printf '安装未完成：已清理本次写入的栈文件与空目录，可以直接重跑 deploy-all.sh。\n' >&2
@@ -172,7 +181,10 @@ deploy_all_exit() {
     cp -p "$ENV_FILE.pre-deploy" "$ENV_FILE"
     printf '部署未完成：.env 已回滚为部署前内容（备份保留在 %s.pre-deploy），可直接重跑 deploy-all.sh。\n' "$ENV_FILE" >&2
   fi
-  [[ -z "${STACK_LOCK_DIR:-}" ]] || rm -rf -- "$STACK_LOCK_DIR"
+  if [[ "${STACK_LOCK_OWNED:-false}" == true && -n "${STACK_LOCK_DIR:-}" ]]; then
+    rm -rf -- "$STACK_LOCK_DIR"
+    STACK_LOCK_OWNED=false
+  fi
   cleanup_fresh_stack
   exit "$status"
 }
@@ -183,6 +195,7 @@ acquire_stack_lock() {
   local attempt=0 pid="" stale=""
   while (( attempt < 2 )); do
     if mkdir -- "$STACK_LOCK_DIR" 2>/dev/null; then
+      STACK_LOCK_OWNED=true
       printf '%s\n' "$$" >"$STACK_LOCK_DIR/pid" 2>/dev/null || true
       date -Is >"$STACK_LOCK_DIR/started" 2>/dev/null || true
       return 0
@@ -308,24 +321,35 @@ install_docker() {
   fi
   run_root systemctl enable --now docker
 
-  # Compose 单独装：Debian 12 官方仓库没有 docker-compose-v2，把引擎和插件写在同一条
-  # apt install 里会整条失败。装不上的错误要直接指向“配置 Docker 官方仓库”。
+  install_compose
+}
+
+# Compose 单独装/单独检查：Debian 12 官方仓库没有 docker-compose-v2，
+# 引擎已存在但 Compose 缺失时也不能因为“docker_ready”跳过。
+install_compose() {
+  [[ "$INSTALL_DOCKER" == true ]] \
+    || die 'Docker Compose v2 is missing and automatic installation is disabled'
   step 'Installing Docker Compose v2'
   if command -v apt-get >/dev/null 2>&1; then
     run_root apt-get install -y docker-compose-v2 \
       || run_root apt-get install -y docker-compose-plugin \
       || true
   elif command -v dnf >/dev/null 2>&1; then
-    run_root dnf install -y docker-compose-plugin || true
+    # Fedora 的 Compose 包名是 docker-compose；Rocky/Alma 9 stock 仓库通常两者都没有。
+    run_root dnf install -y docker-compose-plugin \
+      || run_root dnf install -y docker-compose \
+      || true
   elif command -v yum >/dev/null 2>&1; then
-    run_root yum install -y docker-compose-plugin || true
+    run_root yum install -y docker-compose-plugin \
+      || run_root yum install -y docker-compose \
+      || true
   elif command -v zypper >/dev/null 2>&1; then
     run_root zypper --non-interactive install -y docker-compose || true
   elif command -v pacman >/dev/null 2>&1; then
     run_root pacman -Sy --noconfirm docker-compose || true
   fi
   docker compose version >/dev/null 2>&1 \
-    || die 'Docker Engine is installed but Docker Compose v2 is unavailable. Debian 12 official repos only ship v1; configure the Docker official apt repository (docs/DOCKER.md) or install docker-compose-plugin manually.'
+    || die 'Docker Engine is installed but Docker Compose v2 is unavailable. Debian 12 / Rocky / Alma 9 stock repos do not provide it; configure the Docker official repository (docs/DOCKER.md) or install docker-compose-plugin manually. Fedora uses the docker-compose package.'
 }
 
 docker_call() {
@@ -696,12 +720,13 @@ chmod 700 "$AGENT_DATA_DIR" "$SNOWLUMA_DIR" "$SNOWLUMA_DATA_DIR" \
 # .env/compose 写完之后才挂（655 行），写盘窗口内失败（ENOSPC/权限）会留下半成品 .env，
 # 重跑被 check_local_ownership 拒绝，正是本节注释声称要避免的死结。
 # EXISTING_STACK 的失败退出由 deploy_all_exit 里的 .env 回滚兜底。
-if [[ "$EXISTING_STACK" != true ]]; then
-  FRESH_STACK_CLEANUP=true
-fi
 trap deploy_all_exit EXIT
 STACK_LOCK_DIR="$ROOT_DIR/.deploy-all.lock"
 acquire_stack_lock
+# 只有拿到锁的实例才允许做 fresh 清理；抢锁失败的实例退出时不能删赢家的 .env/compose。
+if [[ "$EXISTING_STACK" != true ]]; then
+  FRESH_STACK_CLEANUP=true
+fi
 # 只比较摘要/长度，不把旧令牌留在变量里（与“现读现用凭据”的纪律一致）。
 OLD_ONEBOT_LEN="$(env_value "$ENV_FILE" ONEBOT_TOKEN | wc -c | tr -d ' ')"
 OLD_ONEBOT_DIGEST="$(env_value "$ENV_FILE" ONEBOT_TOKEN | sha256sum | awk '{print $1}')"
@@ -750,6 +775,11 @@ services:
     image: "${SNOWLUMA_IMAGE}"
     container_name: "${SNOWLUMA_CONTAINER}"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     shm_size: 1gb
     ulimits:
       nofile:
@@ -788,6 +818,7 @@ chmod 600 "$COMPOSE_FILE"
 # 清理钩子已提前到 .env 写盘之前挂载（deploy_all_exit，见上）；Agent 装好后在下方撤销标志。
 if ! docker_ready && ! sudo_docker_ready; then install_docker; fi
 docker_ready || sudo_docker_ready || die 'Docker installation completed but the daemon is unavailable'
+docker_call compose version >/dev/null 2>&1 || install_compose
 docker_call compose version >/dev/null 2>&1 || die 'Docker Compose v2 is required'
 
 # 拉一个引用：每个地址最多 3 次，退避 3 / 6 秒
@@ -841,7 +872,11 @@ HINT
 
 step "Downloading SnowLuma image $IMAGE"
 PULLED=false
-if pull_with_retry "$IMAGE"; then
+if docker_call image inspect "$IMAGE" >/dev/null 2>&1; then
+  # 离线/内网按文档 docker load 过的镜像：本地已有就不要强制访问 registry。
+  info "Using locally loaded image: $IMAGE"
+  PULLED=true
+elif pull_with_retry "$IMAGE"; then
   PULLED=true
 else
   # .env 里存的可能是"上次走通的镜像站前缀 + 基础引用"——默认走内置兜底之后，这是国内新装的

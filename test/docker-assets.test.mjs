@@ -22,6 +22,7 @@ test('Dockerfile：固定 Node 22、只装生产依赖、带健康检查与入�
   assert.match(dockerfile, /QQ_AGENT_RUNTIME=docker/);
   assert.match(dockerfile, /QQ_AGENT_DATA_DIR=\/data/);
   assert.match(dockerfile, /HEALTHCHECK[\s\S]*\/healthz/);
+  assert.match(dockerfile, /start-period=150s/, '启动等待 120 秒配置时不能被 healthcheck 提前判死');
   assert.match(dockerfile, /ENTRYPOINT \["\/app\/docker\/entrypoint\.sh"\]/);
   assert.match(dockerfile, /EXPOSE 3210/);
   assert.match(dockerfile, /gosu/);
@@ -85,6 +86,9 @@ test('compose：控制台只绑 127.0.0.1、根文件系统只读、不挂 docke
   assert.match(compose, /stop_grace_period: 30s/);
   assert.doesNotMatch(compose, /docker\.sock/);
   assert.doesNotMatch(compose, /"0\.0\.0\.0:\$\{QQ_AGENT_PORT/);
+  assert.equal((compose.match(/logging:/g) || []).length, 2, '两个服务都要有日志轮转');
+  assert.match(compose, /SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: \$\{SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD:-/,
+    'SnowLuma 密码变量名要和 deploy-all 的 .env 一致');
 });
 
 test('入口脚本：chown 后降权，最终 exec 成 node（PID 1 能收 SIGTERM）', () => {

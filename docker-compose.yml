@@ -17,6 +17,11 @@ services:
     image: ${SNOWLUMA_IMAGE:-docker.m.daocloud.io/motricseven7/snowluma:v1.14.22}
     container_name: ${SNOWLUMA_CONTAINER:-qq-agent-snowluma}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     shm_size: 1gb
     ulimits:
       nofile:
@@ -35,7 +40,7 @@ services:
       SNOWLUMA_GID: ${SNOWLUMA_GID:-1000}
       SNOWLUMA_WEBUI_HOST: 0.0.0.0
       SNOWLUMA_WEBUI_PORT: "5099"
-      SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: ${SNOWLUMA_WEBUI_PASSWORD:-}
+      SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD: ${SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD:-}
       SNOWLUMA_LOG_LEVEL: ${SNOWLUMA_LOG_LEVEL:-info}
       SNOWLUMA_SCREEN: ${SNOWLUMA_SCREEN:-1920x1080x24}
       SNOWLUMA_HOOK_AUTOLOAD: "1"
@@ -57,6 +62,11 @@ services:
     image: ${QQ_AGENT_IMAGE:-crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.3}
     container_name: ${QQ_AGENT_CONTAINER:-qq-agent}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     init: true
     # 应用自己的退出兜底是 25 秒；Docker 默认 10 秒就会 SIGKILL，可能打断 SQLite 收尾。
     stop_grace_period: 30s

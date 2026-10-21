@@ -115,6 +115,16 @@ test('GET /api/onebot-key：未知字段 400；非本机来源读不到令牌', 
 });
 
 
+test('POST /api/config：非法 JSON 返回 400 而不是 500', async (t) => {
+  const { port } = await boot(t);
+  const res = await request(port, 'POST', '/api/config', {
+    headers: { host: `127.0.0.1:${port}`, 'content-type': 'application/json' },
+    body: '{not-json'
+  });
+  assert.equal(res.status, 400, res.text);
+  assert.match(String(res.body?.error || ''), /JSON/);
+});
+
 test('POST /api/health/check 走同一份巡检并返回检查项', async (t) => {
   const { port } = await boot(t);
   const res = await request(port, 'POST', '/api/health/check', {

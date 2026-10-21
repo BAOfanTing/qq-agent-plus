@@ -14,7 +14,7 @@ DEPLOY_BRANCH=""
 IMPORT_BRIDGE=""
 CREDENTIAL_FILE=""
 NODE_BIN="${NODE_BIN:-}"
-NODE_VERSION="${QQ_AGENT_NODE_VERSION:-22.23.2}"
+NODE_VERSION="${QQ_AGENT_NODE_VERSION:-22.23.3}"
 BACKUP_ENABLED=true
 ALLOW_PATH_CHANGE=false
 
@@ -80,6 +80,12 @@ fi
   exit 2
 }
 [[ "$INSTALL_DIR" = /* ]] || { printf 'Use an absolute installation path\n' >&2; exit 2; }
+case "$INSTALL_DIR" in
+  /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+    printf 'Refusing to deploy into a shared system directory: %s\n' "$INSTALL_DIR" >&2
+    exit 2
+    ;;
+esac
 DATA_DIR="${DATA_DIR:-$INSTALL_DIR/data}"
 [[ "$DATA_DIR" = /* ]] || { printf 'Use an absolute data path\n' >&2; exit 2; }
 for p in "$INSTALL_DIR" "$DATA_DIR"; do
@@ -210,7 +216,7 @@ LOCK_OWNED=true
 node_ready() {
   [[ -n "$1" && -x "$1" ]] || return 1
   # 低限 22.19：运行期依赖 undici 8 声明 engines >=22.19（2026-10-01 升级，
-  # Dependabot 的 undici 6→8）；deploy.sh 自己下载的 .runtime 是 22.23.2，不受影响。
+  # Dependabot 的 undici 6→8）；deploy.sh 自己下载的 .runtime 是 22.23.3，不受影响。
   "$1" --input-type=module -e '
     const [major,minor]=process.versions.node.split(".").map(Number);
     if (major<22 || (major===22 && minor<19)) process.exit(1);

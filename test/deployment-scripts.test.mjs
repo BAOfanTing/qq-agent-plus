@@ -479,6 +479,13 @@ test('deploy.sh 调用 verify-deployment-target.mjs（C7 强校验真实接入�
   assert.match(sh, /DEPLOY_REPOSITORY/, 'deploy.sh 应支持 --repository 透传');
 });
 
+test('manage backup：所有 SQLite 库都走在线 backup API，不直接拷 WAL 文件', () => {
+  const manage = fs.readFileSync(path.join(repo, 'scripts/manage.mjs'), 'utf8');
+  assert.match(manage, /name\.endsWith\('\.sqlite'\)/);
+  assert.match(manage, /await backup\(db, path\.join\(target, name\)\)/);
+  assert.ok(manage.includes('/\\.sqlite-(wal|shm)$/'), 'WAL/SHM 不单独拷贝');
+});
+
 test('凭据轮换时预检不再用旧 token 拦截', () => {
   const deploy = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
   const check = fs.readFileSync(path.join(repo, 'scripts/check-stack-update.mjs'), 'utf8');
@@ -487,11 +494,24 @@ test('凭据轮换时预检不再用旧 token 拦截', () => {
   assert.match(check, /if \(!allowRotation\)/);
 });
 
-test('deploy-all.sh：栈级互斥锁覆盖 .env 到 deploy.sh 的全程', () => {
+test('deploy-all.sh：栈级互斥锁覆盖 .env 到 deploy.sh 的全程，且失败方不删赢家的锁', () => {
   const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
   assert.match(sh, /acquire_stack_lock/);
   assert.match(sh, /STACK_LOCK_DIR="\$ROOT_DIR\/\.deploy-all\.lock"/);
   assert.match(sh, /trap deploy_all_exit EXIT\nSTACK_LOCK_DIR=/);
+  assert.match(sh, /STACK_LOCK_OWNED=false/);
+  assert.match(sh, /if \[\[ "\$\{STACK_LOCK_OWNED:-false\}" == true/,
+    '只有锁的所有者才能删除锁');
+  assert.match(sh, /acquire_stack_lock\n# 只有拿到锁的实例才允许做 fresh 清理/);
+});
+
+test('deploy-all 生成的 compose 也带日志轮转（不等于仓库根目录那份）', () => {
+  const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
+  assert.match(
+    sh,
+    /container_name: "\$\{SNOWLUMA_CONTAINER\}"\n    restart: unless-stopped\n    logging:\n      driver: json-file\n      options:\n        max-size: "10m"\n        max-file: "3"\n/,
+    '生成的 SnowLuma 服务必须限制 json-file 日志大小'
+  );
 });
 
 test('deploy.sh：健康检查有单次超时和总 deadline', () => {

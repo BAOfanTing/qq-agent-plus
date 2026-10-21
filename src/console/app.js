@@ -1560,12 +1560,16 @@ export function createApp({
   };
   const server = http.createServer((req, res) => {
     handleHttp(req, res).catch((error) => {
-      incidentPilot?.capture(error, {
-        source: 'http',
-        category: 'http',
-        severity: 'error',
-        details: { method: req.method || '', pathname: String(req.url || '').split('?')[0] }
-      });
+      // 4xx 是用户输入/权限问题，不是服务端异常：不要写入异常面板，否则每次输错
+      // 管理员 QQ/非法 JSON 都会变成一条 error incident。
+      if (!(Number(error?.httpStatus) >= 400 && Number(error?.httpStatus) < 500)) {
+        incidentPilot?.capture(error, {
+          source: 'http',
+          category: 'http',
+          severity: 'error',
+          details: { method: req.method || '', pathname: String(req.url || '').split('?')[0] }
+        });
+      }
       log('[http] 处理出错:', error?.message ?? error);
       try {
         res.writeHead(error?.httpStatus || 500, { 'content-type': 'application/json' });
@@ -1620,7 +1624,12 @@ export function createApp({
       chunks.push(chunk);
     }
     const text = Buffer.concat(chunks).toString('utf8');
-    return text ? JSON.parse(text) : {};
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw Object.assign(new Error('请求体不是合法 JSON'), { httpStatus: 400 });
+    }
   }
 
   // 「无令牌 = 仅本机」的本机判定必须看 TCP 对端（req.socket.remoteAddress），不能只看 Host 头：
@@ -4312,6 +4321,13 @@ export function createApp({
       next = updateConfig(patch);
     } catch (error) {
       auditWrite('config.update', 'config', { req, before: auditBefore, ok: false, error: String(error?.message ?? error) });
+      // updateConfig 的校验错误是用户输入问题，返回 400；文件系统错误保持 500。
+      const msg = String(error?.message ?? error);
+      const fsCode = String(error?.code || '');
+      if (!error.httpStatus && !/^(EACCES|EPERM|ENOENT|ENOSPC|EIO|EROFS)$/.test(fsCode)
+        && /必须|不能|不合法|非法|无效|不支持|至少|需要/.test(msg)) {
+        error.httpStatus = 400;
+      }
       throw error;
     }
     auditWrite('config.update', 'config', { req, before: auditBefore, after: next, changed: changedTopKeys(auditBefore, next) });
@@ -4937,6 +4953,10 @@ export function createApp({
         res.writeHead(200, {
           'content-type': types[ext] ?? 'application/octet-stream',
           'cache-control': cacheControl,
+          // 控制台可被本机无令牌模式打开：禁止被第三方页面 iframe 嵌入，防点击劫持。
+          'x-frame-options': 'DENY',
+          'content-security-policy': "frame-ancestors 'none'",
+          'referrer-policy': 'no-referrer',
           etag,
           'last-modified': stat.mtime.toUTCString()
         });
