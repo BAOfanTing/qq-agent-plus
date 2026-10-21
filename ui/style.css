@@ -6062,6 +6062,8 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
 
 /* 动作反馈条：贴底的状态胶囊。空时完全不占位；有内容时用主题色描边 + 轻阴影，
    不再是一条横贯页面的白条 —— 它只是"刚才那次操作的结果"，不是页面的分隔线。 */
+/* 底部留出状态胶囊的高度：它是 sticky 的，滚到最底时不该盖住最后一行的动作按钮。 */
+#plugins-page { padding-bottom: 48px; }
 .plugins-status-bar {
   position: sticky; bottom: 14px; z-index: 3;
   display: flex; align-items: center; gap: 8px;
