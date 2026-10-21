@@ -742,11 +742,16 @@ if getent group docker >/dev/null 2>&1; then
             sudo -n systemctl start "$MANAGER_UNIT" 2>/dev/null \
               || printf '警告：user manager 没能启动；请执行：sudo systemctl start %s\n' "$MANAGER_UNIT" >&2
           fi
-          sleep 4
+          for _ in {1..10}; do
+            systemctl --user is-active --quiet "$SERVICE.service" 2>/dev/null && break
+            sleep 1
+          done
           if systemctl --user is-active --quiet "$SERVICE.service" 2>/dev/null; then
             printf '服务已随新管理器恢复（docker 组已生效，控制台可用）\n'
           else
-            printf '服务正在启动，几秒后可用（若长时间不可用：systemctl --user status %s）\n' "$SERVICE.service" >&2
+            printf '服务未能随新管理器恢复：%s。部署按失败处理，请检查：sudo systemctl start %s\n' \
+              "$SERVICE.service" "$MANAGER_UNIT" >&2
+            exit 1
           fi
         else
           printf '警告：停 user manager 失败；请手工执行：sudo systemctl stop %s && sleep 3 && sudo systemctl start %s\n' "$MANAGER_UNIT" "$MANAGER_UNIT" >&2

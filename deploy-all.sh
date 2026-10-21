@@ -589,6 +589,10 @@ ports=("$AGENT_PORT" "$SNOWLUMA_PORT" "$NOVNC_PORT" "$ONEBOT_HTTP_PORT" "$ONEBOT
 if [[ "$SOURCE_DIR" != "$APP_DIR" && ( "$APP_DIR" == "$SOURCE_DIR/"* || "$SOURCE_DIR" == "$APP_DIR/"* ) ]]; then
   die 'Source and application directories cannot contain each other; choose another --root-dir'
 fi
+# 显式轮换凭据时，预检不能拿“新 .env 里的令牌必须等于旧 config.json”来拒绝。
+if [[ "$ROTATE_CREDENTIALS" == true ]]; then
+  export QQ_AGENT_ALLOW_CREDENTIAL_ROTATION=1
+fi
 check_host_ownership
 if [[ "$CHECK_ONLY" == true ]]; then
   if [[ "$EXISTING_STACK" == true ]]; then
@@ -943,6 +947,8 @@ if [[ "$EXISTING_STACK" == true && -n "$SNOWLUMA_CURRENT_PASSWORD" \
     # 令牌又只留在 config.json 里、access 文件还没生成。保持三方一致（都用新凭据）才是可恢复
     # 状态：WebUI 密码维持旧值，带上**实际在用**的旧密码重跑即可完成轮换。
     KEEP_ENV_ON_ROTATE_FAILURE=true
+    printf '控制台令牌已更新；新令牌见 %s/config.json 的 server.token（或 %s/console-access.txt）。SnowLuma WebUI 密码仍是旧值。\n' \
+      "$AGENT_DATA_DIR" "$AGENT_DATA_DIR" >&2
     die 'SnowLuma password rotation failed. Every other credential was left in place and stays consistent; the WebUI password is unchanged. Retry with --snowluma-current-password set to the password the WebUI actually uses.'
   fi
 fi

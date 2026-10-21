@@ -479,6 +479,14 @@ test('deploy.sh 调用 verify-deployment-target.mjs（C7 强校验真实接入�
   assert.match(sh, /DEPLOY_REPOSITORY/, 'deploy.sh 应支持 --repository 透传');
 });
 
+test('凭据轮换时预检不再用旧 token 拦截', () => {
+  const deploy = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
+  const check = fs.readFileSync(path.join(repo, 'scripts/check-stack-update.mjs'), 'utf8');
+  assert.match(deploy, /QQ_AGENT_ALLOW_CREDENTIAL_ROTATION=1/);
+  assert.match(check, /allowRotation/);
+  assert.match(check, /if \(!allowRotation\)/);
+});
+
 test('deploy-all.sh：栈级互斥锁覆盖 .env 到 deploy.sh 的全程', () => {
   const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
   assert.match(sh, /acquire_stack_lock/);
