@@ -43,7 +43,9 @@ test('root-install.sh：测试模式只打印计划，不创建用户或执行�
   fs.copyFileSync(path.join(repo, 'install.sh'), path.join(dir, 'install.sh'));
   fs.copyFileSync(path.join(repo, 'scripts/root-install.sh'), path.join(dir, 'scripts/root-install.sh'));
   fs.writeFileSync(path.join(dir, 'deploy-all.sh'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
-  const stack = path.join(dir, 'stack');
+  // 部署根目录必须在源码目录之外；放在 dir/stack 会被新的路径安全检查拒绝。
+  const stack = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-root-stack-'));
+  t.after(() => fs.rmSync(stack, { recursive: true, force: true }));
   const marker = path.join(dir, 'should-not-exist');
   const result = spawnSync('bash', [path.join(dir, 'scripts/root-install.sh'), '--root-dir', stack, '--check-only'], {
     cwd: dir,
