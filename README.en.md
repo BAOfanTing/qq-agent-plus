@@ -147,9 +147,9 @@ For container-only deployments:
 
 ```bash
 # GHCR
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.4
 # China (Aliyun ACR, public, amd64/arm64)
-docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.3
+docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.4
 
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus

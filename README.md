@@ -121,9 +121,9 @@ OneBot WebSocket
 
 ```bash
 # 海外 / GitHub 可达
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.4
 # 国内（阿里云 ACR，公开，amd64/arm64）
-docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.3
+docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.4
 
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
