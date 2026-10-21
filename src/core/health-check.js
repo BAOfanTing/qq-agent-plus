@@ -253,7 +253,22 @@ export async function runHealthCheck(opts = {}) {
     }
   }
 
-  // ③ 入站处理水位：判据是"**到期的入站消息有没有被处理**"，而不是"入站新 → 出站必须新"，
+  // ③ 媒体工具：ffmpeg/ffprobe 是可选能力（语音转写、视频抽帧、GIF 帧条、超大图降采样）。
+  // 缺失不影响文字聊天，但相关功能会失败 —— 记绿并写明安装命令，避免误报连击。
+  {
+    const has = (cmd) => spawnSync(cmd, ['-version'], { timeout: 3000, stdio: 'ignore' }).status === 0;
+    const ffmpeg = has('ffmpeg');
+    const ffprobe = has('ffprobe');
+    if (ffmpeg && ffprobe) {
+      add('media-tools', true, 'ffmpeg/ffprobe 可用');
+    } else {
+      const missing = [!ffmpeg && 'ffmpeg', !ffprobe && 'ffprobe'].filter(Boolean).join('/');
+      add('media-tools', true, `未安装 ${missing}（可选：语音转写、视频抽帧、GIF 帧条不可用；`
+        + 'Debian/Ubuntu 装 ffmpeg，Fedora/RHEL 装 ffmpeg 包）');
+    }
+  }
+
+  // ④ 入站处理水位：判据是"**到期的入站消息有没有被处理**"，而不是"入站新 → 出站必须新"，
   //    也不是"bot 一直没说话"。
   // - observe 模式本来就不发消息 → 跳过（否则每 5 分钟固定误报）。
   // - 窗口内没有入站消息（深夜/冷清时段）→ 静默期，出站为空是正常行为 → 记 ok。
@@ -338,7 +353,7 @@ export async function runHealthCheck(opts = {}) {
     }
   }
 
-  // ④ 磁盘余量
+  // ⑤ 磁盘余量
   try {
     const st = typeof statfs === 'function' ? statfs(dataDir) : fs.statfsSync(dataDir);
     const avail = Number(st.bavail) * Number(st.bsize);
@@ -347,7 +362,7 @@ export async function runHealthCheck(opts = {}) {
     add('disk-space', false, `磁盘余量读不了: ${error?.message ?? error}`);
   }
 
-  // ⑤ 自动更新状态
+  // ⑥ 自动更新状态
   if (container) {
     // 容器里的更新是"换镜像"，没有 auto-update.json 这回事；旧卷里残留的 failed 状态
     // 也不能拿到这里报红（那会让迁移过来的用户永久看到一条无法自愈的告警）。
@@ -361,7 +376,7 @@ export async function runHealthCheck(opts = {}) {
     }
   }
 
-  // ⑥ 部署中断标记（36c649a 加固项）：存在＝上次部署被 SIGKILL/OOM 打断且未收尾
+  // ⑦ 部署中断标记（36c649a 加固项）：存在＝上次部署被 SIGKILL/OOM 打断且未收尾
   const marker = path.join(dataDir, '.deploy-in-progress');
   if (container) {
     add('deploy-interrupted', true, '容器模式：不适用（部署由镜像/编排负责）');
@@ -369,7 +384,7 @@ export async function runHealthCheck(opts = {}) {
     add('deploy-interrupted', !fs.existsSync(marker), fs.existsSync(marker) ? '存在中断标记，按 docs/LINUX.md「部署被中断后怎么恢复」处理' : '');
   }
 
-  // ⑦ messages 库完整性（适配层只读打开）。控制台交互体检跳过：DatabaseSync 会同步扫全库。
+  // ⑧ messages 库完整性（适配层只读打开）。控制台交互体检跳过：DatabaseSync 会同步扫全库。
   if (integrityCheck) {
     try {
       const db = openDatabase(path.join(dataDir, 'messages.sqlite'), { readOnly: true });
@@ -382,7 +397,7 @@ export async function runHealthCheck(opts = {}) {
     }
   }
 
-  // ⑧ 插件（v1）：装了几个、授权几个、manifest 有没有问题、这台机器能不能隔离。
+  // ⑨ 插件（v1）：装了几个、授权几个、manifest 有没有问题、这台机器能不能隔离。
   // 巡检是**独立进程**（ops health-check），拿不到运行中注册表的状态 —— 它只查磁盘与配置；
   // "某个插件此刻是不是在跑"由控制台「插件」页回答（那是唯一有活注册表的地方）。
   try {

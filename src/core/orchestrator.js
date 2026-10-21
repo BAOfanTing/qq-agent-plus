@@ -371,12 +371,24 @@ function containsStandaloneName(text, name) {
   return false;
 }
 
+/** 拍一拍命中的是机器人自己（群拍 target_id / 私聊拍自己都会落到 targetUserId）。 */
+function isPokeAtBot(message, selfId) {
+  return message?.eventKind === 'poke'
+    && String(message?.targetUserId || '') === String(selfId || '');
+}
+
+/** 拍一拍也算"被直接点名"：档位、自主节奏、降级闸门与回复纠正共用这一口径。 */
+function mentionsOrPokesBot(message, selfId) {
+  return message?.mentionsSelf === true || isPokeAtBot(message, selfId);
+}
+
 /**
  * 这条消息是不是"明确在问机器人"：私聊、被 @、引用/回复它、文本里提到它在该群的名字。
  * 只用于"该回却没发"的补救判定 —— 不参与是否唤醒（档位那边有自己的判定）。
  */
 export function isDirectedAtBot({ kind, triggerEntries = [], persona = {}, selfId = '', accountNickname = '' } = {}) {
   if (kind === 'private') return true;
+  if (triggerEntries.some((message) => isPokeAtBot(message, selfId))) return true;
   const names = [persona.selfNickname, persona.botName, accountNickname]
     .map((value) => String(value || '').trim())
     .filter(Boolean);
@@ -552,7 +564,7 @@ export class Orchestrator {
     // 闸门看的是「这次要处理的那批未读里有没有 @」。窗口偏小时，落在窗口之后的 @ 会被这里
     // 判成"会丢"，提醒被无谓顺延 24 小时（#wake 其实照常派发）—— 2026-10-05 复审实测。
     const pending = this.store.peekUnread(chatKey, this.#unreadScanLimit()) || [];
-    return !pending.some((m) => m?.mentionsSelf === true);
+    return !pending.some((m) => mentionsOrPokesBot(m, this.onebot.selfId));
   }
 
   startRecoveryLoop() {
@@ -633,7 +645,7 @@ export class Orchestrator {
       // 窗口与 #wake / #budgetWouldDrop 同口径（#unreadScanLimit）：@ 落在窗口后半段时同样
       // 算"被 @ 了"，不该因为看少了而被丢进自主节奏排队。
       const pending = this.store.peekUnread(chatKey, this.#unreadScanLimit()) || [];
-      const mentioned = pending.some((m) => m.mentionsSelf === true);
+      const mentioned = pending.some((m) => mentionsOrPokesBot(m, this.onebot.selfId));
       if (!(mentioned && getConfig().pacing?.instantOnMention !== false)) {
         this.#ensurePacedWake(chatKey);
         return;
@@ -1214,7 +1226,7 @@ export class Orchestrator {
       // degrade 只拦"新消息触发"的这一路（主动唤醒不在这个分支里，上面的 block 已经先判过了）
       if (budget.enabled && budget.exceeded && budget.onExceed === 'degrade' && !budgetExempt
         && String(chatKey).startsWith('group:')) {
-        const mentioned = pendingEntries.some((entry) => entry?.mentionsSelf === true);
+        const mentioned = pendingEntries.some((entry) => mentionsOrPokesBot(entry, this.onebot.selfId));
         if (!mentioned) {
           if (waitingSessionId) this.#discardWaiting(waitingSessionId);
           return;   // 保留未读：被 @ 时（或跨日重置后）自然会再进这里

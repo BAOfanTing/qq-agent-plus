@@ -29,6 +29,7 @@ import { Orchestrator } from '../core/orchestrator.js';
 import { DailyMomentsManager } from '../features/daily-moments.js';
 import { QzoneInteractionManager } from '../features/qzone-interactions.js';
 import { GroupDigestManager } from '../features/group-digest.js';
+import { AdminBriefingManager } from '../features/admin-briefing.js';
 import { GroupGameManager } from '../features/group-game.js';
 import { ReminderStore } from '../core/reminders.js';
 import { PluginRegistry } from '../plugins/registry.js';
@@ -662,6 +663,13 @@ export function createApp({
     sender,
     sessions,
     log: moduleLog('group-digest')
+  });
+  // 管理员早报：每天把过去 24 小时群里的见闻私聊给全局管理员（默认关）
+  const adminBriefing = new AdminBriefingManager({
+    store,
+    sender,
+    sessions,
+    log: moduleLog('admin-briefing')
   });
   function createIncidentPilot() {
     return new IncidentPilotManager({
@@ -1446,7 +1454,9 @@ export function createApp({
       senderName: operatorName,
       text,
       media: [],
-      eventKind: 'poke'
+      eventKind: 'poke',
+      // 拍机器人 = 直接互动：档位判定与回复纠正据此把这条当"被点名"处理
+      targetUserId: targetId
     }, { recordOnly: arrivedInactive || !isTimeActive(chatKeyNow) });
     emit('chat-update', `${isGroup ? 'group' : 'private'}:${id}`);
     orchestrator.onIncoming(`${isGroup ? 'group' : 'private'}:${id}`);
@@ -2087,6 +2097,7 @@ export function createApp({
   router.add('GET', '/api/qzone-interactions/status', async (req, res) => json(res, 200, qzoneInteractions.status()));
   router.add('GET', '/api/group-game/status', async (req, res) => json(res, 200, groupGame.status()));
   router.add('GET', '/api/group-digest/status', async (req, res) => json(res, 200, groupDigest.status()));
+  router.add('GET', '/api/admin-briefing/status', async (req, res) => json(res, 200, adminBriefing.status()));
   router.add('GET', '/api/tts/presets', async (req, res) => json(res, 200, { ok: true, services: TTS_SERVICES }));
   // 「平台能力」页的元数据：键 → 标签 / 它管的工具 / 默认取向（"默认关"的三项在 UI 上要标注）。
   // 让 UI 从服务端拿这份清单，而不是在 ui/ 里再抄一份 —— 抄一份就会在下次拆键时漏掉一半。
@@ -2218,6 +2229,9 @@ export function createApp({
     }
     if (body.skipBacklog === true) for (const key of store.listChats()) store.markAllRead(key);
     updateConfig({ runtime: { mode: body.mode } });
+    // 观察/暂停会挡住日报/早报；切回 active 时立刻重排并补跑当天错过的（否则要等重启）。
+    groupDigest.reconfigure();
+    adminBriefing.reconfigure();
     if (body.mode === 'active') slangPilot?.resumeQueued();
     emit('status', { mode: body.mode });
     return json(res, 200, { ok: true, mode: body.mode });
@@ -4360,6 +4374,11 @@ export function createApp({
     if (JSON.stringify(next.groupDigest || {}) !== JSON.stringify(cfgNow.groupDigest || {})) {
       groupDigest.reconfigure();
     }
+    if (JSON.stringify(next.adminBriefing || {}) !== JSON.stringify(cfgNow.adminBriefing || {})
+      || String(next.admin?.ownerUin || '') !== String(cfgNow.admin?.ownerUin || '')) {
+      // 管理员 QQ 后补上时也要重新排程（否则要等进程重启才会有定时器）
+      adminBriefing.reconfigure();
+    }
     // 插件配置动了（总开关 / enabledIds / 插件自己的 settings）→ 重排：停掉再按新配置起。
     // 不 await：控制台保存不该等插件起进程（宿主内部自己 try/catch 并记日志）。
     if (JSON.stringify(next.plugins || {}) !== previousPlugins) {
@@ -4441,6 +4460,14 @@ export function createApp({
   router.add('POST', '/api/group-digest/run', async (req, res) => {
     try {
       const result = await groupDigest.runOnce();
+      return json(res, 200, { ok: true, ...result });
+    } catch (error) {
+      return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+  router.add('POST', '/api/admin-briefing/run', async (req, res) => {
+    try {
+      const result = await adminBriefing.runOnce();
       return json(res, 200, { ok: true, ...result });
     } catch (error) {
       return json(res, 400, { ok: false, error: String(error?.message ?? error) });
@@ -5049,6 +5076,7 @@ export function createApp({
     if (getConfig().dailyMoments?.enabled) dailyMoments.start();
     if (getConfig().qzoneInteractions?.enabled) qzoneInteractions.start();
     if (getConfig().groupDigest?.enabled) groupDigest.start();
+    if (getConfig().adminBriefing?.enabled) adminBriefing.start();
     groupGame.startLoop();   // 内部按配置判断是否推进；重启后从磁盘恢复进行中的局
     if (getConfig().proactive?.enabled) orchestrator.startProactiveLoop();
     orchestrator.startScheduledWakeTicker();
@@ -5118,6 +5146,7 @@ export function createApp({
     // 且群游戏 tick 会把 games.json 再写一遍（2026-10-07 复审 P3）。
     groupGame.stopLoop();
     groupDigest.stop();
+    adminBriefing.stop();
     // 插件子进程要在 onebot 关闭之前停掉：停机后不该再有插件在读消息
     await pluginRegistry.stop();
     await qzoneInteractions.abort();

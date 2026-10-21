@@ -673,8 +673,8 @@ export function buildSystemPrompt({
     // 与工具注入同一道门：生图开关 + 表情包开关（生图的发送路径是 send_sticker）
     if (imageGenAvailable(getConfig()) && getConfig().sticker?.enabled !== false) {
       gameLines.push(cardFirst
-        ? '- 群友要你「画一张」时用 generate_image：prompt 写清画面（主体+风格+氛围），生成后图会进表情库，再用 send_sticker 发出去；要不要配一句话按角色设定。这是按张计费的，一天里别主动画、只在群友真开口要时才用。'
-        : '- 群友要你「画一张」时用 generate_image：prompt 写清画面（主体+风格+氛围），生成后图会进表情库，再用 send_sticker 发出去（记得带上一句自己的话，别只甩图）。这是按张计费的，一天里别主动画、只在群友真开口要时才用。');
+        ? '- 群友要你「画一张」时用 generate_image：prompt 写清画面（主体+风格+氛围），生成后会自动发到当前会话，不需要再调 send_sticker（只想存进表情库、这次不发就传 send:false）；要不要配一句话按角色设定。这是按张计费的，一天里别主动画、只在群友真开口要时才用。'
+        : '- 群友要你「画一张」时用 generate_image：prompt 写清画面（主体+风格+氛围），生成后会自动发到当前会话，不需要再调 send_sticker（只想存进表情库、这次不发就传 send:false）；记得带上一句自己的话，别只甩图。这是按张计费的，一天里别主动画、只在群友真开口要时才用。');
     }
     parts.push('', gameLines.join('\n'));
   }
@@ -806,6 +806,9 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   // "档位调低之后 @ 它也不回"。文本路径保留给非存档来源的调用方（预览、测试、旧数据）。
   const atMe = (triggerEntries || []).some((entry) => entry?.mentionsSelf === true)
     || texts.some((t) => isAtMe(t, { selfNickname, botName, selfId }));
+  // 拍一拍命中的是机器人：属于直接互动，按"被点名"必回，不被随机概率吞掉。
+  const pokeMe = (triggerEntries || []).some((entry) => entry?.eventKind === 'poke'
+    && String(entry?.targetUserId || '') === String(selfId || ''));
   const keyword = hitKeyword(texts.join('\n'), c.keywords);
   // 掷骰子：调用方可传入已固定的 roll（0-100），避免重复随机
   const rollValue = roll === null || roll === undefined ? Math.random() * 100 : Number(roll);
@@ -813,9 +816,12 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   const saverCaps = tokenSaverCapsOf(getConfig());
   const n0 = (v, cap) => cappedByTokenSaver(v, cap);
 
-  // 必回的两种：被 @、命中关键词 —— 不受概率影响（清空关键词表就只剩 @ 必回）
+  // 必回的三种：被 @、被拍一拍、命中关键词 —— 不受概率影响（清空关键词表就只剩前两种）
   if (atMe) {
     return { tier: 1, count: n0(c.atCount, saverCaps?.atCount), reason: '被艾特', shouldRespond: true };
+  }
+  if (pokeMe) {
+    return { tier: 1, count: n0(c.atCount, saverCaps?.atCount), reason: '被拍一拍', shouldRespond: true };
   }
   if (keyword) {
     return { tier: 2, count: n0(c.keywordCount, saverCaps?.keywordCount), reason: '关键词命中', shouldRespond: true };

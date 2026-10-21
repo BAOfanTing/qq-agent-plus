@@ -366,3 +366,15 @@ test('已经用拍一拍回复过：不再触发文字纠正（非文本回复�
     '拍一拍已经让用户看到了回应，不该再补文字');
   assert.deepEqual(f.sent, []);
 });
+
+test('拍一拍机器人 = 直接互动，回复纠正要覆盖；拍别人不算', () => {
+  const persona = { selfNickname: '登录昵称', botName: '小鲸鱼' };
+  assert.equal(isDirectedAtBot({
+    kind: 'group', persona, selfId: '888',
+    triggerEntries: [{ eventKind: 'poke', targetUserId: '888', text: '[拍一拍] 你拍了拍（来自 甲）' }]
+  }), true);
+  assert.equal(isDirectedAtBot({
+    kind: 'group', persona, selfId: '888',
+    triggerEntries: [{ eventKind: 'poke', targetUserId: '999', text: '[拍一拍] 甲 拍了拍 乙' }]
+  }), false);
+});

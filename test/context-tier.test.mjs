@@ -63,6 +63,19 @@ test('中间概率：掷骰子决定，边界由注入的 roll 钉死', () => {
   assert.match(at(0).reason, /24\.3%/);
 });
 
+test('拍一拍机器人也是必回（不受概率影响），拍别人不算', () => {
+  const cfg = { ...BASE, randomPercent: 0 };
+  const poke = { text: '[拍一拍] 你拍了拍（来自 甲）', eventKind: 'poke', targetUserId: '888' };
+  const self = resolveContextTier({ triggerEntries: [poke], selfId: '888', cfg, roll: 99 });
+  assert.equal(self.shouldRespond, true);
+  assert.equal(self.reason, '被拍一拍');
+  assert.equal(self.tier, 1);
+  const other = resolveContextTier({
+    triggerEntries: [{ ...poke, targetUserId: '999' }], selfId: '888', cfg, roll: 99
+  });
+  assert.equal(other.shouldRespond, false, '群友之间互拍不该触发机器人');
+});
+
 test('被 @ 或命中关键词一定回，不受概率影响', () => {
   const cfg = { ...BASE, randomPercent: 0 };
   const names = { selfNickname: '登录昵称', botName: '小鲸鱼', selfId: '888' };

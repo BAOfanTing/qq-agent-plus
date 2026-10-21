@@ -159,7 +159,7 @@ import { assertPublicUrlLiteral, validateImageUrl } from '../llm/safe-fetch.js';
 import { webSearch, webFetch } from '../llm/web-search.js';
 import { expandForwardNodes, extractMediaFromSegments } from '../onebot/onebot.js';
 import { readForwardMessages, readForwardNodesById } from '../onebot/forward-reader.js';
-import { convertGifToStillStrip, convertVideoToFrameStrip, fetchOversizedImageAsJpeg } from './image-downsample.js';
+import { convertGifToStillStrip, convertVideoToFrameStrip, convertStillImageToJpeg, fetchOversizedImageAsJpeg } from './image-downsample.js';
 import { transcribeMessageAudio } from './audio-transcribe.js';
 import { memoryVisibilityOf } from '../core/memory-visibility.js';
 
@@ -168,13 +168,24 @@ import { memoryVisibilityOf } from '../core/memory-visibility.js';
  * 视觉模型用的 data URL 收口。GIF 特殊处理：主流视觉网关不接受 image/gif，
  * 且动图的情绪信息在动作里——用 ffmpeg 抽帧拼成 2x2 帧条转成 JPEG；
  * ffmpeg 缺失或转换失败时回退原始 GIF data URL（保持既有行为，不劣化）。
+ * AVIF/HEIC 等网关不认的静图格式先转 JPEG：直接原样送会被上游 400（Issue #41）。
  */
-async function toVisionDataUrl(buffer, mime, signal) {
+const VISION_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
+export async function toVisionDataUrl(buffer, mime, signal) {
   if (mime === 'image/gif') {
     try {
       const strip = await convertGifToStillStrip(buffer, signal);
       if (strip?.length) return `data:image/jpeg;base64,${strip.toString('base64')}`;
     } catch { /* 回退原始 GIF */ }
+  }
+  if (mime !== 'image/gif' && !VISION_MIME.has(mime)) {
+    try {
+      const jpeg = await convertStillImageToJpeg(buffer, signal);
+      if (jpeg?.length) return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error;
+      throw new Error(`图片格式 ${mime || '未知'} 视觉接口不支持，转成 JPEG 也失败：${error?.message ?? error}`);
+    }
   }
   return `data:${mime};base64,${buffer.toString('base64')}`;
 }
@@ -674,13 +685,14 @@ export function buildToolDefs() {
       description: '自己画一张图（调用图片生成服务，按张计费、有每小时上限）。适合群友点名要"画一张"：梗图、应景的图。'
         + 'prompt 要写清楚画面内容（主体、风格、氛围）；要在图上带中文文字时，把文字用引号原样写进 prompt'
         + '（例如：…画面上有中文文字"事已至此，先吃饭吧"——能不能写对取决于所选图模型）。'
-        + '生成后图片会存进表情库，接着用 send_sticker 发出去。'
+        + '生成后会直接发到当前会话，并同时存进表情库供以后复用；只想收藏、这次不发就传 send:false。'
         + '别频繁用（一次调用就是一次真实花费）。',
       parameters: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: '画面描述：主体 + 风格 + 氛围（如"一只橘猫戴着草帽坐在海边，卡通风格"）' },
-          note: { type: 'string', description: '可选：给这张图起的短语（存进表情库便于以后找）' }
+          note: { type: 'string', description: '可选：给这张图起的短语（存进表情库便于以后找）' },
+          send: { type: 'boolean', description: '默认 true：生成后立即发到当前会话；只想存进表情库时传 false' }
         },
         required: ['prompt']
       },
@@ -705,6 +717,8 @@ export function buildToolDefs() {
               : '画图额度用完了（全局每小时有上限，这是按张计费的）');
           }
           let buffer; let revisedPrompt;
+          const label = String(args.note || '').trim() || prompt;
+          let entry;
           try {
             ({ buffer, revisedPrompt } = await generateImage({
               cfg,
@@ -714,24 +728,57 @@ export function buildToolDefs() {
               signal: ctx.signal
             }));
             // 落库：走与"控制台上传的自定义表情"同一条路（addManual 自己校验格式与体积并落盘）
-            const label = String(args.note || '').trim() || prompt;
-            const entry = ctx.stickers.addManual({
+            entry = ctx.stickers.addManual({
               imageBuffer: buffer,
               desc: label.slice(0, 40),
               localNote: `生成的图：${prompt}`.slice(0, 300),
               tags: ['生成'],
               usage: revisedPrompt ? `提示词修订：${revisedPrompt}`.slice(0, 300) : ''
             });
+          } catch (error) {
+            // 只有"没画出来/没落库"才退额度；发送失败时生成已经真实计费，不能退款
+            imageQuota.refund(ctx.chatKey, reservedAt);
+            throw error;
+          }
+          // 生成即发送：只保存、等模型再调 send_sticker 的旧路径在模型漏掉第二步时
+          // 用户什么也收不到（Issue #41）。仍存进表情库，后续可复用。
+          if (args.send === false) {
             return ok({
               id: entry.id,
               note: entry.localNote,
-              kind: '已存进表情库',
-              next: '用 send_sticker 传这个 id 就能发出去'
+              sent: false,
+              kind: '已存进表情库（未发送）',
+              next: '需要发送时用 send_sticker 传这个 id'
+            });
+          }
+          try {
+            const sendable = await ctx.stickers.findForSend(entry.id);
+            if (!sendable?.url) throw new Error('生成的图片没有可发送的地址');
+            const sent = await ctx.sender.sendSticker(ctx.chatKey, sendable, {
+              runId: ctx.session.leaseId, signal: ctx.signal
+            });
+            afterSent(() => {
+              ctx.stickers.markUsed(entry.id, String(ctx.session.triggerText || '').slice(0, 100));
+              ctx.session.sent.push({ type: 'sticker', text: `[生成的图:${sanitizeUserText(label.slice(0, 40))}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
+              ctx.emit('session-update', ctx.session.id);
+            });
+            return ok({
+              id: entry.id,
+              note: entry.localNote,
+              sent: true,
+              messageId: sent?.message_id ?? null,
+              kind: '已发送并存入表情库'
             });
           } catch (error) {
-            // 没画出来（或没落库）就把占住的额度退回去 —— 预扣只为了堵竞态，不该让失败白花额度
-            imageQuota.refund(ctx.chatKey, reservedAt);
-            throw error;
+            // 图已经生成并入库（钱花了）：把 id 交给模型，不要让它重复生成；
+            // 发送结果不确定时也不要自动重发（outbox 会留 unknown 供人工核对）。
+            return ok({
+              id: entry.id,
+              note: entry.localNote,
+              sent: false,
+              kind: '已生成并存入表情库，但发送失败',
+              warning: `发送失败：${error?.message ?? error}。不要重复生成；结果不确定时不要自动重发。`
+            });
           }
         } catch (error) {
           return err(error?.message ?? error);
