@@ -53,10 +53,10 @@ import { resolveOfficialPrice, listOfficialPrices, listModelAliases, isPeakHour,
 import { initPriceFeed, refreshPriceFeed, priceFeedStatus } from '../pricing/price-feed.js';
 import { probeChannelPrices, capPrices } from '../pricing/price-probe.js';
 import { initChannelPrices, refreshChannelFeed, removeChannelFeed, channelPriceStatus, maybeAutoProbeChannel } from '../pricing/channel-prices.js';
-import { currentProviders, setProviderKey, testAllProviders, testOneProvider, testModelChat, probeThinking, fetchModelsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider } from '../core/providers.js';
+import { currentProviders, setProviderKey, testAllProviders, testOneProvider, testModelChat, probeThinking, fetchModelsFrom, fetchModelCapsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider } from '../core/providers.js';
 import { personaStateSnapshot } from '../core/persona-state.js';
 import { resolvePersona } from '../personas.js';
-import { scanModelsVision, visionResults } from '../llm/vision-scan.js';
+import { scanModelsVision, visionResults, visionEnabled, modelImageVerdict } from '../llm/vision-scan.js';
 import { builtinVisionResults } from '../llm/model-vision-docs.js';
 import { createEventBus, todayKey, shanghaiDayStart, isSelfSender, safeSlice, sanitizeUserText, textWithQuote } from '../core/util.js';
 import { assertCanSend } from '../core/access.js';
@@ -986,7 +986,9 @@ export function createApp({
     stickers,
     memory,
     getIdentityPilot: () => identityPilot,
-    getIdentityStatus: identityPilotStatus
+    getIdentityStatus: identityPilotStatus,
+    // 表情备注走的是模型调用，要记进今日用量（否则控制台"今日花费"与预算判定都少算这一块）
+    sessions
   });
   let slangPilot = null;
   let slangPilotError = '';
@@ -2875,6 +2877,85 @@ export function createApp({
     }
   });
 
+  /**
+   * 批量给"没有备注"的表情补写 AI 备注（AI 资产观测页的「重新备注」按钮）。
+   *
+   * 是**写操作**（会调视觉模型 + 改贴纸库），所以：
+   *   · 需要显式 `confirm: true`（与删除表情同一个口径，防止误触批量烧 token）；
+   *   · **先过视觉能力闸**（visionEnabled）：当前模型不支持图片输入时一次请求都不发，
+   *     否则会拿 10 条去撞 400，用户只看到"10 条失败"却不知道原因（浪费额度还难排查）。
+   *     判定口径与 orchestrator / prompt 完全一致，不自造开关。
+   *   · 单次上限 50 条，默认 10 条；前端「进度条」逐条调用（max=1）拿真实进度。
+   *   · 只补 `localNote` 为空的，已有备注的一律不碰（用户的劳动成果不能被"智能"覆盖）。
+   */
+  router.add('POST', '/api/assets/stickers/renote', async (req, res) => {
+    try {
+      const body = await readBody(req);
+      if (body.confirm !== true) return json(res, 409, { error: '重新备注会调用视觉模型并改写表情库，需要显式确认' });
+      // 闸门一：模型能不能看图。不能就直接拒，别把 image_url 发给一个不认图的接口。
+      if (!visionEnabled()) {
+        const cfg = getConfig();
+        const verdict = modelImageVerdict(cfg?.api?.provider, cfg?.api?.model);
+        return json(res, 409, {
+          ok: false,
+          error: '当前模型不支持图片输入，没法看图写备注',
+          hint: cfg?.api?.vision === false
+            ? '「模型 API」页的「图片输入」开关是关的，打开它，或换一个支持视觉的模型。'
+            : (verdict === 'no-vision'
+              ? '这个模型被判定为不支持图片输入。请换用支持视觉的模型（或在「平台能力」里跑一次视觉扫描确认）。'
+              : '未能确认当前模型支持图片输入。可以在「平台能力」页跑一次视觉扫描，确认后再试。'),
+          canVision: false
+        });
+      }
+      const max = Math.max(1, Math.min(50, Number(body.max) || 10));
+      // 前端逐条处理时带 id：按 id 精确处理，不靠"取队列头"
+      //（否则某条失败后它一直占着队首，会导致缩略图错位 + 坏图烧光剩余轮次）
+      const id = String(body.id ?? '').trim();
+      const result = await assetObserver.renoteMissingStickers(id ? { id } : { max });
+      if (result.updated) emit('asset-update', { kind: 'stickers', action: 'renote', updated: result.updated });
+      auditWrite('assets.stickers.renote', 'stickers', {
+        req, attempted: result.attempted, updated: result.updated, failed: result.failed.length
+      });
+      return json(res, 200, { ok: true, canVision: true, ...result });
+    } catch (error) {
+      return json(res, error?.httpStatus || 500, { error: String(error?.message ?? error) });
+    }
+  });
+  /**
+   * 「重新备注」的前置查询：还剩多少条没备注、当前模型能不能看图。
+   * 前端据此决定按钮是否可点、进度条分母是多少 —— 让用户在**点之前**就知道行不行。
+   */
+  router.add('GET', '/api/assets/stickers/renote-status', async (req, res, params, url) => {
+    try {
+      const snapshot = assetObserver.stickerSnapshot();
+      const pending = (snapshot.entries || []).filter((entry) =>
+        !String(entry.localNote || '').trim() && !String(entry.usage || '').trim() && entry.hasImage);
+      const cfg = getConfig();
+      // 带上**预览地址**：前端派发请求时就能先把图显示出来（否则"处理中…"那一行是空白的，
+      // 用户看不到正在处理哪张）。
+      // ⚠️ QQ 收藏表情本地没有文件、只有一条临时图链（p.qpic.cn/…），而观测视图有契约
+      // "不得泄露临时图片 URL"（见 test/asset-observer），所以不能把 url 直接回给前端。
+      // 统一走 /api/assets/stickers/image?id= 这个后端代理入口：它在服务端取图
+      // （本地文件或远程图链都支持），前端拿到的只是一个稳定的 id 地址。
+      // 注意**不要**按 entry.localFile 判断要不要给地址 —— stickerView 不暴露 localFile，
+      // 那样写会全部判成"没有图"（实测预览数为 0）。
+      const limit = Math.max(1, Math.min(60, Number(url.searchParams.get('preview')) || 30));
+      const previews = pending.slice(0, limit).map((entry) => ({
+        id: entry.id,
+        imageUrl: `/api/assets/stickers/image?id=${encodeURIComponent(entry.id)}`
+      }));
+      return json(res, 200, {
+        ok: true,
+        pending: pending.length,
+        previews,
+        canVision: visionEnabled(),
+        visionVerdict: modelImageVerdict(cfg?.api?.provider, cfg?.api?.model) || 'unknown',
+        visionSwitch: cfg?.api?.vision !== false
+      });
+    } catch (error) {
+      return json(res, error?.httpStatus || 500, { error: String(error?.message ?? error) });
+    }
+  });
   router.add('PUT', /^\/api\/assets\/stickers\/([^/]+)$/, async (req, res, params) => {
     try {
       const id = decodeURIComponent(params[1]);
@@ -4381,6 +4462,38 @@ export function createApp({
     } catch (error) {
       auditWrite('providers.upsert', '', { req, ok: false, error: String(error?.message ?? error) });
       return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+  /**
+   * 查一个模型的上下文窗口（供「切换模型后自动填」用）。
+   *
+   * 只查不写：前端拿到 `contextWindow` 之后再和模型一起 `POST /api/config` 提交，
+   * 这样"改模型"与"改窗口"是同一次写入，不会出现改了一半的状态。
+   * 查不到时返回 `contextWindow: 0` + `reason`，前端据此**保持原值不动**（绝不瞎猜）。
+   */
+  router.add('POST', '/api/providers/model-context', async (req, res) => {
+    try {
+      const body = await readBody(req);
+      const cfgNow = getConfig();
+      const baseUrl = String(body.baseUrl || cfgNow.api.baseUrl || '');
+      const model = String(body.model ?? '').trim();
+      if (!model) return json(res, 400, { ok: false, error: '缺少 model' });
+      const submitted = String(body.apiKey ?? '').trim();
+      // 与「获取列表」「测试连通性」同一条守卫：掩码/空 Key 只发给配置里已知的地址
+      const apiKey = (submitted && submitted !== '******')
+        ? submitted
+        : (storedKeyAllowedFor(cfgNow, baseUrl) ? resolveApiKey(cfgNow) : '');
+      const { contextWindows } = await fetchModelCapsFrom(baseUrl, apiKey);
+      const tokens = Number(contextWindows?.[model]) || 0;
+      return json(res, 200, {
+        ok: true,
+        model,
+        contextWindow: tokens,
+        known: Object.keys(contextWindows || {}).length,
+        reason: tokens ? '' : '提供商的模型列表里没有上下文窗口字段（很多接口不带），保持原值不变'
+      });
+    } catch (error) {
+      return json(res, 502, { ok: false, error: String(error?.message ?? error) });
     }
   });
   router.add('POST', '/api/providers/models', async (req, res) => {

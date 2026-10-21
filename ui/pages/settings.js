@@ -1199,13 +1199,41 @@ function openModelPicker() {
         const pid = el.dataset.pid;
         const model = el.dataset.model;
         try {
-          // 只更新 provider/model/baseUrl；apiKey 保持当前已保存值，不把密钥回写到接口请求里
+          // 先问一下这个模型的上下文窗口：查得到就把「模型上下文窗口」和
+          // 「单次运行累计 Token 上限」一起填成该值（用户要求：切模型后自动对齐窗口）。
+          // 查不到（很多接口的 /models 不带这个字段）就**保持原值不动**，绝不瞎猜一个数。
+          let walletPatch = {};
+          let ctxNote = '';
+          try {
+            const r = await api('/api/providers/model-context', {
+              method: 'POST',
+              body: JSON.stringify({ baseUrl: p.baseURL, model })
+            });
+            const tokens = Number(r?.contextWindow) || 0;
+            if (tokens > 0) {
+              // 两个字段都拉到同一个上限：单轮累计 token 不该超过模型一次能吃的上下文
+              walletPatch = { contextWindowTokens: tokens, maxRunTokens: tokens };
+              ctxNote = `已按模型自动填入上下文窗口：${tokens.toLocaleString()} tokens`;
+            } else {
+              ctxNote = r?.reason || '该模型的上下文窗口未知，保持原设置';
+            }
+          } catch (e) {
+            ctxNote = `上下文窗口查询失败（${e.message}），保持原设置`;
+          }
+          // 只更新 provider/model/baseUrl + 自动补的窗口值；apiKey 保持当前已保存值
           await api('/api/config', {
             method: 'POST',
-            body: JSON.stringify({ api: { provider: pid, model, baseUrl: p.baseURL } })
+            body: JSON.stringify({ api: { provider: pid, model, baseUrl: p.baseURL, ...walletPatch } })
           });
           closeModelModal(overlay);
           loadSettings();
+          if (ctxNote) {
+            // loadSettings 会重渲染整页，提示得等它画完再写
+            setTimeout(() => {
+              const hint = document.getElementById('provider-action-hint');
+              if (hint) hint.textContent = ctxNote;
+            }, 120);
+          }
         } catch (e) {
           $('#provider-hint').textContent = `选择失败：${e.message}`;
           closeModelModal(overlay);
