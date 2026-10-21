@@ -94,6 +94,10 @@ export class ChatStore {
         PRIMARY KEY (chat_key, id), UNIQUE (chat_key, mid)
       );
       CREATE INDEX IF NOT EXISTS messages_pending ON messages(chat_key, state, available_at, id);
+      -- getChatMeta 在每条入站消息和 5 秒 tick 上都会跑；failed/held 没有窄索引时
+      -- 会随会话历史线性变慢。
+      CREATE INDEX IF NOT EXISTS messages_failed ON messages(chat_key) WHERE state='failed';
+      CREATE INDEX IF NOT EXISTS messages_held ON messages(chat_key) WHERE state='held';
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, chat_key TEXT NOT NULL, state TEXT NOT NULL,
         expires_at INTEGER NOT NULL, error TEXT
@@ -154,6 +158,15 @@ export class ChatStore {
     ensureColumn(this.db, 'messages', 'mentions_self', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn(this.db, 'messages', 'target_user_id', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.db, 'messages', 'event_kind', "TEXT NOT NULL DEFAULT 'message'");
+    // getChatMeta 的 total 不能再用 COUNT(*) 扫全历史（每条入站消息 + 5 秒 tick 都调），
+    // 但也不能用 next_id-1：保留期清理会删掉旧行，那样会虚报"还有 N 条没加载"。
+    // 维护一个随插入/清理增减的计数，老库首次启动按现有行数回填一次。
+    ensureColumn(this.db, 'chats', 'message_count', 'INTEGER NOT NULL DEFAULT 0');
+    if (!this.db.prepare("SELECT 1 FROM migrations WHERE name='chats_message_count'").get()) {
+      this.db.exec(`UPDATE chats SET message_count=(
+        SELECT COUNT(*) FROM messages WHERE messages.chat_key=chats.chat_key)`);
+      this.db.prepare("INSERT INTO migrations(name) VALUES ('chats_message_count')").run();
+    }
     // runs 是全仓唯一没有回收纪律的账本（每次带租约的运行 +1，常驻不删，5 秒全表扫）：
     // 进程启动时清掉终态且早已过期的行。expires_at 记的是"租约到期时刻"，用它当近似创建时间，
     // 90 天前的终态行已无诊断价值（2026-10-07 复审 P3）。
@@ -239,12 +252,16 @@ export class ChatStore {
       m.mentionsSelf ? 1 : 0, String(m.targetUserId || ''),
       String(m.eventKind || 'message'), state
     );
-    this.db.prepare('UPDATE chats SET next_id=next_id+1 WHERE chat_key=?').run(chatKey);
+    this.db.prepare('UPDATE chats SET next_id=next_id+1, message_count=message_count+1 WHERE chat_key=?').run(chatKey);
     if (this.maxPerChat > 0) {
       // Retention must never evict unprocessed or uncertain messages.
-      this.db.prepare(`DELETE FROM messages WHERE chat_key=? AND state='acked' AND id <
+      const removed = this.db.prepare(`DELETE FROM messages WHERE chat_key=? AND state='acked' AND id <
         COALESCE((SELECT id FROM messages WHERE chat_key=? ORDER BY id DESC LIMIT 1 OFFSET ?),0)`)
         .run(chatKey, chatKey, this.maxPerChat - 1);
+      if (removed.changes) {
+        this.db.prepare('UPDATE chats SET message_count=MAX(0, message_count-?) WHERE chat_key=?')
+          .run(Number(removed.changes), chatKey);
+      }
     }
     return entry(this.db.prepare('SELECT * FROM messages WHERE chat_key=? AND id=?').get(chatKey, id));
   }
@@ -266,17 +283,19 @@ export class ChatStore {
   close() { this.db.close(); }
 
   getChatMeta(chatKey) {
-    const counts = this.db.prepare(`SELECT COUNT(*) AS total,
-      COALESCE(SUM(state IN ('pending','leased')),0) AS unread,
-      COALESCE(SUM(state='failed'),0) AS failed,
-      COALESCE(SUM(state='held'),0) AS heldMessages FROM messages WHERE chat_key=?`).get(chatKey);
+    // total 走 chats 上维护的计数（插入/保留期清理同步增减），不再对整段历史做 COUNT(*)；
+    // 其余状态各走自己的窄索引。这个函数在每条入站消息和 5 秒 tick 上都会调用。
+    const total = Number(this.db.prepare('SELECT message_count FROM chats WHERE chat_key=?').get(chatKey)?.message_count) || 0;
+    const unread = Number(this.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE chat_key=? AND state IN ('pending','leased')").get(chatKey)?.n) || 0;
+    const failed = Number(this.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE chat_key=? AND state='failed'").get(chatKey)?.n) || 0;
+    const heldMessages = Number(this.db.prepare("SELECT COUNT(*) AS n FROM messages WHERE chat_key=? AND state='held'").get(chatKey)?.n) || 0;
+    const counts = { total, unread, failed };
     const uncertain = this.db.prepare(`SELECT COUNT(DISTINCT COALESCE(run_id,id)) AS held
       FROM outbox WHERE chat_key=? AND state IN ('sending','unknown')`).get(chatKey).held;
-    const last = this.db.prepare('SELECT ts,text FROM messages WHERE chat_key=? ORDER BY id DESC LIMIT 1').get(chatKey);
+    const last = this.db.prepare('SELECT ts,text FROM messages WHERE chat_key=? ORDER BY ts DESC, id DESC LIMIT 1').get(chatKey);
     const thread = this.getConversationThread(chatKey);
-    const { heldMessages, ...rest } = counts;
     return {
-      chatKey, ...rest, held: Math.max(Number(heldMessages) || 0, Number(uncertain) || 0),
+      chatKey, ...counts, held: Math.max(Number(heldMessages) || 0, Number(uncertain) || 0),
       lastTs: last?.ts || 0, lastText: last?.text || '',
       thread: thread ? {
         threadId: thread.threadId,
@@ -473,7 +492,11 @@ export class ChatStore {
             SELECT rowid FROM outbox WHERE (run_id IS NULL OR run_id='') AND ${terminal}
             ORDER BY rowid DESC LIMIT ?
           )`).run(limit);
-      return Number(result?.changes) || 0;
+      // runs 保留期清理后，带 run_id 的终态 outbox 行会变成孤儿；它们没有别的回收路径。
+      const orphan = this.db.prepare(`DELETE FROM outbox
+        WHERE run_id IS NOT NULL AND run_id != '' AND ${terminal}
+          AND run_id NOT IN (SELECT id FROM runs)`).run();
+      return (Number(result?.changes) || 0) + (Number(orphan?.changes) || 0);
     } catch {
       return 0;
     }

@@ -1106,6 +1106,26 @@ function migrateConfig(parsed) {
   // 被 loadConfig 的 catch 吞掉后静默退回默认值、还会被持久化 —— 用户配置整份没了。
   if (!isPlainObject(parsed)) parsed = {};
   const out = structuredClone(parsed);
+  // 名单/数组段统一归一化：手改或 API 传成字符串/对象时，入站路径的 .map、
+  // 模型请求的 .find、设置页的 .join 会直接抛，机器人静默不回复。
+  // 这里按"空名单/空数组"恢复，而不是把类型错误带进运行期。
+  const listOf = (value) => (Array.isArray(value) ? value : []);
+  if (!isPlainObject(out.allow)) out.allow = {};
+  out.allow.groups = listOf(out.allow.groups);
+  out.allow.private = listOf(out.allow.private);
+  if (!isPlainObject(out.deny)) out.deny = {};
+  out.deny.groups = listOf(out.deny.groups);
+  out.deny.private = listOf(out.deny.private);
+  if (!isPlainObject(out.blocklist)) out.blocklist = {};
+  for (const key of Object.keys(out.blocklist)) {
+    out.blocklist[key] = listOf(out.blocklist[key]);
+  }
+  out.providers = listOf(out.providers);
+  out.customPersonas = listOf(out.customPersonas);
+  // store 段缺失或形状坏掉时整段丢掉，交给默认值合并：补一个空对象会让后面的概率迁移
+  // 以为"用户明确写了 0%"，把默认的全响应改成不响应。
+  if (out.store !== undefined && !isPlainObject(out.store)) delete out.store;
+  if (isPlainObject(out.store)) out.store.keywords = listOf(out.store.keywords);
   // 人设段必须是对象：手改坏的 config.json 里可能是 "persona": "小鲸鱼" 这类标量或数组，
   // 放它过去会在保存时炸（Cannot create property 'behaviorProfile' on string），
   // 而控制台保存与 scripts/configure-linux.mjs 都要走这条路径 —— 恢复成默认人设对象。

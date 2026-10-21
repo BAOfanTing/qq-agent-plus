@@ -124,6 +124,9 @@ export class ReminderStore {
       targetName: sanitizeUserText(String(targetName || '').trim()).slice(0, 40),
       status: 'pending',
       createdAt: now,
+      // originalAt 是承诺时间，deferTo 外因顺延会更新；投递重试不会。
+      originalAt: when,
+      deliveryAttempts: 0,
       firedAt: null,
       finishedAt: null
     };
@@ -158,9 +161,18 @@ export class ReminderStore {
     return this.items.filter((it) => it.status === 'pending' && it.at <= now);
   }
 
-  /** 迟到的提醒：超过 12 小时的直接作废（不补发一串"迟到的提醒"）。 */
+  /** 迟到的提醒：超过 12 小时的直接作废（不补发一串"迟到的提醒"）。
+   *  originalAt 是"对外承诺的到点时间"；投递重试只改 at，不能把作废时钟一起推走，
+   *  否则一条永远发不出去的提醒会每 5 分钟重试、永远不过期（2026-10-21 复审 P1）。 */
   expired(now = Date.now()) {
-    return this.items.filter((it) => it.status === 'pending' && it.at <= now - EXPIRE_AFTER_MS);
+    return this.items.filter((it) => {
+      if (it.status !== 'pending') return false;
+      const at = Number(it.at) || 0;
+      const originalAt = Number(it.originalAt) || at;
+      // 取更早的那个：投递重试只把 at 推后（仍按原承诺作废）；
+      // 手工/迁移把 at 改成更早（或旧数据没有 originalAt）时也按 at 判。
+      return Math.min(originalAt, at) <= now - EXPIRE_AFTER_MS;
+    });
   }
 
   /**
@@ -172,6 +184,39 @@ export class ReminderStore {
     const hit = this.items.find((x) => x.id === id && x.status === 'pending');
     if (!hit) return null;
     hit.at = Number(at) || hit.at;
+    // 预算/静默段属于"外因顺延"：承诺时间确实改到新窗口，作废时钟跟着新 at 起算。
+    hit.originalAt = hit.at;
+    this.#save();
+    return hit;
+  }
+
+  /** 投递失败后的短暂重试：只改 at，不改 originalAt；超过上限就停止自动重试。
+   *  返回 { exhausted, attempts }，调用方据此记日志/告警。 */
+  retryLater(id, at, { maxAttempts = 3 } = {}) {
+    const hit = this.items.find((x) => x.id === id && x.status === 'pending');
+    if (!hit) return { exhausted: false, attempts: 0, missing: true };
+    hit.deliveryAttempts = (Number(hit.deliveryAttempts) || 0) + 1;
+    if (hit.deliveryAttempts > maxAttempts) {
+      hit.status = 'failed';
+      hit.finishedAt = Date.now();
+      hit.error = `连续 ${hit.deliveryAttempts} 次未确认播报，已停止自动重试`;
+      this.#prune();
+      this.#save();
+      return { exhausted: true, attempts: hit.deliveryAttempts };
+    }
+    hit.at = Number(at) || hit.at;
+    this.#save();
+    return { exhausted: false, attempts: hit.deliveryAttempts };
+  }
+
+  /** 发送结果未知/确认失败时停止自动重试（避免重复发送），保留原因供人工核对。 */
+  failDelivery(id, reason = '') {
+    const hit = this.items.find((x) => x.id === id && x.status === 'pending');
+    if (!hit) return null;
+    hit.status = 'failed';
+    hit.finishedAt = Date.now();
+    hit.error = String(reason || '投递结果未知，已停止自动重试');
+    this.#prune();
     this.#save();
     return hit;
   }

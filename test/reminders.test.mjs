@@ -152,3 +152,33 @@ test('reminderNoteCost：归属名计进派发预算（条数上限与 note 截�
   assert.equal(reminderNoteCost({ text: 'x'.repeat(10), createdBy: '甲'.repeat(5), targetName: '乙'.repeat(7) }), 10 + 5 + 7 + 8);
   assert.equal(reminderNoteCost({ text: 'x' }), 1 + 8);
 });
+
+test('投递重试不推走作废时钟，超过 3 次停止自动重试', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-reminders-retry-'));
+  try {
+    const store = new ReminderStore(path.join(dir, 'r.json'));
+    const now = Date.now();
+    const { id } = store.add({ chatKey: 'group:1', at: now + 60_000, text: '喝水' });
+    const retryAt = now + 5 * 60 * 1000;
+    for (let i = 0; i < 3; i += 1) {
+      const r = store.retryLater(id, retryAt + i * 1000);
+      assert.equal(r.exhausted, false);
+    }
+    const fourth = store.retryLater(id, retryAt + 4000);
+    assert.equal(fourth.exhausted, true, '超过 3 次必须停止');
+    assert.equal(store.items.find((x) => x.id === id).status, 'failed');
+
+    const second = store.add({ chatKey: 'group:2', at: now + 60_000, text: '吃药' });
+    store.retryLater(second.id, now + 5 * 60 * 1000);
+    assert.equal(store.expired(now + 13 * 3600 * 1000).some((x) => x.id === second.id), true,
+      '重试只改 at，不能把 originalAt 一起推走');
+    // 关键区分：重试把 at 推到作废线之外时，仍要按承诺时间 originalAt 作废；
+    // 只看 at 的实现会认为它还"很新"，永远不进入 expired。
+    const late = store.add({ chatKey: 'group:3', at: now + 60_000, text: '跨过作废线' });
+    store.retryLater(late.id, now + 12.5 * 3600 * 1000);
+    assert.equal(store.expired(now + 13 * 3600 * 1000).some((x) => x.id === late.id), true,
+      'at 被推后也不能推迟作废');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

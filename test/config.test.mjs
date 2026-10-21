@@ -377,3 +377,23 @@ test('三个带凭据映射的段（asr/tts/imageGen）：手改坏成标量/数
   updateConfig({ asr: { provider: 'tencent', keys: { tencent: { secretId: 'AKID', secretKey: 'SK' } } } });
   assert.deepEqual(getConfig().asr.keys.tencent, { secretId: 'AKID', secretKey: 'SK' });
 });
+
+test('坏形状的 allow/deny/blocklist/providers/customPersonas/store.keywords 归一化', () => {
+  updateConfig({
+    allow: { groups: '123456', private: { a: 1 } },
+    deny: { groups: null, private: 'x' },
+    blocklist: { '123': '456' },
+    providers: {},
+    customPersonas: {},
+    store: { keywords: 'not-an-array' }
+  });
+  const cfg = getConfig();
+  assert.deepEqual(cfg.allow.groups, []);
+  assert.ok(Array.isArray(cfg.allow.private), '私聊名单必须是数组（管理员 QQ 可能被自动补入）');
+  assert.deepEqual(cfg.deny.groups, []);
+  assert.ok(Array.isArray(cfg.deny.private));
+  assert.deepEqual(cfg.blocklist['123'], []);
+  assert.deepEqual(cfg.providers, []);
+  assert.deepEqual(cfg.customPersonas, []);
+  assert.deepEqual(cfg.store.keywords, []);
+});
