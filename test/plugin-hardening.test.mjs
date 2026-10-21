@@ -515,3 +515,20 @@ test('签名脚本：--keygen 生成密钥对，签出来的名宿主认得（�
   assert.equal(verifyPluginSignature({ buffer: fs.readFileSync(pkg), signature, publicKey: pub }).ok, true);
   assert.equal(sha256Of(fs.readFileSync(pkg)).length, 64);
 });
+
+test('模型侧工具名超过 64 字符时在 manifest 校验就拒绝', () => {
+  const parsed = parsePluginManifest({
+    id: 'a'.repeat(32),
+    name: 'too-long-tool',
+    version: '1.0.0',
+    apiVersion: 1,
+    capabilities: ['tools'],
+    tools: [{
+      name: 'a'.repeat(31),
+      description: 'x',
+      parameters: { type: 'object', properties: {} }
+    }]
+  });
+  assert.equal(parsed.ok, false);
+  assert.match(parsed.error, /64 字符上限/);
+});

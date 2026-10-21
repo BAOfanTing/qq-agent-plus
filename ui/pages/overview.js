@@ -115,20 +115,84 @@ async function loadOverview() {
   if (!box.dataset.ready) {
     box.innerHTML = '<div class="hint" style="padding:24px">正在读取总览…</div>';
   }
-  // 五个数据源各自独立：任何一个失败都不该让整页空着
-  const [status, usage, incidents, snowluma, host] = await Promise.all([
+  // 六个数据源各自独立：任何一个失败都不该让整页空着
+  const [status, usage, incidents, snowluma, host, config] = await Promise.all([
     api('/api/status').catch(() => null),
     api('/api/usage/stats?range=7d').catch(() => null),
     api('/api/incidents?limit=5').catch(() => null),
     api('/api/snowluma/version').catch(() => null),
-    api('/api/host').catch(() => null)
+    api('/api/host').catch(() => null),
+    api('/api/config').catch(() => null)
   ]);
 
   const onebot = status?.onebot || {};
   const usageToday = status?.usage || {};
   const selfName = onebot?.self?.nickname ? String(onebot.self.nickname) : '';
-  const modeText = status?.paused ? '已暂停' : (status?.runtime?.mode === 'observe' || status?.mode === 'observe' ? '观察模式' : '运行中');
+  // 运行模式在 /api/status.orchestrator.mode 里；不要把 observe 误显示成"运行中"。
+  const runMode = status?.orchestrator?.mode;
+  const modeText = status?.paused ? '已暂停' : (runMode === 'observe' ? '观察模式' : '运行中');
   const modeChip = status?.paused ? { text: '暂停', cls: 'warn' } : null;
+
+  // 首启体检：装完控制台最怕“不知道还差什么”。这五项是机器人能开口的最小集合，
+  // 每项都给一个直达入口；全部完成后这块自动消失，不占老用户的空间。
+  const asList = (value) => (Array.isArray(value) ? value : []);
+  const allowOk = asList(config?.allow?.groups).length > 0
+    || asList(config?.allow?.private).length > 0
+    || config?.allowAllWhenEmpty === true;
+  const modelOk = Boolean(config?.api?.baseUrl && config?.api?.model);
+  const qqOk = Boolean(selfName || onebot?.self?.userId);
+  const setupSteps = [
+    {
+      key: 'model',
+      label: '模型 API',
+      ok: modelOk,
+      detail: modelOk ? '已配置' : '还没填地址、Key 或模型名',
+      action: modelOk ? '' : '<button type="button" class="btn btn-small" data-open-settings="api">去配置</button>'
+    },
+    {
+      key: 'onebot',
+      label: 'OneBot 连接',
+      ok: Boolean(onebot.connected),
+      detail: onebot.connected ? '已连接' : (onebot.everConnected ? '连接断开' : '协议端还没连上'),
+      action: onebot.connected ? '' : '<button type="button" class="btn btn-small" data-open-settings="onebot">看设置</button>'
+    },
+    {
+      key: 'qq',
+      label: 'QQ 登录',
+      ok: qqOk,
+      detail: qqOk ? `已登录${selfName ? ` · ${esc(selfName)}` : ''}` : '还没拿到登录信息',
+      action: qqOk ? '' : '<button type="button" class="btn btn-small" data-setup-tab="control">去扫码</button>'
+    },
+    {
+      key: 'allow',
+      label: '聊天白名单',
+      ok: allowOk,
+      detail: allowOk ? '已配置' : '还没有群或私聊，机器人不会回任何消息',
+      action: allowOk ? '' : '<button type="button" class="btn btn-small" data-open-settings="chats">去添加</button>'
+    },
+    {
+      key: 'mode',
+      label: '运行模式',
+      ok: runMode === 'active',
+      detail: runMode === 'active' ? '活跃' : '观察模式（只看不回）',
+      action: runMode === 'active' ? '' : '<button type="button" class="btn btn-small" data-setup-tab="control">去切换</button>'
+    }
+  ];
+  const setupDone = setupSteps.filter((step) => step.ok).length;
+  const setupPanel = setupDone === setupSteps.length ? '' : panel(
+    '开始使用',
+    `${setupDone}/${setupSteps.length} 项就绪 · 按顺序做完，机器人就能在群里回复`,
+    `<ul class="setup-list">${setupSteps.map((step) => `
+      <li class="setup-row${step.ok ? ' is-done' : ''}">
+        <span class="setup-mark">${iconSvg(step.ok ? 'check' : 'plus', { size: 14 })}</span>
+        <span class="setup-main">
+          <span class="setup-label">${esc(step.label)}</span>
+          <span class="setup-detail">${step.detail}</span>
+        </span>
+        ${step.action ? `<span class="setup-action">${step.action}</span>` : ''}
+      </li>`).join('')}</ul>`,
+    { icon: 'sparkles' }
+  );
 
   const incidentList = Array.isArray(incidents?.incidents) ? incidents.incidents : [];
   // 计数字段在 status.counts 里（open / acknowledged / resolved / critical）—— 别猜扁平键名
@@ -138,10 +202,12 @@ async function loadOverview() {
   const ackedCount = Number(counts.acknowledged) || 0;
 
   const slVersion = String(snowluma?.currentVersion || '');
-  const slChip = !snowluma?.installed ? { text: '未检测到', cls: '' }
-    : snowluma?.outdated ? { text: `落后 → ${snowluma.targetVersion}`, cls: 'warn' }
-      : snowluma?.belowRecommended ? { text: `低于推荐 ${snowluma.minRecommended}`, cls: 'warn' }
-        : { text: '已是最新', cls: 'ok' };
+  const slContainer = snowluma?.container === true;
+  const slChip = slContainer ? { text: '容器模式', cls: 'ok' }
+    : !snowluma?.installed ? { text: '未检测到', cls: '' }
+      : snowluma?.outdated ? { text: `落后 → ${snowluma.targetVersion}`, cls: 'warn' }
+        : snowluma?.belowRecommended ? { text: `低于推荐 ${snowluma.minRecommended}`, cls: 'warn' }
+          : { text: '已是最新', cls: 'ok' };
 
   // 按天的行在 stats.days 里（不是 rows）；每天的次数用 exactCalls，runs 是另一维
   const statDays = Array.isArray(usage?.days) ? usage.days : [];
@@ -181,6 +247,8 @@ async function loadOverview() {
       <button class="btn btn-small" id="overview-refresh">${iconSvg('refresh', { size: 15 })}<span>刷新</span></button>
     </div>
 
+    ${setupPanel}
+
     <div class="kpi-grid">
       ${kpi({
         icon: 'zap', label: '机器人', id: 'kpi-bot',
@@ -209,8 +277,12 @@ async function loadOverview() {
       })}
       ${kpi({
         icon: 'globe', label: '协议端（SnowLuma）',
-        value: slVersion ? `v${esc(slVersion)}` : '—',
-        sub: snowluma?.installed ? `容器${snowluma.running ? '运行中' : '未运行'} · 基线 v${esc(snowluma.targetVersion || '')}` : '没检测到协议端 compose 项目',
+        value: slVersion ? `v${esc(slVersion)}` : (slContainer ? '由 compose 管理' : '—'),
+        sub: slContainer
+          ? '容器模式 · 更新请改 compose 里的镜像 tag'
+          : (snowluma?.installed
+            ? `容器${snowluma.running ? '运行中' : '未运行'} · 基线 v${esc(snowluma.targetVersion || '')}`
+            : '没检测到协议端 compose 项目'),
         chip: slChip
       })}
     </div>
@@ -256,6 +328,9 @@ async function loadOverview() {
 
   applyIcons(box);
   animateKpiCounters(box);
+  box.querySelectorAll('[data-setup-tab]').forEach((el) => {
+    el.addEventListener('click', () => switchTab(el.dataset.setupTab));
+  });
   document.getElementById('overview-refresh')?.addEventListener('click', () => { delete box.dataset.ready; loadOverview(); });
   // 「去更新 / 看详情」不在这里绑定：它带 data-open-settings="onebot"，由 app.js 里那**一个**
   // 全局委托处理（老写法是自己 switchTab + 派发一个 qa-settings-section 事件，而那个事件全仓

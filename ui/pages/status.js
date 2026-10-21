@@ -107,8 +107,8 @@ function containerManaged() {
 
 function renderUpdateCheckNote(update = {}) {
   if (containerManaged()) {
-    return '当前以 Docker 容器运行：应用由镜像管理。更新请在宿主机执行'
-      + ' docker compose pull && docker compose up -d（数据卷不动）。';
+    return '当前以 Docker 容器运行：应用由镜像管理。升级时先把 compose 里的 QQ_AGENT_IMAGE 改到目标版本，'
+      + '再 docker compose pull && docker compose up -d（数据卷不动）。';
   }
   const short = (value) => (value ? String(value).slice(0, 12) : '-');
   const check = update.updateNotice && typeof update.updateNotice === 'object' ? update.updateNotice : null;
@@ -183,7 +183,7 @@ async function runManualUpdate() {
   const result = $('#auto-update-result');
   if (containerManaged()) {
     if (result) {
-      result.textContent = '容器部署请在宿主机执行：docker compose pull && docker compose up -d';
+      result.textContent = '容器部署请先把 compose 里的 QQ_AGENT_IMAGE 改到目标版本，再执行 docker compose pull && docker compose up -d';
       result.className = 'control-result muted';
     }
     return;
@@ -212,7 +212,7 @@ async function runUpdateFromNotice() {
   const runBtn = $('#update-notice-run');
   if (containerManaged()) {
     if (result) {
-      result.textContent = '容器部署请在宿主机执行：docker compose pull && docker compose up -d';
+      result.textContent = '容器部署请先把 compose 里的 QQ_AGENT_IMAGE 改到目标版本，再执行 docker compose pull && docker compose up -d';
       result.className = 'control-result muted';
     }
     return;

@@ -18,9 +18,16 @@ the old instance.
 ## Requirements
 
 - Linux with systemd user services, curl, tar, sha256sum and rsync.
-- A non-root user: `deploy-all.sh` refuses to run as root, and `deploy.sh` is
-  meant to run as the service user that owns the systemd user service.
-- A mounted local filesystem for SQLite; NFS and SMB are not supported.
+- A non-root service user. `install.sh` may be started as root: it creates or
+  reuses a dedicated service account (default `qqagent`, or `SUDO_USER`), then
+  re-runs the installer as that user. `deploy-all.sh` itself still refuses root.
+- Recommended resources: 2 CPU cores, 2GB RAM and 10GB free local disk. A 1GB
+  host can OOM while SnowLuma/Chromium starts; SQLite must not live on NFS/SMB.
+- Distribution tiers: tested on Ubuntu 22.04/24.04, Debian 12, Rocky 9 and AlmaLinux 9.
+  Fedora/CentOS Stream/RHEL/Oracle/Amazon Linux, Arch/Manjaro, openSUSE/SLES and
+  openEuler/Anolis/Kylin/UOS are attempted through their package manager but not
+  tested here. Alpine/musl, NixOS, Gentoo, Void, WSL1 and containers without systemd
+  are unsupported. Run `sh scripts/check-platform.sh` for a read-only verdict.
 - A separately managed OneBot v11 HTTP/forward WebSocket service when using
   `deploy.sh`; `deploy-all.sh` installs SnowLuma/OneBot.
 - An OpenAI Chat Completions compatible model with function calling.
@@ -36,11 +43,14 @@ with a three-step checklist (tokenized console link, QQ login page, allowlist).
 
 ```bash
 bash install.sh
+# or, on a fresh VPS that only gives you root:
+sudo bash install.sh
 ```
 
 The interactive installer is the same engine with the questions asked instead
-of defaulted. Run it as a regular user, not as root: the installer refuses root
-and calls `sudo` only for host dependencies such as Docker and linger.
+of defaulted. `install.sh` may run as root (it switches to a non-root service
+account first); `deploy-all.sh` should be run as a regular user and calls
+`sudo` only for host dependencies such as Docker and linger.
 
 ```bash
 bash deploy-all.sh

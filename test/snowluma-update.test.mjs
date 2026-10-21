@@ -43,7 +43,13 @@ function fakeDocker({ dir, state = {} } = {}) {
   const calls = [];
   const api = {
     calls,
-    state: { running: state.running === true, image: state.image || '', failingPull: false, failingUp: false },
+    state: {
+      running: state.running === true,
+      image: state.image || '',
+      failingPull: false,
+      failingUp: false,
+      services: state.services || ['snowluma']
+    },
     exec(cmd, args) {
       calls.push([cmd, ...args].join(' '));
       if (cmd !== 'docker') return { ok: false, code: -1, stdout: '', stderr: `unexpected cmd ${cmd}` };
@@ -55,6 +61,9 @@ function fakeDocker({ dir, state = {} } = {}) {
       }
       if (args[0] === 'compose') {
         const action = args.filter((a) => !a.startsWith('-') && a !== 'compose' && a !== dir && !a.includes('.env') && !a.includes('docker-compose'))[0];
+        if (action === 'config') {
+          return { ok: true, code: 0, stdout: (api.state.services || ['snowluma']).join('\n'), stderr: '' };
+        }
         if (action === 'pull') {
           if (api.state.failingPull) return { ok: false, code: 1, stdout: '', stderr: 'manifest unknown' };
           return { ok: true, code: 0, stdout: 'pulled', stderr: '' };
@@ -229,6 +238,25 @@ test('update dryRun：只算命令与 .env 变化，一个字节都不写', asyn
   assert.equal(fs.readFileSync(path.join(dir, '.env'), 'utf8'), before, 'dry-run 不许改 .env');
   assert.equal(docker.calls.some((c) => c.includes(' pull') || c.includes(' up')), false,
     'dry-run 不许动容器（只允许 inspect 这类只读查询）');
+});
+
+test('update：compose 目录含 agent 服务（全栈 compose）时拒绝更新，不写 .env', async () => {
+  const dir = makeProject();
+  const docker = fakeDocker({
+    dir,
+    state: {
+      running: true,
+      image: 'mirror.ccs.tencentyun.com/motricseven7/snowluma:v1.14.15',
+      services: ['snowluma', 'agent']
+    }
+  });
+  const before = readComposeEnv(dir).image;
+  const res = await makeUpdater(dir, docker).update();
+  assert.equal(res.ok, false);
+  assert.match(res.error, /全栈 compose|agent 服务/);
+  assert.equal(readComposeEnv(dir).image, before, '拒绝时不许改 .env');
+  assert.equal(docker.calls.some((c) => c.includes(' pull') || c.includes(' up')), false,
+    '拒绝时不许 pull/up');
 });
 
 test('update：pull 失败 → 只还原 .env，容器一个都不动', async () => {

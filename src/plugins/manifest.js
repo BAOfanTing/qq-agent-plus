@@ -162,6 +162,14 @@ export function parsePluginManifest(raw, { dir = '' } = {}) {
     const result = validateTool(item, index);
     if (result.error) return { ok: false, error: result.error };
     if (tools.some((t) => t.name === result.tool.name)) return { ok: false, error: `工具名重复：${result.tool.name}` };
+    // OpenAI function name 上限 64；`<id>__<tool>` 最长可达 32+2+32=66，严格端点会 400
+    // 整轮请求（不只是这个工具不可用）。安装时就拒掉，别让用户运行期才遇到。
+    if (qualifiedToolName(id, result.tool.name).length > 64) {
+      return {
+        ok: false,
+        error: `模型侧工具名 ${qualifiedToolName(id, result.tool.name)} 超过 64 字符上限（id 与工具名合计需 ≤62）`
+      };
+    }
     tools.push(result.tool);
   }
 

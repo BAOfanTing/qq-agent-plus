@@ -28,5 +28,5 @@ export function runtimeKind() {
 
 /** 容器模式下所有"更新"类操作的统一说明（控制台、ops、异常信息共用）。 */
 export function containerUpdateHint() {
-  return '当前以容器运行：应用由镜像管理，更新请拉取新镜像后重建容器（docker compose pull && docker compose up -d）；协议端镜像同理。';
+  return '当前以容器运行：应用由镜像管理。升级时先把 compose 里的 QQ_AGENT_IMAGE（或其他镜像引用）改成目标版本，再 docker compose pull && docker compose up -d；协议端镜像同理。';
 }

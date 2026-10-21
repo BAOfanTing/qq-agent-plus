@@ -30,7 +30,7 @@ UID_OUT=$(docker run --rm "$IMAGE" sh -c 'id -u')
 
 # 2) 全新卷 + 只读根文件系统启动
 docker run -d --name "$NAME" \
-  --read-only --tmpfs /tmp:size=64m \
+  --read-only --tmpfs /tmp:size=1g \
   --security-opt no-new-privileges:true \
   -p "127.0.0.1:${PORT}:3210" \
   -v "${VOL}:/data" \
@@ -51,6 +51,9 @@ done
 TOKEN=$(docker exec "$NAME" node -e "console.log(require('/data/config.json').server.token)")
 [ -n "$TOKEN" ] || fail "config.json 没有生成令牌"
 docker exec "$NAME" sh -c 'test -f /data/console-access.txt' || fail "console-access.txt 没有生成"
+# 默认液态玻璃壁纸必须是运行期资源；.dockerignore 的 *.png 曾把它排除
+docker exec "$NAME" node -e "fetch('http://127.0.0.1:3210/assets/liquid-wallpaper.png').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))" \
+  || fail "默认壁纸 /assets/liquid-wallpaper.png 返回非 200"
 
 # 4) 容器标记 + 绑定地址
 docker exec "$NAME" node -e "

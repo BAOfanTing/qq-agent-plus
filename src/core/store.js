@@ -106,6 +106,8 @@ export class ChatStore {
         id TEXT PRIMARY KEY, run_id TEXT, chat_key TEXT NOT NULL,
         state TEXT NOT NULL, payload TEXT NOT NULL, message_id TEXT, error TEXT
       );
+      -- getChatMeta 每 5 秒扫 outbox(chat_key,state)；没有索引会随历史行线性变慢。
+      CREATE INDEX IF NOT EXISTS outbox_chat_state ON outbox(chat_key, state);
       CREATE TABLE IF NOT EXISTS conversation_threads (
         chat_key TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
         mode TEXT NOT NULL DEFAULT 'threaded', state TEXT NOT NULL,
@@ -159,6 +161,7 @@ export class ChatStore {
     //（与三个台账踩过同一个坑，a465539 修了它们却漏了本表）。清理由 pruneRuns() 承担，
     // 常驻期间由 console 的每日保留期调度复用同一方法（retentionPruneTargets）。
     this.pruneRuns();
+    this.pruneOutbox();
     this.#importJson(dataDir);
   }
 
@@ -448,6 +451,28 @@ export class ChatStore {
     try {
       const result = this.db.prepare("DELETE FROM runs WHERE state != 'leased' AND expires_at <= ?")
         .run(Date.now() - days * 24 * 3600 * 1000);
+      return Number(result?.changes) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * 清掉无 runId 的终态 outbox 行（插件 send、群游戏、日报、额度提示都不带 runId）。
+   * 这些行没有"运行收尾按 run_id 删"的回收路径；不设上限会无界增长（含消息正文）。
+   * 保留最近 keep 条，按 rowid 倒序；启动与每日保留期调度都会调用。
+   * @returns {number} 实际删除的行数
+   */
+  pruneOutbox({ keep = 2000 } = {}) {
+    const limit = Math.max(1, Number(keep) || 2000);
+    const terminal = "state IN ('sent','failed','reconciled_sent','reconciled_failed')";
+    try {
+      const result = this.db.prepare(`DELETE FROM outbox
+        WHERE (run_id IS NULL OR run_id='') AND ${terminal}
+          AND rowid NOT IN (
+            SELECT rowid FROM outbox WHERE (run_id IS NULL OR run_id='') AND ${terminal}
+            ORDER BY rowid DESC LIMIT ?
+          )`).run(limit);
       return Number(result?.changes) || 0;
     } catch {
       return 0;
@@ -967,13 +992,25 @@ export class ChatStore {
   }
 
   recent(chatKey, { limit = 80, offset = 0, includeSelf = true, readOnly = false, afterId = 0 } = {}) {
-    // afterId：只取 id 更大的消息（增量消费）。固定"最新 N 条"的窗口在积压超过 N 时
-    // 会静默丢掉最老的那些——游戏 tick 丢的就是票（2026-09-29 审查 P2）
-    return this.db.prepare(`SELECT * FROM messages WHERE chat_key=? ${includeSelf ? '' : 'AND self=0'}
+    // afterId：增量消费按 id **升序**取"游标之后最早的一批"；积压超过 limit 时下一轮继续，
+    // 不能按 DESC 取最新 N 条再 reverse —— 那会把落在窗口外的最老消息静默跳过（游戏丢票）。
+    // 非增量调用仍保持"最新 N 条、按时间正序返回"的既有语义。
+    const after = Number(afterId) > 0 ? Number(afterId) : 0;
+    const rows = this.db.prepare(`SELECT * FROM messages WHERE chat_key=? ${includeSelf ? '' : 'AND self=0'}
       ${readOnly ? "AND state='acked'" : ''}
-      ${Number(afterId) > 0 ? 'AND id > ?' : ''}
-      ORDER BY id DESC LIMIT ? OFFSET ?`)
-      .all(chatKey, ...(Number(afterId) > 0 ? [Number(afterId)] : []), Math.max(1, Number(limit) || 1), Math.max(0, Number(offset) || 0)).reverse().map(entry);
+      ${after ? 'AND id > ?' : ''}
+      ORDER BY id ${after ? 'ASC' : 'DESC'} LIMIT ? OFFSET ?`)
+      .all(chatKey, ...(after ? [after] : []), Math.max(1, Number(limit) || 1), Math.max(0, Number(offset) || 0));
+    return (after ? rows : rows.reverse()).map(entry);
+  }
+
+  /**
+   * 该会话在 ts 之后有没有自己的消息落库。
+   * 提醒确认用它而不是"最新 N 条里翻"：唤醒期间涌入的消息可以把刚发出的自述挤出窗口。
+   */
+  hasSelfSince(chatKey, ts) {
+    return !!this.db.prepare('SELECT 1 FROM messages WHERE chat_key=? AND self=1 AND ts>=? LIMIT 1')
+      .get(String(chatKey), Number(ts) || 0);
   }
 
   findByMid(chatKey, mid) {

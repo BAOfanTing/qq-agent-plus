@@ -154,3 +154,12 @@ jobs:
             --draft \
             --title "${GITHUB_REF_NAME}" \
             --notes-file RELEASE_NOTES.md
+
+      # 一键连接脚本作为 Release 资产：用户本地没有项目也能直接下载。
+      # 安装页目前用 raw/main 作为即时地址，这里的资产给 releases/latest/download 用。
+      - name: 上传一键连接脚本
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            console-tunnel.bat console-tunnel.sh --clobber

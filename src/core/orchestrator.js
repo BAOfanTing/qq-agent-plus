@@ -111,6 +111,7 @@ function proactiveWindowState(raw, now) {
 
 import { safeSlice } from './util.js';
 import { canRun, chatAllowed } from './access.js';
+import { idList } from './list.js';
 import { assertTimeAllowed, isTimeActive, TimeControlError, timeUntilActive, watchTimeWindow, withTimeScope } from './time-gate.js';
 import { vendorOfConfig, vendorOfBaseUrl } from '../pricing/model-prices.js';
 import { budgetStatus } from './budget.js';
@@ -984,6 +985,12 @@ export class Orchestrator {
 
   /** 「今天的额度用完了」这句按 chatKey × 天去重：没有它，兜底回收每 5~25s 重排一次就会在群里刷屏。 */
   #budgetSaid = new Map();
+
+  /**
+   * 正在派发、还没确认播报的提醒 id。标记已触发改到了唤醒完成之后（2026-10-20），
+   * 这中间状态仍是 pending；没有这个集合，30 秒后的下一轮会把同一条再派一次。
+   */
+  #remindersInFlight = new Set();
 
   /**
    * 额度用完的固定文案：同一天同一会话只发一次（2026-10-03 全量审查：原来无条件发，
@@ -2588,6 +2595,7 @@ export class Orchestrator {
     const byChat = new Map();
     for (const item of this.reminders.due(now)) {
       if (this.aborted) continue;
+      if (this.#remindersInFlight.has(item.id)) continue;
       if (!canRun(item.chatKey)) {
         // canRun 含 isTimeActive 与 runtime.mode（access.js）：静默段/观察模式下派不出去。
         // 这里必须顺延而不是干等 —— 干等的话，持续静默超过 12 小时会被上面的 expired()
@@ -2647,12 +2655,33 @@ export class Orchestrator {
         }
         continue;
       }
+      const dispatchedAt = Date.now();
+      for (const it of chosen) this.#remindersInFlight.add(it.id);
       this.wake(chatKey, { manual: true, paced: true, wakeNote: note })
-        .catch((error) => log.error('[reminder] 唤醒出错:', error?.message ?? error));
-      for (const it of chosen) this.reminders.markFired(it.id, now);
+        .then(() => {
+          // #wake 不会因为模型请求失败而 reject；用"本轮之后有没有自己的消息落库"
+          // 判断提醒是否真的播报出去。没播报就顺延 5 分钟重试，别直接 markFired
+          //（模型网关故障时提醒会永久丢失，2026-10-20 审查）。
+          const delivered = this.store.hasSelfSince(chatKey, dispatchedAt);
+          if (delivered) {
+            for (const it of chosen) this.reminders.markFired(it.id, now);
+            log.info(`[reminder] 已播报 ${chosen.length} 条：${chatKey} ${chosen.map((x) => String(x.text)).join(' / ')}`);
+            return;
+          }
+          const later = Date.now() + 5 * 60 * 1000;
+          for (const it of chosen) this.reminders.deferTo(it.id, later);
+          log.warn(`[reminder] 本轮未检测到发送，${chosen.length} 条 5 分钟后重试：${chatKey}`);
+        })
+        .catch((error) => {
+          const later = Date.now() + 5 * 60 * 1000;
+          for (const it of chosen) this.reminders.deferTo(it.id, later);
+          log.error(`[reminder] 唤醒出错，${chosen.length} 条 5 分钟后重试:`, error?.message ?? error);
+        })
+        .finally(() => {
+          for (const it of chosen) this.#remindersInFlight.delete(it.id);
+        });
       const deferred = items.length - chosen.length;
-      // 全文进日志（单条正文 ≤200 字）：派发后若整轮运行最终失败，提醒内容至少还在这条日志
-      // 和会话留档里可查、可人工重试 —— 别只留 20 字（2026-10-12 审查）。
+      // 全文进日志（单条正文 ≤200 字）：先记下派发内容，播报结果在 then/catch 里补。
       log.info(`[reminder] 到点派发 ${chosen.length} 条：${chatKey} ${chosen.map((x) => String(x.text)).join(' / ')}`
         + (deferred > 0 ? `（另有 ${deferred} 条本轮装不进提示词，30 秒后继续派发）` : ''));
     }
@@ -2717,7 +2746,7 @@ export class Orchestrator {
 
   #proactiveCandidates(cfg) {
     const idleMs = Math.max(300000, Number(cfg.proactive?.idleThresholdMs) || 1800000);
-    const allowGroups = (cfg.allow?.groups ?? []).map(String);
+    const allowGroups = idList(cfg.allow?.groups);
     const out = [];
     for (const chatKey of this.store.listChats()) {
       const [kind, id] = chatKey.split(':');
@@ -2753,6 +2782,10 @@ export class Orchestrator {
       if (!canRun(chatKey)) return;
       if (cfg.memory?.consolidateEnabled === false) return;
       if (this.paused || this.aborted) return;
+      // 整理是后台付费模型调用，不是"回 @ 的那一句"；当日预算用尽后也要停，
+      // 否则 block/degrade 只是挡住了聊天，整理仍会继续花钱（2026-10-20 审查）。
+      const budget = budgetStatus(cfg, this.sessions?.todayUsage?.(todayKey()) || {});
+      if (budget.enabled && budget.exceeded) return;
       if (!cfg.api?.model || !cfg.api?.baseUrl) return;   // 没选模型就不整理
       if (this.consolidating.has(chatKey)) return;
       const st = this.memory.consolidationState(chatKey);

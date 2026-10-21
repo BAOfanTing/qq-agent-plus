@@ -822,7 +822,7 @@ test('㉜ P2：预算闸门不吞到点提醒（markFired 在派发后才跑，�
   const start = src.indexOf('fireDueReminders() {');
   assert.ok(start > 0, '前置条件：找得到 fireDueReminders');
   let end = src.indexOf('\n  }', start);
-  if (end < 0 || end - start > 4000) end = start + 4000;
+  if (end < 0 || end - start > 8000) end = start + 8000;
   const body = src.slice(start, end).replace(/\s+/g, ' ');
   assert.match(body, /#budgetWouldDrop\(/,
     '派发前要先算「这次唤醒会不会被预算闸门丢掉」（判据在 #budgetWouldDrop）');

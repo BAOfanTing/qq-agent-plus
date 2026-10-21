@@ -23,6 +23,7 @@ rem ===========================================================================
 
 set "CFG=%~dp0.console-tunnel.cfg"
 set "SSHOPTS=-o"BatchMode=yes" -o"ServerAliveInterval=30" -o"ServerAliveCountMax=3" -o"ConnectTimeout=15" -o"ExitOnForwardFailure=yes""
+set "SSH_READ=-o"BatchMode=yes" -o"ConnectTimeout=10""
 if "%QQ_AGENT_CONSOLE_PORT%"=="" (set "CONSOLE_PORT=3210") else (set "CONSOLE_PORT=%QQ_AGENT_CONSOLE_PORT%")
 if "%QQ_AGENT_WEBUI_PORT%"=="" (set "WEBUI_PORT=5099") else (set "WEBUI_PORT=%QQ_AGENT_WEBUI_PORT%")
 if "%QQ_AGENT_VNC_PORT%"=="" (set "VNC_PORT=6081") else (set "VNC_PORT=%QQ_AGENT_VNC_PORT%")
@@ -41,11 +42,19 @@ if "%SRV%"=="" (
 if "%SRV%"=="" goto nohost
 echo %SRV%>"%CFG%"
 
+rem ── 认证方式：优先密钥；没有密钥就退回普通 SSH，让用户输密码 ─────────────
+ssh %SSH_READ% %SRV% "exit 0" >nul 2>&1
+if errorlevel 1 (
+  set "SSH_READ=-o"ConnectTimeout=10""
+  set "SSHOPTS=-o"ServerAliveInterval=30" -o"ServerAliveCountMax=3" -o"ConnectTimeout=15" -o"ExitOnForwardFailure=yes""
+  set "PASSWORD_MODE=1"
+)
+
 rem ── 从服务器读取控制台 Token，用于打开浏览器时免登录 ─────────────────────
 set "TOKEN="
 set "REMOTE_CMD=for f in /mnt/data/qq-agent/data/console-access.txt /data/qq-agent/data/console-access.txt; do if [ -f $f ]; then awk '/^Token/{print $2; exit}' $f; break; fi; done"
 rem 注意：ssh 的 -o 选项必须用「贴紧」写法（-o"K=V"），带空格的写法在 for /f 里会被拆坏。
-for /f "usebackq delims=" %%t in (`ssh -o"BatchMode=yes" -o"ConnectTimeout=10" %SRV% "!REMOTE_CMD!" 2^>nul`) do set "TOKEN=%%t"
+for /f "usebackq delims=" %%t in (`ssh %SSH_READ% %SRV% "!REMOTE_CMD!"`) do set "TOKEN=%%t"
 if "%TOKEN%"=="" (set "URL=http://127.0.0.1:%CONSOLE_PORT%/") else (set "URL=http://127.0.0.1:%CONSOLE_PORT%/?token=%TOKEN%")
 
 where ssh >nul 2>&1 || goto nossh
@@ -54,7 +63,7 @@ echo ============================================================
 echo   QQ Agent 控制台（SSH 隧道到 %SRV%）
 echo ============================================================
 echo.
-echo 正在建立 SSH 隧道（需已配置密钥登录）...
+echo 正在建立 SSH 隧道（密钥登录不会提示；密码登录可能提示输入两次密码）...
 echo.
 echo    QQ Agent 控制台 ....... http://127.0.0.1:%CONSOLE_PORT%
 echo    SnowLuma WebUI ........ http://127.0.0.1:%WEBUI_PORT%
@@ -67,7 +76,7 @@ set "CRED_CMD=for f in /mnt/data/qq-agent/deployment-access.txt /data/qq-agent/d
 rem ⚠️ 这一段临时关掉 delayed expansion：密码里可能带 ! ，开着会被 cmd 吃掉
 rem （实测踩过：Sl-xxxx!Aa 打印成 Sl-xxxxAa，用户照抄就登不上）
 setlocal disabledelayedexpansion
-for /f "usebackq delims=" %%c in (`ssh -o"BatchMode=yes" -o"ConnectTimeout=10" %SRV% "%CRED_CMD%" 2^>nul`) do (
+for /f "usebackq delims=" %%c in (`ssh %SSH_READ% %SRV% "%CRED_CMD%"`) do (
   echo    %%c
   set "GOT_CRED=1"
 )

@@ -35,6 +35,19 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+      - name: Tag 与版本号一致
+        if: github.ref_type == 'tag'
+        run: |
+          set -e
+          # 与 release.yml 同一口径：tag 与 package.json 不一致时不许发镜像，
+          # 否则 GHCR/ACR 会推出一个自报版本与 tag 对不上的镜像。
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 package.json 版本 $PKG_VERSION 不一致"
+            exit 1
+          fi
+          echo "版本号一致：$TAG_VERSION"
       - run: npm ci
       - run: npm run lint
       - run: npm run test:unit

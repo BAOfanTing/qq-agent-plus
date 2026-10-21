@@ -47,6 +47,7 @@ import { scanModelsVision, visionResults, visionEnabled, modelImageVerdict } fro
 import { builtinVisionResults } from '../llm/model-vision-docs.js';
 import { createEventBus, todayKey, shanghaiDayStart, isSelfSender, safeSlice, sanitizeUserText, textWithQuote } from '../core/util.js';
 import { assertCanSend } from '../core/access.js';
+import { idList } from '../core/list.js';
 import { isTimeActive } from '../core/time-gate.js';
 import { timeControlState, TIME_ZONE } from '../core/time-control.js';
 import { IdentityPilotManager, inactiveIdentityPilotStatus } from '../identity/identity-pilot.js';
@@ -71,6 +72,7 @@ import {
 import { integrationStatus, updateSnowLumaPassword } from './integrations.js';
 import { createSnowlumaUpdater, baselineAlignDecision } from '../core/snowluma-update.js';
 import { hostStats } from '../core/host-stats.js';
+import { runHealthCheck } from '../core/health-check.js';
 import { isContainerRuntime, containerUpdateHint } from '../core/runtime.js';
 import { AutoUpdateManager, autoUpdatePending, readAutoUpdateState } from '../auto-update.js';
 import { checkForUpdate, ignoreVersion } from '../update-notice.js';
@@ -145,10 +147,10 @@ function rewriteAssetUrls(html) {
 // ── 白名单判断（移植自原版 allowed()） ───────────────────────────────────
 function allowed(kind, id, cfg) {
   const s = String(id);
-  const denyList = cfg.deny?.[kind] ?? cfg.deny?.[`${kind}s`] ?? [];
-  if (denyList.map(String).includes(s)) return false;
-  const allowList = cfg.allow?.[kind] ?? cfg.allow?.[`${kind}s`] ?? [];
-  if (allowList.length > 0) return allowList.map(String).includes(s);
+  const denyList = idList(cfg.deny?.[kind] ?? cfg.deny?.[`${kind}s`]);
+  if (denyList.includes(s)) return false;
+  const allowList = idList(cfg.allow?.[kind] ?? cfg.allow?.[`${kind}s`]);
+  if (allowList.length > 0) return allowList.includes(s);
   return cfg.allowAllWhenEmpty === true;
 }
 
@@ -745,6 +747,7 @@ export function createApp({
       { name: '关系台账', run: () => identityPilot?.pruneRelationshipHistory?.() },
       { name: '异常台账', run: () => incidentPilot?.pruneResolvedIncidents() },
       { name: '运行台账', run: () => store.pruneRuns() },
+      { name: '发送台账', run: () => store.pruneOutbox() },
       { name: '会话留档', run: () => sessions.pruneSessions() }
     ];
   }
@@ -842,11 +845,10 @@ export function createApp({
         const id = String(userId || '').trim();
         if (!/^\d{1,15}$/.test(id)) throw new Error('好友 QQ 号无效');
         const privateAllow = [...new Set([
-          ...(current.allow?.private || []).map(String),
+          ...idList(current.allow?.private),
           id
         ])];
-        const privateDeny = (current.deny?.private || [])
-          .map(String)
+        const privateDeny = idList(current.deny?.private)
           .filter((item) => item !== id);
         updateConfig({
           allow: { ...(current.allow || {}), private: privateAllow },
@@ -1252,8 +1254,8 @@ export function createApp({
     const cfgNow = getConfig();
     const windowMs = catchupReplyWindowMs(cfgNow);
     const targets = [
-      ...(cfgNow.allow?.groups ?? []).map((g) => ({ kind: 'group', id: String(g) })),
-      ...(cfgNow.allow?.private ?? []).map((p) => ({ kind: 'private', id: String(p) }))
+      ...idList(cfgNow.allow?.groups).map((g) => ({ kind: 'group', id: g })),
+      ...idList(cfgNow.allow?.private).map((p) => ({ kind: 'private', id: p }))
     ];
     for (const { kind, id } of targets) {
       const chatKey = `${kind}:${id}`;
@@ -1977,6 +1979,36 @@ export function createApp({
   // 协议端（SnowLuma）版本 / 更新 / 回滚：控制台「设置 → OneBot」页用
   // 主机资源（只读）：总览页用。取不到的项返回 null，接口本身不因为某个指标失败而 500。
   router.add('GET', '/api/host', async (req, res) => json(res, 200, { ok: true, ...hostStats({ dir: DATA_DIR }) }));
+
+  // 一键体检：复用 `ops health-check` 的同一份巡检（控制台/协议端/入站/磁盘/更新），
+  // 只读、不通知 owner。控制台把失败项直接列出来，用户不用再 ssh 跑命令。
+  router.add('POST', '/api/health/check', async (req, res) => {
+    const cfgNow = getConfig();
+    const onebotPort = Number(cfgNow.onebot?.httpPort) || 3000;
+    const onebotHttpUrl = String(cfgNow.onebot?.httpUrl || '').trim()
+      || `http://127.0.0.1:${onebotPort}`;
+    try {
+      const result = await runHealthCheck({
+        dataDir: DATA_DIR,
+        mode: String(cfgNow.runtime?.mode || 'active'),
+        consolePort: Number(cfgNow.server?.port) || Number(process.env.QQ_AGENT_SERVER_PORT) || 3210,
+        onebotHttpPort: onebotPort,
+        onebotHttpUrl,
+        onebotToken: String(cfgNow.onebot?.httpAccessToken || cfgNow.onebot?.accessToken || ''),
+        containerRuntime: isContainerRuntime(),
+        snowlumaDir,
+        service: '',
+        notify: null
+      });
+      return json(res, 200, { healthy: result.healthy, checks: result.checks });
+    } catch (error) {
+      return json(res, 200, {
+        healthy: false,
+        checks: [],
+        error: String(error?.message ?? error)
+      });
+    }
+  });
   router.add('GET', '/api/snowluma/version', async (req, res) => {
     const st = await snowlumaUpdater.status();
     const auto = getConfig().autoUpdate?.snowluma || {};
@@ -3014,7 +3046,7 @@ export function createApp({
     // 白名单里的群没有记忆也要显示
     const seen = new Set(files.map((f) => f.chatKey));
     // 补上白名单里还没有记忆的会话（缺字段也要有默认值，前端统一处理）
-    for (const gid of (getConfig().allow?.groups || [])) {
+    for (const gid of idList(getConfig().allow?.groups)) {
       const key = `group:${String(gid)}`;
       if (!seen.has(key)) {
         files.push({
@@ -3023,7 +3055,7 @@ export function createApp({
         });
       }
     }
-    for (const uid of (getConfig().allow?.private || [])) {
+    for (const uid of idList(getConfig().allow?.private)) {
       const key = `private:${String(uid)}`;
       if (!seen.has(key)) {
         files.push({
@@ -4612,8 +4644,8 @@ export function createApp({
     const now = Date.now();
     const keys = [...new Set([
       ...store.listChats(),
-      ...(cfgNow.allow?.groups || []).map((id) => `group:${id}`),
-      ...(cfgNow.allow?.private || []).map((id) => `private:${id}`),
+      ...idList(cfgNow.allow?.groups).map((id) => `group:${id}`),
+      ...idList(cfgNow.allow?.private).map((id) => `private:${id}`),
       ...Object.keys(cfgNow.timeControl?.overrides || {})
     ])];
     return json(res, 200, {

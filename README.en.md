@@ -171,14 +171,46 @@ link with the login token embedded, the QQ login page, and where to set the chat
 model key and group IDs are filled in later in the web console. SnowLuma already contains OneBot;
 NapCat and Lagrange must not be installed on top of it.
 
-Installation and runtime must not use root: the script refuses to run as root, so use a regular user
-(it calls `sudo` only when installing Docker or enabling linger).
+The installer may be started as root. It creates or reuses a dedicated non-root service account
+(default `qqagent`, or `SUDO_USER`), installs Docker, adds that account to the `docker` group,
+enables linger, and then re-runs the installer as that user. The bot process itself never runs as
+root. `deploy-all.sh` still requires a regular user.
+
+The service account is added to the `docker` group, which is required by the console protocol-update
+button. On Linux the `docker` group is equivalent to host root (members can mount host paths); this
+drops the application process identity, not the Docker privilege. Remove the account from that group
+and manage SnowLuma manually if you do not need the update button.
 
 ```bash
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
+sudo bash install.sh    # root or sudo; the service is dropped to a non-root user
+# or, as a regular user:
 bash install.sh
 ```
+
+If cloning from GitHub is slow or blocked, download the source archive from the Release page (or a
+trusted mirror), extract it and run the same commands. `install.sh` needs the full repository, not
+a single copied script.
+
+Recommended host: 2 CPU cores, 2GB RAM and 10GB free local disk. A 1GB host can run out of memory
+while SnowLuma/Chromium starts; SQLite must not live on NFS or SMB.
+
+Distribution support is split into three tiers:
+
+- **Tested**: Ubuntu 22.04/24.04, Debian 12, Rocky Linux 9, AlmaLinux 9.
+- **Expected to work**: Fedora, CentOS Stream, RHEL, Oracle Linux, Amazon Linux,
+  Arch/Manjaro, openSUSE Leap/Tumbleweed, SLES, openEuler, Anolis, Kylin/UOS
+  (attempted through dnf/yum/zypper/pacman).
+- **Unsupported**: Alpine (musl), NixOS, Gentoo, Void, WSL1, and containers without systemd.
+
+Run the read-only check before installing:
+
+```bash
+sh scripts/check-platform.sh
+```
+
+
 
 When you prefer to answer the questions (deployment directory, ports, credentials, model), use the
 interactive installer instead — it is the same installer with the questions asked instead of
@@ -440,11 +472,20 @@ same procedure is documented in more detail in
 The console listens on `3210` by default. An agent-only installation (`deploy.sh`) binds `127.0.0.1`
 only, so local access requires no public port; the full-stack installer (`deploy-all.sh`) starts the
 console with `--host 0.0.0.0`, and cross-host access should be limited to a trusted LAN or VPN. On
-Windows, [`console-tunnel.bat`](console-tunnel.bat) in the repository root reads the console token
-from the server, opens an SSH tunnel and launches the browser without a login prompt; the host is
-entered once as `user@host` and remembered. It also forwards `5099` (SnowLuma WebUI) and `6081` (QQ
-login). On macOS, Linux or any machine with Node installed, `node src/ops.js console --open` has the
-same effect.
+No local project is required. Use Windows `console-tunnel.bat` or macOS/Linux
+`console-tunnel.sh`; both read the console token from the server, open an SSH tunnel and launch the
+browser without a login prompt. The host is entered once as `user@host` and remembered. They also
+forward `5099` (SnowLuma WebUI) and `6081` (QQ login). Download one file from the server:
+
+```bash
+# macOS / Linux
+scp user@server:/data/qq-agent/app/console-tunnel.sh .
+bash console-tunnel.sh user@server
+```
+
+On Windows use the matching `.bat` file. With Node installed, `node src/ops.js console --open` has
+the same effect. A manual tunnel is also enough:
+`ssh -N -L 3210:127.0.0.1:3210 -L 5099:127.0.0.1:5099 -L 6081:127.0.0.1:6081 user@server`.
 
 The token can be rotated under “设置 -> 系统 -> 控制台安全”. Once the console is reachable from
 other hosts, the token is its only credential and must be kept private.

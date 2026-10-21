@@ -55,6 +55,9 @@ docker compose exec agent cat /data/console-access.txt
 3. 控制台 → 聊天设置/白名单，加入要参与的群。
 4. 在群里 @ 机器人一句，确认能回。
 
+**全新 Docker 配置默认是 `active`**：填好模型、加入白名单后就会直接回复（裸机 `install.sh`
+首次安装默认 observe，两者不同）。想先只观察，设 `QQ_AGENT_RUNTIME_MODE=observe`，或在控制台切换。
+
 几个首次部署的边界：
 
 - **宿主机 uid 不是 1000**：SnowLuma 默认按 `SNOWLUMA_UID/GID=1000` 写数据；用
@@ -81,6 +84,7 @@ ssh -L 3210:127.0.0.1:3210 -L 5099:127.0.0.1:5099 -L 6081:127.0.0.1:6081 user@se
 如果已经有一个 OneBot v11 协议端，启动时指定地址即可，不需要 compose 里的 `snowluma`：
 
 ```bash
+QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS=0 \
 QQ_AGENT_ONEBOT_WS_URL=ws://<协议端主机>:3001 \
 QQ_AGENT_ONEBOT_HTTP_URL=http://<协议端主机>:3000 \
 docker compose up -d agent
@@ -115,13 +119,15 @@ docker run -d --name qq-agent \
 | --- | --- |
 | `QQ_AGENT_CONSOLE_TOKEN` | 控制台令牌；留空＝首次生成并写进配置 |
 | `QQ_AGENT_SERVER_HOST` | 容器内监听地址，默认 `0.0.0.0`（不要改成 127.0.0.1） |
-| `QQ_AGENT_SERVER_PORT` | 控制台端口，默认 3210 |
+| `QQ_AGENT_SERVER_PORT` | 容器内固定 3210（宿主端口用 `QQ_AGENT_PORT`） |
 | `QQ_AGENT_ONEBOT_WS_URL` | OneBot WebSocket 地址 |
 | `QQ_AGENT_ONEBOT_HTTP_URL` | OneBot HTTP 地址 |
 | `QQ_AGENT_ONEBOT_ACCESS_TOKEN` / `QQ_AGENT_ONEBOT_HTTP_TOKEN` | OneBot 令牌 |
 | `QQ_AGENT_API_BASE_URL` / `QQ_AGENT_API_KEY` / `QQ_AGENT_API_MODEL` | 可选的模型初始配置 |
 | `SNOWLUMA_INTERNAL_URL` | 服务端探测协议端 WebUI 的地址（compose 网络内） |
 | `QQ_AGENT_NOVNC_URL` | 服务端探测 noVNC 的地址（compose 网络内） |
+| `QQ_AGENT_RUNTIME_MODE` | 全新配置的首次运行模式；默认 `active`，设 `observe` 先观察 |
+| `QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS` | 等 SnowLuma 写出 OneBot 配置的毫秒数；只跑 agent 时设 `0` |
 | `QQ_AGENT_PRINT_TOKEN` | 设为 1 时把控制台令牌打印到日志（默认只写文件） |
 
 **例外与强制覆盖**：
@@ -159,8 +165,9 @@ docker compose start agent
 ## 5. 升级与回滚
 
 ```bash
-docker compose pull agent
-docker compose up -d agent
+# 先把 compose 里的 QQ_AGENT_IMAGE 改到目标版本（下面是显式传变量的写法）
+QQ_AGENT_IMAGE=<镜像>:<新版本> docker compose pull agent
+QQ_AGENT_IMAGE=<镜像>:<新版本> docker compose up -d agent
 ```
 
 数据卷不动。回滚：把 compose 里的 `QQ_AGENT_IMAGE` 固定到上一个版本 tag，再 `up -d`：
@@ -178,7 +185,8 @@ QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:0.9.3 docker compose up -d agen
 
 1. **先更新 compose 文件**：本次新增了 SnowLuma 配置挂载和 OneBot 令牌同步，只 `pull` 镜像不够。
    在仓库目录 `git pull`，或重新下载 `docker-compose.yml`。
-2. `docker compose pull && docker compose up -d`；数据卷不动，不需要迁移数据。
+2. 把 compose 里的 `QQ_AGENT_IMAGE` 改到目标版本（或显式传变量），再
+   `docker compose pull && docker compose up -d`；数据卷不动，不需要迁移数据。
 3. 如果升级前控制台显示“观察模式”，到 控制 → 运行模式 切到**活跃**（旧配置不会被自动改成 active）。
 4. 如果 noVNC 密码变了，看 `docker compose logs snowluma`（`VNC_PASSWD` 留空时是随机生成的）。
 5. 固定了旧镜像 digest 的，把 `QQ_AGENT_IMAGE` 改回 `...:0.9.3` 或新 digest 后再 pull。

@@ -48,24 +48,29 @@ async function boot(t) {
   return { port, get };
 }
 
-function get(port, urlPath, headers = {}) {
+function request(port, method, urlPath, { headers = {}, body = '' } = {}) {
   return new Promise((resolve) => {
     const req = http.request(
-      { host: '127.0.0.1', port, path: urlPath, method: 'GET', headers },
+      { host: '127.0.0.1', port, path: urlPath, method, headers },
       (res) => {
         let text = '';
         res.setEncoding('utf8');
         res.on('data', (c) => { text += c; });
         res.on('end', () => {
-          let body = null;
-          try { body = JSON.parse(text); } catch { /* 非 JSON */ }
-          resolve({ status: res.statusCode, text, body });
+          let parsed = null;
+          try { parsed = JSON.parse(text); } catch { /* 非 JSON */ }
+          resolve({ status: res.statusCode, text, body: parsed });
         });
       }
     );
     req.on('error', (e) => resolve({ status: 0, text: String(e.message), body: null }));
-    req.end();
+    if (body) req.setHeader('content-length', Buffer.byteLength(body));
+    req.end(body);
   });
+}
+
+function get(port, urlPath, headers = {}) {
+  return request(port, 'GET', urlPath, { headers });
 }
 
 test('GET /api/onebot-key 按 field 回读 WS / HTTP 令牌明文', async (t) => {
@@ -109,6 +114,18 @@ test('GET /api/onebot-key：未知字段 400；非本机来源读不到令牌', 
   assert.match(src.slice(at, at + 900), /keyEndpoint: true/, '必须走明文密钥端点的守卫');
 });
 
+
+test('POST /api/health/check 走同一份巡检并返回检查项', async (t) => {
+  const { port } = await boot(t);
+  const res = await request(port, 'POST', '/api/health/check', {
+    headers: { host: `127.0.0.1:${port}`, 'content-type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(res.status, 200, res.text);
+  assert.equal(typeof res.body?.healthy, 'boolean');
+  assert.ok(Array.isArray(res.body?.checks));
+  assert.ok(res.body.checks.length > 0, '巡检至少要返回控制台/协议端等检查项');
+});
 
 test('GET /api/status 带版本号（控制台版本徽标的数据来源）', async (t) => {
   const { port, get: fetchPath } = await boot(t);

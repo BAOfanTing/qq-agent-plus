@@ -15,10 +15,11 @@ In particular:
 
 控制台默认只监听服务器本机 `127.0.0.1:3210`，不对外开放。两条等价入口：
 
-- **Windows（无需 Node）**：仓库根目录 `console-tunnel.bat`。双击即用；首次运行输入
-  `user@host` 并记住（写入 `.console-tunnel.cfg`，已 gitignore），自动通过 SSH 读取服务器上的
-  控制台令牌并免登录打开浏览器；`test` 子命令只做连通性自检（返回 `TEST_OK` / 非零退出），
-  `forget` 清除记住的地址。
+- **无需 Node（推荐给终端用户）**：Windows 用 `console-tunnel.bat`，macOS/Linux 用
+  `bash console-tunnel.sh`。首次运行输入 `user@host` 并记住，自动通过 SSH 读取服务器上的
+  控制台令牌、建隧道并免登录打开浏览器；`test` 子命令只做连通性自检（返回 `TEST_OK` /
+  非零退出），`forget` 清除记住的地址。两个脚本都可从部署机
+  `/data/qq-agent/app/` 单文件下载，不需要克隆仓库。
 - **macOS / Linux / 本机有 Node**：`SSHHOST=user@host node src/ops.js console --open`
   （`console --print` 只打印 ssh 命令）。
 
