@@ -226,6 +226,22 @@ function renderDailyMomentsSection(c) {
       <button class="btn btn-small" id="digest-run-btn" type="button">立即试跑一次</button>
       <span id="digest-run-result" class="muted"></span>
       <span class="muted">试跑会真的把日报发到上面配置的群里</span>
+    </div>
+    <h3 id="settings-briefing">管理员早报</h3>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-briefing-enabled" ${c.adminBriefing?.enabled === true ? 'checked' : ''} />
+      <label for="cfg-briefing-enabled">每天把「昨天群里聊了啥」以机器人口吻私聊给管理员（默认关）</label></div>
+    <div class="field-row">
+      <div class="field"><label for="cfg-briefing-time">发送时间（北京时间 HH:MM）</label>
+        <input type="text" id="cfg-briefing-time" value="${esc(c.adminBriefing?.time || '09:30')}" placeholder="09:30" /></div>
+      <div class="field"><label for="cfg-briefing-max">最多字数</label>
+        <input type="number" id="cfg-briefing-max" min="80" max="600" value="${esc(c.adminBriefing?.maxChars ?? 300)}" /></div>
+    </div>
+    <div class="field"><label>汇报哪些群（不勾选 = 所有当前可运行的白名单群）</label>
+      <div id="cfg-briefing-chats-box" class="group-checklist"><span class="muted">正在读取群列表…</span></div></div>
+    <div class="settings-actions">
+      <button class="btn btn-small" id="briefing-run-btn" type="button">立即试跑一次</button>
+      <span id="briefing-run-result" class="muted"></span>
+      <span class="muted">试跑会真的私聊管理员；收件人取「设置 → 管理员」里的 QQ</span>
     </div>`;
 }
 
@@ -731,8 +747,35 @@ async function loadQzoneInteractionStatus() {
 }
 
 
+/**
+ * 「管理员早报」立即试跑按钮。放在本页模块里，避免 settings-bind.js 继续膨胀
+ * （它有 max-lines 约束）；settings-bind 的跨页控件统一调这个函数。
+ */
+function bindAdminBriefingRunButton() {
+  const button = $('#briefing-run-btn');
+  if (!button || button.dataset.bound) return;
+  button.dataset.bound = '1';
+  button.addEventListener('click', async () => {
+    const out = $('#briefing-run-result');
+    if (out) out.textContent = '生成中…（先保存设置再试跑）';
+    try {
+      const r = await api('/api/admin-briefing/run', { method: 'POST' });
+      const skipped = {
+        'no-admin': '未配置管理员 QQ（设置 → 管理员）',
+        'no-groups': '没有可运行的白名单群',
+        'too-few': '消息太少，本次跳过',
+        'already-running': '正在跑，稍等',
+        blocked: `当前不可运行：${r.error || ''}`
+      };
+      if (out) out.textContent = skipped[r.skipped] || JSON.stringify(r).slice(0, 220);
+    } catch (e) {
+      if (out) out.textContent = `失败：${e.message}`;
+    }
+  });
+}
+
 export {
-  launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
+  bindAdminBriefingRunButton, launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
   loadRemindersView, momentStatusLabel, renderDailyMomentsSection, renderExperimentalSettingsSectionImpl,
   renderGroupChecklist, renderGroupGameSection, renderMomentWindowRow, renderQzoneInteractionSection,
   renderRemindersSection

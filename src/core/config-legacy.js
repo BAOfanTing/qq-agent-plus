@@ -372,6 +372,14 @@ export const DEFAULT_CONFIG = {
     chats: [],
     maxChars: 300
   },
+  // 管理员早报：每天定时把过去 24 小时群里的见闻私聊给全局管理员（admin.ownerUin）。
+  // chats 留空 = 所有当前可运行的白名单群；默认关。
+  adminBriefing: {
+    enabled: false,
+    time: '09:30',
+    chats: [],
+    maxChars: 300
+  },
   // 群游戏（实验性，默认关）：白名单制、每群同时一局；私聊发词默认关闭（风控考虑）。
   groupGame: {
     enabled: false,

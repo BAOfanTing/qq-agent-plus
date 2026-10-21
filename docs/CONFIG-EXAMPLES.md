@@ -446,6 +446,8 @@
 - **返回的图片格式不一定是 PNG**：智谱 CogView 回的就是 JPEG（2026-10-01 实测）。落库与「试画一张」
   的预览都按**字节魔数**判断格式（`src/core/image-type.js`），不看扩展名也不看 Content-Type。
 - 提示词上限 800 字；生成的图落盘上限 8 MiB、只收 PNG/JPEG/GIF/WebP（与表情库同一道校验）。
+- **生成成功即发送**：图片同时存进表情库并直接发到当前会话；只想收藏、这次不发时传 `send:false`。
+  不再依赖模型追加一次 `send_sticker`（模型漏掉第二步时用户收不到图，Issue #41）。
 - 关闭时 `generate_image` 不进模型工具表、提示词也不提画图 —— 模型不会去调一个必然失败的工具。
 
 ## groupDigest：群日报（可选，默认关闭）
@@ -464,6 +466,27 @@
 - 每天到点把「过去 24 小时这个群聊了什么」汇总成一条，用机器人的人设口吻发到群里（只发白名单里的群）。
 - 少于 5 条消息的群当天跳过；生成走 `purpose:'write'`，吃对应思考档位与省 Token 上限。
 - 手动触发/查看状态：`POST /api/group-digest/run`、`GET /api/group-digest/status`。
+
+## adminBriefing：管理员早报（可选，默认关闭）
+
+```json
+{
+  "adminBriefing": {
+    "enabled": true,
+    "time": "09:30",
+    "chats": [],
+    "maxChars": 300
+  }
+}
+```
+
+- 每天到点把「过去 24 小时群里的见闻」用机器人自己的口吻**私聊给全局管理员**（`admin.ownerUin`），
+  不发群、也不是运行状态报告。
+- `chats` 留空 = 所有当前可运行（active、未暂停、在活跃时段、白名单内）的群；也可以只挑几个群。
+  最多读 12 个群、每群按小时分层抽样，不会只看到某个时间点的消息。
+- 全部群加起来少于 5 条消息不打扰；当天成功发送后去重，重启不会重发；观察/暂停模式会延迟 30 分钟补跑
+  （最多 8 次）。管理员 QQ 或私聊白名单没配好时不跑，绝不猜收件人。
+- 手动触发/查看状态：`POST /api/admin-briefing/run`、`GET /api/admin-briefing/status`。
 
 ## onebot：WebSocket 心跳与「补课」回复窗口
 

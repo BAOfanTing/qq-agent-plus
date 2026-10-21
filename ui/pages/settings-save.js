@@ -188,6 +188,18 @@ async function saveConfig({ quiet = false } = {}) {
       })(),
       ...(pickedGroups('cfg-digest-chats-box') ? { chats: pickedGroups('cfg-digest-chats-box') } : {})
     };
+    patch.adminBriefing = {
+      ...(c.adminBriefing || {}),
+      enabled: chk('#cfg-briefing-enabled', c.adminBriefing?.enabled === true),
+      time: (() => {
+        const raw = String(val('#cfg-briefing-time', '') || '').trim();
+        return /^([01]?\d|2[0-3]):([0-5]\d)$/.test(raw) ? raw : (c.adminBriefing?.time || '09:30');
+      })(),
+      maxChars: clampInt(val('#cfg-briefing-max', c.adminBriefing?.maxChars), 80, 600, 300),
+      // 不勾 = 空数组 = 所有当前可运行的白名单群（与「群日报」必须显式选群不同）；
+      // 列表没渲染出来（null）时不动存量值。
+      ...(pickedGroups('cfg-briefing-chats-box') ? { chats: pickedGroups('cfg-briefing-chats-box') } : {})
+    };
     patch.dailyMoments = {
       ...(c.dailyMoments || {}),
       enabled: chk('#cfg-moments-enabled', c.dailyMoments?.enabled === true),

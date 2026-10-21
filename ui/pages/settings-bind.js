@@ -16,6 +16,7 @@ import {
 } from '../core/format.js';
 import { state } from '../core/state.js';
 import { loadExperimentalFeatureStatuses } from './features.js';
+import { bindAdminBriefingRunButton } from './moments.js';
 import { openMemoryModelPicker } from './memory.js';
 import {
   launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
@@ -104,8 +105,10 @@ function bindCrossSectionControls() {
       } catch (e) { if (out) out.textContent = `失败：${e.message}`; }
     });
   }
+  bindAdminBriefingRunButton();
   renderGroupChecklist('cfg-game-chats-box', state.config?.groupGame?.chats || []);
   renderGroupChecklist('cfg-digest-chats-box', state.config?.groupDigest?.chats || []);
+  renderGroupChecklist('cfg-briefing-chats-box', state.config?.adminBriefing?.chats || []);
   // 定时提醒页：列表加载 + 取消按钮（事件挂在列表容器上做委托，行是动态渲染的）
   const pendBox = $('#reminders-pending');
   if (pendBox && !pendBox.dataset.bound) {
