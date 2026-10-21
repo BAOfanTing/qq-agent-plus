@@ -3,10 +3,22 @@ name: Docker
 # tag push 发布版本 tag；稳定版才移动 latest。手动 workflow_dispatch 默认只推 sha-...，
 # 填新的版本号且该 tag 不存在时才推版本 tag，避免覆盖已发布版本。
 # 发布前先跑单元测试与 lint：镜像会被用户直接拉取运行，不能绕过发布闸门。
+# 容器相关文件的 PR 只做构建+冒烟，不登录、不推送。
 on:
   push:
     tags:
       - 'v*'
+  # 只改容器相关文件的 PR 也跑构建+冒烟（不推送），否则 Dockerfile 坏到发版才发现。
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker-compose.yml
+      - docker/**
+      - scripts/docker-*.sh
+      - scripts/docker-*.mjs
+      - package.json
+      - package-lock.json
   workflow_dispatch:
     inputs:
       version:
@@ -26,7 +38,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: docker-${{ github.ref }}
+  # 所有 tag 构建共用一个组：避免两个稳定 tag 并发时旧版本最后完成、把 latest 覆盖回去。
+  group: docker-${{ github.ref_type == 'tag' && 'tags' || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +51,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
       - name: Tag 与版本号一致
         if: github.ref_type == 'tag'
         run: |
@@ -63,6 +76,11 @@ jobs:
             exit 1
           fi
           echo "版本号一致：$VERSION"
+      - name: 版本发布只能从 main 分支
+        if: inputs.version != '' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::正式版本只能从 main 发布（当前 ref: ${{ github.ref }}）"
+          exit 1
       - run: npm ci
       - run: npm run lint
       - run: npm run test:unit
@@ -74,8 +92,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
@@ -88,6 +106,7 @@ jobs:
 
   build:
     needs: [verify, smoke]
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -96,9 +115,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -119,7 +138,7 @@ jobs:
             exit 1
           fi
       - id: meta
-        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -132,7 +151,7 @@ jobs:
             org.opencontainers.image.title=QQ Agent Plus
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=MIT
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -187,6 +206,7 @@ jobs:
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION_INPUT: ${{ inputs.version }}
+          OVERWRITE_INPUT: ${{ inputs.overwrite }}
         run: |
           set -eu
           SRC="ghcr.io/${{ github.repository }}"
@@ -203,13 +223,20 @@ jobs:
           printf '%s' "$CN_REGISTRY_PASSWORD" | skopeo login "$CN_REGISTRY" --username "$CN_REGISTRY_USERNAME" --password-stdin
 
           for tag in $TAGS; do
+            SRC_DIGEST="$(skopeo inspect --format '{{.Digest}}' "docker://${SRC}:${tag}" 2>/dev/null || true)"
+            DST_DIGEST="$(skopeo inspect --format '{{.Digest}}' "docker://${DST}:${tag}" 2>/dev/null || true)"
+            if [ -n "$DST_DIGEST" ] && [ "$DST_DIGEST" != "$SRC_DIGEST" ] \
+              && [ "${OVERWRITE_INPUT:-false}" != "true" ]; then
+              echo "::error::${DST}:${tag} 已存在且 digest 不同（${DST_DIGEST} != ${SRC_DIGEST}）；已发布 tag 不可覆盖"
+              exit 1
+            fi
             attempt=0
             ok=false
             while [ "$attempt" -lt 5 ]; do
               attempt=$((attempt + 1))
               # ACR 对 BuildKit 的 HTTP/2 上传会随机 PROTOCOL_ERROR；强制 HTTP/1.1，
               # 并在 shell 层重试（失败的层不会重传已完成的部分）。
-              if GODEBUG=http2client=0 skopeo copy --all \
+              if GODEBUG=http2client=0 skopeo copy --all --preserve-digests \
                 "docker://${SRC}:${tag}" "docker://${DST}:${tag}"; then
                 ok=true
                 break
@@ -218,5 +245,10 @@ jobs:
               sleep 10
             done
             [ "$ok" = true ] || { echo "copy ${tag} failed after 5 attempts" >&2; exit 1; }
+            COPIED_DIGEST="$(skopeo inspect --format '{{.Digest}}' "docker://${DST}:${tag}" 2>/dev/null || true)"
+            if [ -n "$SRC_DIGEST" ] && [ "$COPIED_DIGEST" != "$SRC_DIGEST" ]; then
+              echo "::error::${DST}:${tag} 复制后 digest 不一致（${COPIED_DIGEST} != ${SRC_DIGEST}）"
+              exit 1
+            fi
             echo "docker pull ${DST}:${tag}" >> "$GITHUB_STEP_SUMMARY"
           done

@@ -17,7 +17,7 @@ the old instance.
 
 ## Requirements
 
-- Linux with systemd user services, curl, tar, sha256sum, rsync and xz
+- Linux with systemd user services, curl, tar, sha256sum, rsync, xz and git
   (the Node.js archive is `.tar.xz`).
 - A non-root service user. `install.sh` may be started as root: it creates or
   reuses a dedicated service account (default `qqagent`, or `SUDO_USER`), then
@@ -25,7 +25,7 @@ the old instance.
 - Recommended resources: 2 CPU cores, 2GB RAM and 10GB free local disk. A 1GB
   host can OOM while SnowLuma/Chromium starts; SQLite must not live on NFS/SMB.
 - Distribution tiers: tested on Ubuntu 22.04/24.04 (current production host).
-  Debian 12, Rocky 9, AlmaLinux 9, Fedora/CentOS Stream/RHEL/Oracle/Amazon Linux,
+  Debian 12/13, Ubuntu 26.04, Rocky 9, AlmaLinux 9, Fedora/CentOS Stream/RHEL/Oracle/Amazon Linux,
   Arch/Manjaro, openSUSE/SLES and openEuler/Anolis/Kylin/UOS are attempted through
   their package manager but not tested here. Debian 12 needs Docker's official apt
   repository for Compose v2 (its own repository only ships v1). Alpine/musl, NixOS,
@@ -86,7 +86,10 @@ STACK_ROOT/
   deployment-access.txt   generated URLs and credentials (0600)
 ```
 
-The SnowLuma image is pinned to the tested `v1.14.22` release by default. If you already
+The SnowLuma image is pinned to the tested `v1.14.22` release by default. Upstream has since
+published a v2 line (minimum Node.js 24 and no documented OneBot migration in its release notes);
+this project intentionally does not auto-upgrade across that major until it has been tested here.
+If you already
 deployed an older protocol image, you do not need to edit compose files by hand: the console's
 **Settings → OneBot → 协议端（SnowLuma）** panel shows the running version and can update it
 (changes `SNOWLUMA_IMAGE` in `.env`, then `compose pull && up -d`; volumes are untouched so the

@@ -172,7 +172,7 @@ SnowLuma 已包含 OneBot，无需另行安装 NapCat 或 Lagrange。
 发行版支持分三档：
 
 - **已实测**：Ubuntu 22.04/24.04（当前生产环境）。
-- **预期可用**：Debian 12、Rocky Linux 9、AlmaLinux 9、Fedora、CentOS Stream、RHEL、Oracle Linux、Amazon Linux、Arch/Manjaro、openSUSE Leap/Tumbleweed、SLES、openEuler、Anolis、麒麟/UOS（按 dnf/yum/zypper/pacman 尝试）。Debian 12 官方仓库只有 Compose v1，需先按 Docker 官方文档配置 apt 仓库才能拿到 Compose v2。
+- **预期可用**：Debian 12/13、Ubuntu 26.04、Rocky Linux 9、AlmaLinux 9、Fedora、CentOS Stream、RHEL、Oracle Linux、Amazon Linux、Arch/Manjaro、openSUSE Leap/Tumbleweed、SLES、openEuler、Anolis、麒麟/UOS（按 dnf/yum/zypper/pacman 尝试）。Debian 12 官方仓库只有 Compose v1，需先按 Docker 官方文档配置 apt 仓库才能拿到 Compose v2。
 - **明确不支持**：Alpine（musl）、NixOS、Gentoo、Void、WSL1，以及没有 systemd 的容器环境。
 
 安装前可以先跑只读体检，它会打印发行版、包管理器、systemd、libc 和结论：
@@ -270,7 +270,7 @@ bash deploy-all.sh --help
 
 - Linux，且可用 systemd 用户服务；
 - 以非 root 的普通用户执行（服务注册为该用户的 systemd 用户服务）；
-- `curl`、`tar`、`sha256sum`、`rsync`、`xz`（缺少合格 Node.js 时自动安装已校验的 Node 22）；
+- `curl`、`tar`、`sha256sum`、`rsync`、`xz`、`git`（缺少合格 Node.js 时自动安装已校验的 Node 22）；
 - 已运行的 OneBot v11 HTTP 与正向 WebSocket 服务；
 - 兼容 OpenAI Chat Completions 的模型服务。
 
@@ -440,8 +440,8 @@ ssh -N -L 3210:127.0.0.1:3210 -L 5099:127.0.0.1:5099 -L 6081:127.0.0.1:6081 <用
 
 本地不需要克隆仓库。也可以只下载一个连接脚本，它会自动从服务器读取令牌、建隧道并免登录打开浏览器：
 
-- Windows：`scp <用户>@<服务器>:/data/qq-agent/app/console-tunnel.bat .`，双击运行。
-- macOS/Linux：`scp <用户>@<服务器>:/data/qq-agent/app/console-tunnel.sh .`，然后 `bash console-tunnel.sh`。
+- Windows：`scp <用户>@<服务器>:<安装根目录>/app/console-tunnel.bat .`，双击运行。
+- macOS/Linux：`scp <用户>@<服务器>:<安装根目录>/app/console-tunnel.sh .`，然后 `bash console-tunnel.sh`。
 - 已安装 Node：`node src/ops.js console --open`，效果相同。
 
 两个脚本都会同时转发 `5099`（SnowLuma WebUI）与 `6081`（QQ 扫码登录），并读取服务器上的登录凭据。

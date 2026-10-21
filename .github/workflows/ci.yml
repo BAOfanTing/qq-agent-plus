@@ -21,7 +21,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: npm
 
       - name: 安装依赖
@@ -29,7 +29,8 @@ jobs:
 
       # runner 镜像里没有 ffmpeg，而 GIF 帧条与语音转码的用例依赖它：缺了会被显式跳过，
       # 于是"CI 绿"覆盖不到这两条链路（2026-09-26 实测：新用例在缺 ffmpeg 时断言失败）。
-      # 装发行版包（不引第三方 action），顺便多验证一个 ffmpeg 版本（生产是 4.4.2）。
+      # 装发行版包（不引第三方 action）。版本并不与生产完全一致：裸机 Ubuntu 22.04 是 4.4.2，
+      # Docker 镜像 Debian 12 是 5.1.9，CI 是 ubuntu-latest 的发行版包。
       - name: 安装 ffmpeg（GIF 帧条 / 音频转码用例依赖）
         run: |
           sudo apt-get update -qq
@@ -125,7 +126,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'
+          node-version-file: .nvmrc
           cache: npm
 
       - name: 安装依赖

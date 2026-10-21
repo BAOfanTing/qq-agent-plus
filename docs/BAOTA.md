@@ -154,9 +154,9 @@ bash deploy.sh \
 
 - **Windows**：只下载一个 `console-tunnel.bat`（不用克隆仓库），双击后输入 `qqagent@服务器地址`；
   或使用命令行 `console-tunnel.bat qqagent@服务器地址`（记住地址，后续可直接双击）。
-  下载命令：`scp qqagent@服务器地址:/data/qq-agent/app/console-tunnel.bat .`
+  下载命令：`scp qqagent@服务器地址:<安装根目录>/app/console-tunnel.bat .`
 - **macOS / Linux**：下载 `console-tunnel.sh`，运行 `bash console-tunnel.sh qqagent@服务器地址`；
-  下载命令：`scp qqagent@服务器地址:/data/qq-agent/app/console-tunnel.sh .`
+  下载命令：`scp qqagent@服务器地址:<安装根目录>/app/console-tunnel.sh .`
 - **本机有 Node**：`SSHHOST=qqagent@服务器地址 node src/ops.js console --open`。
 - **手工方式**：
 

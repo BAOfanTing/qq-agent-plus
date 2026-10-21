@@ -30,7 +30,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       # 发布前再跑一遍与 CI 相同的检查，任何一步失败都不会出 Release
       - run: npm ci
@@ -149,6 +149,20 @@ jobs:
             echo "安装与部署见 [docs/OPS.md](docs/OPS.md)。"
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
+
+      - name: 确认镜像已发布（避免发布一个拉不到镜像的版本）
+        run: |
+          set -e
+          VERSION="${GITHUB_REF_NAME#v}"
+          for _ in $(seq 1 120); do
+            if docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:${VERSION}" >/dev/null 2>&1; then
+              echo "image ghcr.io/${{ github.repository }}:${VERSION} is available"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::20 分钟内未在 GHCR 看到 ${VERSION} 镜像；Release 不创建"
+          exit 1
 
       - name: 创建 Release（草稿，确认后发布）并上传连接脚本
         env:

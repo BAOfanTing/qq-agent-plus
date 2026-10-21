@@ -199,7 +199,7 @@ while SnowLuma/Chromium starts; SQLite must not live on NFS or SMB.
 Distribution support is split into three tiers:
 
 - **Tested**: Ubuntu 22.04/24.04 (current production host).
-- **Expected to work**: Debian 12, Rocky Linux 9, AlmaLinux 9, Fedora, CentOS Stream,
+- **Expected to work**: Debian 12/13, Ubuntu 26.04, Rocky Linux 9, AlmaLinux 9, Fedora, CentOS Stream,
   RHEL, Oracle Linux, Amazon Linux, Arch/Manjaro, openSUSE Leap/Tumbleweed, SLES,
   openEuler, Anolis, Kylin/UOS (attempted through dnf/yum/zypper/pacman). Debian 12
   official repositories only ship Compose v1; configure Docker's apt repository first
@@ -294,7 +294,7 @@ Use `deploy.sh` when a compatible OneBot v11 service already exists, or when onl
 installed or updated. Requirements:
 
 - Linux with systemd user services;
-- `curl`, `tar`, `sha256sum`, `rsync`, `xz` (if no suitable Node.js is found, the script downloads and
+- `curl`, `tar`, `sha256sum`, `rsync`, `xz`, `git` (if no suitable Node.js is found, the script downloads and
   verifies Node 22 into `INSTALL_DIR/.runtime`);
 - a non-root user (the service is registered as that user's systemd user service);
 - a running OneBot v11 HTTP and forward WebSocket service;
@@ -483,7 +483,7 @@ forward `5099` (SnowLuma WebUI) and `6081` (QQ login). Download one file from th
 
 ```bash
 # macOS / Linux
-scp user@server:/data/qq-agent/app/console-tunnel.sh .
+scp user@server:/mnt/data/qq-agent/app/console-tunnel.sh .   # adjust for --root-dir
 bash console-tunnel.sh user@server
 ```
 

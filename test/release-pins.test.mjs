@@ -22,6 +22,13 @@ test('Docker 手动发布也会校验版本号', () => {
   assert.match(docker, /手动发布版本 .* package\.json 版本/);
 });
 
+test('容器相关 PR 只构建冒烟，不登录也不推送', () => {
+  const docker = fs.readFileSync(path.join(repo, '.github/workflows/docker.yml'), 'utf8');
+  assert.match(docker, /pull_request:\n    paths:/, 'PR 也应触发镜像构建检查');
+  assert.match(docker, /build:\n    needs: \[verify, smoke\]\n    if: github\.event_name != 'pull_request'/,
+    'PR 上必须跳过推送 job');
+});
+
 test('README / DOCKER 文档的拉取示例与 package.json 版本一致', () => {
   assert.match(readme, new RegExp(`qq-agent-plus:${pkg.version.replace(/\./g, '\\.')}`));
   assert.match(dockerDoc, new RegExp(`qq-agent-plus:${pkg.version.replace(/\./g, '\\.')}`));

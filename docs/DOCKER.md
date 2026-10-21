@@ -5,7 +5,8 @@
 
 ## 0. 前提
 
-- Docker Engine 24+（或 Docker Desktop），`docker compose version` 可用。
+- Docker Engine 27+（或当前稳定版 Docker Desktop），Compose v2.3.3+，`docker compose version` 可用。
+  Engine 24.0 已停止维护，不建议作为新部署下限。
   普通用户还要能执行 Docker 命令：如果 `docker ps` 报 permission denied，执行
   `sudo usermod -aG docker $USER` 后重新登录，或者所有命令前加 `sudo`。
 - 一个 QQ 账号（扫码登录协议端）。
@@ -131,6 +132,7 @@ docker run -d --name qq-agent \
 | `QQ_AGENT_ONEBOT_WS_URL` | OneBot WebSocket 地址 |
 | `QQ_AGENT_ONEBOT_HTTP_URL` | OneBot HTTP 地址 |
 | `QQ_AGENT_ONEBOT_ACCESS_TOKEN` / `QQ_AGENT_ONEBOT_HTTP_TOKEN` | OneBot 令牌 |
+| `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD` | SnowLuma WebUI 初始密码（与 deploy-all 的 `.env` 同名） |
 | `QQ_AGENT_API_BASE_URL` / `QQ_AGENT_API_KEY` / `QQ_AGENT_API_MODEL` | 可选的模型初始配置 |
 | `SNOWLUMA_INTERNAL_URL` | 服务端探测协议端 WebUI 的地址（compose 网络内） |
 | `QQ_AGENT_NOVNC_URL` | 服务端探测 noVNC 的地址（compose 网络内） |
