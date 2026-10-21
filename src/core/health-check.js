@@ -155,6 +155,10 @@ export async function runHealthCheck(opts = {}) {
     fetchTimeoutMs = FETCH_TIMEOUT_MS,
     statfs = null,
     now = Date.now(),
+    // 控制台「一键体检」在 **Web 进程内**调用：跳过全库 integrity_check（同步、O(库大小)）
+    // 和 health.json 落盘，避免一次点击把事件循环/定时巡检的连击状态拖坏。
+    integrityCheck = true,
+    persist = true,
   } = opts;
 
   const checks = [];
@@ -365,15 +369,17 @@ export async function runHealthCheck(opts = {}) {
     add('deploy-interrupted', !fs.existsSync(marker), fs.existsSync(marker) ? '存在中断标记，按 docs/LINUX.md「部署被中断后怎么恢复」处理' : '');
   }
 
-  // ⑦ messages 库完整性（适配层只读打开）
-  try {
-    const db = openDatabase(path.join(dataDir, 'messages.sqlite'), { readOnly: true });
+  // ⑦ messages 库完整性（适配层只读打开）。控制台交互体检跳过：DatabaseSync 会同步扫全库。
+  if (integrityCheck) {
     try {
-      const row = db.prepare('PRAGMA integrity_check').get();
-      add('sqlite-integrity', row?.integrity_check === 'ok', row?.integrity_check ?? '');
-    } finally { db.close(); }
-  } catch (error) {
-    add('sqlite-integrity', false, error?.message ?? String(error));
+      const db = openDatabase(path.join(dataDir, 'messages.sqlite'), { readOnly: true });
+      try {
+        const row = db.prepare('PRAGMA integrity_check').get();
+        add('sqlite-integrity', row?.integrity_check === 'ok', row?.integrity_check ?? '');
+      } finally { db.close(); }
+    } catch (error) {
+      add('sqlite-integrity', false, error?.message ?? String(error));
+    }
   }
 
   // ⑧ 插件（v1）：装了几个、授权几个、manifest 有没有问题、这台机器能不能隔离。
@@ -431,12 +437,14 @@ export async function runHealthCheck(opts = {}) {
   const healthy = checks.every((c) => c.ok);
 
   // ── 抑制与通知：按类别计连击；连续 NOTIFY_AFTER_STREAK 次失败才通知，恢复补发一次 ──
+  // persist=false 时（控制台交互体检）不读/不写 health.json，避免覆盖定时巡检的连击状态。
+  const notified = [];
+  if (persist) {
   const state = loadState(dataDir);
   state.streaks = state.streaks || {};
   state.lastRunAt = now;
   state.healthy = healthy;
   state.lastResults = checks;
-  const notified = [];
   if (typeof notify === 'function') {
     for (const c of checks) {
       const prev = state.streaks[c.name] || { count: 0 };
@@ -480,6 +488,7 @@ export async function runHealthCheck(opts = {}) {
     }
   }
   try { saveState(dataDir, state); } catch { /* health.json 写失败不影响巡检结论 */ }
+  }
 
   return { healthy, checks, notified, code: healthy ? 0 : 1 };
 }

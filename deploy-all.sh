@@ -101,6 +101,7 @@ require_value() {
 while (($#)); do
   case "$1" in
     --root-dir) require_value "$@"; ROOT_DIR="$2"; shift 2 ;;
+    --root-dir=*) ROOT_DIR="${1#*=}"; shift ;;
     --agent-port) require_value "$@"; AGENT_PORT="$2"; AGENT_PORT_SET=true; shift 2 ;;
     --snowluma-port) require_value "$@"; SNOWLUMA_PORT="$2"; SNOWLUMA_PORT_SET=true; shift 2 ;;
     --novnc-port) require_value "$@"; NOVNC_PORT="$2"; NOVNC_PORT_SET=true; shift 2 ;;
@@ -147,6 +148,7 @@ die() {
 # check_local_ownership 判成"不完整的受管安装"而拒绝 —— 而拉镜像失败的提示恰恰让操作者重跑。
 # 容器可能已经写过东西，所以目录只用 rmdir：非空会失败，正好保留现场。
 FRESH_STACK_CLEANUP=false
+STACK_LOCK_DIR=""
 cleanup_fresh_stack() {
   [[ "$FRESH_STACK_CLEANUP" == true ]] || return 0
   printf '安装未完成：已清理本次写入的栈文件与空目录，可以直接重跑 deploy-all.sh。\n' >&2
@@ -170,8 +172,34 @@ deploy_all_exit() {
     cp -p "$ENV_FILE.pre-deploy" "$ENV_FILE"
     printf '部署未完成：.env 已回滚为部署前内容（备份保留在 %s.pre-deploy），可直接重跑 deploy-all.sh。\n' "$ENV_FILE" >&2
   fi
+  [[ -z "${STACK_LOCK_DIR:-}" ]] || rm -rf -- "$STACK_LOCK_DIR"
   cleanup_fresh_stack
   exit "$status"
+}
+
+# 栈级互斥：两个 deploy-all 同时跑时，.env/compose 会在 deploy.sh 的锁之前互相覆盖。
+# 锁放在部署根目录，覆盖从 .env 写入到 deploy.sh 收尾的全程。
+acquire_stack_lock() {
+  local attempt=0 pid="" stale=""
+  while (( attempt < 2 )); do
+    if mkdir -- "$STACK_LOCK_DIR" 2>/dev/null; then
+      printf '%s\n' "$$" >"$STACK_LOCK_DIR/pid" 2>/dev/null || true
+      date -Is >"$STACK_LOCK_DIR/started" 2>/dev/null || true
+      return 0
+    fi
+    pid="$(cat "$STACK_LOCK_DIR/pid" 2>/dev/null | tr -d '\r\n' || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      die "另一个 deploy-all.sh 正在运行（pid $pid，锁 $STACK_LOCK_DIR）"
+    fi
+    stale="$(find "$STACK_LOCK_DIR" -maxdepth 0 -mmin +5 2>/dev/null || true)"
+    if [[ -n "$stale" || -n "$pid" ]]; then
+      rm -rf -- "$STACK_LOCK_DIR"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    die "另一个 deploy-all.sh 正在运行（锁 $STACK_LOCK_DIR）"
+  done
+  die "无法获取部署锁：$STACK_LOCK_DIR"
 }
 
 step() {
@@ -222,7 +250,7 @@ random_hex() {
 env_value() {
   local file="$1" key="$2"
   [[ -f "$file" ]] || return 0
-  sed -n "s/^${key}=//p" "$file" | tail -n 1
+  sed -n "s/^${key}=//p" "$file" | tail -n 1 | tr -d '\r'
 }
 
 validate_port() {
@@ -261,26 +289,43 @@ install_docker() {
   confirm 'Docker is missing. Install Docker and Compose now?' true \
     || die 'Docker is required by SnowLuma'
 
-  step 'Installing Docker'
+  step 'Installing Docker Engine'
   if command -v apt-get >/dev/null 2>&1; then
     run_root apt-get update
-    if ! run_root apt-get install -y docker.io docker-compose-v2; then
-      run_root apt-get install -y docker.io docker-compose-plugin
-    fi
+    run_root apt-get install -y docker.io || die 'Docker Engine installation failed'
   elif command -v dnf >/dev/null 2>&1; then
-    run_root dnf install -y docker docker-compose-plugin \
-      || run_root dnf install -y moby-engine docker-compose-plugin
+    run_root dnf install -y docker || run_root dnf install -y moby-engine \
+      || die 'Docker Engine installation failed'
   elif command -v yum >/dev/null 2>&1; then
-    run_root yum install -y docker docker-compose-plugin \
-      || run_root yum install -y docker-compose
+    run_root yum install -y docker || run_root yum install -y moby-engine \
+      || die 'Docker Engine installation failed'
   elif command -v zypper >/dev/null 2>&1; then
-    run_root zypper --non-interactive install -y docker docker-compose
+    run_root zypper --non-interactive install -y docker || die 'Docker Engine installation failed'
   elif command -v pacman >/dev/null 2>&1; then
-    run_root pacman -Sy --noconfirm docker docker-compose
+    run_root pacman -Sy --noconfirm docker || die 'Docker Engine installation failed'
   else
     die 'No supported package manager found; install Docker Engine and Compose manually'
   fi
   run_root systemctl enable --now docker
+
+  # Compose 单独装：Debian 12 官方仓库没有 docker-compose-v2，把引擎和插件写在同一条
+  # apt install 里会整条失败。装不上的错误要直接指向“配置 Docker 官方仓库”。
+  step 'Installing Docker Compose v2'
+  if command -v apt-get >/dev/null 2>&1; then
+    run_root apt-get install -y docker-compose-v2 \
+      || run_root apt-get install -y docker-compose-plugin \
+      || true
+  elif command -v dnf >/dev/null 2>&1; then
+    run_root dnf install -y docker-compose-plugin || true
+  elif command -v yum >/dev/null 2>&1; then
+    run_root yum install -y docker-compose-plugin || true
+  elif command -v zypper >/dev/null 2>&1; then
+    run_root zypper --non-interactive install -y docker-compose || true
+  elif command -v pacman >/dev/null 2>&1; then
+    run_root pacman -Sy --noconfirm docker-compose || true
+  fi
+  docker compose version >/dev/null 2>&1 \
+    || die 'Docker Engine is installed but Docker Compose v2 is unavailable. Debian 12 official repos only ship v1; configure the Docker official apt repository (docs/DOCKER.md) or install docker-compose-plugin manually.'
 }
 
 docker_call() {
@@ -628,14 +673,19 @@ validate_secret 'SnowLuma WebUI password' "$SNOWLUMA_PASSWORD" 10
 validate_secret 'noVNC password' "$VNC_PASSWORD" 8
 
 step 'Preparing directories'
+ROOT_CREATED=false
 if [[ ! -d "$ROOT_DIR" ]]; then
   run_root mkdir -p "$ROOT_DIR"
   run_root chown "$(id -u):$(id -g)" "$ROOT_DIR"
+  ROOT_CREATED=true
 fi
 [[ -w "$ROOT_DIR" ]] || die "Deployment root is not writable by $(id -un): $ROOT_DIR"
 mkdir -p "$APP_DIR" "$AGENT_DATA_DIR" \
   "$SNOWLUMA_DATA_DIR/config" "$SNOWLUMA_DIR/client-config" "$SNOWLUMA_DIR/client-data"
-chmod 700 "$ROOT_DIR" "$AGENT_DATA_DIR" "$SNOWLUMA_DIR" "$SNOWLUMA_DATA_DIR" \
+# 只收紧本次创建的根目录；已存在的父目录可能是共享目录（/opt、/mnt/data），
+# 不能因为一次部署把别人的目录改成 0700。
+[[ "$ROOT_CREATED" != true ]] || chmod 700 "$ROOT_DIR"
+chmod 700 "$AGENT_DATA_DIR" "$SNOWLUMA_DIR" "$SNOWLUMA_DATA_DIR" \
   "$SNOWLUMA_DIR/client-config" "$SNOWLUMA_DIR/client-data"
 
 # 2026-10-06 复审 P3：退出钩子必须挂在第一次写盘之前 —— 原先 fresh 的清理 trap 在
@@ -646,6 +696,19 @@ if [[ "$EXISTING_STACK" != true ]]; then
   FRESH_STACK_CLEANUP=true
 fi
 trap deploy_all_exit EXIT
+STACK_LOCK_DIR="$ROOT_DIR/.deploy-all.lock"
+acquire_stack_lock
+# 只比较摘要/长度，不把旧令牌留在变量里（与“现读现用凭据”的纪律一致）。
+OLD_ONEBOT_LEN="$(env_value "$ENV_FILE" ONEBOT_TOKEN | wc -c | tr -d ' ')"
+OLD_ONEBOT_DIGEST="$(env_value "$ENV_FILE" ONEBOT_TOKEN | sha256sum | awk '{print $1}')"
+NEW_ONEBOT_DIGEST="$(printf '%s' "$ONEBOT_TOKEN" | sha256sum | awk '{print $1}')"
+if (( OLD_ONEBOT_LEN > 0 )) && [[ "$OLD_ONEBOT_DIGEST" != "$NEW_ONEBOT_DIGEST" ]]; then
+  # compose up 看到配置没变不会重建容器；令牌改了但 SnowLuma 仍读旧 onebot.json
+  # 会一直 401，所以这里显式强制重建。
+  RECREATE_SNOWLUMA=true
+else
+  RECREATE_SNOWLUMA=false
+fi
 if [[ -f "$ENV_FILE" ]]; then
   cp -p "$ENV_FILE" "$ENV_FILE.pre-deploy"
 fi
@@ -673,9 +736,9 @@ ONEBOT_TOKEN=$ONEBOT_TOKEN
 QQ_AGENT_CONSOLE_TOKEN=$AGENT_TOKEN
 EOF
 mv "$ENV_FILE.tmp" "$ENV_FILE"
-chmod 600 "$ENV_FILE"
-# .env 已重写（可能带新凭据）：部署成功前的失败退出要回拷 .pre-deploy（见 deploy_all_exit）。
+# .env 已重写（可能带新凭据）：先置位，再做 chmod；chmod 失败时失败退出仍能回拷 .pre-deploy。
 ENV_REWRITTEN=true
+chmod 600 "$ENV_FILE"
 
 cat >"$COMPOSE_FILE.tmp" <<'EOF'
 services:
@@ -829,12 +892,13 @@ fi
 [[ -z "$MODEL_NAME" ]] || export QQ_AGENT_MODEL="$MODEL_NAME"
 [[ -z "$ALLOW_GROUPS" ]] || export QQ_AGENT_ALLOW_GROUPS="$ALLOW_GROUPS"
 [[ -z "$ALLOW_PRIVATE" ]] || export QQ_AGENT_ALLOW_PRIVATE="$ALLOW_PRIVATE"
-bash "$SOURCE_DIR/deploy.sh" \
-  --install-dir "$APP_DIR" \
-  --data-dir "$AGENT_DATA_DIR" \
-  --host 0.0.0.0 \
-  --port "$AGENT_PORT" \
-  --service "$SERVICE"
+DEPLOY_ARGS=(--install-dir "$APP_DIR" --data-dir "$AGENT_DATA_DIR" --service "$SERVICE")
+if [[ "$EXISTING_STACK" != true ]]; then
+  # 新装才强制 0.0.0.0/所选端口；已有安装让 deploy.sh 沿用 config.json 里的现值，
+  # 否则用户按文档改成 127.0.0.1 后会被安装器改回去。
+  DEPLOY_ARGS+=(--host 0.0.0.0 --port "$AGENT_PORT")
+fi
+bash "$SOURCE_DIR/deploy.sh" "${DEPLOY_ARGS[@]}"
 # Agent 已装好，栈不再是"半成品"：撤销失败清理，保留 .env / compose。
 FRESH_STACK_CLEANUP=false
 # .env 的新凭据自此生效（deploy.sh 已完成、config.json 已含配套令牌）：此后失败不再回拷。
@@ -850,7 +914,11 @@ fi
   --ws-port 3001
 
 step 'Starting SnowLuma and OneBot'
-(cd "$SNOWLUMA_DIR" && docker_call compose --env-file .env up -d)
+COMPOSE_UP=(--env-file .env up -d)
+if [[ "$RECREATE_SNOWLUMA" == true ]]; then
+  COMPOSE_UP+=(--force-recreate snowluma)
+fi
+(cd "$SNOWLUMA_DIR" && docker_call compose "${COMPOSE_UP[@]}")
 wait_http "http://127.0.0.1:$SNOWLUMA_PORT/api/ui/public" 90 \
   || die "SnowLuma WebUI did not become ready; run: cd $SNOWLUMA_DIR && docker compose logs"
 wait_http "http://127.0.0.1:$NOVNC_PORT/" 30 \
@@ -882,7 +950,9 @@ systemctl --user restart "$SERVICE.service"
 wait_http "http://127.0.0.1:$AGENT_PORT/healthz" 30 \
   || die "QQ Agent did not become ready; run: $APP_DIR/manage.sh logs"
 
-HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+# 优先 IPv4：IPv6 直接拼 http://240e:... 是非法 URL，install.sh 的端口正则也匹配不到。
+HOST_IP="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
+HOST_IP="${HOST_IP:-$(hostname -I 2>/dev/null | awk '{print $1}' || true)}"
 HOST_IP="${HOST_IP:-127.0.0.1}"
 MODE="$("$NODE_BIN" -e 'const c=require(process.argv[1]);process.stdout.write(c.runtime.mode)' \
   "$AGENT_DATA_DIR/config.json")"
@@ -901,6 +971,8 @@ Mode: $MODE
 EOF
 mv "$ACCESS_FILE.tmp" "$ACCESS_FILE"
 chmod 600 "$ACCESS_FILE"
+# 成功收尾：.env 已是当前凭据，旧 .pre-deploy 里还有上一版令牌/密码，不应长期留在栈目录。
+rm -f "$ENV_FILE.pre-deploy"
 
 printf '\nDeployment complete. Agent mode: %s.\n' "$MODE"
 printf '1. Open QQ login:     http://%s:%s\n' "$HOST_IP" "$NOVNC_PORT"

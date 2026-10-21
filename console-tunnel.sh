@@ -78,16 +78,26 @@ if ! ssh "${SSH_OPTS[@]}" "$SRV" true >/dev/null 2>&1; then
 fi
 
 # 读取控制台令牌与 SnowLuma/noVNC 密码。只读，不落盘。
-REMOTE_READ='
-for f in /mnt/data/qq-agent/data/console-access.txt /data/qq-agent/data/console-access.txt; do
-  if [ -f "$f" ]; then awk "/^Token/{print \$2; exit}" "$f"; break; fi
+# 支持自定义部署根目录；legacy /data/qq-agent 仍作为兜底。
+STACK_DIR="${QQ_AGENT_STACK_DIR:-/mnt/data/qq-agent}"
+REMOTE_READ="$(cat <<EOF
+STACK_DIR='$STACK_DIR'
+for f in "\$STACK_DIR/data/console-access.txt" /data/qq-agent/data/console-access.txt; do
+  if [ -f "\$f" ]; then awk '/^Token/{print \$2; exit}' "\$f"; break; fi
 done
 echo __CREDS__
-for f in /mnt/data/qq-agent/deployment-access.txt /data/qq-agent/deployment-access.txt; do
-  if [ -f "$f" ]; then grep -E "^(SnowLuma password|noVNC password): " "$f"; break; fi
+for f in "\$STACK_DIR/deployment-access.txt" /data/qq-agent/deployment-access.txt; do
+  if [ -f "\$f" ]; then grep -E '^(SnowLuma password|noVNC password): ' "\$f"; break; fi
 done
-'
-REMOTE_OUT="$(ssh "${SSH_OPTS[@]}" "$SRV" "$REMOTE_READ" 2>/dev/null || true)"
+EOF
+)"
+ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/qq-tunnel-ssh.XXXXXX")"
+REMOTE_OUT="$(ssh "${SSH_OPTS[@]}" "$SRV" "$REMOTE_READ" 2>"$ERR_FILE" || true)"
+if [[ -s "$ERR_FILE" ]]; then
+  # 密码回退时不能把 stderr 丢掉：首次连接的 host key 提示/认证错误都在这里。
+  sed 's/^/[ssh] /' "$ERR_FILE" >&2
+fi
+rm -f "$ERR_FILE"
 TOKEN="$(printf '%s\n' "$REMOTE_OUT" | sed -n '1,/^__CREDS__$/p' | sed '$d' | head -n 1 | tr -d '\r')"
 CREDS="$(printf '%s\n' "$REMOTE_OUT" | sed -n '/^__CREDS__$/,$p' | tail -n +2)"
 
@@ -131,6 +141,10 @@ if command -v curl >/dev/null 2>&1; then
     sleep 1
   done
 else
+  if [[ "$MODE" == test ]]; then
+    warn '本机没有 curl，test 模式无法验证隧道/控制台；请安装 curl 后重试。'
+    exit 1
+  fi
   sleep 8
   READY=true
 fi

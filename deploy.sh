@@ -71,6 +71,9 @@ while (($#)); do
 done
 
 [[ "$(uname -s)" == Linux ]] || { printf 'Linux only\n' >&2; exit 1; }
+if ((EUID == 0)); then
+  printf 'Warning: running deploy.sh as root is not recommended; the service will run as root. Prefer the service user or install.sh.\n' >&2
+fi
 [[ "$SERVICE" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
 [[ "$PORT" =~ ^[0-9]+$ ]] && ((PORT >= 1 && PORT <= 65535)) || {
   printf 'Port must be an integer from 1 to 65535\n' >&2
@@ -241,6 +244,7 @@ if ! node_ready "$NODE_BIN"; then
   command -v curl >/dev/null
   command -v sha256sum >/dev/null
   command -v tar >/dev/null
+  command -v xz >/dev/null || { printf 'xz is required to unpack the Node.js archive (install xz-utils)\n' >&2; exit 1; }
   if [[ -z "$NODE_ARCH" ]]; then
     printf 'Unsupported CPU architecture: %s\n' "$(uname -m)" >&2; exit 1
   fi
@@ -408,8 +412,12 @@ fi
 RSYNC_SOURCE=("${RSYNC_PRESERVE[@]}" --exclude=/node_modules/)
 
 WAS_ACTIVE=false
+WAS_ENABLED=false
 if systemctl --user is-active --quiet "$SERVICE.service"; then
   WAS_ACTIVE=true
+fi
+if systemctl --user is-enabled --quiet "$SERVICE.service" 2>/dev/null; then
+  WAS_ENABLED=true
 fi
 
 ROLLBACK_DIR=""
@@ -507,6 +515,7 @@ rollback_deployment() {
   ((status != 0)) || status=1
   trap - ERR INT TERM
   set +e
+  ROLLBACK_FAILED=false
   # 注意：清标记必须放在**恢复动作之后**（原来放在这里）：
   # 恢复过程中再失败（磁盘满正是常见原因）或被 SIGKILL 时，标记已经没了，
   # 机器停在"半新半旧"却不再报 deploy-interrupted（2026-10-13 全项目审查）。
@@ -514,41 +523,41 @@ rollback_deployment() {
   systemctl --user stop "$SERVICE.service" >/dev/null 2>&1
   systemctl --user disable --now "$UPDATE_SERVICE.timer" >/dev/null 2>&1
   if [[ -n "$ROLLBACK_DIR" && -d "$ROLLBACK_DIR/app" ]]; then
-    rsync -a --delete "${RSYNC_PRESERVE[@]}" "$ROLLBACK_DIR/app/" "$INSTALL_DIR/"
+    rsync -a --delete "${RSYNC_PRESERVE[@]}" "$ROLLBACK_DIR/app/" "$INSTALL_DIR/" || ROLLBACK_FAILED=true
   fi
   if [[ "$HAD_CONFIG" == true ]]; then
-    cp -p "$LOCK_DIR/state/config.json" "$DATA_DIR/config.json"
+    cp -p "$LOCK_DIR/state/config.json" "$DATA_DIR/config.json" || ROLLBACK_FAILED=true
   else
     rm -f -- "$DATA_DIR/config.json"
   fi
   if [[ "$HAD_ACCESS_FILE" == true ]]; then
-    cp -p "$LOCK_DIR/state/console-access.txt" "$DATA_DIR/console-access.txt"
+    cp -p "$LOCK_DIR/state/console-access.txt" "$DATA_DIR/console-access.txt" || ROLLBACK_FAILED=true
   else
     rm -f -- "$DATA_DIR/console-access.txt"
   fi
   if [[ "$HAD_UNIT" == true ]]; then
     mkdir -p "$(dirname "$UNIT_FILE")"
-    cp -p "$LOCK_DIR/state/service.unit" "$UNIT_FILE"
+    cp -p "$LOCK_DIR/state/service.unit" "$UNIT_FILE" || ROLLBACK_FAILED=true
   else
     rm -f -- "$UNIT_FILE"
   fi
   if [[ "$HAD_UPDATE_UNIT" == true ]]; then
-    cp -p "$LOCK_DIR/state/update.service" "$UPDATE_UNIT_FILE"
+    cp -p "$LOCK_DIR/state/update.service" "$UPDATE_UNIT_FILE" || ROLLBACK_FAILED=true
   else
     rm -f -- "$UPDATE_UNIT_FILE"
   fi
   if [[ "$HAD_UPDATE_TIMER" == true ]]; then
-    cp -p "$LOCK_DIR/state/update.timer" "$UPDATE_TIMER_FILE"
+    cp -p "$LOCK_DIR/state/update.timer" "$UPDATE_TIMER_FILE" || ROLLBACK_FAILED=true
   else
     rm -f -- "$UPDATE_TIMER_FILE"
   fi
   if [[ "$HAD_DEPLOYMENT_JSON" == true ]]; then
-    cp -p "$LOCK_DIR/state/deployment.json" "$INSTALL_DIR/.deployment.json"
+    cp -p "$LOCK_DIR/state/deployment.json" "$INSTALL_DIR/.deployment.json" || ROLLBACK_FAILED=true
   else
     rm -f -- "$INSTALL_DIR/.deployment.json"
   fi
   if [[ "$HAD_DEPLOYMENT_NODE" == true ]]; then
-    cp -p "$LOCK_DIR/state/deployment-node" "$INSTALL_DIR/.deployment-node"
+    cp -p "$LOCK_DIR/state/deployment-node" "$INSTALL_DIR/.deployment-node" || ROLLBACK_FAILED=true
   else
     rm -f -- "$INSTALL_DIR/.deployment-node"
   fi
@@ -560,8 +569,15 @@ rollback_deployment() {
   fi
   if [[ "$WAS_ACTIVE" == true ]]; then
     systemctl --user start "$SERVICE.service"
+  elif [[ "$WAS_ENABLED" == true ]]; then
+    # 原来是 enabled 但被手动 stop：回滚只恢复开机自启，不擅自启动。
+    systemctl --user enable "$SERVICE.service" >/dev/null 2>&1
   else
     systemctl --user disable --now "$SERVICE.service" >/dev/null 2>&1
+  fi
+  if [[ "$ROLLBACK_FAILED" == true ]]; then
+    printf 'Rollback incomplete: keeping %s for manual recovery. Do not start the old service blindly.\n' "$IN_PROGRESS_MARKER" >&2
+    exit "$status"
   fi
   # 恢复与重启都做完，才算这次部署收尾
   clear_deploy_marker
@@ -628,12 +644,16 @@ HEALTHY=false
 # 90 秒窗口：慢机器冷启动（大库迁移、慢磁盘）可能超过旧版 50×0.2s≈10-20 秒，
 # 被误判失败会触发回滚，形成"每次更新都回滚"的怪圈；deploy-all 对同服务给的是
 # 30-90 秒，这里对齐同一量级。
+HEALTH_DEADLINE=$((SECONDS + 90))
 for _ in {1..90}; do
-  if "$NODE_BIN" -e 'fetch(process.argv[1]).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))' \
+  # 单次 fetch 必须有硬超时：服务接受连接但不响应时，undici 默认可能拖几百秒，
+  # 90 次循环就不再是 90 秒窗口，更新 unit 会先被杀掉、回滚也跑不到。
+  if "$NODE_BIN" -e 'fetch(process.argv[1], { signal: AbortSignal.timeout(2000) }).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))' \
       "http://$HEALTH_HOST:$PORT/healthz"; then
     HEALTHY=true
     break
   fi
+  (( SECONDS < HEALTH_DEADLINE )) || break
   sleep 1
 done
 [[ "$HEALTHY" == true ]] || { printf 'Service health check failed\n' >&2; rollback_deployment; exit 1; }

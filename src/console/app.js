@@ -1980,31 +1980,45 @@ export function createApp({
 
   // 一键体检：复用 `ops health-check` 的同一份巡检（控制台/协议端/入站/磁盘/更新），
   // 只读、不通知 owner。控制台把失败项直接列出来，用户不用再 ssh 跑命令。
+  // 并发/落盘约束：一次只允许一个体检；跳过全库 integrity_check 和 health.json 写入，
+  // 否则同步 DatabaseSync 会卡住事件循环，并覆盖定时巡检的连击状态。
+  let healthCheckInFlight = null;
   router.add('POST', '/api/health/check', async (req, res) => {
+    if (healthCheckInFlight) {
+      return json(res, 429, { busy: true, error: '体检正在进行中，请稍候' });
+    }
     const cfgNow = getConfig();
     const onebotPort = Number(cfgNow.onebot?.httpPort) || 3000;
     const onebotHttpUrl = String(cfgNow.onebot?.httpUrl || '').trim()
       || `http://127.0.0.1:${onebotPort}`;
+    const task = (async () => runHealthCheck({
+      dataDir: DATA_DIR,
+      mode: String(cfgNow.runtime?.mode || 'active'),
+      consolePort: Number(cfgNow.server?.port) || Number(process.env.QQ_AGENT_SERVER_PORT) || 3210,
+      onebotHttpPort: onebotPort,
+      onebotHttpUrl,
+      onebotToken: String(cfgNow.onebot?.httpAccessToken || cfgNow.onebot?.accessToken || ''),
+      containerRuntime: isContainerRuntime(),
+      snowlumaDir,
+      service: '',
+      notify: null,
+      persist: false,
+      integrityCheck: false,
+      sudoDockerProbe: () => false
+    }))();
+    healthCheckInFlight = task;
     try {
-      const result = await runHealthCheck({
-        dataDir: DATA_DIR,
-        mode: String(cfgNow.runtime?.mode || 'active'),
-        consolePort: Number(cfgNow.server?.port) || Number(process.env.QQ_AGENT_SERVER_PORT) || 3210,
-        onebotHttpPort: onebotPort,
-        onebotHttpUrl,
-        onebotToken: String(cfgNow.onebot?.httpAccessToken || cfgNow.onebot?.accessToken || ''),
-        containerRuntime: isContainerRuntime(),
-        snowlumaDir,
-        service: '',
-        notify: null
-      });
+      const result = await task;
       return json(res, 200, { healthy: result.healthy, checks: result.checks });
     } catch (error) {
+      log('[console] health check failed:', error?.message ?? error);
       return json(res, 200, {
         healthy: false,
         checks: [],
         error: String(error?.message ?? error)
       });
+    } finally {
+      if (healthCheckInFlight === task) healthCheckInFlight = null;
     }
   });
   router.add('GET', '/api/snowluma/version', async (req, res) => {

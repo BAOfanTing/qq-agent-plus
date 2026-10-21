@@ -63,9 +63,9 @@ DISTRO="$(printf '%s %s' "${ID:-}" "${ID_LIKE:-}" | tr '[:upper:]' '[:lower:]')"
 SUPPORTED=false
 TIER=unknown
 case " $DISTRO " in
-  *" ubuntu "*|*" debian "*|*" rocky "*|*" almalinux "*)
+  *" ubuntu "*)
     SUPPORTED=true; TIER=tested ;;
-  *" fedora "*|*" centos "*|*" rhel "*|*" amzn "*|*" oracle "*|*" arch "*|*" manjaro "*|*" opensuse-leap "*|*" opensuse-tumbleweed "*|*" sles "*|*" openeuler "*|*" anolis "*|*" kylin "*|*" uos "*)
+  *" debian "*|*" rocky "*|*" almalinux "*|*" fedora "*|*" centos "*|*" rhel "*|*" amzn "*|*" oracle "*|*" arch "*|*" manjaro "*|*" opensuse-leap "*|*" opensuse-tumbleweed "*|*" sles "*|*" openeuler "*|*" anolis "*|*" kylin "*|*" uos "*)
     SUPPORTED=true; TIER=expected ;;
 esac
 

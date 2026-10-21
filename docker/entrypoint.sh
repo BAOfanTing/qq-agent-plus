@@ -21,9 +21,9 @@ if [ "$(id -u)" = "0" ]; then
   # 其他用户可以读聊天记录。bare-metal 部署同样把数据目录设成 0700。
   chmod 700 "$DATA_DIR" 2>/dev/null || true
   if command -v gosu >/dev/null 2>&1; then
-    exec gosu node "$0" "$@"
+    exec env HOME=/home/node gosu node "$0" "$@"
   elif command -v setpriv >/dev/null 2>&1; then
-    exec setpriv --reuid=node --regid=node --init-groups "$0" "$@"
+    exec env HOME=/home/node setpriv --reuid=node --regid=node --init-groups "$0" "$@"
   else
     echo "[docker] 缺少 gosu/setpriv，无法降权到 node；拒绝以 root 身份运行应用。" >&2
     exit 1

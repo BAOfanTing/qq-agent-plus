@@ -500,6 +500,19 @@ function renderControlHub(data = {}) {
   updateControlHubFields(box, statuses, update);
 }
 
+const HEALTH_CHECK_LABELS = {
+  'console-healthz': '控制台',
+  'onebot-status': 'OneBot',
+  'protocol-version': '协议端版本',
+  'docker-socket': 'Docker 权限',
+  'outbound-freshness': '入站水位',
+  'disk-space': '磁盘余量',
+  'auto-update': '自动更新',
+  'deploy-interrupted': '部署中断',
+  'sqlite-integrity': '消息库完整性',
+  plugins: '插件'
+};
+
 async function runControlHealth() {
   const btn = $('#control-health-run');
   const box = $('#control-health-result');
@@ -529,7 +542,7 @@ async function runControlHealth() {
     box.className = 'control-result error';
     box.innerHTML = `<div>发现 ${failed.length} 项异常：</div>
       <ul class="feed">${failed.map((check) => `
-        <li><span class="chip bad">异常</span><span>${esc(check.name)}${check.detail ? `：${esc(check.detail)}` : ''}</span></li>`).join('')}</ul>`;
+        <li><span class="chip bad">异常</span><span>${esc(HEALTH_CHECK_LABELS[check.name] || check.name)}${check.detail ? `：${esc(check.detail)}` : ''}</span></li>`).join('')}</ul>`;
   } catch (error) {
     box.className = 'control-result error';
     box.textContent = `体检失败：${error.message}`;
@@ -987,6 +1000,9 @@ function connectSSE() {
   });
   es.addEventListener('onebot-status', () => {
     refreshStatus();
+    // 扫码登录后首启清单/控制页的 QQ 状态要立刻跟着变，不要等下一次 15s 轮询。
+    if (state.tab === 'overview') loadOverview();
+    if (state.tab === 'control') renderControlHub(state.integrationStatus || {});
   });
   es.addEventListener('asset-update', (event) => {
     if (state.tab !== 'assets') return;
@@ -1415,9 +1431,11 @@ async function init() {
       || cfg.allowAllWhenEmpty === true;
     const ready = Boolean(cfg.api?.model) && allowReady;
     if (!ready) {
-      switchTab('overview');
+      // 启动时已经在总览就不重复 loadOverview（那会并发发两轮 6 个请求）。
+      if (state.tab !== 'overview') switchTab('overview');
       connectSSE();
       refreshStatus();
+      startListPoller();   // 配置已就绪，把 4s 兜底轮询校准到 ui.refreshMs
       setInterval(refreshStatus, refreshIntervalMs(15000));
       return;
     }

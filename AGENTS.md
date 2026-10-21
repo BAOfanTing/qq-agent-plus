@@ -31,7 +31,7 @@ In particular:
 要部署、更新或排查线上实例时，先读：`docs/LINUX.md`（部署、控制台、数据与备份、连接排查）、
 `docs/OPS.md`（`src/ops.js` 的运维入口）、`docs/BAOTA.md`（宝塔 / aaPanel 面板环境）。五条硬约束：
 
-- **不要以 root 部署**：`deploy-all.sh` 直接拒绝 root，`deploy.sh` 也要求以服务用户身份运行。
+- **不要以 root 部署**：`deploy-all.sh` 直接拒绝 root；`deploy.sh` 允许 root 但会打印警告，只保留给已有的面板/root 部署场景，新部署优先用 `install.sh` 或普通服务用户。
 - **不要用 PM2 或面板的 Node 项目启动**：进程由 systemd 用户服务托管，`manage.sh` 依赖
   `systemctl --user`。
 - **`manage.sh` 必须在安装目录（含 `.deployment.json` 的那一层）里执行**；在源码 checkout 里跑会
@@ -76,7 +76,7 @@ In particular:
 - **默认只部署到自有服务器**：改完推 `main`、同步到线上跑着看，不推 tag、不发 Release；
   攒够了再一起发。别为了单个修复开一期版本。
 - **版本号接着当前 minor 的补丁位走**（2026-09-28 定）：即使这一批装了新功能，也发
-  `0.8.x` 的下一位，不跳 minor（例如不做 0.9.0）——一批功能+修复 = 补丁位 +1。
+  当前 `0.9.x` 的下一位，不跳 minor（例如不做 0.10.0）——一批功能+修复 = 补丁位 +1。
 - 发版流程见 [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md)：推 `v*` tag → 工作流先跑与 CI 相同的检查、
   再建**草稿** Release → 填说明后发布。不要另用 `gh release create`：同一个 tag 会多出重复草稿。
 

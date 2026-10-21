@@ -44,7 +44,9 @@ while (($#)); do
       ;;
     --root-dir=*)
       ROOT_DIR="${1#*=}"
-      PASSTHRU+=("$1")
+      # deploy-all.sh 只认分离写法；统一成 --root-dir PATH 再透传，
+      # 否则 root 路径会在改完用户/Docker/linger 之后才报“未知参数”。
+      PASSTHRU+=("--root-dir" "$ROOT_DIR")
       shift
       ;;
     --check-only)
@@ -64,13 +66,40 @@ while (($#)); do
 done
 
 [[ "$ROOT_DIR" == /* ]] || die "部署根目录必须是绝对路径：$ROOT_DIR"
-[[ "$ROOT_DIR" != / ]] || die '不能把文件系统根目录当部署根目录'
 [[ "$ROOT_DIR" != *[[:space:]%\"]* ]] || die "部署根目录不能包含空格、% 或引号：$ROOT_DIR"
 case "$ROOT_DIR" in
   *'$'*|*'`'*|*'\'*) die "部署根目录不能包含 \$、反引号或反斜杠：$ROOT_DIR" ;;
 esac
+command -v realpath >/dev/null 2>&1 \
+  || die '缺少 realpath（coreutils）；无法安全规范化部署根目录'
+ROOT_DIR="$(realpath -m -- "$ROOT_DIR")"
+SOURCE_DIR="$(realpath -m -- "$SOURCE_DIR")"
+
+# 共享系统目录绝不能整体 chown/chmod；默认安装目录 /mnt/data/qq-agent 不受影响，
+# 但 /mnt、/opt、/home 这类父目录会被拒绝。
+case "$ROOT_DIR" in
+  /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+    die "部署根目录不能是共享系统目录：$ROOT_DIR（请用例如 /mnt/data/qq-agent）"
+    ;;
+esac
 [[ -f "$SOURCE_DIR/install.sh" && -f "$SOURCE_DIR/deploy-all.sh" ]] \
   || die "源码目录不完整：$SOURCE_DIR（需要 install.sh 与 deploy-all.sh）"
+
+# 源码不能在部署根目录里（否则 chown/chmod/rsync 会动到你的 checkout），
+# 也不能把部署根目录放进源码里。$ROOT_DIR/src 是安装器自己的副本，允许复用。
+SRC_DIR="$ROOT_DIR/src"
+case "$SOURCE_DIR/" in
+  "$ROOT_DIR/"*)
+    [[ "$SOURCE_DIR" == "$SRC_DIR" ]] \
+      || die "源码不能放在部署根目录里：$SOURCE_DIR（请把仓库 clone 到别处）"
+    ;;
+esac
+case "$ROOT_DIR/" in
+  "$SOURCE_DIR/"*) die "部署根目录不能放在源码目录里：$ROOT_DIR" ;;
+esac
+case "$SOURCE_DIR/" in
+  "$SRC_DIR/"*) die "源码不能放在安装器副本目录里：$SOURCE_DIR" ;;
+esac
 
 # 测试/预览入口：只打印计划，不做任何系统改动。正式路径必须真的是 root。
 TEST_MODE="${QQ_AGENT_ROOT_INSTALL_TEST:-}"
@@ -106,8 +135,6 @@ SERVICE_USER="${SERVICE_USER:-qqagent}"
 [[ "$SERVICE_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] \
   || die "服务用户名不合法：$SERVICE_USER（只允许小写字母、数字、_、-）"
 [[ "$SERVICE_USER" != "root" ]] || die '服务用户不能是 root'
-
-SRC_DIR="$ROOT_DIR/src"
 
 print_plan() {
   cat <<EOF
@@ -174,6 +201,9 @@ fi
 
 IFS=: read -r _ _ SERVICE_UID SERVICE_GID _ HOME_DIR SERVICE_SHELL <<<"$(getent passwd "$SERVICE_USER")"
 [[ -n "$SERVICE_UID" && -n "$SERVICE_GID" ]] || die "无法读取用户信息：$SERVICE_USER"
+# UID/GID 0 的别名账号也是 root；不拦住会让内层 install.sh 再次进入 root-install。
+[[ "$SERVICE_UID" != "0" && "$SERVICE_GID" != "0" ]] \
+  || die "服务用户不能是 UID/GID 0（$SERVICE_USER 实际是 root）"
 
 SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
 if [[ -z "$HOME_DIR" || "$HOME_DIR" == "/nonexistent" ]]; then
@@ -230,25 +260,47 @@ if ((${#MISSING[@]})); then
 fi
 
 # ── Docker ──────────────────────────────────────────────────────────────────
-if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-  info '安装/启动 Docker'
+# 引擎和 Compose 分开装：Debian 12 官方仓库没有 docker-compose-v2，把两个包写在
+# 同一条 apt install 里会整条失败，连 docker.io 都装不上。
+if ! command -v docker >/dev/null 2>&1; then
+  info '安装 Docker Engine'
   if command -v apt-get >/dev/null 2>&1; then
-    if ! install_packages docker.io docker-compose-v2; then
-      install_packages docker.io docker-compose-plugin || die 'Docker 安装失败'
-    fi
+    install_packages docker.io || die 'Docker Engine 安装失败'
   elif command -v dnf >/dev/null 2>&1; then
-    install_packages docker docker-compose-plugin || die 'Docker 安装失败'
+    install_packages docker || install_packages moby-engine || die 'Docker Engine 安装失败'
   elif command -v yum >/dev/null 2>&1; then
-    install_packages docker docker-compose-plugin || die 'Docker 安装失败'
+    install_packages docker || install_packages moby-engine || die 'Docker Engine 安装失败'
+  elif command -v zypper >/dev/null 2>&1; then
+    install_packages docker || die 'Docker Engine 安装失败'
   elif command -v pacman >/dev/null 2>&1; then
-    install_packages docker docker-compose || die 'Docker 安装失败'
+    install_packages docker || die 'Docker Engine 安装失败'
   else
     die '找不到支持的包管理器；请手工安装 Docker Engine 与 Compose 后重试'
   fi
-  systemctl enable --now docker || die 'Docker 服务启动失败'
 fi
-docker info >/dev/null 2>&1 || die 'Docker 守护进程不可用'
-docker compose version >/dev/null 2>&1 || die 'Docker Compose 插件不可用'
+if ! docker info >/dev/null 2>&1; then
+  info '启动 Docker 守护进程'
+  systemctl enable --now docker >/dev/null 2>&1 || true
+fi
+docker info >/dev/null 2>&1 \
+  || die 'Docker 守护进程不可用。已尝试 systemctl enable --now docker；请检查 docker.service 与 /var/run/docker.sock。'
+
+if ! docker compose version >/dev/null 2>&1; then
+  info '安装 Docker Compose v2'
+  if command -v apt-get >/dev/null 2>&1; then
+    install_packages docker-compose-v2 || install_packages docker-compose-plugin || true
+  elif command -v dnf >/dev/null 2>&1; then
+    install_packages docker-compose-plugin || true
+  elif command -v yum >/dev/null 2>&1; then
+    install_packages docker-compose-plugin || true
+  elif command -v zypper >/dev/null 2>&1; then
+    install_packages docker-compose || true
+  elif command -v pacman >/dev/null 2>&1; then
+    install_packages docker-compose || true
+  fi
+fi
+docker compose version >/dev/null 2>&1 \
+  || die 'Docker Engine 已安装，但 Docker Compose v2 不可用。Debian 12 官方仓库只有 v1；请按 docs/DOCKER.md 配置 Docker 官方 apt 仓库，或手工安装 docker-compose-plugin 后重试。'
 
 getent group docker >/dev/null 2>&1 \
   || die '系统里没有 docker 组；rootless Docker 不在这个安装器的支持范围内'
@@ -269,18 +321,23 @@ done
   || die "用户管理器没有起来：/run/user/$SERVICE_UID 不存在（检查 systemd-logind 与 linger）"
 
 # ── 目录与源码 ──────────────────────────────────────────────────────────────
-mkdir -p "$ROOT_DIR"
-chown "$SERVICE_USER:$SERVICE_GROUP" "$ROOT_DIR"
-chmod 0700 "$ROOT_DIR"
-
-case "$SOURCE_DIR" in
-  "$ROOT_DIR/app"|"$ROOT_DIR/app/"*)
-    die "源码不能放在部署应用目录里：$SOURCE_DIR"
-    ;;
-  "$ROOT_DIR")
-    die "源码不能就是部署根目录：$SOURCE_DIR（请把仓库 clone 到别处再运行 install.sh）"
-    ;;
-esac
+if [[ ! -d "$ROOT_DIR" ]]; then
+  mkdir -p "$ROOT_DIR"
+  chown -- "$SERVICE_USER:$SERVICE_GROUP" "$ROOT_DIR"
+  chmod -- 0700 "$ROOT_DIR"
+else
+  # 已存在的根目录只允许受管条目；避免把 /mnt/data、/opt 这类共享父目录整体改权限。
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    case "$(basename -- "$entry")" in
+      app|data|snowluma|src|backup|deployment-access.txt|console-access.txt)
+        ;;
+      *)
+        die "部署根目录已有未知内容：$entry（请换一个空目录，或先人工确认）"
+        ;;
+    esac
+  done < <(find "$ROOT_DIR" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+fi
 
 if [[ "$SOURCE_DIR" != "$SRC_DIR" ]]; then
   info "复制源码到 $SRC_DIR"

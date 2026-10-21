@@ -479,6 +479,19 @@ test('deploy.sh 调用 verify-deployment-target.mjs（C7 强校验真实接入�
   assert.match(sh, /DEPLOY_REPOSITORY/, 'deploy.sh 应支持 --repository 透传');
 });
 
+test('deploy-all.sh：栈级互斥锁覆盖 .env 到 deploy.sh 的全程', () => {
+  const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
+  assert.match(sh, /acquire_stack_lock/);
+  assert.match(sh, /STACK_LOCK_DIR="\$ROOT_DIR\/\.deploy-all\.lock"/);
+  assert.match(sh, /trap deploy_all_exit EXIT\nSTACK_LOCK_DIR=/);
+});
+
+test('deploy.sh：健康检查有单次超时和总 deadline', () => {
+  const sh = fs.readFileSync(path.join(repo, 'deploy.sh'), 'utf8');
+  assert.match(sh, /AbortSignal\.timeout\(2000\)/);
+  assert.match(sh, /HEALTH_DEADLINE/);
+});
+
 test('deploy.sh：systemd 安装树不铺 Docker 全栈文件', () => {
   const sh = fs.readFileSync(path.join(repo, 'deploy.sh'), 'utf8');
   for (const rule of [

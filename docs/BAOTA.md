@@ -52,7 +52,7 @@ unit 的自动重启，以及 Release 驱动的自动更新。
 
 | 项目的假设 | 宝塔面板默认 | 处理方式 |
 | --- | --- | --- |
-| 以非 root 服务用户运行 | 面板默认以 root 操作 | 直接 `sudo bash install.sh`：安装器自动创建 `qqagent` 并降权；也可手工建普通用户后执行 |
+| 以非 root 服务用户运行 | 面板默认以 root 操作 | 直接 `sudo bash install.sh`：安装器优先沿用 `SUDO_USER`，没有则创建 `qqagent` 并降权；也可手工建普通用户后执行 |
 | `systemctl --user` 可用 | 网页终端/非登录会话缺 `XDG_RUNTIME_DIR`（用户管理器其实在跑） | 脚本会自动补该变量；`/run/user/<uid>` 不存在时先 `sudo loginctl enable-linger <user>`；SSH 或文末 root 方案同样可行 |
 | 依赖 `rsync`（硬检查）、`xz`（解压 Node） | 精简模板通常缺失 | 先执行 `apt install` |
 | 脚本不改动防火墙，仅绑定 `127.0.0.1` | 面板「安全」页管理 ufw/iptables | 默认使用 SSH 隧道，无需放行端口 |
@@ -202,7 +202,7 @@ proxy_send_timeout 3600s;
 
 ## 六、全栈部署（SnowLuma / OneBot / Docker）
 
-最简单的做法是以 root 执行 `install.sh`，它会自动创建/复用 `qqagent` 并降权，不需要手工切用户。如果要手工控制服务用户，按以下顺序操作：
+最简单的做法是以 root 执行 `install.sh`，它会复用 `SUDO_USER`（没有则创建 `qqagent`）并降权，不需要手工切用户。如果要手工控制服务用户，按以下顺序操作：
 
 1. 先在宝塔「Docker」管理器中安装 Docker 与 Compose v2，避免脚本再通过 apt 安装第二套；
 2. 执行 `usermod -aG docker qqagent`，然后**重新登录** `qqagent`（组变更需在新会话中生效）；

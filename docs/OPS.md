@@ -142,7 +142,10 @@ node src/ops.js install-timers --confirm
 
 ## 环境变量
 
-所有带默认值的路径均可覆盖；默认值对应「部署根目录 `/data/qq-agent`」的标准布局。
+所有带默认值的路径均可覆盖。注意：`install.sh` / `deploy-all.sh` 默认部署到
+`/mnt/data/qq-agent`，而 `ops.js` 的历史默认仍是 `/data/qq-agent`。用安装器装完后请先
+`export QQ_AGENT_DIR=/mnt/data/qq-agent`（或显式传 `--dir` / `--data`），否则体检、备份和
+定时器会看错目录。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |

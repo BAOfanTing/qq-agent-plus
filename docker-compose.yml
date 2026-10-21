@@ -90,8 +90,8 @@ services:
       QQ_AGENT_ONEBOT_ACCESS_TOKEN: ${QQ_AGENT_ONEBOT_ACCESS_TOKEN:-}
       QQ_AGENT_ONEBOT_HTTP_TOKEN: ${QQ_AGENT_ONEBOT_HTTP_TOKEN:-}
       QQ_AGENT_SNOWLUMA_CONFIG_DIR: /snowluma-config
-      # 只跑 agent（外部协议端）时设 0，避免等 SnowLuma 配置的 30 秒空转
-      QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: ${QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS:-30000}
+      # 只跑 agent（外部协议端）时设 0，避免等 SnowLuma 配置的 120 秒空转
+      QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: ${QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS:-120000}
       # 留空＝首次启动自动生成并写进 data/config.json；
       # 访问信息写入 /data/console-access.txt（日志不打印令牌）。
       QQ_AGENT_CONSOLE_TOKEN: ${QQ_AGENT_CONSOLE_TOKEN:-}

@@ -171,8 +171,8 @@ SnowLuma 已包含 OneBot，无需另行安装 NapCat 或 Lagrange。
 
 发行版支持分三档：
 
-- **已实测**：Ubuntu 22.04/24.04、Debian 12、Rocky Linux 9、AlmaLinux 9。
-- **预期可用**：Fedora、CentOS Stream、RHEL、Oracle Linux、Amazon Linux、Arch/Manjaro、openSUSE Leap/Tumbleweed、SLES、openEuler、Anolis、麒麟/UOS（按 dnf/yum/zypper/pacman 尝试）。
+- **已实测**：Ubuntu 22.04/24.04（当前生产环境）。
+- **预期可用**：Debian 12、Rocky Linux 9、AlmaLinux 9、Fedora、CentOS Stream、RHEL、Oracle Linux、Amazon Linux、Arch/Manjaro、openSUSE Leap/Tumbleweed、SLES、openEuler、Anolis、麒麟/UOS（按 dnf/yum/zypper/pacman 尝试）。Debian 12 官方仓库只有 Compose v1，需先按 Docker 官方文档配置 apt 仓库才能拿到 Compose v2。
 - **明确不支持**：Alpine（musl）、NixOS、Gentoo、Void、WSL1，以及没有 systemd 的容器环境。
 
 安装前可以先跑只读体检，它会打印发行版、包管理器、systemd、libc 和结论：
@@ -270,7 +270,7 @@ bash deploy-all.sh --help
 
 - Linux，且可用 systemd 用户服务；
 - 以非 root 的普通用户执行（服务注册为该用户的 systemd 用户服务）；
-- `curl`、`tar`、`sha256sum`、`rsync`（缺少合格 Node.js 时自动安装已校验的 Node 22）；
+- `curl`、`tar`、`sha256sum`、`rsync`、`xz`（缺少合格 Node.js 时自动安装已校验的 Node 22）；
 - 已运行的 OneBot v11 HTTP 与正向 WebSocket 服务；
 - 兼容 OpenAI Chat Completions 的模型服务。
 
@@ -335,8 +335,10 @@ bash deploy.sh \
   --port 3210
 ```
 
-更新不重置运行模式，其余配置也保持不变。`--install-dir` 与 `--data-dir` 必须与现有安装一致：传错
-目录不会报错，而是把服务指向一个新的空数据目录。`--host` 与 `--port` 可以省略——省略时脚本沿用
+更新不重置运行模式，其余配置也保持不变。`--install-dir` 与 `--data-dir` 必须与现有安装一致：
+传错目录会在任何改动前直接拒绝（服务未停、代码未动），不会创建一个新的空数据目录；迁移数据目录
+需要同时给 `--allow-path-change` 和 `QQ_AGENT_ALLOW_PATH_CHANGE=1`，旧数据不会自动复制。
+`--host` 与 `--port` 可以省略——省略时脚本沿用
 `config.json` 中记录的现值并打印一行提示；显式传入时必须与首次安装相同（例如全栈安装用的是
 `0.0.0.0`），否则控制台会从外部失联。当前监听地址可从 `DATA_DIR/console-access.txt` 的 URL 行读到。
 
@@ -374,7 +376,12 @@ bash manage.sh backup /path/to/new-backup-dir
 `manage.sh` 之外的运维工具（只读体检、数据备份、发送与登录监控、进程看门狗、表情名导出、非交互
 部署、SSH 隧道）统一由 `src/ops.js` 提供，仅使用 Node 内置模块：
 
+安装器默认部署到 `/mnt/data/qq-agent`，而 `ops.js` 的旧默认是 `/data/qq-agent`。先导出根目录，
+或者给命令显式传 `--dir` / `--data`，否则体检、备份和定时器会看错目录：
+
 ```bash
+export QQ_AGENT_DIR=/mnt/data/qq-agent
+
 node src/ops.js help                     # 全部子命令
 node src/ops.js audit                    # 服务 + 代码 + 数据体检（只读）
 node src/ops.js audit-host               # 主机体检（只读）
@@ -599,7 +606,7 @@ bash -n deploy.sh && bash -n deploy-all.sh && bash -n manage.sh
 
 CI（GitHub Actions）在每次推送和 PR 上执行语法检查、未定义调用扫描（严格模式）、单元测试、本地回归，
 以及提示词 / 渲染 / 滚动 / 用量端到端回归。
-当前基线上有两条已确认、暂不修的小问题，均不影响主链路，历史记录见[已知问题](docs/KNOWN-ISSUES.md)。
+当前基线上仍有一批已确认、暂不修的问题；数量与状态以[已知问题](docs/KNOWN-ISSUES.md)为准，不要在这里写死条数。
 
 详细说明见 [Linux 运维手册](docs/LINUX.md)，全部文档见[文档索引](docs/README.md)。试验性三模式对话
 引擎见 [Conversation Modes](docs/CONVERSATION_MODES.md)；早期参与者续接方案见

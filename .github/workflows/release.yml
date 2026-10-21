@@ -13,6 +13,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -146,20 +150,27 @@ jobs:
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 
-      - name: 创建 Release（草稿，确认后发布）
+      - name: 创建 Release（草稿，确认后发布）并上传连接脚本
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --draft \
-            --title "${GITHUB_REF_NAME}" \
-            --notes-file RELEASE_NOTES.md
-
-      # 一键连接脚本作为 Release 资产：用户本地没有项目也能直接下载。
-      # 安装页目前用 raw/main 作为即时地址，这里的资产给 releases/latest/download 用。
-      - name: 上传一键连接脚本
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${GITHUB_REF_NAME}" \
-            console-tunnel.bat console-tunnel.sh --clobber
+          set -e
+          PRERELEASE=()
+          # 与 update-notice 的口径一致：tag 含 -rc/-beta 等预发布标识时，
+          # GitHub Release 必须标 prerelease，否则 /releases/latest 会把它当正式版。
+          case "${GITHUB_REF_NAME}" in
+            *-*) PRERELEASE=(--prerelease) ;;
+          esac
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            # 重跑：只补资产，不重复创建（create 会因已存在直接失败）。
+            gh release upload "${GITHUB_REF_NAME}" \
+              console-tunnel.bat console-tunnel.sh --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --draft \
+              --verify-tag \
+              "${PRERELEASE[@]}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file RELEASE_NOTES.md \
+              console-tunnel.bat console-tunnel.sh
+          fi

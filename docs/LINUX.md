@@ -17,17 +17,20 @@ the old instance.
 
 ## Requirements
 
-- Linux with systemd user services, curl, tar, sha256sum and rsync.
+- Linux with systemd user services, curl, tar, sha256sum, rsync and xz
+  (the Node.js archive is `.tar.xz`).
 - A non-root service user. `install.sh` may be started as root: it creates or
   reuses a dedicated service account (default `qqagent`, or `SUDO_USER`), then
   re-runs the installer as that user. `deploy-all.sh` itself still refuses root.
 - Recommended resources: 2 CPU cores, 2GB RAM and 10GB free local disk. A 1GB
   host can OOM while SnowLuma/Chromium starts; SQLite must not live on NFS/SMB.
-- Distribution tiers: tested on Ubuntu 22.04/24.04, Debian 12, Rocky 9 and AlmaLinux 9.
-  Fedora/CentOS Stream/RHEL/Oracle/Amazon Linux, Arch/Manjaro, openSUSE/SLES and
-  openEuler/Anolis/Kylin/UOS are attempted through their package manager but not
-  tested here. Alpine/musl, NixOS, Gentoo, Void, WSL1 and containers without systemd
-  are unsupported. Run `sh scripts/check-platform.sh` for a read-only verdict.
+- Distribution tiers: tested on Ubuntu 22.04/24.04 (current production host).
+  Debian 12, Rocky 9, AlmaLinux 9, Fedora/CentOS Stream/RHEL/Oracle/Amazon Linux,
+  Arch/Manjaro, openSUSE/SLES and openEuler/Anolis/Kylin/UOS are attempted through
+  their package manager but not tested here. Debian 12 needs Docker's official apt
+  repository for Compose v2 (its own repository only ships v1). Alpine/musl, NixOS,
+  Gentoo, Void, WSL1 and containers without systemd are unsupported. Run
+  `sh scripts/check-platform.sh` for a read-only verdict.
 - A separately managed OneBot v11 HTTP/forward WebSocket service when using
   `deploy.sh`; `deploy-all.sh` installs SnowLuma/OneBot.
 - An OpenAI Chat Completions compatible model with function calling.

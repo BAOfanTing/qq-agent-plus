@@ -168,7 +168,7 @@ async function loadOverview() {
       label: '聊天白名单',
       ok: allowOk,
       detail: allowOk ? '已配置' : '还没有群或私聊，机器人不会回任何消息',
-      action: allowOk ? '' : '<button type="button" class="btn btn-small" data-open-settings="chats">去添加</button>'
+      action: allowOk ? '' : '<button type="button" class="btn btn-small" data-open-settings="allow">去添加</button>'
     },
     {
       key: 'mode',

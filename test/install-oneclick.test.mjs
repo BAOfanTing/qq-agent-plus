@@ -86,6 +86,14 @@ test('零问答装配：--yes + 默认跳过模型配置，装完打印接下来
   assert.match(r.stdout, /观察/, 'observe 模式要提示去控制台切「启用」');
 });
 
+test('--help：只转发帮助，不继续打印“安装完成”假成功页', { skip }, (t) => {
+  const f = fixture(t);
+  const r = run(f, ['--help']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(stubArgs(f), ['--help'], '帮助参数应直接转给 deploy-all.sh');
+  assert.doesNotMatch(r.stdout, /安装完成/, '帮助不能当成安装完成');
+});
+
 test('--check-only：只预检就把"预检通过"说成"安装完成"是错的（2026-10-13 审查）', { skip }, (t) => {
   const f = fixture(t);
   const r = run(f, ['--check-only']);

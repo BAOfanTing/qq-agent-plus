@@ -198,10 +198,12 @@ while SnowLuma/Chromium starts; SQLite must not live on NFS or SMB.
 
 Distribution support is split into three tiers:
 
-- **Tested**: Ubuntu 22.04/24.04, Debian 12, Rocky Linux 9, AlmaLinux 9.
-- **Expected to work**: Fedora, CentOS Stream, RHEL, Oracle Linux, Amazon Linux,
-  Arch/Manjaro, openSUSE Leap/Tumbleweed, SLES, openEuler, Anolis, Kylin/UOS
-  (attempted through dnf/yum/zypper/pacman).
+- **Tested**: Ubuntu 22.04/24.04 (current production host).
+- **Expected to work**: Debian 12, Rocky Linux 9, AlmaLinux 9, Fedora, CentOS Stream,
+  RHEL, Oracle Linux, Amazon Linux, Arch/Manjaro, openSUSE Leap/Tumbleweed, SLES,
+  openEuler, Anolis, Kylin/UOS (attempted through dnf/yum/zypper/pacman). Debian 12
+  official repositories only ship Compose v1; configure Docker's apt repository first
+  to get Compose v2.
 - **Unsupported**: Alpine (musl), NixOS, Gentoo, Void, WSL1, and containers without systemd.
 
 Run the read-only check before installing:
@@ -292,7 +294,7 @@ Use `deploy.sh` when a compatible OneBot v11 service already exists, or when onl
 installed or updated. Requirements:
 
 - Linux with systemd user services;
-- `curl`, `tar`, `sha256sum`, `rsync` (if no suitable Node.js is found, the script downloads and
+- `curl`, `tar`, `sha256sum`, `rsync`, `xz` (if no suitable Node.js is found, the script downloads and
   verifies Node 22 into `INSTALL_DIR/.runtime`);
 - a non-root user (the service is registered as that user's systemd user service);
 - a running OneBot v11 HTTP and forward WebSocket service;
@@ -362,8 +364,10 @@ bash deploy.sh \
 ```
 
 Updates do not reset the run mode, and the rest of the configuration is preserved. `--install-dir`
-and `--data-dir` must match the existing installation: a wrong directory is not rejected, it points
-the service at a new, empty data directory. `--host` and `--port` may be omitted — the script then
+and `--data-dir` must match the existing installation: a wrong directory is rejected before any
+change (service still running, code untouched); it does not create a new empty data directory.
+Moving the data directory requires both `--allow-path-change` and
+`QQ_AGENT_ALLOW_PATH_CHANGE=1`; old data is not copied automatically. `--host` and `--port` may be omitted — the script then
 reuses the values recorded in `config.json` and prints a note; when given explicitly they must match
 the first installation (a full-stack install uses `0.0.0.0`), otherwise the console becomes
 unreachable from outside. The current listen address is on the URL line of `DATA_DIR/console-access.txt`.
@@ -471,7 +475,7 @@ same procedure is documented in more detail in
 
 The console listens on `3210` by default. An agent-only installation (`deploy.sh`) binds `127.0.0.1`
 only, so local access requires no public port; the full-stack installer (`deploy-all.sh`) starts the
-console with `--host 0.0.0.0`, and cross-host access should be limited to a trusted LAN or VPN. On
+console with `--host 0.0.0.0`, and cross-host access should be limited to a trusted LAN or VPN.
 No local project is required. Use Windows `console-tunnel.bat` or macOS/Linux
 `console-tunnel.sh`; both read the console token from the server, open an SSH tunnel and launch the
 browser without a login prompt. The host is entered once as `user@host` and remembered. They also

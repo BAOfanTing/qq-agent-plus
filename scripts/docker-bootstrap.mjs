@@ -144,11 +144,11 @@ function sleepSync(ms) {
   } catch { /* 极少数运行时不支持，放弃等待 */ }
 }
 
-/** 等 SnowLuma 首次启动把 onebot.json 写出来（默认最多 30 秒；外部协议端不设该目录）。 */
+/** 等 SnowLuma 首次启动把 onebot.json 写出来（默认最多 120 秒；外部协议端不设该目录）。 */
 export function readSnowlumaOneBotToken(env = process.env) {
   const dir = nonEmpty(env.QQ_AGENT_SNOWLUMA_CONFIG_DIR);
   if (!dir) return '';
-  const waitMs = Math.max(0, Number(env.QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS ?? 30000) || 0);
+  const waitMs = Math.max(0, Number(env.QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS ?? 120000) || 0);
   const deadline = Date.now() + waitMs;
   for (;;) {
     const token = readOneBotTokenFrom(dir);

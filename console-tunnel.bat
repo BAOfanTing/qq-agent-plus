@@ -22,6 +22,7 @@ rem  等价工具（本机已装 Node 时）：node src/ops.js console --open
 rem ===========================================================================
 
 set "CFG=%~dp0.console-tunnel.cfg"
+if "%QQ_AGENT_STACK_DIR%"=="" (set "STACK_DIR=/mnt/data/qq-agent") else (set "STACK_DIR=%QQ_AGENT_STACK_DIR%")
 set "SSHOPTS=-o"BatchMode=yes" -o"ServerAliveInterval=30" -o"ServerAliveCountMax=3" -o"ConnectTimeout=15" -o"ExitOnForwardFailure=yes""
 set "SSH_READ=-o"BatchMode=yes" -o"ConnectTimeout=10""
 if "%QQ_AGENT_CONSOLE_PORT%"=="" (set "CONSOLE_PORT=3210") else (set "CONSOLE_PORT=%QQ_AGENT_CONSOLE_PORT%")
@@ -55,9 +56,15 @@ if errorlevel 1 (
 
 rem ── 从服务器读取控制台 Token，用于打开浏览器时免登录 ─────────────────────
 set "TOKEN="
-set "REMOTE_CMD=for f in /mnt/data/qq-agent/data/console-access.txt /data/qq-agent/data/console-access.txt; do if [ -f $f ]; then awk '/^Token/{print $2; exit}' $f; break; fi; done"
+set "REMOTE_CMD=for f in %STACK_DIR%/data/console-access.txt /data/qq-agent/data/console-access.txt; do if [ -f $f ]; then awk '/^Token/{print $2; exit}' $f; break; fi; done"
 rem 注意：ssh 的 -o 选项必须用「贴紧」写法（-o"K=V"），带空格的写法在 for /f 里会被拆坏。
-for /f "usebackq delims=" %%t in (`ssh %SSH_READ% %SRV% "!REMOTE_CMD!"`) do set "TOKEN=%%t"
+rem 令牌可能含 !，这一段必须关掉 delayed expansion；用临时文件把值带回外层作用域。
+set "TOKEN_FILE=%TEMP%\qq-agent-token-%RANDOM%-%RANDOM%.txt"
+setlocal disabledelayedexpansion
+for /f "usebackq delims=" %%t in (`ssh %SSH_READ% %SRV% "%REMOTE_CMD%"`) do >>"%TOKEN_FILE%" echo %%t
+endlocal
+if exist "%TOKEN_FILE%" set /p TOKEN=<"%TOKEN_FILE%"
+del "%TOKEN_FILE%" >nul 2>&1
 if "%TOKEN%"=="" (set "URL=http://127.0.0.1:%CONSOLE_PORT%/") else (set "URL=http://127.0.0.1:%CONSOLE_PORT%/?token=%TOKEN%")
 
 where ssh >nul 2>&1 || goto nossh
@@ -66,7 +73,7 @@ echo ============================================================
 echo   QQ Agent 控制台（SSH 隧道到 %SRV%）
 echo ============================================================
 echo.
-echo 正在建立 SSH 隧道（密钥登录不会提示；密码登录可能提示输入两次密码）...
+echo 正在建立 SSH 隧道（密钥登录不会提示；密码登录最多可能提示三次）...
 echo.
 echo    QQ Agent 控制台 ....... http://127.0.0.1:%CONSOLE_PORT%
 echo    SnowLuma WebUI ........ http://127.0.0.1:%WEBUI_PORT%
@@ -75,7 +82,7 @@ echo.
 rem ── 从服务器读 SnowLuma / noVNC 的登录凭据 ───────────────────────────────
 rem 只给 URL 不给密码，打开 SnowLuma WebUI 会卡在登录页（那份凭证在服务器上的
 rem deployment-access.txt 里，0600 权限；顺手取一次，省得用户再 ssh 去找）。
-set "CRED_CMD=for f in /mnt/data/qq-agent/deployment-access.txt /data/qq-agent/deployment-access.txt; do if [ -f $f ]; then grep -E '^(SnowLuma password|noVNC password): ' $f; break; fi; done"
+set "CRED_CMD=for f in %STACK_DIR%/deployment-access.txt /data/qq-agent/deployment-access.txt; do if [ -f $f ]; then grep -E '^(SnowLuma password|noVNC password): ' $f; break; fi; done"
 rem ⚠️ 这一段临时关掉 delayed expansion：密码里可能带 ! ，开着会被 cmd 吃掉
 rem （实测踩过：Sl-xxxx!Aa 打印成 Sl-xxxxAa，用户照抄就登不上）
 setlocal disabledelayedexpansion
@@ -133,13 +140,13 @@ pause >nul
 exit /b 0
 
 :nocurl
-echo （本机没有 curl，改用固定等待 8 秒）
-%SystemRoot%\System32\timeout.exe /t 8 >nul
+echo （本机没有 curl，无法验证控制台响应）
 if "%MODE%"=="test" (
   taskkill /f /t /fi "WINDOWTITLE eq QQ Agent Tunnel TEST" >nul 2>&1
-  echo TEST_OK: 隧道已建立（未验证控制台响应；测试模式，隧道已清理）
-  exit /b 0
+  echo TEST_FAIL: 本机没有 curl，无法验证隧道/控制台
+  exit /b 1
 )
+%SystemRoot%\System32\timeout.exe /t 8 >nul
 start "" "%URL%"
 echo 控制台已打开。若浏览器没弹出，把下面这行整条粘进地址栏：
 echo   %URL%

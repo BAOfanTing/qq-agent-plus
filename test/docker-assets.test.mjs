@@ -43,7 +43,10 @@ test('.dockerignore：不把 node_modules、数据、测试与构建上下文垃
   // 本地 compose 跑过之后，这些目录/文件可能带着令牌或 QQ 登录态；漏一个就会进镜像层。
   for (const entry of [
     '.env', '.env.*', 'snowluma', 'snowluma-data', 'snowluma-client-config',
-    'snowluma-client-data', 'backups', 'console-access.txt', 'docker-compose.yml',
+    'snowluma-client-data', 'backups', 'console-access.txt', 'deployment-access.txt',
+    'config.json', '*.sqlite', '*.sqlite-*', '*.sqlite3', 'docker-compose.yml',
+    '.deployment.json', '.deployment-node', '.console-tunnel.cfg',
+    '.npmrc', '.netrc', '.dbg/', '.runtime/', '*.pem', '*.key', '*.crt', '*.p12', '*.pfx',
     'deploy.sh', 'deploy-all.sh', 'install.sh', 'manage.sh',
     'console-tunnel.bat', 'console-tunnel.sh'
   ]) {
@@ -71,7 +74,7 @@ test('compose：控制台只绑 127.0.0.1、根文件系统只读、不挂 docke
   // OneBot 令牌：只读挂载 SnowLuma 配置自动同步；外部协议端才用显式环境变量
   assert.match(compose, /\.\/snowluma-data\/config:\/snowluma-config:ro/);
   assert.match(compose, /QQ_AGENT_SNOWLUMA_CONFIG_DIR: \/snowluma-config/);
-  assert.match(compose, /QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: \$\{QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS:-30000\}/);
+  assert.match(compose, /QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS: \$\{QQ_AGENT_SNOWLUMA_CONFIG_WAIT_MS:-120000\}/);
   assert.match(compose, /QQ_AGENT_RUNTIME_MODE: \$\{QQ_AGENT_RUNTIME_MODE:-active\}/);
   assert.match(compose, /QQ_AGENT_ONEBOT_ACCESS_TOKEN: \$\{QQ_AGENT_ONEBOT_ACCESS_TOKEN:-/);
   assert.match(compose, /QQ_AGENT_ONEBOT_HTTP_TOKEN: \$\{QQ_AGENT_ONEBOT_HTTP_TOKEN:-/);
@@ -88,7 +91,8 @@ test('入口脚本：chown 后降权，最终 exec 成 node（PID 1 能收 SIGTE
   assert.match(entrypoint, /chown -R node:node/);
   assert.match(entrypoint, /chmod 700 "\$DATA_DIR"/);
   assert.match(entrypoint, /umask 077/);
-  assert.match(entrypoint, /exec gosu node/);
+  assert.match(entrypoint, /exec env HOME=\/home\/node gosu node "\$0" "\$@"/,
+    '降权时显式设置 HOME，避免 os.homedir() 落到 /root');
   assert.match(entrypoint, /exec node \/app\/src\/server\.js/);
   assert.match(entrypoint, /docker-bootstrap\.mjs/);
   assert.doesNotMatch(entrypoint, /^node \/app\/src\/server\.js$/m, '最后一步必须是 exec，不能是前台子进程');

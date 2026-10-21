@@ -27,7 +27,7 @@ test('console-tunnel.bat：密钥失败时退回密码登录，不再硬卡 Batc
   assert.match(bat, /if errorlevel 1 \(/);
   assert.match(bat, /set "SSH_READ=-o"ConnectTimeout=10""/,
     '失败后退回不带 BatchMode 的 SSH，让密码提示能出来');
-  assert.match(bat, /ssh %SSH_READ% %SRV% "!REMOTE_CMD!"/);
+  assert.match(bat, /ssh %SSH_READ% %SRV% "%REMOTE_CMD%"/);
   assert.match(bat, /ssh %SSH_READ% %SRV% "%CRED_CMD%"/);
   assert.match(bat, /if not "%~2"=="" set "SRV=%~2"/, 'test 后可以直接带服务器地址');
 });
@@ -40,6 +40,7 @@ test('release 工作流：把两个连接脚本挂到 Release 资产', { skip },
   const release = fs.readFileSync(path.join(repo, '.github/workflows/release.yml'), 'utf8');
   assert.match(release, /gh release upload/);
   assert.match(release, /console-tunnel\.bat console-tunnel\.sh/);
+  assert.match(release, /--prerelease/, 'RC tag 必须标成 prerelease');
 });
 
 test('console-tunnel.sh：语法正确，--help 可独立运行', { skip }, () => {

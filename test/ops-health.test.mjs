@@ -554,3 +554,21 @@ test('插件：总开关关着跳过；开着且 manifest 合法为绿；manifes
   assert.match(bad.detail, /apiVersion 不匹配/);
   assert.match(bad.detail, /demo/);
 });
+
+test('控制台交互体检：persist=false 不写 health.json，integrityCheck=false 跳过全库扫描', async () => {
+  const dir = makeDataDir({ withDb: true });
+  const healthFile = path.join(dir, 'health.json');
+  assert.equal(fs.existsSync(healthFile), false, '前置条件：临时目录里没有 health.json');
+  const r = await runHealthCheck({
+    dataDir: dir,
+    fetchImpl: okFetch,
+    statfs: okStatfs,
+    notify: null,
+    persist: false,
+    integrityCheck: false,
+    sudoDockerProbe: () => false
+  });
+  assert.equal(fs.existsSync(healthFile), false, '交互体检不能覆盖定时巡检的连击状态');
+  assert.equal(r.checks.some((c) => c.name === 'sqlite-integrity'), false,
+    '跳过全库 integrity_check，避免同步 DatabaseSync 卡住控制台事件循环');
+});

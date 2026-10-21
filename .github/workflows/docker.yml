@@ -25,6 +25,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -48,6 +52,17 @@ jobs:
             exit 1
           fi
           echo "版本号一致：$TAG_VERSION"
+      - name: 手动发布版本与 package.json 一致
+        if: github.event_name == 'workflow_dispatch' && inputs.version != ''
+        run: |
+          set -e
+          VERSION="${{ inputs.version }}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::手动发布版本 $VERSION 与 package.json 版本 $PKG_VERSION 不一致"
+            exit 1
+          fi
+          echo "版本号一致：$VERSION"
       - run: npm ci
       - run: npm run lint
       - run: npm run test:unit
@@ -95,16 +110,24 @@ jobs:
             echo "::error::tag ${{ inputs.version }} already exists; delete it explicitly or use a new version"
             exit 1
           fi
+      - name: Refuse to overwrite an existing release tag (tag push)
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if docker buildx imagetools inspect "ghcr.io/${{ github.repository }}:${VERSION}" >/dev/null 2>&1; then
+            echo "::error::tag ${VERSION} already exists; published image tags are immutable"
+            exit 1
+          fi
       - id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'push' && github.ref_type == 'tag' }}
             type=sha,prefix=sha-
             type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
           labels: |
             org.opencontainers.image.title=QQ Agent Plus
             org.opencontainers.image.source=https://github.com/${{ github.repository }}

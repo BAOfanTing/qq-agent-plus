@@ -663,6 +663,12 @@ test('真实 DOM 冒烟：控制页有 QQ 登录引导与一键体检，体检�
   } finally { window.happyDOM?.abort?.(); }
 });
 
+test('总览首启清单的分区键必须真实存在（白名单是 allow，不是 chats）', () => {
+  const source = fs.readFileSync(path.join(UI, 'pages', 'overview.js'), 'utf8');
+  assert.match(source, /data-open-settings="allow"/);
+  assert.doesNotMatch(source, /data-open-settings="chats"/);
+});
+
 test('真实 DOM 冒烟：总览的异常列表用服务端取值（warning/acknowledged 不漏英文、色块不丢）', { skip: SKIP }, async () => {
   // 服务端的 severity 是 info|warning|error|critical、state 是 open|acknowledged|resolved，
   // 总览曾经自己写了一份 warn/acked 的小表 → 界面上直接印出英文 "warning"/"acknowledged"，

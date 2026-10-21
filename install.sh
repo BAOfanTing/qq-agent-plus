@@ -25,6 +25,15 @@ case "${BASH_VERSINFO[0]:-0}" in
   0|1|2|3) die "需要 bash 4 以上（当前 ${BASH_VERSION:-unknown}）。请用 bash install.sh 运行。" ;;
 esac
 
+# --help 只打印帮助，不能继续走到“安装完成”清单（否则会打印空 token 的假成功页）。
+if [[ -f "$DEPLOY_ALL" ]]; then
+  for arg in "$@"; do
+    case "$arg" in
+      -h|--help) exec bash "$DEPLOY_ALL" --help ;;
+    esac
+  done
+fi
+
 # 发行版/运行环境体检：Alpine（musl）、无 systemd、无包管理器的环境直接说清楚，
 # 不要让用户在装到一半才看到 Node 二进制或 systemctl 报错。
 if [[ "$(uname -s)" == "Linux" && "${QQ_AGENT_PLATFORM_CHECKED:-}" != "1" ]]; then
@@ -57,6 +66,9 @@ STACK_DIR="${QQ_AGENT_STACK_DIR:-/mnt/data/qq-agent}"
 PREV_ARG=""
 for arg in "$@"; do
   if [[ "$PREV_ARG" == "--root-dir" ]]; then STACK_DIR="$arg"; fi
+  case "$arg" in
+    --root-dir=*) STACK_DIR="${arg#*=}" ;;
+  esac
   PREV_ARG="$arg"
 done
 if [[ -r /proc/meminfo ]]; then

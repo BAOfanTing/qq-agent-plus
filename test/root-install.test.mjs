@@ -29,6 +29,11 @@ test('root-install.sh：创建服务用户、装 Docker、开 linger、以普通
   assert.match(rootInstaller, /qq-agent-manage/, 'root 用户需要一个降权后的管理入口');
   assert.match(rootInstaller, /--exclude='\.env'/,
     '复制源码时不能把 .env 一起带到部署目录');
+  assert.match(rootInstaller, /realpath -m -- "\$ROOT_DIR"/, '部署根目录必须先规范化');
+  assert.match(rootInstaller, /不能是共享系统目录/, '必须拒绝 /mnt、/opt、/home 等共享父目录');
+  assert.match(rootInstaller, /SERVICE_UID" != "0"/, '必须拒绝 UID 0 的别名账号');
+  assert.match(rootInstaller, /install_packages docker\.io \|\|/, '引擎和 Compose 必须分开安装');
+  assert.match(rootInstaller, /Docker Compose v2 不可用/, 'Compose v2 缺失要给可执行说明');
 });
 
 test('root-install.sh：测试模式只打印计划，不创建用户或执行安装', { skip: process.platform !== 'linux' }, (t) => {
@@ -51,4 +56,21 @@ test('root-install.sh：测试模式只打印计划，不创建用户或执行�
   assert.match(result.stdout, /服务用户：qqagent/);
   assert.match(result.stdout, new RegExp(`部署目录：${stack.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.equal(fs.existsSync(marker), false, '测试模式绝不能执行 deploy-all.sh');
+});
+
+test('root-install.sh：拒绝 /mnt、/opt 这类共享父目录', { skip: process.platform !== 'linux' }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-root-unsafe-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+  fs.copyFileSync(path.join(repo, 'install.sh'), path.join(dir, 'install.sh'));
+  fs.copyFileSync(path.join(repo, 'scripts/root-install.sh'), path.join(dir, 'scripts/root-install.sh'));
+  fs.writeFileSync(path.join(dir, 'deploy-all.sh'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+  const result = spawnSync('bash', [path.join(dir, 'scripts/root-install.sh'), '--root-dir', '/mnt', '--check-only'], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env, QQ_AGENT_ROOT_INSTALL_TEST: '1' },
+    timeout: 20_000
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /共享系统目录/);
 });
