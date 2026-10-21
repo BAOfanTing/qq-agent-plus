@@ -12,6 +12,20 @@ function readJson(file, hint) {
     throw new Error(`${hint} (${file}): ${error?.message ?? error}`);
   }
 }
+// 只按后缀判断会把普通文件当数据库打开（SQLITE_NOTADB 直接中断备份）。
+const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'binary');
+function isSqliteFile(file) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const head = Buffer.alloc(SQLITE_MAGIC.length);
+      return fs.readSync(fd, head, 0, head.length, 0) === head.length
+        && head.equals(SQLITE_MAGIC);
+    } finally { fs.closeSync(fd); }
+  } catch {
+    return false;
+  }
+}
 const deploy = readJson(path.join(root, '.deployment.json'),
   'Cannot read the deployment record — run manage.sh from the installation directory (the one holding .deployment.json)');
 const cfg = readJson(path.join(deploy.data, 'config.json'),
@@ -86,11 +100,15 @@ if (['start', 'stop', 'restart', 'status'].includes(command)) {
     if (name.endsWith('.lock')) continue;
     // 所有 SQLite 库都走在线 backup API：identity/relationship/incident 等库也开了 WAL，
     // 直接 cpSync 会把 .sqlite/-wal/-shm 拆在不同时点，恢复时可能撕裂。
-    if (name.endsWith('.sqlite')) {
+    // 后缀是 .sqlite 但不以 SQLite 头开头的普通文件/目录按普通条目复制，别让一个
+    // 手工放进去的文件把整次备份打断。
+    if (name.endsWith('.sqlite') && entry.isFile() && isSqliteFile(path.join(deploy.data, name))) {
       const db = openDatabase(path.join(deploy.data, name), { readOnly: true });
       try {
-        await backup(db, path.join(target, name));
-        fs.chmodSync(path.join(target, name), 0o600);
+        const out = path.join(target, name);
+        await backup(db, out);
+        // 网络盘（CIFS/NFS）可能不支持 chmod；目标目录本身是 0700，权限收紧失败不该中断备份。
+        try { fs.chmodSync(out, 0o600); } catch { /* 网络盘可能不支持 chmod；目标目录本身是 0700 */ }
       } finally { db.close(); }
       continue;
     }

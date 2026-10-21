@@ -181,19 +181,20 @@ deploy_all_exit() {
     cp -p "$ENV_FILE.pre-deploy" "$ENV_FILE"
     printf '部署未完成：.env 已回滚为部署前内容（备份保留在 %s.pre-deploy），可直接重跑 deploy-all.sh。\n' "$ENV_FILE" >&2
   fi
+  # 清理必须在仍持锁时做：先放锁再删 .env，新的赢家可能已经写好 .env 又被这里删掉。
+  cleanup_fresh_stack
   if [[ "${STACK_LOCK_OWNED:-false}" == true && -n "${STACK_LOCK_DIR:-}" ]]; then
     rm -rf -- "$STACK_LOCK_DIR"
     STACK_LOCK_OWNED=false
   fi
-  cleanup_fresh_stack
   exit "$status"
 }
 
 # 栈级互斥：两个 deploy-all 同时跑时，.env/compose 会在 deploy.sh 的锁之前互相覆盖。
 # 锁放在部署根目录，覆盖从 .env 写入到 deploy.sh 收尾的全程。
 acquire_stack_lock() {
-  local attempt=0 pid="" stale=""
-  while (( attempt < 2 )); do
+  local attempt=0 pid="" stale="" takeover="$STACK_LOCK_DIR.takeover"
+  while (( attempt < 3 )); do
     if mkdir -- "$STACK_LOCK_DIR" 2>/dev/null; then
       STACK_LOCK_OWNED=true
       printf '%s\n' "$$" >"$STACK_LOCK_DIR/pid" 2>/dev/null || true
@@ -206,7 +207,28 @@ acquire_stack_lock() {
     fi
     stale="$(find "$STACK_LOCK_DIR" -maxdepth 0 -mmin +5 2>/dev/null || true)"
     if [[ -n "$stale" || -n "$pid" ]]; then
-      rm -rf -- "$STACK_LOCK_DIR"
+      # 陈旧锁的接管要互斥：两个实例都判定"陈旧"时，不能都 rm -rf 再 mkdir——
+      # 后者的 rm 会把前者刚建好的新锁删掉，两个进程同时往下走。
+      if ! mkdir -- "$takeover" 2>/dev/null; then
+        if [[ -n "$(find "$takeover" -maxdepth 0 -mmin +5 2>/dev/null || true)" ]]; then
+          rm -rf -- "$takeover"
+          mkdir -- "$takeover" 2>/dev/null \
+            || die "另一个 deploy-all.sh 正在接管陈旧锁，请稍后重试"
+        else
+          die "另一个 deploy-all.sh 正在接管陈旧锁，请稍后重试"
+        fi
+      fi
+      # 二次判定：拿到接管权后锁可能已被别人重建
+      pid="$(cat "$STACK_LOCK_DIR/pid" 2>/dev/null | tr -d '\r\n' || true)"
+      if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        rmdir -- "$takeover" 2>/dev/null || true
+        die "另一个 deploy-all.sh 正在运行（pid $pid，锁 $STACK_LOCK_DIR）"
+      fi
+      # 原子移走再删：只有真正搬走旧锁的实例才能继续，搬不动的说明已被别人接管。
+      if mv -- "$STACK_LOCK_DIR" "$takeover/stale" 2>/dev/null; then
+        rm -rf -- "$takeover/stale"
+      fi
+      rmdir -- "$takeover" 2>/dev/null || true
       attempt=$((attempt + 1))
       continue
     fi
@@ -348,7 +370,7 @@ install_compose() {
   elif command -v pacman >/dev/null 2>&1; then
     run_root pacman -Sy --noconfirm docker-compose || true
   fi
-  docker compose version >/dev/null 2>&1 \
+  docker_call compose version >/dev/null 2>&1 \
     || die 'Docker Engine is installed but Docker Compose v2 is unavailable. Debian 12 / Rocky / Alma 9 stock repos do not provide it; configure the Docker official repository (docs/DOCKER.md) or install docker-compose-plugin manually. Fedora uses the docker-compose package.'
 }
 
@@ -898,6 +920,14 @@ else
     esac
     # 直连那一步已经试过这个引用（剥离后重拼可能等于原值）就别再试一遍
     [[ "$candidate" == "$IMAGE" ]] && continue
+    # 本地已有镜像站前缀的同一镜像时别访问那个可能已下线的站
+    if docker_call image inspect "$candidate" >/dev/null 2>&1; then
+      info "Using locally loaded image: $candidate"
+      IMAGE="$candidate"
+      update_env_image || true
+      PULLED=true
+      break
+    fi
     step "Retrying through image mirror $mirror"
     if pull_with_retry "$candidate"; then
       IMAGE="$candidate"

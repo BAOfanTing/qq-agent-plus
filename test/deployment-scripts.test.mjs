@@ -482,7 +482,9 @@ test('deploy.sh 调用 verify-deployment-target.mjs（C7 强校验真实接入�
 test('manage backup：所有 SQLite 库都走在线 backup API，不直接拷 WAL 文件', () => {
   const manage = fs.readFileSync(path.join(repo, 'scripts/manage.mjs'), 'utf8');
   assert.match(manage, /name\.endsWith\('\.sqlite'\)/);
-  assert.match(manage, /await backup\(db, path\.join\(target, name\)\)/);
+  assert.match(manage, /isSqliteFile\(/,
+    '后缀是 .sqlite 的普通文件不能当数据库打开，否则整次备份中断');
+  assert.match(manage, /await backup\(db, out\)/);
   assert.ok(manage.includes('/\\.sqlite-(wal|shm)$/'), 'WAL/SHM 不单独拷贝');
 });
 
@@ -503,6 +505,18 @@ test('deploy-all.sh：栈级互斥锁覆盖 .env 到 deploy.sh 的全程，且�
   assert.match(sh, /if \[\[ "\$\{STACK_LOCK_OWNED:-false\}" == true/,
     '只有锁的所有者才能删除锁');
   assert.match(sh, /acquire_stack_lock\n# 只有拿到锁的实例才允许做 fresh 清理/);
+  assert.match(sh, /STACK_LOCK_DIR\.takeover/, '陈旧锁接管要有互斥');
+  assert.match(sh, /mv -- "\$STACK_LOCK_DIR" "\$takeover\/stale"/,
+    '接管要先原子搬走旧锁，不能 rm -rf 后再 mkdir');
+});
+
+test('deploy.sh：共享目录判定在 realpath 之后，且离线时复用已装运行时', () => {
+  const sh = fs.readFileSync(path.join(repo, 'deploy.sh'), 'utf8');
+  const canonAt = sh.indexOf('INSTALL_CANON="$(canon_path');
+  const caseAt = sh.indexOf('case "$INSTALL_CANON" in');
+  assert.ok(canonAt > 0 && caseAt > canonAt, 'case 必须在归一化之后');
+  assert.match(sh, /Reusing recorded Node\.js runtime/,
+    '升级补丁版本时不能无视已记录的可用运行时');
 });
 
 test('deploy-all 生成的 compose 也带日志轮转（不等于仓库根目录那份）', () => {

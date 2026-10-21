@@ -330,13 +330,17 @@ else
   while IFS= read -r entry; do
     [[ -n "$entry" ]] || continue
     case "$(basename -- "$entry")" in
-      app|data|snowluma|src|backup|deployment-access.txt|console-access.txt|.deploy-all.lock)
+      app|data|snowluma|src|backup|deployment-access.txt|deployment-access.txt.tmp|console-access.txt|console-access.txt.tmp|.deploy-all.lock|.deploy-all.lock.takeover)
         ;;
       *)
         die "部署根目录已有未知内容：$entry（请换一个空目录，或先人工确认）"
         ;;
     esac
   done < <(find "$ROOT_DIR" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+  # 管理员按文档先 `sudo mkdir -p /mnt/data/qq-agent` 是常见前置：目录是 root 的，
+  # 服务用户随后写不进去。只改根目录本身（不递归），下面的受管子目录由 deploy.sh 维护。
+  chown -- "$SERVICE_USER:$SERVICE_GROUP" "$ROOT_DIR"
+  chmod -- 0700 "$ROOT_DIR"
 fi
 
 if [[ "$SOURCE_DIR" != "$SRC_DIR" ]]; then

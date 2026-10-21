@@ -119,11 +119,19 @@ jobs:
     # 写权限只给这个 job：它只做"生成说明 + 建草稿 Release"，不跑 npm ci、不跑测试。
     permissions:
       contents: write
+      packages: read   # 只读 GHCR manifest，确认镜像已发布
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: 登录 GHCR（读私有包时也要有凭据）
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" \
+            | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
 
       - name: 生成发布说明草稿
         run: |

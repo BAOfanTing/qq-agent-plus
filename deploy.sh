@@ -80,12 +80,6 @@ fi
   exit 2
 }
 [[ "$INSTALL_DIR" = /* ]] || { printf 'Use an absolute installation path\n' >&2; exit 2; }
-case "$INSTALL_DIR" in
-  /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
-    printf 'Refusing to deploy into a shared system directory: %s\n' "$INSTALL_DIR" >&2
-    exit 2
-    ;;
-esac
 DATA_DIR="${DATA_DIR:-$INSTALL_DIR/data}"
 [[ "$DATA_DIR" = /* ]] || { printf 'Use an absolute data path\n' >&2; exit 2; }
 for p in "$INSTALL_DIR" "$DATA_DIR"; do
@@ -107,6 +101,14 @@ canon_path() {
 }
 ROOT_CANON="$(canon_path "$ROOT")" || { printf 'Cannot normalize the source path: %s\n' "$ROOT" >&2; exit 2; }
 INSTALL_CANON="$(canon_path "$INSTALL_DIR")" || { printf 'Cannot normalize the installation path: %s\n' "$INSTALL_DIR" >&2; exit 2; }
+# 共享目录判定放在归一化之后：`/srv/`、`/srv/../srv` 或指向 /srv 的符号链接
+# 归一化后都会命中；只比较未归一化的原始字符串会被这些等价写法绕过。
+case "$INSTALL_CANON" in
+  /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+    printf 'Refusing to deploy into a shared system directory: %s\n' "$INSTALL_DIR" >&2
+    exit 2
+    ;;
+esac
 if [[ "$ROOT_CANON" != "$INSTALL_CANON" && "$INSTALL_CANON" == "$ROOT_CANON/"* ]]; then
   printf 'Installation path must not be nested inside the source repository\n' >&2
   exit 2
@@ -245,6 +247,26 @@ if [[ -n "$NODE_ARCH" ]] && ! node_ready "$NODE_BIN"; then
     NODE_BIN="$CANDIDATE_NODE"
     printf 'Reusing existing Node.js runtime at %s\n' "$CANDIDATE_NODE"
   fi
+fi
+# 精确补丁版没命中时，先认上次部署记下的运行时，再退到 .runtime 里任意一个合格版本：
+# 升级 NODE_VERSION（22.23.2 → 22.23.3）不该让离线机器因为"版本号不同"重新下载。
+if ! node_ready "$NODE_BIN" && [[ -r "$INSTALL_DIR/.deployment-node" ]]; then
+  RECORDED_NODE="$(tr -d '\r\n' < "$INSTALL_DIR/.deployment-node" 2>/dev/null || true)"
+  if node_ready "$RECORDED_NODE"; then
+    NODE_BIN="$RECORDED_NODE"
+    printf 'Reusing recorded Node.js runtime at %s\n' "$NODE_BIN"
+  fi
+fi
+if ! node_ready "$NODE_BIN" && [[ -n "$NODE_ARCH" && -d "$RUNTIME_DIR" ]]; then
+  while IFS= read -r CANDIDATE_NODE; do
+    [[ -n "$CANDIDATE_NODE" ]] || continue
+    if node_ready "$CANDIDATE_NODE"; then
+      NODE_BIN="$CANDIDATE_NODE"
+      printf 'Reusing existing Node.js runtime at %s\n' "$NODE_BIN"
+      break
+    fi
+  done < <(find "$RUNTIME_DIR" -maxdepth 4 -type f \
+    -path "*/node-v*-linux-${NODE_ARCH}/bin/node" -print 2>/dev/null | sort -rV)
 fi
 if ! node_ready "$NODE_BIN"; then
   command -v curl >/dev/null

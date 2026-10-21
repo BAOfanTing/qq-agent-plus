@@ -101,9 +101,11 @@ const current = getConfig();
 // 已存在且权限更宽的旧文件要显式 chmod 收紧（与 config.json 同样处理）。
 const accessFile = path.join(path.dirname(CONFIG_FILE), 'console-access.txt');
 // 0.0.0.0/:: 是监听地址，不是能点开的浏览器地址；文件里给回环地址。
-const displayHost = current.server.host === '0.0.0.0' || current.server.host === '::'
+// IPv6 字面量必须带方括号，否则 http://::1:3210 不是合法 URL。
+const rawHost = String(current.server.host || '').trim();
+const displayHost = !rawHost || rawHost === '0.0.0.0' || rawHost === '::' || rawHost === '::0'
   ? '127.0.0.1'
-  : current.server.host;
+  : (rawHost.includes(':') && !rawHost.startsWith('[') ? `[${rawHost}]` : rawHost);
 fs.writeFileSync(accessFile,
   `QQ Agent Linux\nURL: http://${displayHost}:${current.server.port}\nToken: ${current.server.token}\nMode: ${current.runtime.mode}\n`,
   { mode: 0o600 });
