@@ -355,13 +355,18 @@ export class AssetObserver {
     memory,
     getIdentityPilot = () => null,
     getIdentityStatus = () => null,
-    dataDir = DATA_DIR
+    dataDir = DATA_DIR,
+    // 会话仓库：用来把「非会话类」的模型调用记进今日用量台账。
+    // 表情备注每张都要花 token，不能只显示在进度条上，否则"今日花费"与预算判定都偏乐观
+    //（与 orchestrator / group-digest 同一条口径：recordExternalUsage）。
+    sessions = null
   }) {
     this.stickers = stickers;
     this.memory = memory;
     this.getIdentityPilot = getIdentityPilot;
     this.getIdentityStatus = getIdentityStatus;
     this.dataDir = dataDir;
+    this.sessions = sessions;
   }
 
   addSticker(input) {
@@ -376,14 +381,195 @@ export class AssetObserver {
     return this.stickers.remove(id);
   }
 
+  /**
+   * 批量给**没有备注**的表情补写 AI 备注（控制台「重新备注」按钮）。
+   *
+   * 判定"没备注"：`localNote` 和 `usage` 都为空（`desc` 是 QQ 那边带过来的表情名或文件名，
+   * 不算"有人看过这张图并写过说明"）。
+   *
+   * ⚠️ 图片从哪来：贴纸库以 **QQ 收藏表情**为主（实测 135 条里 134 条 source=qq），
+   * 这些条目**没有 localFile**，只有一个 `p.qpic.cn/qq_expression/…` 的 url。
+   * 早先只查本地文件，结果 112 条"没备注"的**全部被当成没有图跳过**了。
+   * 正确做法：有本地文件读文件，没有就按 url 下载（走 safeFetchBinary 那套守卫）。
+   *
+   * ⚠️ 参数**不用解构默认值**：`ops.js scan --strict` 认不出"解构参数里的回调"，
+   * 会把 `progress` 报成"可疑未定义调用点"导致 CI 红（KNOWN_IGNORE 里那句
+   * "解构参数默认值超出扫描器识别范围"说的就是这个）。所以逐个从 options 上取。
+   *
+   * @param options.max 本次最多处理几条（默认 10）—— 一条一次视觉调用，贪多会让整页卡很久
+   * @param options.progress 每处理完一条回调一次（前端做进度显示）
+   * @param options.id 只处理**这一条**（按 id 精确指定）
+   *
+   * ⚠️ `options.id` 不是可选的锦上添花，是**修一个真实 bug 的必需项**：
+   * 早先前端逐条发 `max:1`、每次由后端取「待备注队列的头一个」。某条失败后它仍留在队首，
+   * 下一次请求还是处理它 —— 于是
+   *   ① 前端用 previews[i] 显示的缩略图与后端实际处理的图从第一次失败起**永久错位**；
+   *   ② 一张坏图（下载失败 / 写入不落地）会把用户选的全部张数**烧光在同一张上**
+   *      （2026-10-20 实测：连调 3 次 max:1，3 次都是同一张 ZZTEST_broken_1）。
+   * 按 id 处理就没有"谁在队首"这回事：前端拿 previews 里的 id 逐个点名，失败也只是那一条失败。
+   */
+  async renoteMissingStickers(options = {}) {
+    const max = Number(options?.max) || 10;
+    const progress = typeof options?.progress === 'function' ? options.progress : null;
+    const { signal } = options || {};
+    const onlyId = String(options?.id ?? '').trim();
+    const entries = (this.stickers?.entries || []).filter(Boolean);
+    // ⚠️ **必须排除 hidden 条目**（2026-10-20 实测踩到的坑）：
+    // 库里有一批 `hidden: true` 的条目（占位/已失效的），它们没有 localNote，
+    // 于是每次都排在候选第一位、被反复拿去请求模型 —— 而 `stickerView` 又会把这些条目过滤掉，
+    // 结果是：每点一次都消耗 token、`annotated` 一个都不涨、还总是同一张图。
+    const visible = entries.filter((entry) => entry.hidden !== true);
+    const missing = visible.filter((entry) => !String(entry.localNote || '').trim() && !String(entry.usage || '').trim());
+    // 有没有可用的图：本地文件 或 QQ 收藏带的图链。
+    // ⚠️ 这里遍历的是**原始条目**（this.stickers.entries），不是 stickerView 包装过的对象 ——
+    // 原始条目上没有 hasImage 字段，早先写 entry.hasImage 导致 111 条全部被当成"没有图"跳过。
+    const usable = missing.filter((entry) => entry.localFile || entry.url);
+
+    // 指定了 id 就只处理那一条（不看它在队列里的位置）。找不到/已不符条件时如实报错，
+    // 不回退成"取队首" —— 那会让前端以为处理的是 A、实际处理的是 B。
+    let targets;
+    if (onlyId) {
+      const hit = usable.find((entry) => entry.id === onlyId || entry.resId === onlyId);
+      if (!hit) {
+        // 可能已被别处补上备注了：这不算错误，返回 attempted:0 让前端跳过
+        const exists = visible.some((entry) => entry.id === onlyId || entry.resId === onlyId);
+        return {
+          total: visible.length,
+          missing: missing.length,
+          skippedNoImage: 0,
+          attempted: 0,
+          updated: 0,
+          tokens: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          failed: [],
+          items: [],
+          note: exists ? '这一条已经有备注了（或没有可用图片），跳过' : `找不到这个表情：${onlyId}`
+        };
+      }
+      targets = [hit];
+    } else {
+      targets = usable.slice(0, Math.max(1, Math.min(50, Number(max) || 10)));
+    }
+
+    const result = {
+      total: visible.length,
+      missing: missing.length,        // 没备注的
+      skippedNoImage: missing.length - usable.length,  // 既没有文件也没有图链（少见）
+      attempted: targets.length,
+      updated: 0,
+      // 本次消耗的 token（含重试）。前端进度条要显示"这次花了多少"
+      tokens: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      failed: [],
+      items: []
+    };
+    // 连续失败计数：单次失败（模型抽风、某张图异常）不该中止整批，**连续**才说明是系统性问题。
+    // 实测 glm-5.2 看图是随机抖动的（第 1 张说看不到图、第 2 张却成功、第 3 张又说看不到），
+    // 按"一失败就停"会把能成功的那几张也一起跳掉。
+    const ABORT_AFTER_CONSECUTIVE = 2;
+    let consecutiveFailures = 0;
+    let consecutiveRateLimited = 0;
+    for (const [index, entry] of targets.entries()) {
+      if (signal?.aborted) break;
+      let usage = null;
+      try {
+        // 只传 id：取本地文件还是下载图链，由贴纸库自己判断（url 不对观测层暴露）
+        const note = await this.stickers.annotateStickerImage({ ref: entry.id });
+        usage = note?.usage || null;
+        if (!note?.ok) {
+          result.failed.push({
+            id: entry.id,
+            reason: note?.reason || '没拿到备注',
+            rateLimited: note?.rateLimited === true
+          });
+          // 限流单独计数：连续限流说明请求太快，本轮该收手让用户等一下
+          consecutiveRateLimited = note?.rateLimited ? consecutiveRateLimited + 1 : 0;
+          if (consecutiveRateLimited >= ABORT_AFTER_CONSECUTIVE) {
+            result.aborted = true;
+            result.abortKind = 'rate-limit';
+            result.abortReason = '连续被限流（请求太快），先停一下，等几秒再继续';
+            break;
+          }
+          // 模型看不到图：连续两次才中止（单次可能只是抽风）
+          consecutiveFailures = note?.cannotSeeImage ? consecutiveFailures + 1 : 0;
+          if (consecutiveFailures >= ABORT_AFTER_CONSECUTIVE) {
+            result.aborted = true;
+            result.abortKind = 'no-vision';
+            result.abortReason = `${note.reason}（连续 ${consecutiveFailures} 张都看不到图，已停止）`;
+            break;
+          }
+          continue;
+        }
+        // 成功一次就把连续计数清零
+        consecutiveFailures = 0;
+        consecutiveRateLimited = 0;
+        const patch = { localNote: note.note };
+        // 只在原来没有标签时才补，避免覆盖用户自己打的标签
+        if (!(entry.tags || []).length && note.tags?.length) patch.tags = note.tags;
+        const saved = this.stickers.update(entry.id, patch);
+        // 回读校验：写入没落地时不能报"已补 N 条"（真实踩过：隐藏条目写不进去，
+        // 界面显示成功但 annotated 一个没涨、下一轮还是同一张图）。
+        const persisted = String(saved?.localNote || '').trim() || String(
+          (this.stickers?.entries || []).find((e) => e.id === entry.id)?.localNote || ''
+        ).trim();
+        if (!persisted) {
+          result.failed.push({ id: entry.id, reason: '备注写入没有落地（条目可能是隐藏/只读的）' });
+          continue;
+        }
+        result.updated += 1;
+        result.items.push({
+          id: entry.id,
+          note: note.note,
+          ok: true,
+          // 给进度条显示缩略图用：带图链的条目回传图链，本地文件的走 /api/assets/stickers/image?id=
+          imageUrl: entry.localFile ? '' : String(entry.url || ''),
+          hasLocalFile: Boolean(entry.localFile)
+        });
+      } catch (error) {
+        result.failed.push({ id: entry.id, reason: String(error?.message ?? error) });
+      } finally {
+        // 成功失败都要记 token：失败的调用也真的花掉了
+        if (usage) {
+          result.tokens.promptTokens += Number(usage.promptTokens) || 0;
+          result.tokens.completionTokens += Number(usage.completionTokens) || 0;
+          result.tokens.totalTokens += Number(usage.totalTokens) || 0;
+          // 记进「今日用量」台账：表情备注属于**非会话类**模型调用（与记忆整理、群日报同类），
+          // 花的是真钱。早先只把数字显示在进度条上，控制台的"今日花费"和预算判定都不知道这笔账。
+          // 失败也记（above 已经算进 tokens），口径与 #recordExternalUsage 一致：不计 runs。
+          try {
+            this.sessions?.recordExternalUsage?.({
+              promptTokens: Number(usage.promptTokens) || 0,
+              completionTokens: Number(usage.completionTokens) || 0,
+              totalTokens: Number(usage.totalTokens) || 0,
+              cachedTokens: Number(usage.cachedTokens) || 0
+            }, { model: usage.model || '' });
+          } catch { /* 记账失败不该让备注本身失败 */ }
+        }
+      }
+      if (progress) {
+        try {
+          progress({
+            done: index + 1,
+            total: targets.length,
+            id: entry.id,
+            tokens: { ...result.tokens }
+          });
+        } catch { /* 回调不该影响主流程 */ }
+      }
+    }
+    return result;
+  }
+
   stickerSnapshot() {
     const entries = (this.stickers?.entries || []).map(stickerView).filter(Boolean);
     return {
       enabled: this.stickers?.enabled !== false,
       syncedAt: Number(this.stickers?.syncedAt) || 0,
       total: entries.length,
-      annotated: entries.filter((entry) =>
-        entry.desc || entry.localNote || entry.tags.length || entry.usage).length,
+      // 「已备注」只看 localNote（AI 写过的那句说明）。
+      // ⚠️ 早先的口径是 `desc || localNote || tags || usage`，但 QQ 收藏的表情**天生带 desc**
+      // （QQ 那边给的表情名，如「早安」「甚惊之」），于是这些条目在 AI 写备注之前就已经被
+      // 算成"已备注"了 —— 用户点完「重新备注」，这个数字一点没变就是这么来的（2026-10-20 实测：
+      // 135 条里 43 条按旧口径算"已备注"，而真正有 localNote 的只有 38 条）。
+      annotated: entries.filter((entry) => String(entry.localNote || '').trim()).length,
       used: entries.filter((entry) => entry.useCount > 0).length,
       sources: {
         qq: entries.filter((entry) => entry.source === 'qq').length,

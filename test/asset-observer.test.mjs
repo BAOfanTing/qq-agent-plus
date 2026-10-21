@@ -96,7 +96,11 @@ test('builds an inventory for stickers, slang, memory, and identities without mu
 
   const overview = observer.overview();
   assert.equal(overview.stickers.total, 2);
-  assert.equal(overview.stickers.annotated, 2);
+  // 「已备注」只看 localNote（AI 写过的那句说明）。上面第二条只有 desc='震惊'（QQ 自带的表情名），
+  // 所以不算已备注 —— 早先的口径是 `desc || localNote || tags || usage`，把 QQ 自带名字也算进去，
+  // 于是用户点完「重新备注」发现这个数字一个都不涨（2026-10-20 实测：135 条里 43 条按旧口径算
+  // 已备注，真正有 localNote 的只有 38 条）。这里按新口径断言。
+  assert.equal(overview.stickers.annotated, 1);
   assert.equal(overview.stickers.used, 1);
   assert.equal(overview.slang.total, 2);
   assert.equal(overview.slang.counts.confirmed, 1);

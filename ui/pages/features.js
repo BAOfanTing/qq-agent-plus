@@ -21,6 +21,7 @@ import { $, $$, esc } from '../core/dom.js';
 import { iconSvg } from '../core/icons.js';
 import { chatNameOf, clampInt, fmtTime, fmtTok, formatChatTitle } from '../core/format.js';
 import { state } from '../core/state.js';
+import { bindRenoteButton } from './features-renote.js';
 function assetStateText(active, exists, activeText = '运行中') {
   if (active) return activeText;
   if (exists) return '已存储 · 未接入';
@@ -49,6 +50,14 @@ function renderAssetSummary(overview) {
       </button>
     </div>`;
 }
+
+/**
+ * 问用户"这次备注几张"。
+ * 返回选定的张数（正整数），取消返回 0。
+ *
+ * 为什么不用 window.confirm：确认框只能"是/否"，数量被写死在代码里；批量视觉调用是花钱的动作，
+ * 数量必须让用户自己定（用户明确要求）。上限 50 与后端 clamp 保持一致。
+ */
 
 function renderStickerAssets(data) {
   const entries = data?.entries || [];
@@ -647,6 +656,9 @@ function renderAssetObservatory() {
         ${kind === 'slang-research'
           ? ''
           : '<button type="button" class="btn btn-small btn-primary" id="asset-add">＋ 新增</button>'}
+        ${kind === 'stickers'
+          ? '<button type="button" class="btn btn-small" id="asset-renote" title="给还没有备注的表情补写一句 AI 备注（会调用视觉模型）">重新备注</button>'
+          : ''}
         <div class="asset-search">
         <input type="search" id="asset-query" value="${esc(state.assetQuery)}" placeholder="搜索" />
         ${kind === 'slang' ? `<select id="asset-slang-status">
@@ -683,6 +695,8 @@ function renderAssetObservatory() {
   $('#asset-refresh')?.addEventListener('click', () =>
     loadAssetObservatory({ refreshStickers: kind === 'stickers' }));
   $('#asset-add')?.addEventListener('click', () => openAssetEditor(kind));
+  // 「重新备注」的整套逻辑在 features-renote.js（拆出去给这个文件留行数额度）
+  bindRenoteButton(loadAssetObservatory);
   const search = () => {
     state.assetQuery = $('#asset-query')?.value || '';
     state.assetSlangStatus = $('#asset-slang-status')?.value || '';

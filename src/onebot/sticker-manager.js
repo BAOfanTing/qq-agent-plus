@@ -40,7 +40,7 @@ export function stickerJudgeCriteria(config = {}) {
   return custom ? custom.slice(0, 2000) : STICKER_JUDGE_DEFAULT_CRITERIA;
 }
 
-import { chatCompletionWithRetry } from '../llm/llm.js';
+import { chatCompletionWithRetry, cachedTokensOfUsage } from '../llm/llm.js';
 import { safeFetchBinary, validateImageUrl } from '../llm/safe-fetch.js';
 import { resolveToolCalls } from '../tools/inline-tools.js';
 import { createLogger } from '../core/logger.js';
@@ -513,6 +513,179 @@ export class StickerManager {
   async judgeImage({ url = '', message = null, signal = null } = {}) {
     if (!url) return { save: false, reason: '这条消息里没有可收藏的图片' };
     return this.#judgeSticker({ url }, message, signal);
+  }
+
+  /**
+   * 给**一张已入库的表情**补写 AI 备注（不看"收不收"，只回答"这是什么"）。
+   *
+   * 与 #judgeSticker 的区别：那个是"收不收这张图"的决策，会写 decide 日志、走收藏配额；
+   * 这里是"已经收下了，给它起个名字"，不碰配额、不改收藏状态，只回一句备注。
+   * 供控制台「AI 资产观测 → 重新备注」批量调用。
+   */
+  async annotateStickerImage({ ref = '', imageBuffer = null, contentType = '', url = '' } = {}) {
+    let buffer = imageBuffer;
+    let mime = contentType;
+    if (!buffer && !url) {
+      // 先看本地有没有落盘文件（AI 收藏 / 手动上传的那种）
+      const got = this.readImage(ref);
+      if (got) {
+        buffer = got.buffer;
+        mime = got.contentType;
+      }
+    }
+    if (!buffer && !url) {
+      // QQ 收藏的表情**本地没有文件**，只有一个 p.qpic.cn 的临时图链 —— 在贴纸库内部取，
+      // 不经过对外视图（观测 API 有契约：不得泄露临时图片 URL，见 test/asset-observer）。
+      // ⚠️ 这里**直接按 id 精确找**，不用 findSticker：后者会把 hidden 条目过滤掉，
+      // 而"重新备注"要处理的正是库里所有还看得见的条目（隐藏的也可能在里面），用它会漏。
+      const wanted = String(ref || '');
+      const entry = (this.entries || []).find((item) => item && (item.id === wanted || item.resId === wanted));
+      const remote = String(entry?.url || '');
+      if (!remote) return { ok: false, reason: '取不到这张表情的图片（既没有本地文件也没有图链）' };
+      // 走同行那套「校验地址 → 有界下载」，与自动收藏看图同一条路（不能裸 fetch 任意 URL）
+      try {
+        const safeUrl = await validateImageUrl(remote);
+        const got = await safeFetchBinary(safeUrl, 4 * 1024 * 1024);
+        buffer = got.buffer;
+        mime = got.contentType;
+      } catch (error) {
+        return { ok: false, reason: `下载表情图失败：${error?.message ?? error}` };
+      }
+    }
+    if (!buffer?.length) return { ok: false, reason: '图片内容为空' };
+    const dataUrl = `data:${/^image\//.test(String(mime || '')) ? mime : 'image/jpeg'};base64,${buffer.toString('base64')}`;
+    const botName = resolveSelfName(getConfig().persona || {}, this.onebot?.selfNickname || '');
+
+    const tool = {
+      type: 'function',
+      function: {
+        name: 'submit_sticker_note',
+        description: '给这张表情包写一句备注。',
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            note: { type: 'string', maxLength: 24, description: '这句表情是什么/适合什么场合（越短越好，别超过 24 字）' },
+            tags: {
+              type: 'array', maxItems: 4,
+              items: { type: 'string', maxLength: 8 },
+              description: '2-4 个关键词标签'
+            }
+          },
+          required: ['note']
+        }
+      }
+    };
+    const ask = () => chatCompletionWithRetry({
+      messages: [
+        {
+          role: 'system',
+          content: `你是「${botName}」，一个混在 QQ 群里的群友。现在要给表情库里的一张表情写备注，`
+            + '方便以后在合适的场合把它发出来。\n'
+            + '要求：\n'
+            + '- note 一句话说清"画的是什么 + 适合什么场合"，不超过 24 字，不要写"这是一张…"这种废话开头\n'
+            + '- 如果是纯文字表情，就直接把字面意思和语气写出来\n'
+            + '- 不要瞎猜看不见的东西；实在认不出就写"含义不明"'
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '给这张表情写一句备注。' },
+            { type: 'image_url', image_url: { url: dataUrl } }
+          ]
+        }
+      ],
+      tools: [tool],
+      toolChoice: { type: 'function', function: { name: 'submit_sticker_note' } },
+      temperature: 0.3,
+      purpose: 'judge',
+      maxTokens: 600
+    });
+
+    let response = null;
+    let args = null;
+    // 累计本次备注消耗的 token：重试会多花一份，也要算进去（控制台进度条要显示真实开销）
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let totalTokens = 0;
+    let cachedTokensTotal = 0;
+    for (let attempt = 1; attempt <= 2 && !args; attempt += 1) {
+      try {
+        response = await ask();
+      } catch (error) {
+        // 限流会在 chatCompletionWithRetry 重试耗尽后抛出来（消息里带 HTTP 429）。
+        // 这里**不吞成通用错误**：调用方要靠 rateLimited 决定"提示用户等几秒"还是"中止整批"。
+        const message = String(error?.message ?? error);
+        if (/HTTP\s*429|rpm\s*exhausted|rate\s*limit|too many requests|quota_exceeded/i.test(message)) {
+          return {
+            ok: false,
+            reason: '请求太快被限流了，等几秒再继续',
+            rateLimited: true,
+            usage: { promptTokens, completionTokens, totalTokens, cachedTokens: cachedTokensTotal, model: '' }
+          };
+        }
+        throw error;
+      }
+      const usage = response?.usage || null;
+      if (usage) {
+        promptTokens += Number(usage.prompt_tokens) || 0;
+        completionTokens += Number(usage.completion_tokens) || 0;
+        totalTokens += Number(usage.total_tokens) || ((Number(usage.prompt_tokens) || 0) + (Number(usage.completion_tokens) || 0));
+        // 缓存命中要单独累加：今日用量台账靠它算缓存命中率与真实成本
+        cachedTokensTotal += cachedTokensOfUsage(usage);
+      }
+      const call = (response?.message?.tool_calls || [])[0];
+      if (call) {
+        try { args = JSON.parse(call.function?.arguments || '{}'); } catch { args = null; }
+      }
+      if (!args) {
+        const inline = resolveToolCalls(response?.message)[0];
+        if (inline?.function?.name === 'submit_sticker_note') {
+          try { args = JSON.parse(inline.function.arguments || '{}'); } catch { args = null; }
+        }
+      }
+      if (!args) {
+        // 有些模型把 JSON 直接写在正文里
+        const m = String(response?.message?.content || '').match(/\{[\s\S]*"note"[\s\S]*\}/);
+        if (m) { try { args = JSON.parse(m[0]); } catch { args = null; } }
+      }
+    }
+    // 即便没拿到备注，token 也已经花掉了 —— 一起回传，界面才能显示真实消耗。
+    // cachedTokens / model 也要带上：调用方要把这笔账记进「今日用量」，
+    // 缺了 cachedTokens 会让缓存命中率算错，缺了 model 会按当前配置倒推历史（估价口径不对）。
+    const usage = {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      cachedTokens: cachedTokensTotal,
+      model: String(response?.model || '')
+    };
+    if (!args?.note) {
+      // 区分几种"没拿到备注"，界面要按类型给出不同提示：
+      //   ① 模型**明确说没看到图** —— 这个模型（或这条链路）吃不到 image_url；
+      //   ② 限流（429 / rpm / rate limit）—— 请求太快，等一下就能继续；
+      //   ③ 其它（没按工具格式提交）。
+      const said = String(response?.message?.content || '');
+      const cannotSee = /(没看到|看不到|没有看到|没有接收到|无法查看|无法看到|没有收到).{0,10}(图|图片|表情)|(cannot|can't|unable to)\s+(see|view)\s+(the\s+)?(image|picture)/i.test(said);
+      // 429 这类在 chatCompletionWithRetry 里会抛出来（重试耗尽），不会走到这里；
+      // 但有的网关把限流写成 200 + 说明文字，所以正文也认一遍。
+      const rateLimited = /(rpm\s*exhausted|rate\s*limit|too many requests|请求过于频繁|限流|quota_exceeded)/i.test(said);
+      return {
+        ok: false,
+        reason: cannotSee
+          ? `当前模型看不到图片（模型原话：「${said.slice(0, 40)}」），换一个支持图片输入的模型再试`
+          : (rateLimited ? '请求太快被限流了，等几秒再继续' : '模型没有返回备注'),
+        cannotSeeImage: cannotSee,
+        rateLimited,
+        usage
+      };
+    }
+    return {
+      ok: true,
+      note: cleanMetadata(String(args.note), 300),
+      tags: Array.isArray(args.tags) ? args.tags.map((t) => cleanMetadata(String(t), 20)).filter(Boolean).slice(0, 4) : [],
+      usage
+    };
   }
 
   /** #9：把配置里的双闸限值同步到配额实例（全局 = maxCollectPerHour，会话 = maxCollectPerHourPerChat）。 */

@@ -117,6 +117,44 @@ function opencodeHeaders(baseUrl, model = '') {
   return { 'x-opencode-session': `qqagent-probe-${process.pid}`, 'user-agent': 'qq-agent/0.3' };
 }
 
+/**
+ * 从 `/models` 的一条记录里抠出**上下文窗口**（tokens）。
+ *
+ * OpenAI 官方接口不带这个字段，但中转站/自建网关（OpenRouter、one-api、new-api、
+ * vLLM、LiteLLM 等）普遍会带，字段名各写各的 —— 这里按常见程度依次认：
+ *   context_length / context_window / max_context_length / max_input_tokens /
+ *   max_model_len / input_token_limit / context_size …
+ * 取值也可能在顶层，或嵌在 `top_provider` / `limits` / `capabilities` 里。
+ *
+ * 拿不到就返回 0（调用方据此保持原值不动，**绝不瞎猜**）。
+ */
+export function contextWindowOf(entry) {
+  if (!entry || typeof entry !== 'object') return 0;
+  const KEYS = [
+    'context_length', 'context_window', 'context_window_tokens', 'max_context_length',
+    'max_context_tokens', 'max_input_tokens', 'max_model_len', 'input_token_limit',
+    'context_size', 'max_sequence_length', 'max_tokens'
+  ];
+  const NESTED = ['top_provider', 'limits', 'capabilities', 'capability', 'architecture', 'meta'];
+  const pick = (node) => {
+    if (!node || typeof node !== 'object') return 0;
+    for (const key of KEYS) {
+      const raw = node[key];
+      const n = Number(raw);
+      // 合理性闸门：小于 1000 的多半是"单次输出上限"而不是上下文窗口；大于 1000 万的当脏数据
+      if (Number.isFinite(n) && n >= 1000 && n <= 10_000_000) return Math.round(n);
+    }
+    return 0;
+  };
+  const direct = pick(entry);
+  if (direct) return direct;
+  for (const key of NESTED) {
+    const nested = pick(entry[key]);
+    if (nested) return nested;
+  }
+  return 0;
+}
+
 /** 用指定 baseUrl/key 获取模型列表（OpenAI /models）。 */
 export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000) {
   const base = normalizeBaseUrl(baseUrl);
@@ -130,6 +168,33 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000) {
   const data = await readJsonBounded(res, 2 * 1024 * 1024);
   const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
   return list.map((m) => String(m.id ?? m.model ?? m)).filter(Boolean);
+}
+
+/**
+ * 和 fetchModelsFrom 一样，但**同时带回每个模型的上下文窗口**。
+ * 供「切换模型后自动填上下文窗口」用：控制台拿到 `{ id → tokens }` 映射后写进配置。
+ * 单独一个函数而不是改 fetchModelsFrom 的返回值：那个函数有 5 处调用方都在用
+ * 「返回字符串数组」这个形状，改它等于让所有调用方一起改。
+ */
+export async function fetchModelCapsFrom(baseUrl, apiKey, timeoutMs = 15000) {
+  const base = normalizeBaseUrl(baseUrl);
+  if (!base) throw new Error('请先填写 Base URL');
+  const res = await fetch(`${base}/models`, {
+    headers: { ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...opencodeHeaders(base) },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  if (!res.ok) throw new Error(`获取模型列表失败：HTTP ${res.status}`);
+  const data = await readJsonBounded(res, 2 * 1024 * 1024);
+  const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+  const caps = {};
+  for (const entry of list) {
+    if (!entry) continue;
+    const id = String(entry.id ?? entry.model ?? entry);
+    if (!id) continue;
+    const ctx = contextWindowOf(entry);
+    if (ctx) caps[id] = ctx;
+  }
+  return { models: list.map((m) => String(m?.id ?? m?.model ?? m)).filter(Boolean), contextWindows: caps };
 }
 
 /** 用用户提供的 baseUrl + apiKey + modelId 发送一次最小 chat 测试请求。 */
