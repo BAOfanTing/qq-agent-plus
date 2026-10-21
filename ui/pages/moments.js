@@ -268,6 +268,8 @@ function renderGroupGameSection(c) {
         <div id="cfg-game-chats-box" class="group-checklist"><span class="muted">正在读取群列表…</span></div></div>
       <div class="field"><label for="cfg-game-daily">每群每天最多开局数</label>
         <input type="number" id="cfg-game-daily" min="1" max="50" value="${esc(c.groupGame?.dailyLimitPerChat ?? 6)}" /></div>
+      <div class="field"><label for="cfg-game-maxtime">单局时长上限（分钟）</label>
+        <input type="number" id="cfg-game-maxtime" min="5" max="180" value="${esc(c.groupGame?.maxDurationMin ?? 60)}" /></div>
     </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-game-private" ${c.groupGame?.allowPrivateInvite === true ? 'checked' : ''} />
       <label for="cfg-game-private">允许私聊发词/身份（谁是卧底与狼人杀都必需；只发给报名/在册的人，失败不重试）</label></div>

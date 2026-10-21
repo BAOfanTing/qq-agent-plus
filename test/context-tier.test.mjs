@@ -119,3 +119,18 @@ test('概率没填时按全响应处理（老配置里这字段可能是 0 或�
   const zero = resolveContextTier({ triggerEntries: [entry('普通消息')], cfg: { ...BASE, randomPercent: 0 }, roll: 0 });
   assert.equal(zero.shouldRespond, false, '0 是合法值：不能被当成"没填"');
 });
+
+test('conversation.pokeReplyEnabled=false：拍一拍退回普通消息，不再必回', async () => {
+  const { updateConfig } = await import('../src/core/config.js');
+  updateConfig({ conversation: { pokeReplyEnabled: false } });
+  try {
+    const cfg = { ...BASE, randomPercent: 0 };
+    const r = resolveContextTier({
+      triggerEntries: [{ text: '[拍一拍] 你拍了拍', eventKind: 'poke', targetUserId: '888' }],
+      selfId: '888', cfg, roll: 99
+    });
+    assert.equal(r.shouldRespond, false);
+  } finally {
+    updateConfig({ conversation: { pokeReplyEnabled: true } });
+  }
+});

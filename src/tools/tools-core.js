@@ -685,14 +685,14 @@ export function buildToolDefs() {
       description: '自己画一张图（调用图片生成服务，按张计费、有每小时上限）。适合群友点名要"画一张"：梗图、应景的图。'
         + 'prompt 要写清楚画面内容（主体、风格、氛围）；要在图上带中文文字时，把文字用引号原样写进 prompt'
         + '（例如：…画面上有中文文字"事已至此，先吃饭吧"——能不能写对取决于所选图模型）。'
-        + '生成后会直接发到当前会话，并同时存进表情库供以后复用；只想收藏、这次不发就传 send:false。'
+        + '默认生成后直接发到当前会话（配置可关掉自动发送），并同时存进表情库供以后复用；只想收藏、这次不发就传 send:false。'
         + '别频繁用（一次调用就是一次真实花费）。',
       parameters: {
         type: 'object',
         properties: {
           prompt: { type: 'string', description: '画面描述：主体 + 风格 + 氛围（如"一只橘猫戴着草帽坐在海边，卡通风格"）' },
           note: { type: 'string', description: '可选：给这张图起的短语（存进表情库便于以后找）' },
-          send: { type: 'boolean', description: '默认 true：生成后立即发到当前会话；只想存进表情库时传 false' }
+          send: { type: 'boolean', description: '传 false：这次只存进表情库、不发送；不传时按图片生成设置里的「生成后直接发送」处理' }
         },
         required: ['prompt']
       },
@@ -742,7 +742,8 @@ export function buildToolDefs() {
           }
           // 生成即发送：只保存、等模型再调 send_sticker 的旧路径在模型漏掉第二步时
           // 用户什么也收不到（Issue #41）。仍存进表情库，后续可复用。
-          if (args.send === false) {
+          const autoSend = args.send !== false && cfg.imageGen?.autoSend !== false;
+          if (!autoSend) {
             return ok({
               id: entry.id,
               note: entry.localNote,

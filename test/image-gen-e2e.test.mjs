@@ -267,3 +267,27 @@ test('系统提示词不再教「生成后再调 send_sticker」（否则一次�
   assert.doesNotMatch(prompt, /再用 send_sticker 发出去/);
   assert.match(prompt, /生成后会自动发到当前会话/);
 });
+
+test('imageGen.autoSend=false 时只入库、不自动发送', async () => {
+  resetImageQuotaForTest();
+  const { updateConfig } = await import('../src/core/config.js');
+  updateConfig({ imageGen: { autoSend: false } });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] })
+  });
+  try {
+    const f = context();
+    const res = await tool('generate_image').execute(f.ctx, { prompt: '只存不发' });
+    assert.equal(res.isError, undefined, res.content);
+    const body = JSON.parse(res.content);
+    assert.equal(body.sent, false);
+    assert.ok(f.manager.entries.find((e) => e.id === body.id));
+    assert.equal(f.sends.length, 0, '全局关闭自动发送后不该发消息');
+  } finally {
+    globalThis.fetch = realFetch;
+    updateConfig({ imageGen: { autoSend: true } });
+  }
+});

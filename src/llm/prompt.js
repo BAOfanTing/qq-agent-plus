@@ -807,8 +807,9 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   const atMe = (triggerEntries || []).some((entry) => entry?.mentionsSelf === true)
     || texts.some((t) => isAtMe(t, { selfNickname, botName, selfId }));
   // 拍一拍命中的是机器人：属于直接互动，按"被点名"必回，不被随机概率吞掉。
-  const pokeMe = (triggerEntries || []).some((entry) => entry?.eventKind === 'poke'
-    && String(entry?.targetUserId || '') === String(selfId || ''));
+  const pokeMe = getConfig().conversation?.pokeReplyEnabled !== false
+    && (triggerEntries || []).some((entry) => entry?.eventKind === 'poke'
+      && String(entry?.targetUserId || '') === String(selfId || ''));
   const keyword = hitKeyword(texts.join('\n'), c.keywords);
   // 掷骰子：调用方可传入已固定的 roll（0-100），避免重复随机
   const rollValue = roll === null || roll === undefined ? Math.random() * 100 : Number(roll);

@@ -320,7 +320,9 @@ function renderApiSection(c) {
           <option value="block" ${c.api?.budget?.onExceed === 'block' ? 'selected' : ''}>停止：新消息不处理</option>
         </select></div>
     </div>
-    <div class="hint">超限当天私聊通知管理员一次（需配好管理员 QQ）；跨日自动重置。未定价的运行不计入金额，但会在用量状态里标出次数，避免"没价＝永远不超限"。</div>
+    <div class="hint">通知需要先配好管理员 QQ；跨日自动重置。未定价的运行不计入金额，但会在用量状态里标出次数，避免"没价＝永远不超限"。</div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-budget-notify" ${c.api?.budget?.notify !== false ? 'checked' : ''} />
+      <label for="cfg-budget-notify">超限时私聊通知管理员一次</label></div>
 
     <div class="settings-divider"></div>
 
@@ -545,6 +547,8 @@ function renderMemorySettingsSection(c) {
     <h3 id="settings-memory">记忆整理</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-mem-consolidate" ${mem.consolidateEnabled !== false ? 'checked' : ''} />
       <label for="cfg-mem-consolidate">启用记忆自动整理</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-mem-handoff" ${mem.handoffEnabled !== false ? 'checked' : ''} />
+      <label for="cfg-mem-handoff">允许模型自动写「会话交接」（下次唤醒时带上）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-mem-usechat" ${useChat ? 'checked' : ''} />
       <label for="cfg-mem-usechat">使用与聊天机器人相同的模型</label></div>
     <div id="mem-model-box" style="${useChat ? 'display:none' : ''}">

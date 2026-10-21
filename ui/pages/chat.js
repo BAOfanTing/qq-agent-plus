@@ -172,6 +172,7 @@ return `
       <div class="field"><label>检查间隔下限（毫秒）</label><input type="number" id="cfg-pro-min" min="60000" value="${esc(c.proactive.checkIntervalMinMs)}" /></div>
       <div class="field"><label>检查间隔上限（毫秒）</label><input type="number" id="cfg-pro-max" min="120000" value="${esc(c.proactive.checkIntervalMaxMs)}" /></div>
       <div class="field"><label>触发概率 0~1</label><input type="number" id="cfg-pro-prob" step="0.05" min="0" max="1" value="${esc(c.proactive.probability)}" /></div>
+      <div class="field"><label>冷场判定（毫秒，至少 5 分钟）</label><input type="number" id="cfg-pro-idle" min="300000" max="86400000" step="60000" value="${esc(c.proactive.idleThresholdMs ?? 1800000)}" /></div>
     </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-followup" ${c.proactive?.followUpEnabled !== false ? 'checked' : ''} />
       <label for="cfg-pro-followup">说完话没人接，过十来分钟补一句（"？"/"人呢"）</label></div>
@@ -180,6 +181,46 @@ return `
     <div class="hint">
       这三项互不影响：只取消第一条，机器人仍可能在说完话没人接时补一句、也可能按自己安排的时机开口；
       完全不想让它主动开口就把三个都取消。后两项在较早版本里一直生效，本版起可以在控制台关掉。
+    </div>
+
+    <h3>所有模式 · 回复行为</h3>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-reply-guard" ${conversation.replyGuardEnabled !== false ? 'checked' : ''} />
+      <label for="cfg-reply-guard">该回却没发时自动纠正一次（私聊 / 被 @ / 引用 / 点名）</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-poke-reply" ${conversation.pokeReplyEnabled !== false ? 'checked' : ''} />
+      <label for="cfg-poke-reply">拍一拍机器人时按直接互动回复（必回、即时处理）</label></div>
+    <div class="hint">
+      回复纠正只在“模型写了正文却没调用发送工具”时触发，会多跑一次模型；关掉后这类情况不再补救。
+      拍一拍必回会跳过随机概率；关掉后拍一拍按普通群消息处理。
+    </div>
+
+    <h3>所有模式 · 自主节奏（实验性）</h3>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-pacing-enabled" ${c.pacing?.enabled === true ? 'checked' : ''} />
+      <label for="cfg-pacing-enabled">消息不即时唤醒，按自主节奏攒批处理</label></div>
+    <div class="field-row">
+      <div class="field"><label for="cfg-pacing-default">默认多久醒一次（分钟）</label>
+        <input type="number" id="cfg-pacing-default" min="1" max="240" value="${esc(c.pacing?.defaultWakeMinutes ?? 20)}" /></div>
+      <div class="field"><label for="cfg-pacing-min">两次自主醒来最短间隔（分钟）</label>
+        <input type="number" id="cfg-pacing-min" min="1" max="240" value="${esc(c.pacing?.minWakeMinutes ?? 5)}" /></div>
+    </div>
+    <div class="field"><label for="cfg-pacing-max">最长沉默上限（分钟）</label>
+      <input type="number" id="cfg-pacing-max" min="1" max="240" value="${esc(c.pacing?.maxSilenceMinutes ?? 45)}" /></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-pacing-instant" ${c.pacing?.instantOnMention !== false ? 'checked' : ''} />
+      <label for="cfg-pacing-instant">被 @ 时仍然立刻处理，不排队</label></div>
+    <div class="hint">
+      开启后普通消息先攒着，等机器人自己安排的时机统一处理；被 @ 或拍一拍时仍然立刻处理
+      （拍一拍算不算直接互动看上一条开关）。私聊永远即时。默认关闭，仍在实验阶段，建议先在少量群里试。
+    </div>
+
+    <h3>所有模式 · 数据保留</h3>
+    <div class="field-row">
+      <div class="field"><label for="cfg-store-maxmessages">每个会话最多保留消息（0 = 不限）</label>
+        <input type="number" id="cfg-store-maxmessages" min="0" max="1000000" value="${esc(st.maxMessagesPerChat ?? 0)}" /></div>
+      <div class="field"><label for="cfg-store-keepsessions">会话审计文件保留条数（0 = 不限）</label>
+        <input type="number" id="cfg-store-keepsessions" min="0" max="100000" value="${esc(st.keepSessionFiles ?? 2000)}" /></div>
+    </div>
+    <div class="hint">
+      消息保留上限只清理已经处理完的历史，不会删待处理或结果未知的消息，填 0 表示不清理，保存后即时生效。
+      审计文件条数在下次重启后生效；占用磁盘时再调小。
     </div>
 
     <h3>所有模式 · 表情包</h3>

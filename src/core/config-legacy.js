@@ -249,6 +249,7 @@ export const DEFAULT_CONFIG = {
     size: '',                 // 如 1024x1024；留空由服务商默认
     responseFormat: '',       // 留空最兼容（新版 OpenAI 会因未知参数 400）；可填 b64_json / url
     maxPerHour: 6,            // 全局每小时最多生成几张（按张计费，硬闸门）
+    autoSend: true,           // 生成成功后直接发到当前会话（false = 只入库，等 send_sticker）
     timeoutMs: 120000,        // 生图比对话慢
     extraBody: {}             // 额外请求参数（个别网关要 quality/style 之类）
   },
@@ -313,6 +314,8 @@ export const DEFAULT_CONFIG = {
     // 该回没发时的补救（私聊 / 被 @ / 引用机器人 / 点名）：模型只输出了正文、没调 send_message
     // 时做一次纠正；仍未发送就发一条固定说明。默认开（只在失败时多一次调用）。
     replyGuardEnabled: true,
+    // 拍一拍机器人算直接互动（必回、即时处理、纳入回复纠正）。关掉后按普通群消息处理。
+    pokeReplyEnabled: true,
     rolloverArmedMs: 600000,         // 活跃线程撞硬上限后，一次性任意消息触发期限
     lifecycleContextCount: 100,      // 生命周期首次运行携带的历史条数
     lifecycleRolloverInputTokens: 32000, // 上次实际输入达到此值时，下一批先换代
@@ -342,10 +345,12 @@ export const DEFAULT_CONFIG = {
     selfWakeEnabled: true       // 模型用 schedule_wake 给自己安排稍后的主动发言
   },
   // 自主节奏（可选）：消息不再即时触发，改由模型按自己安排的节奏醒来统一处理。
-  // 默认关闭；开启后建议先在小范围（scope）试，确认能接受"延迟接话"的节奏。
+  // 默认关闭；开启后建议先观察一段，确认能接受"延迟接话"的节奏。
   pacing: {
     enabled: false,
-    scope: 'group',            // group | all —— 对哪些会话启用（私聊永远即时，不受影响）
+    // group | all —— 目前只有群聊与私聊两种会话，私聊永远即时，所以两种取值效果一致；
+    // 控制台只开放开关与节奏参数，scope 留在配置文件里。
+    scope: 'group',
     instantOnMention: true,    // 被 @ 时立刻处理，不排队
     defaultWakeMinutes: 20,    // 默认多久后自己醒一次看看
     minWakeMinutes: 5,         // 两次自主醒来之间的最短间隔

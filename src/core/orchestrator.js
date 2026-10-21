@@ -373,6 +373,7 @@ function containsStandaloneName(text, name) {
 
 /** 拍一拍命中的是机器人自己（群拍 target_id / 私聊拍自己都会落到 targetUserId）。 */
 function isPokeAtBot(message, selfId) {
+  if (getConfig().conversation?.pokeReplyEnabled === false) return false;
   return message?.eventKind === 'poke'
     && String(message?.targetUserId || '') === String(selfId || '');
 }

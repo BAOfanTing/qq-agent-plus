@@ -183,6 +183,26 @@ ${QUOTA_ROWS.map(([key, label, dflt]) => `          <tr>
       : '<div class="hint" style="margin-bottom:10px">白名单里还没有群 —— 先在「聊天白名单」加群，再回来按群覆盖。</div>'}
     </section>
 
+    <section class="plat-card">
+      <div class="plat-card-head">
+        <h3 class="plat-card-title">插件宿主（高级）</h3>
+        <span class="plat-card-note">第三方插件进程的资源与网络边界</span>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="cfg-plugin-memory">单个插件内存上限（MB，V8 堆）</label>
+          <input type="number" id="cfg-plugin-memory" min="32" max="1024" value="${esc(c.plugins?.limits?.memoryMb ?? 128)}" /></div>
+        <div class="field"><label for="cfg-plugin-calls">单个插件每分钟最多调用（次）</label>
+          <input type="number" id="cfg-plugin-calls" min="10" max="1000" value="${esc(c.plugins?.limits?.callsPerMinute ?? 120)}" /></div>
+      </div>
+      <div class="checkbox-row"><input type="checkbox" id="cfg-plugin-netiso" ${c.plugins?.networkIsolation !== false ? 'checked' : ''} />
+        <label for="cfg-plugin-netiso">本机支持时，把插件放进无网络命名空间（联网只能走宿主代理）</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="cfg-plugin-requirenetiso" ${c.plugins?.requireNetworkIsolation === true ? 'checked' : ''} />
+        <label for="cfg-plugin-requirenetiso">要求网络隔离，做不到就拒绝加载插件</label></div>
+      <div class="hint">内存上限是 V8 堆上限，不是 RSS；调用上限是每分钟工具调用次数。两项都只影响插件进程，不影响主程序。
+        Windows / macOS 没有网络命名空间，打开「要求网络隔离」等于禁用全部插件。
+        更严格的权限隔离（<code>plugins.requireIsolation</code>）保持配置默认的 fail-closed，不在界面开放关闭。</div>
+    </section>
+
     <div class="hint" style="margin-top:2px">
       这些能力来自协议端 SnowLuma。关掉的项不只是"不显示"：对应工具会从模型的工具表里摘除，
       模型不会再调用它们，也不会在提示词里看到用法。<br>

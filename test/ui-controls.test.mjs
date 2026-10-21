@@ -1,0 +1,51 @@
+// 新增控制台开关的接线守卫：控件 id、渲染端、保存端必须同时存在。
+// 这类缺口只有真机点保存才看得见（界面显示"已保存"、配置却没变），用静态断言兜住。
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (...p) => fs.readFileSync(path.join(repo, ...p), 'utf8');
+const chat = read('ui/pages/chat.js');
+const save = read('ui/pages/settings-save.js');
+const settings = read('ui/pages/settings.js');
+const voice = read('ui/pages/settings-voice.js');
+const moments = read('ui/pages/moments.js');
+const platform = read('ui/pages/platform.js');
+
+test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控件与保存接线', () => {
+  for (const id of ['cfg-reply-guard', 'cfg-poke-reply', 'cfg-pacing-enabled',
+    'cfg-pacing-default', 'cfg-pacing-min', 'cfg-pacing-max', 'cfg-pacing-instant',
+    'cfg-store-maxmessages', 'cfg-store-keepsessions']) {
+    assert.ok(chat.includes(`id="${id}"`), `缺少控件 ${id}`);
+  }
+  for (const key of ['replyGuardEnabled', 'pokeReplyEnabled']) {
+    assert.ok(save.includes(`${key}:`), `保存端缺少 ${key}`);
+  }
+  assert.match(save, /patch\.pacing = \{/);
+  assert.match(save, /maxMessagesPerChat: clampInt/);
+  assert.match(save, /keepSessionFiles: clampInt/);
+});
+
+test('记忆 / 预算 / 图片生成 / 群游戏：新开关都接到保存端', () => {
+  assert.ok(settings.includes('id="cfg-mem-handoff"'));
+  assert.ok(save.includes('handoffEnabled: chk('));
+  assert.ok(settings.includes('id="cfg-budget-notify"'));
+  assert.ok(save.includes('notify: chk('));
+  assert.ok(voice.includes('id="cfg-img-autosend"'));
+  assert.ok(save.includes('autoSend: chk('));
+  assert.ok(moments.includes('id="cfg-game-maxtime"'));
+  assert.ok(save.includes('maxDurationMin: clampInt'));
+});
+
+test('平台能力：插件宿主高级项有控件、保存时只提交这几个键', () => {
+  for (const id of ['cfg-plugin-memory', 'cfg-plugin-calls', 'cfg-plugin-netiso', 'cfg-plugin-requirenetiso']) {
+    assert.ok(platform.includes(`id="${id}"`), `缺少控件 ${id}`);
+  }
+  assert.match(save, /patch\.plugins = \{/);
+  assert.match(save, /limits: \{/);
+  assert.match(save, /networkIsolation: chk\(/);
+  assert.match(save, /requireNetworkIsolation: chk\(/);
+});

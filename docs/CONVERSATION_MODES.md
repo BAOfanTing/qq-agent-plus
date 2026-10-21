@@ -170,6 +170,11 @@ The guard never runs for proactive or manual runs, never sends when the outbox
 may already contain a delivery, and leaves ordinary group conversations free to
 stay silent. Disable it with `conversation.replyGuardEnabled: false`.
 
+A poke aimed at the bot counts as a directed interaction: it is treated as an
+@mention for tier selection, pacing bypass, the budget degrade gate and this
+reply guard. Set `conversation.pokeReplyEnabled: false` to process pokes like
+ordinary group messages instead. Pokes between other members are unaffected.
+
 ## Operational Guidance
 
 Start with lifecycle mode on one active group. Compare it with threaded and

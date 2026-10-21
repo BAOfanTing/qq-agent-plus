@@ -95,6 +95,7 @@ async function saveConfig({ quiet = false } = {}) {
     patch.memory = {
       ...(c.memory || {}),
       consolidateEnabled: chk('#cfg-mem-consolidate', c.memory?.consolidateEnabled !== false),
+      handoffEnabled: chk('#cfg-mem-handoff', c.memory?.handoffEnabled !== false),
       useChatModel: chk('#cfg-mem-usechat', c.memory?.useChatModel !== false),
       provider: val('#cfg-mem-provider', c.memory?.provider || '').trim(),
       model: val('#cfg-mem-model', c.memory?.model || '').trim(),
@@ -152,6 +153,7 @@ async function saveConfig({ quiet = false } = {}) {
       // 游戏期间私聊豁免：只影响引擎发给"本局在册玩家"的私聊；模型发送永远受白名单
       allowGamePrivateDm: chk('#cfg-game-privatedm', c.groupGame?.allowGamePrivateDm === true),
       dailyLimitPerChat: clampInt(val('#cfg-game-daily', c.groupGame?.dailyLimitPerChat ?? 6), 1, 50, 6),
+      maxDurationMin: clampInt(val('#cfg-game-maxtime', c.groupGame?.maxDurationMin ?? 60), 5, 180, 60),
       maxPlayers: clampInt(val('#cfg-game-maxplayers', c.groupGame?.maxPlayers ?? 10), 2, 30, 10),
       roundSeconds: clampInt(val('#cfg-game-round', c.groupGame?.roundSeconds ?? 0), 0, 600, 0),
       discussSeconds: clampInt(val('#cfg-game-discuss', c.groupGame?.discussSeconds ?? 0), 0, 600, 0),
@@ -326,6 +328,7 @@ async function saveConfig({ quiet = false } = {}) {
         ...(c.api?.budget || {}),
         enabled: chk('#cfg-budget-enabled', c.api?.budget?.enabled === true),
         dailyYuan: Number(val('#cfg-budget-daily', c.api?.budget?.dailyYuan ?? 20)) || 0,
+        notify: chk('#cfg-budget-notify', c.api?.budget?.notify !== false),
         onExceed: val('#cfg-budget-onexceed', 'degrade') === 'block' ? 'block' : 'degrade'
       },
       // 思考模式：每供应商独立（thinkingByService[主机]）。只有用户真的动过控件才写，
@@ -538,6 +541,7 @@ async function saveConfig({ quiet = false } = {}) {
         return {
           ...g,
           enabled: chk('#cfg-img-enabled', g.enabled === true),
+          autoSend: chk('#cfg-img-autosend', g.autoSend !== false),
           baseUrl: String(val('#cfg-img-baseurl', g.baseUrl || '') || '').trim(),
           model: String(val('#cfg-img-model', g.model || '') || '').trim(),
           size: String(val('#cfg-img-size', g.size || '') || '').trim(),
@@ -719,7 +723,17 @@ async function saveConfig({ quiet = false } = {}) {
       maxTranscriptChars: clampInt(
         val('#cfg-life-chars', c.conversation?.maxTranscriptChars),
         20000, 1000000, 240000
-      )
+      ),
+      replyGuardEnabled: chk('#cfg-reply-guard', c.conversation?.replyGuardEnabled !== false),
+      pokeReplyEnabled: chk('#cfg-poke-reply', c.conversation?.pokeReplyEnabled !== false)
+    };
+    patch.pacing = {
+      ...(c.pacing || {}),
+      enabled: chk('#cfg-pacing-enabled', c.pacing?.enabled === true),
+      defaultWakeMinutes: clampInt(val('#cfg-pacing-default', c.pacing?.defaultWakeMinutes ?? 20), 1, 240, 20),
+      minWakeMinutes: clampInt(val('#cfg-pacing-min', c.pacing?.minWakeMinutes ?? 5), 1, 240, 5),
+      maxSilenceMinutes: clampInt(val('#cfg-pacing-max', c.pacing?.maxSilenceMinutes ?? 45), 1, 240, 45),
+      instantOnMention: chk('#cfg-pacing-instant', c.pacing?.instantOnMention !== false)
     };
     patch.send = {
       ...c.send,
@@ -739,6 +753,8 @@ async function saveConfig({ quiet = false } = {}) {
       checkIntervalMinMs: Number(val('#cfg-pro-min', c.proactive?.checkIntervalMinMs)) || 1800000,
       checkIntervalMaxMs: Number(val('#cfg-pro-max', c.proactive?.checkIntervalMaxMs)) || 5400000,
       probability: numKeep(val('#cfg-pro-prob', c.proactive?.probability), c.proactive?.probability, 0, 1, 0.25),
+      // 后端按 max(300000, …) 收口；这里同口径，避免界面显示 2 分钟、实际按 5 分钟算
+      idleThresholdMs: clampInt(val('#cfg-pro-idle', c.proactive?.idleThresholdMs ?? 1800000), 300000, 86400000, 1800000),
       // 默认 true（与升级前行为一致）：没这个控件时才退回已保存配置
       followUpEnabled: chk('#cfg-pro-followup', c.proactive?.followUpEnabled !== false),
       selfWakeEnabled: chk('#cfg-pro-selfwake', c.proactive?.selfWakeEnabled !== false)
@@ -809,7 +825,9 @@ async function saveConfig({ quiet = false } = {}) {
       sliderMode: 'probability',
       groupSliderPos: {
         __replace__: (() => { try { return JSON.parse($('#tier-group-json')?.value || '{}'); } catch { return {}; } })()
-      }
+      },
+      maxMessagesPerChat: clampInt(val('#cfg-store-maxmessages', c.store?.maxMessagesPerChat ?? 0), 0, 1000000, 0),
+      keepSessionFiles: clampInt(val('#cfg-store-keepsessions', c.store?.keepSessionFiles ?? 2000), 0, 100000, 2000)
     };
     // 注：老字段 pastStateLimit 已无读取方；pastStateMaxChars 仍在用（prompt.js 读它夹"过去
     // 状态"上限）—— 别误删。这里不再做 delete：patch 只是发给服务端的合并片段，
@@ -864,6 +882,16 @@ async function saveConfig({ quiet = false } = {}) {
     platform.readReceipts = chk('#cfg-platform-readreceipts', c.platform?.readReceipts === true);
     platform.forwardCards = chk('#cfg-platform-forwardcards', c.platform?.forwardCards !== false);
     patch.platform = platform;
+    // 插件宿主高级项：只提交这几个键，不整段替换 plugins（避免把 enabledIds 等现场状态覆盖掉）。
+    // requireIsolation 保持配置默认的 fail-closed，不在界面提供关闭。
+    patch.plugins = {
+      limits: {
+        memoryMb: clampInt(val('#cfg-plugin-memory', c.plugins?.limits?.memoryMb ?? 128), 32, 1024, 128),
+        callsPerMinute: clampInt(val('#cfg-plugin-calls', c.plugins?.limits?.callsPerMinute ?? 120), 10, 1000, 120)
+      },
+      networkIsolation: chk('#cfg-plugin-netiso', c.plugins?.networkIsolation !== false),
+      requireNetworkIsolation: chk('#cfg-plugin-requirenetiso', c.plugins?.requireNetworkIsolation === true)
+    };
   }
 
   if (sec === 'desktop' || sec === 'appearance') {

@@ -278,6 +278,7 @@
 {
   "memory": {
     "consolidateEnabled": true,
+    "handoffEnabled": true,
     "consolidateMinIntervalMs": 21600000,
     "useChatModel": true,
     "visibility": {
@@ -294,6 +295,8 @@
   **两个字段的默认值与历史完全一致，切换是需要显式操作的运营决定。**
 - `visibility.hidePrivateInGroup`：`true` 时**群聊里**不注入/返回来源含 `private:<QQ>` 的印象
   （私聊里照常可见）——适合"不想让人觉得机器人把私聊内容带进群"的运营者。
+- `handoffEnabled`（默认 `true`）：允许模型在长会话里写「会话交接」，下次唤醒时带上。
+  关掉后不再生成也不再注入交接（已有交接文件不删）。控制台「设置 → 记忆整理」有勾选框。
 - 控制台「设置 → 记忆整理」有同样两个控件（下拉 + 勾选框），保存即生效，无需重启。
 - 控制台的人物记忆页不受影响：你始终能看到全部印象与来源；「来源」不交给模型
   （`memory_query` 返回前会剥掉 `sourceChatKeys`）。
@@ -409,7 +412,8 @@
     "model": "gpt-image-1",
     "size": "1024x1024",
     "responseFormat": "",
-    "maxPerHour": 6
+    "maxPerHour": 6,
+    "autoSend": true
   }
 }
 ```
@@ -446,8 +450,10 @@
 - **返回的图片格式不一定是 PNG**：智谱 CogView 回的就是 JPEG（2026-10-01 实测）。落库与「试画一张」
   的预览都按**字节魔数**判断格式（`src/core/image-type.js`），不看扩展名也不看 Content-Type。
 - 提示词上限 800 字；生成的图落盘上限 8 MiB、只收 PNG/JPEG/GIF/WebP（与表情库同一道校验）。
-- **生成成功即发送**：图片同时存进表情库并直接发到当前会话；只想收藏、这次不发时传 `send:false`。
-  不再依赖模型追加一次 `send_sticker`（模型漏掉第二步时用户收不到图，Issue #41）。
+- **生成成功即发送**（`autoSend`，默认 `true`）：图片同时存进表情库并直接发到当前会话；
+  不想自动发送就把它设成 `false`，此时只入库，模型需要时用 `send_sticker` 发。
+  单次调用传 `send:false` 可以只收藏这一次。不再依赖模型追加一次 `send_sticker`
+  （模型漏掉第二步时用户收不到图，Issue #41）。控制台在「图片生成」区块有同名勾选框。
 - 关闭时 `generate_image` 不进模型工具表、提示词也不提画图 —— 模型不会去调一个必然失败的工具。
 
 ## groupDigest：群日报（可选，默认关闭）
@@ -606,7 +612,12 @@
 ```
 
 开启后消息不再即时触发，模型按自己安排的节奏醒来统一处理；私聊永远即时，
-`instantOnMention` 保证被 @ 时立刻响应。适合"不想每条都秒回"的场景，建议先小范围试。
+`instantOnMention` 保证被 @（以及算直接互动的拍一拍，见 `conversation.pokeReplyEnabled`）时立刻响应。
+适合"不想每条都秒回"的场景，建议先小范围试。
+
+控制台「设置 → 聊天」有开关与四个节奏参数（默认醒来间隔、最短间隔、最长沉默、被 @ 即时）。
+`scope` 目前只在配置文件里可调：私聊永远即时，所以 `all` 与 `group` 在当前只有群聊与私聊两种
+会话时效果一致，控制台不暴露这个选项。
 
 ## tokenSaver：省 Token 模式
 
