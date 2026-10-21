@@ -457,9 +457,41 @@ function renderPluginsPage() {
 
 const statusText = () => $('#plugins-status');
 
-function setStatus(text) {
+let statusTimer = null;
+/**
+ * 插件页底部状态条：把"正在安装 / 已安装 / 失败"做成跟主题一致的状态胶囊。
+ * busy 显示转圈；success/error 用主题色描边与图标；普通提示用灰点。
+ * 非 busy 状态会定时收起，避免操作完成后一直挂着一条陈旧提示。
+ */
+function setStatus(text, { tone = '', busy = false } = {}) {
   const node = statusText();
-  if (node) node.textContent = text;
+  if (!node) return;
+  if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
+  if (!text) {
+    node.className = 'gm-status plugins-status-bar';
+    node.innerHTML = '';
+    return;
+  }
+  node.className = `gm-status plugins-status-bar${busy ? ' is-busy' : (tone ? ` is-${tone}` : ' is-info')}`;
+  const icon = busy
+    ? '<span class="loading-spinner" aria-hidden="true"></span>'
+    : tone === 'success'
+      ? iconSvg('check', { size: 14, cls: 'plugin-status-ico' })
+      : tone === 'error'
+        ? iconSvg('alert', { size: 14, cls: 'plugin-status-ico' })
+        : '<i class="plugin-status-dot" aria-hidden="true"></i>';
+  node.innerHTML = `${icon}<span class="plugin-status-text">${esc(text)}</span>`;
+  node.setAttribute('role', 'status');
+  node.setAttribute('aria-live', 'polite');
+  if (!busy) {
+    const ms = tone === 'error' ? 15000 : (tone === 'success' ? 10000 : 8000);
+    statusTimer = setTimeout(() => {
+      if (statusText() !== node) return;
+      node.className = 'gm-status plugins-status-bar';
+      node.innerHTML = '';
+      statusTimer = null;
+    }, ms);
+  }
 }
 
 /** 切页签（目录 / 已装 / 手动安装）：三个面都在 DOM 里，只切显隐 —— 切换不重排、状态不丢。 */
@@ -1161,7 +1193,7 @@ function renderInstalled(state) {
  * 用户看到的是按钮失灵。渲染出错就说出来。
  */
 function safeRenderIndex() {
-  try { renderIndex(lastIndex, lastState); } catch (error) { setStatus(`刷新插件页失败：${error?.message || error}`); }
+  try { renderIndex(lastIndex, lastState); } catch (error) { setStatus(`刷新插件页失败：${error?.message || error}`, { tone: 'error' }); }
 }
 
 async function refreshPlugins() {
@@ -1203,7 +1235,7 @@ async function refreshPlugins() {
     try {
       index = await api('/api/plugins/index');
     } catch (error) {
-      setStatus(`索引拉取失败：${error?.message || error}`);
+      setStatus(`索引拉取失败：${error?.message || error}`, { tone: 'error' });
       // 拉不到就沿用上一次成功的列表（如果有），并让页签/页脚说"读取失败"而不是"未配置"
       index = { ...lastIndex, loading: false, failed: true, error: String(error?.message || error) };
     }
@@ -1215,7 +1247,7 @@ async function refreshPlugins() {
     renderIndex(index, state);
     return state;
   } catch (error) {
-    setStatus(`读取插件状态失败：${error?.message || error}`);
+    setStatus(`读取插件状态失败：${error?.message || error}`, { tone: 'error' });
     renderInstalled(null);
     return null;
   }
@@ -1237,10 +1269,10 @@ function bindPluginsSection() {
     const enabled = event.currentTarget.checked;
     try {
       await post('/api/plugins/master', { enabled });
-      setStatus(enabled ? '已启用插件功能' : '已关闭插件功能');
+      setStatus(enabled ? '已启用插件功能' : '已关闭插件功能', { tone: 'success' });
     } catch (error) {
       event.currentTarget.checked = !enabled;
-      setStatus(`切换失败：${error?.message || error}`);
+      setStatus(`切换失败：${error?.message || error}`, { tone: 'error' });
     }
     await refreshPlugins();
   });
@@ -1454,33 +1486,33 @@ function bindPluginsSection() {
       button.disabled = true;
       try {
         await post('/api/plugins/uninstall', { id, confirm: true });
-        setStatus(`已卸载 ${id}`);
-      } catch (error) { setStatus(`卸载失败：${error?.message || error}`); }
+        setStatus(`已卸载 ${id}`, { tone: 'success' });
+      } catch (error) { setStatus(`卸载失败：${error?.message || error}`, { tone: 'error' }); }
       await refreshPlugins();
       return;
     }
     button.disabled = true;
     try {
       if (action === 'install' || action === 'upgrade') {
-        setStatus(action === 'upgrade' ? `正在升级 ${id}…` : `正在安装 ${id}…`);
+        setStatus(action === 'upgrade' ? `正在升级 ${id}…` : `正在安装 ${id}…`, { busy: true });
         await post('/api/plugins/install', { id });
         setStatus(action === 'upgrade'
           ? `已升级 ${id}（旧版留在 plugins/.backup-* 里，确认没问题可以删）`
-          : `已安装 ${id} —— 还要点「启用」才会跑（装上 ≠ 授权）`);
+          : `已安装 ${id} —— 还要点「启用」才会跑（装上 ≠ 授权）`, { tone: 'success' });
       } else if (action === 'install-file') {
         const file = pendingPluginFile;
-        if (!file) { setStatus('先选一个包文件'); button.disabled = false; return; }
-        if (Number(file.size || 0) > 5 * 1024 * 1024) { setStatus('文件超过 5MB 上限'); button.disabled = false; return; }
-        setStatus(`正在读取 ${file.name}…`);
+        if (!file) { setStatus('先选一个包文件', { tone: 'error' }); button.disabled = false; return; }
+        if (Number(file.size || 0) > 5 * 1024 * 1024) { setStatus('文件超过 5MB 上限', { tone: 'error' }); button.disabled = false; return; }
+        setStatus(`正在读取 ${file.name}…`, { busy: true });
         const base64 = await fileToBase64(file);
-        setStatus('正在校验并换入…');
+        setStatus('正在校验并换入…', { busy: true });
         const result = await post('/api/plugins/install-file', { fileName: file.name, base64 });
         setStatus(`已装 ${result.id} v${result.version}（来源：本地文件：${result.fileName}）`
-          + `｜包内容 sha256 ${String(result.sha256 || '').slice(0, 16)}…`);
+          + `｜包内容 sha256 ${String(result.sha256 || '').slice(0, 16)}…`, { tone: 'success' });
         // 装完直接问要不要启用：小白最容易卡在"装完了以为就好了"
         if (await askForConfirmation(`「${result.id}」已经装上了。现在就启用它吗？（启用后模型才能用它的工具）`)) {
           await post('/api/plugins/toggle', { id: result.id, enabled: true });
-          setStatus(`已启用 ${result.id}`);
+          setStatus(`已启用 ${result.id}`, { tone: 'success' });
         }
         setPickedFile(null);
       } else if (action === 'install-url') {
@@ -1488,25 +1520,25 @@ function bindPluginsSection() {
         // 而不是等服务端报"必须提供 sha256"
         const url = String($('#plugins-manual-url')?.value || '').trim();
         const sha256 = String($('#plugins-manual-sha')?.value || '').trim().toLowerCase();
-        if (!/^https?:\/\//i.test(url)) { setStatus('地址要以 http:// 或 https:// 开头'); button.disabled = false; return; }
-        if (!/^[0-9a-f]{64}$/.test(sha256)) { setStatus('sha256 要填 64 位十六进制（打包脚本会打印）'); button.disabled = false; return; }
-        setStatus('正在下载并校验…');
+        if (!/^https?:\/\//i.test(url)) { setStatus('地址要以 http:// 或 https:// 开头', { tone: 'error' }); button.disabled = false; return; }
+        if (!/^[0-9a-f]{64}$/.test(sha256)) { setStatus('sha256 要填 64 位十六进制（打包脚本会打印）', { tone: 'error' }); button.disabled = false; return; }
+        setStatus('正在下载并校验…', { busy: true });
         const result = await post('/api/plugins/install', { url, sha256 });
-        setStatus(`已安装 ${result?.id || ''} —— 还要点「启用」才会跑（装上 ≠ 授权）`);
+        setStatus(`已安装 ${result?.id || ''} —— 还要点「启用」才会跑（装上 ≠ 授权）`, { tone: 'success' });
       } else if (action === 'enable' || action === 'disable') {
         await post('/api/plugins/toggle', { id, enabled: action === 'enable' });
-        setStatus(`${action === 'enable' ? '已启用' : '已停用'} ${id}`);
+        setStatus(`${action === 'enable' ? '已启用' : '已停用'} ${id}`, { tone: 'success' });
       } else if (action === 'rollback') {
         const ok = await askForConfirmation(`把「${id}」回退到上一次升级前的版本？当前版本会被挪到 plugins/.removed-* 里（不删）。`);
         if (!ok) { button.disabled = false; return; }
         const result = await post('/api/plugins/rollback', { id });
-        setStatus(`已回退 ${id} 到 ${result.rolledBackTo}${result.version ? `（v${result.version}）` : ''}`);
+        setStatus(`已回退 ${id} 到 ${result.rolledBackTo}${result.version ? `（v${result.version}）` : ''}`, { tone: 'success' });
       } else if (action === 'reload') {
         await post('/api/plugins/reload', { id });
-        setStatus(`已重载 ${id}`);
+        setStatus(`已重载 ${id}`, { tone: 'success' });
       }
     } catch (error) {
-      setStatus(`操作失败：${error?.message || error}`);
+      setStatus(`操作失败：${error?.message || error}`, { tone: 'error' });
     } finally {
       // 「安装 / 装这个文件」是**静态骨架**里的按钮，不会被 refreshPlugins 重画 ——
       // 不复位的话，装完一次（或失败一次）就永久变灰，连重试都点不了。

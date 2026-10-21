@@ -5779,12 +5779,31 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
 .plugin-state-failed::before { background: var(--red); }
 .plugin-state-deprecated::before { background: var(--orange); }
 
-.plugin-state-text { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
-.plugin-state-text i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
-.plugin-state-text.running { color: var(--green); }
-.plugin-state-text.idle { color: var(--accent); }
-.plugin-state-text.failed { color: var(--red); }
-.plugin-state-text.off { color: var(--faint); }
+.plugin-state-text {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px 3px 8px;
+  border: 1px solid var(--border); border-radius: var(--r-pill);
+  background: var(--hover);
+  font-size: var(--fs-xs); line-height: 1.45; color: var(--muted);
+  white-space: nowrap;
+}
+.plugin-state-text i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; opacity: .85; }
+.plugin-state-text.running {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 30%, var(--border));
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+.plugin-state-text.idle {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+.plugin-state-text.failed {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 30%, var(--border));
+  background: color-mix(in srgb, var(--red) 9%, transparent);
+}
+.plugin-state-text.off { color: var(--muted); }
 .plugin-caps-inline { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--muted); }
 .plugin-caps-inline .ico-svg { display: inline-block; vertical-align: -2px; color: var(--faint); }
 .plugin-caps-inline .lead { color: var(--faint); }
@@ -6041,9 +6060,45 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
 @media (hover: hover) and (pointer: fine) { .plugin-linkbtn:hover { text-decoration: underline; } }
 .plugin-linkbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 
-/* 动作反馈条：贴底 */
-.plugins-status-bar { position: sticky; bottom: 0; z-index: 2; margin-top: 22px; padding: 10px 0 2px; background: var(--bg); border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+/* 动作反馈条：贴底的状态胶囊。空时完全不占位；有内容时用主题色描边 + 轻阴影，
+   不再是一条横贯页面的白条 —— 它只是"刚才那次操作的结果"，不是页面的分隔线。 */
+.plugins-status-bar {
+  position: sticky; bottom: 14px; z-index: 3;
+  display: flex; align-items: center; gap: 8px;
+  width: fit-content; max-width: min(100%, 760px);
+  margin: 18px 0 0 auto; padding: 8px 14px;
+  border: 1px solid var(--border); border-radius: var(--r-pill);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-sm); line-height: 1.45; color: var(--text);
+  animation: plugin-status-in var(--dur-interaction) var(--ease-out-quart);
+}
 .plugins-status-bar:empty { display: none; }
+.plugins-status-bar .plugin-status-text { min-width: 0; overflow-wrap: anywhere; }
+.plugins-status-bar .plugin-status-ico { width: 14px; height: 14px; flex: 0 0 auto; color: var(--muted); }
+.plugins-status-bar .plugin-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.plugins-status-bar .loading-spinner { width: 14px; height: 14px; border-width: 2px; flex: 0 0 auto; }
+.plugins-status-bar.is-success {
+  border-color: color-mix(in srgb, var(--green) 32%, var(--border));
+  background: color-mix(in srgb, var(--green) 8%, var(--bg-2));
+}
+.plugins-status-bar.is-success .plugin-status-ico { color: var(--green); }
+.plugins-status-bar.is-error {
+  border-color: color-mix(in srgb, var(--red) 32%, var(--border));
+  background: color-mix(in srgb, var(--red) 7%, var(--bg-2));
+}
+.plugins-status-bar.is-error .plugin-status-ico { color: var(--red); }
+[data-glass] .plugins-status-bar {
+  background: var(--glass-fill, var(--bg-2));
+  border-color: var(--glass-edge, var(--border));
+  backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%));
+}
+@keyframes plugin-status-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+html[data-motion='off'] .plugins-status-bar { animation: none; }
 .plugin-empty { padding: 16px 0; font-size: var(--fs-sm); color: var(--muted); }
 
 @media (max-width: 760px) {
