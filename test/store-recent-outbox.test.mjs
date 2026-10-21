@@ -78,6 +78,17 @@ test('老库升级：message_count 缺失时按现有行数回填一次', () => 
   }
 });
 
+test('getChatMeta 的最新消息查询有 (chat_key, ts) 索引', () => {
+  const store = new ChatStore(0, { dataDir: dir, filename: 'meta-index.sqlite' });
+  try {
+    const names = store.db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all()
+      .map((row) => row.name);
+    assert.ok(names.includes('messages_chat_ts'), '按 ts 取最新一条不能再全表排序');
+  } finally {
+    store.close();
+  }
+});
+
 test('pruneOutbox 保留最近 N 条无 runId 的终态行，并清掉 runs 已不存在的孤儿行', () => {
   const store = new ChatStore(0, { dataDir: dir, filename: 'outbox.sqlite' });
   try {

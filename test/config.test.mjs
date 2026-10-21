@@ -397,3 +397,10 @@ test('坏形状的 allow/deny/blocklist/providers/customPersonas/store.keywords 
   assert.deepEqual(cfg.customPersonas, []);
   assert.deepEqual(cfg.store.keywords, []);
 });
+
+test('updateConfig 的校验错误带 httpStatus=400 标记（控制台据此区分用户输入）', () => {
+  assert.throws(() => updateConfig({ server: { port: 0 } }),
+    (error) => error.httpStatus === 400 && /Invalid server port/.test(error.message));
+  assert.throws(() => updateConfig({ runtime: { mode: 'nope' } }),
+    (error) => error.httpStatus === 400 && /Invalid runtime mode/.test(error.message));
+});

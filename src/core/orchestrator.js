@@ -2656,6 +2656,9 @@ export class Orchestrator {
         continue;
       }
       const dispatchedAt = Date.now();
+      // 只把**本次唤醒新产生**的 unknown 当成本轮结果不确定：历史遗留的 unknown/sending
+      // （上次硬崩溃、别的 run 的残行）不该让每条提醒一上来就放弃重试。
+      const unknownBefore = new Set(this.store.listUnknownOperations(chatKey).map((op) => op.id));
       for (const it of chosen) this.#remindersInFlight.add(it.id);
       this.wake(chatKey, { manual: true, paced: true, wakeNote: note })
         .then(() => {
@@ -2670,7 +2673,8 @@ export class Orchestrator {
           }
           // 发送结果不确定（outbox unknown）时绝不自动重试：换一轮 lease 后
           // 原来的 hasUncertainEffects 看不到这批副作用，重说一遍就会重复提醒。
-          const uncertain = this.store.listUnknownOperations(chatKey).length > 0;
+          const uncertain = this.store.listUnknownOperations(chatKey)
+            .some((op) => !unknownBefore.has(op.id));
           if (uncertain) {
             for (const it of chosen) this.reminders.failDelivery(it.id, '发送结果未知，已停止自动重试，请人工核对');
             log.error(`[reminder] 有未确认的外发，${chosen.length} 条提醒停止自动重试：${chatKey}`);
@@ -2683,7 +2687,9 @@ export class Orchestrator {
             if (retry.exhausted) exhausted += 1;
           }
           if (exhausted) {
-            log.error(`[reminder] ${exhausted} 条连续 3 次未确认播报，已停止自动重试：${chatKey}`);
+            const retried = chosen.length - exhausted;
+            log.error(`[reminder] ${exhausted} 条连续未确认播报，已停止自动重试`
+              + (retried ? `；另外 ${retried} 条 5 分钟后重试` : '') + `：${chatKey}`);
           } else {
             log.warn(`[reminder] 本轮未检测到发送，${chosen.length} 条 5 分钟后重试：${chatKey}`);
           }
@@ -2695,7 +2701,12 @@ export class Orchestrator {
             const retry = this.reminders.retryLater(it.id, later, { maxAttempts: 3 });
             if (retry.exhausted) exhausted += 1;
           }
-          log.error(`[reminder] 唤醒出错，${exhausted ? `${exhausted} 条已停止重试，` : ''}${chosen.length} 条 5 分钟后重试:`, error?.message ?? error);
+          const retried = chosen.length - exhausted;
+          log.error(`[reminder] 唤醒出错，`
+            + (exhausted ? `${exhausted} 条已停止重试` : '')
+            + (exhausted && retried ? '，' : '')
+            + (retried ? `${retried} 条 5 分钟后重试` : '')
+            + ':', error?.message ?? error);
         })
         .finally(() => {
           for (const it of chosen) this.#remindersInFlight.delete(it.id);

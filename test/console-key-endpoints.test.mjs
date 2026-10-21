@@ -59,7 +59,7 @@ function request(port, method, urlPath, { headers = {}, body = '' } = {}) {
         res.on('end', () => {
           let parsed = null;
           try { parsed = JSON.parse(text); } catch { /* 非 JSON */ }
-          resolve({ status: res.statusCode, text, body: parsed });
+          resolve({ status: res.statusCode, text, body: parsed, headers: res.headers });
         });
       }
     );
@@ -123,6 +123,31 @@ test('POST /api/config：非法 JSON 返回 400 而不是 500', async (t) => {
   });
   assert.equal(res.status, 400, res.text);
   assert.match(String(res.body?.error || ''), /JSON/);
+});
+
+test('POST /api/config：英文校验错误也返回 400（不靠错误文案猜）', async (t) => {
+  const { port } = await boot(t);
+  const res = await request(port, 'POST', '/api/config', {
+    headers: { host: `127.0.0.1:${port}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ server: { port: 0 } })
+  });
+  assert.equal(res.status, 400, res.text);
+  assert.match(String(res.body?.error || ''), /Invalid server port/);
+});
+
+test('静态资源 304 也带防点击劫持头（老缓存不会漏防护）', async (t) => {
+  const { port } = await boot(t);
+  const first = await request(port, 'GET', '/', { headers: { host: `127.0.0.1:${port}` } });
+  assert.equal(first.status, 200, first.text);
+  const etag = first.headers?.etag;
+  assert.ok(etag, 'HTML 响应应带 ETag');
+  const second = await request(port, 'GET', '/', {
+    headers: { host: `127.0.0.1:${port}`, 'if-none-match': etag }
+  });
+  assert.equal(second.status, 304, second.text);
+  assert.equal(second.headers?.['x-frame-options'], 'DENY');
+  assert.match(String(second.headers?.['content-security-policy'] || ''), /frame-ancestors 'none'/);
+  assert.equal(second.headers?.['referrer-policy'], 'no-referrer');
 });
 
 test('POST /api/health/check 走同一份巡检并返回检查项', async (t) => {

@@ -186,6 +186,8 @@ export class ReminderStore {
     hit.at = Number(at) || hit.at;
     // 预算/静默段属于"外因顺延"：承诺时间确实改到新窗口，作废时钟跟着新 at 起算。
     hit.originalAt = hit.at;
+    // 外因顺延之间没有尝试过，不能把"连续未确认播报"的计数接着累计。
+    hit.deliveryAttempts = 0;
     this.#save();
     return hit;
   }

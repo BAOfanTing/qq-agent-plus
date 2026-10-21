@@ -94,10 +94,13 @@ export class ChatStore {
         PRIMARY KEY (chat_key, id), UNIQUE (chat_key, mid)
       );
       CREATE INDEX IF NOT EXISTS messages_pending ON messages(chat_key, state, available_at, id);
-      -- getChatMeta 在每条入站消息和 5 秒 tick 上都会跑；failed/held 没有窄索引时
-      -- 会随会话历史线性变慢。
+      -- getChatMeta 在每条入站消息和 5 秒 tick 上都会跑；failed/held 用更窄的 partial
+      -- 索引，避免每次计数都扫整段会话历史。
       CREATE INDEX IF NOT EXISTS messages_failed ON messages(chat_key) WHERE state='failed';
       CREATE INDEX IF NOT EXISTS messages_held ON messages(chat_key) WHERE state='held';
+      -- getChatMeta 取"最新一条"按 ts 排序（历史导入的 ts 可能乱序）；没有这个索引
+      -- 时 SQLite 要对整个会话做临时排序。
+      CREATE INDEX IF NOT EXISTS messages_chat_ts ON messages(chat_key, ts DESC, id DESC);
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, chat_key TEXT NOT NULL, state TEXT NOT NULL,
         expires_at INTEGER NOT NULL, error TEXT
@@ -161,12 +164,21 @@ export class ChatStore {
     // getChatMeta 的 total 不能再用 COUNT(*) 扫全历史（每条入站消息 + 5 秒 tick 都调），
     // 但也不能用 next_id-1：保留期清理会删掉旧行，那样会虚报"还有 N 条没加载"。
     // 维护一个随插入/清理增减的计数，老库首次启动按现有行数回填一次。
-    ensureColumn(this.db, 'chats', 'message_count', 'INTEGER NOT NULL DEFAULT 0');
-    if (!this.db.prepare("SELECT 1 FROM migrations WHERE name='chats_message_count'").get()) {
+    // 两进程同时首启时 ALTER/标记都可能撞车：ALTER 的 duplicate column 视为已加，
+    // 标记与回填放进同一个 BEGIN IMMEDIATE，避免一个进程先写标记、另一个读到 0。
+    try {
+      ensureColumn(this.db, 'chats', 'message_count', 'INTEGER NOT NULL DEFAULT 0');
+    } catch (error) {
+      if (!/duplicate column name/i.test(String(error?.message || ''))) throw error;
+    }
+    this.#transaction(() => {
+      const claimed = this.db.prepare(
+        "INSERT OR IGNORE INTO migrations(name) VALUES ('chats_message_count')"
+      ).run();
+      if (!Number(claimed?.changes)) return;
       this.db.exec(`UPDATE chats SET message_count=(
         SELECT COUNT(*) FROM messages WHERE messages.chat_key=chats.chat_key)`);
-      this.db.prepare("INSERT INTO migrations(name) VALUES ('chats_message_count')").run();
-    }
+    });
     // runs 是全仓唯一没有回收纪律的账本（每次带租约的运行 +1，常驻不删，5 秒全表扫）：
     // 进程启动时清掉终态且早已过期的行。expires_at 记的是"租约到期时刻"，用它当近似创建时间，
     // 90 天前的终态行已无诊断价值（2026-10-07 复审 P3）。

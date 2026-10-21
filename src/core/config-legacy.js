@@ -17,6 +17,11 @@ import { normalizeMomentWindows } from '../features/moment-schedule.js';
 import { PLATFORM_GATE_KEYS } from './platform-gates.js';   // 零依赖模块：按群覆盖的键名校验
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// 控制台把 updateConfig 的校验失败映射成 400：用显式标记，不靠匹配错误文案
+//（英文校验信息会被当成 500，文件系统错误也可能反而被误判成用户输入）。
+function invalidConfig(message) {
+  return Object.assign(new Error(message), { httpStatus: 400 });
+}
 // 本文件在 src/core/ 下：仓库根要多退一层（挪目录时最容易漏的就是这里）
 export const ROOT = path.resolve(__dirname, '..', '..');
 // 测试/便携场景可重定向数据目录
@@ -1740,13 +1745,13 @@ export function updateConfig(patch) {
   next.tokenSaver = { ...(next.tokenSaver || {}), mode: normalizeTokenSaverMode(next.tokenSaver?.mode) };
   next.timeControl = normalizeTimeControl(next.timeControl);
   next.dailyMoments.scheduleWindows = normalizeMomentWindows(next.dailyMoments.scheduleWindows);
-  if (!['observe', 'active'].includes(next.runtime?.mode)) throw new Error('Invalid runtime mode');
+  if (!['observe', 'active'].includes(next.runtime?.mode)) throw invalidConfig('Invalid runtime mode');
   if (!['legacy', 'threaded', 'lifecycle'].includes(next.conversation?.mode)) {
-    throw new Error('Invalid conversation mode');
+    throw invalidConfig('Invalid conversation mode');
   }
   for (const mode of Object.values(next.conversation?.groupModes || {})) {
     if (!['legacy', 'threaded', 'lifecycle'].includes(mode)) {
-      throw new Error('Invalid group conversation mode');
+      throw invalidConfig('Invalid group conversation mode');
     }
   }
   next.api.maxRunTokens = Math.min(
@@ -1826,7 +1831,7 @@ export function updateConfig(patch) {
     stability: clampInteger(rawWeights.stability, 0, 100, 10)
   };
   if (Object.values(weights).reduce((sum, value) => sum + value, 0) !== 100) {
-    throw new Error('主动好友评估权重合计必须为 100');
+    throw invalidConfig('主动好友评估权重合计必须为 100');
   }
   next.identityPilot = {
     ...identity,
@@ -1911,12 +1916,12 @@ export function updateConfig(patch) {
     )
   ) {
     const ownerUin = next.identityPilot.friendProposal.ownerUin;
-    if (!ownerUin) throw new Error('好友审批功能需要配置管理员 QQ');
+    if (!ownerUin) throw invalidConfig('好友审批功能需要配置管理员 QQ');
     if (
       next.allowAllWhenEmpty !== true
       && !idList(next.allow?.private).includes(ownerUin)
     ) {
-      throw new Error('审批管理员 QQ 必须同时加入私聊白名单');
+      throw invalidConfig('审批管理员 QQ 必须同时加入私聊白名单');
     }
   }
   const incidentPilot = next.incidentPilot || {};
@@ -1940,13 +1945,13 @@ export function updateConfig(patch) {
   };
   if (next.incidentPilot.enabled) {
     if (!next.incidentPilot.ownerUin) {
-      throw new Error('异常处理试点需要配置告警管理员 QQ');
+      throw invalidConfig('异常处理试点需要配置告警管理员 QQ');
     }
     if (
       next.allowAllWhenEmpty !== true
       && !idList(next.allow?.private).includes(next.incidentPilot.ownerUin)
     ) {
-      throw new Error('异常告警管理员 QQ 必须同时加入私聊白名单');
+      throw invalidConfig('异常告警管理员 QQ 必须同时加入私聊白名单');
     }
   }
   const autoUpdate = next.autoUpdate || {};
@@ -1959,7 +1964,7 @@ export function updateConfig(patch) {
   if (!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(
     updateRepository
   )) {
-    throw new Error('自动更新仓库必须是 GitHub HTTPS 地址');
+    throw invalidConfig('自动更新仓库必须是 GitHub HTTPS 地址');
   }
   if (
     !/^[A-Za-z0-9._/-]{1,100}$/.test(updateBranch)
@@ -1967,7 +1972,7 @@ export function updateConfig(patch) {
     || updateBranch.includes('..')
     || updateBranch.endsWith('/')
   ) {
-    throw new Error('自动更新分支名称无效');
+    throw invalidConfig('自动更新分支名称无效');
   }
   next.autoUpdate = {
     ...autoUpdate,
@@ -1986,13 +1991,13 @@ export function updateConfig(patch) {
   };
   if (next.autoUpdate.enabled) {
     if (!next.autoUpdate.ownerUin) {
-      throw new Error('自动更新需要配置告警管理员 QQ');
+      throw invalidConfig('自动更新需要配置告警管理员 QQ');
     }
     if (
       next.allowAllWhenEmpty !== true
       && !idList(next.allow?.private).includes(next.autoUpdate.ownerUin)
     ) {
-      throw new Error('自动更新管理员 QQ 必须同时加入私聊白名单');
+      throw invalidConfig('自动更新管理员 QQ 必须同时加入私聊白名单');
     }
   }
   const slangPilot = next.slangPilot || {};
@@ -2047,19 +2052,19 @@ export function updateConfig(patch) {
   };
   if (next.slangPilot.enabled) {
     const ownerUin = next.slangPilot.ownerUin;
-    if (!ownerUin) throw new Error('黑话语料库试点需要配置审批管理员 QQ');
+    if (!ownerUin) throw invalidConfig('黑话语料库试点需要配置审批管理员 QQ');
     if (
       next.allowAllWhenEmpty !== true
       && !idList(next.allow?.private).includes(ownerUin)
     ) {
-      throw new Error('黑话审批管理员 QQ 必须同时加入私聊白名单');
+      throw invalidConfig('黑话审批管理员 QQ 必须同时加入私聊白名单');
     }
   }
   if (!Number.isInteger(Number(next.server?.port)) || next.server.port < 1 || next.server.port > 65535) {
-    throw new Error('Invalid server port');
+    throw invalidConfig('Invalid server port');
   }
   if (!['127.0.0.1', 'localhost', '::1'].includes(next.server.host) && !String(next.server.token || '').trim()) {
-    throw new Error('A console token is required for LAN access');
+    throw invalidConfig('A console token is required for LAN access');
   }
   currentConfig = next;
 

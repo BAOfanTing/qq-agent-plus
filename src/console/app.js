@@ -257,6 +257,17 @@ function modelPricesPayload(modelOverride = null) {
   };
 }
 
+/**
+ * 写进 console-access.txt 的"可点击地址"：监听地址是通配地址时给 127.0.0.1，
+ * IPv6 字面量要加方括号（http://::1:3210 不是合法 URL）。
+ */
+function consoleUrlHost(host) {
+  const value = String(host || '').trim();
+  if (!value || value === '0.0.0.0' || value === '::' || value === '::0') return '127.0.0.1';
+  if (value.includes(':') && !value.startsWith('[')) return `[${value}]`;
+  return value;
+}
+
 export function createApp({
   log = console.log,
   autoUpdateOptions = {},
@@ -1676,8 +1687,9 @@ export function createApp({
   function writeConsoleAccess(token) {
     const file = path.join(DATA_DIR, 'console-access.txt');
     const tmp = `${file}.${process.pid}.tmp`;
+    const cfg = getConfig();
     fs.writeFileSync(tmp,
-      `QQ Agent Linux\nURL: http://${getConfig().server.host}:${getConfig().server.port}\nToken: ${token}\nMode: ${getConfig().runtime.mode}\n`,
+      `QQ Agent Linux\nURL: http://${consoleUrlHost(cfg.server.host)}:${cfg.server.port}\nToken: ${token}\nMode: ${cfg.runtime.mode}\n`,
       { mode: 0o600 });
     fs.renameSync(tmp, file);
     fs.chmodSync(file, 0o600);
@@ -2012,8 +2024,9 @@ export function createApp({
       service: '',
       notify: null,
       persist: false,
-      integrityCheck: false,
-      sudoDockerProbe: () => false
+      integrityCheck: false
+      // 不注入 sudoDockerProbe：巡检默认会试一次 `sudo -n docker`（8 秒上限）。
+      // 固定成 false 会让"直连不可用但 sudo 回退可用"的机器在控制台里假红。
     }))();
     healthCheckInFlight = task;
     try {
@@ -4321,13 +4334,8 @@ export function createApp({
       next = updateConfig(patch);
     } catch (error) {
       auditWrite('config.update', 'config', { req, before: auditBefore, ok: false, error: String(error?.message ?? error) });
-      // updateConfig 的校验错误是用户输入问题，返回 400；文件系统错误保持 500。
-      const msg = String(error?.message ?? error);
-      const fsCode = String(error?.code || '');
-      if (!error.httpStatus && !/^(EACCES|EPERM|ENOENT|ENOSPC|EIO|EROFS)$/.test(fsCode)
-        && /必须|不能|不合法|非法|无效|不支持|至少|需要/.test(msg)) {
-        error.httpStatus = 400;
-      }
+      // updateConfig 的校验错误自带 httpStatus=400（见 config-legacy 的 invalidConfig）；
+      // 文件系统/内部错误没有这个标记，按 500 处理并进异常面板。
       throw error;
     }
     auditWrite('config.update', 'config', { req, before: auditBefore, after: next, changed: changedTopKeys(auditBefore, next) });
@@ -4945,18 +4953,22 @@ export function createApp({
           ? inm.split(',').some((t) => t.trim() === etag || t.trim() === `W/${etag}` || `W/${t.trim()}` === etag)
           : (ext !== '.html' && String(req.headers['if-modified-since'] || '') !== ''
             && Date.parse(req.headers['if-modified-since']) >= Math.floor(stat.mtimeMs / 1000) * 1000);
+        const securityHeaders = {
+          // 控制台可被本机无令牌模式打开：禁止被第三方页面 iframe 嵌入，防点击劫持。
+          'x-frame-options': 'DENY',
+          'content-security-policy': "frame-ancestors 'none'",
+          'referrer-policy': 'no-referrer'
+        };
         if (matched) {
-          res.writeHead(304, { etag, 'cache-control': cacheControl });
+          // 304 也要带安全头：否则升级前缓存过 index.html 的浏览器会一直复用旧响应，防护不生效。
+          res.writeHead(304, { ...securityHeaders, etag, 'cache-control': cacheControl });
           res.end();
           return;
         }
         res.writeHead(200, {
           'content-type': types[ext] ?? 'application/octet-stream',
           'cache-control': cacheControl,
-          // 控制台可被本机无令牌模式打开：禁止被第三方页面 iframe 嵌入，防点击劫持。
-          'x-frame-options': 'DENY',
-          'content-security-policy': "frame-ancestors 'none'",
-          'referrer-policy': 'no-referrer',
+          ...securityHeaders,
           etag,
           'last-modified': stat.mtime.toUTCString()
         });
