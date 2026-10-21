@@ -130,9 +130,10 @@ QQ_AGENT_MODEL_API_KEY=... QQ_AGENT_MODEL_BASE_URL=... QQ_AGENT_MODEL=... \
 # 控制台隧道
 SSHHOST=user@your-server node src/ops.js console --open
 node src/ops.js console --print        # 只打印 ssh 命令
-# Windows 且本机没有 Node：双击仓库根目录 console-tunnel.bat
-#   console-tunnel.bat test            # 连通性自检（输出 TEST_OK / 非零退出）
-#   console-tunnel.bat forget          # 清除记住的服务器地址
+# 本机没有 Node：只下载一个脚本即可（不用克隆仓库）
+#   Windows:      console-tunnel.bat [test|forget]
+#   macOS/Linux:  bash console-tunnel.sh [test|forget]
+#   test 做连通性自检（输出 TEST_OK / 非零退出）；forget 清除记住的服务器地址
 
 # 定时器
 node src/ops.js install-timers --print

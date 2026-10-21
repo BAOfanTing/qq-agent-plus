@@ -152,10 +152,12 @@ bash deploy.sh \
 与裸机部署一致，推荐入口为 SSH 隧道；[AGENTS.md](../AGENTS.md) 的口径是不要求服务器开放
 任何公网端口。
 
-- **Windows**：使用仓库根目录的 `console-tunnel.bat`，双击后输入 `qqagent@服务器地址`；
-  或使用命令行 `console-tunnel.bat qqagent@服务器地址`（写入 `.console-tunnel.cfg`，
-  后续可直接双击）。
-- **macOS / Linux / 本机有 Node**：`SSHHOST=qqagent@服务器地址 node src/ops.js console --open`。
+- **Windows**：只下载一个 `console-tunnel.bat`（不用克隆仓库），双击后输入 `qqagent@服务器地址`；
+  或使用命令行 `console-tunnel.bat qqagent@服务器地址`（记住地址，后续可直接双击）。
+  下载命令：`scp qqagent@服务器地址:/data/qq-agent/app/console-tunnel.bat .`
+- **macOS / Linux**：下载 `console-tunnel.sh`，运行 `bash console-tunnel.sh qqagent@服务器地址`；
+  下载命令：`scp qqagent@服务器地址:/data/qq-agent/app/console-tunnel.sh .`
+- **本机有 Node**：`SSHHOST=qqagent@服务器地址 node src/ops.js console --open`。
 - **手工方式**：
 
   ```bash
@@ -164,7 +166,7 @@ bash deploy.sh \
 
   随后访问 `http://127.0.0.1:3210`。扫码登录 QQ 使用 `6081`，**不得**将 noVNC 暴露到公网。
 
-**目录变更的影响**：`console-tunnel.bat` 仅在
+**目录变更的影响**：`console-tunnel.bat` / `console-tunnel.sh` 仅在
 `/mnt/data/qq-agent/data/console-access.txt` 与 `/data/qq-agent/data/console-access.txt`
 两处查找令牌。安装到其它路径时隧道仍可使用，但不支持免登录，需手动获取令牌：
 
@@ -173,7 +175,8 @@ cat /安装根目录/data/console-access.txt      # 查看 Token 那一行
 bash /安装根目录/app/manage.sh token         # 等价
 ```
 
-或在客户端设置 `QQ_AGENT_CONSOLE_TOKEN=<令牌>`。`.bat` 使用密钥登录（`BatchMode=yes`），
+或在客户端设置 `QQ_AGENT_CONSOLE_TOKEN=<令牌>`。`.bat` 使用密钥登录（`BatchMode=yes`）；
+`.sh` 优先用密钥，没有密钥时会退回普通 SSH，密码登录可能提示两次。
 读取令牌的账号须能读取 `data/`（权限 `0600`，属主 `qqagent`），因此隧道账号使用 `qqagent`
 或 root 最为简便。
 

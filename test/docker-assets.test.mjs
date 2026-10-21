@@ -44,7 +44,8 @@ test('.dockerignore：不把 node_modules、数据、测试与构建上下文垃
   for (const entry of [
     '.env', '.env.*', 'snowluma', 'snowluma-data', 'snowluma-client-config',
     'snowluma-client-data', 'backups', 'console-access.txt', 'docker-compose.yml',
-    'deploy.sh', 'deploy-all.sh', 'install.sh', 'manage.sh', 'console-tunnel.bat'
+    'deploy.sh', 'deploy-all.sh', 'install.sh', 'manage.sh',
+    'console-tunnel.bat', 'console-tunnel.sh'
   ]) {
     assert.ok(
       dockerignore.split('\n').map((line) => line.trim()).includes(entry),

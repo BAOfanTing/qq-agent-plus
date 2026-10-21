@@ -72,12 +72,14 @@ test('零问答装配：--yes + 默认跳过模型配置，装完打印接下来
   assert.match(r.stdout, /http:\/\/10\.0\.0\.5:46081/);
   assert.match(r.stdout, /12345678/);
   assert.match(r.stdout, /聊天白名单/);
-  assert.match(r.stdout, /43210 控制台/,
+  assert.match(r.stdout, /安全组放行 43210/,
     '安全组提示里的控制台端口要从实际地址取（非默认端口时要跟着走）');
-  assert.match(r.stdout, /45099 协议端后台/);
-  assert.match(r.stdout, /46081 扫码登录/);
-  assert.match(r.stdout, /ssh -L 43210:127\.0\.0\.1:43210/,
-    '协议端/扫码端口建议走 SSH 隧道，不要把三个端口都开公网');
+  assert.match(r.stdout, /ssh -N -L 43210:127\.0\.0\.1:43210/,
+    '给出可在本地直接复制的完整隧道命令');
+  assert.match(r.stdout, /45099:127\.0\.0\.1:45099/);
+  assert.match(r.stdout, /46081:127\.0\.0\.1:46081/);
+  assert.match(r.stdout, /console-tunnel\.bat/);
+  assert.match(r.stdout, /console-tunnel\.sh/);
   assert.match(r.stdout, /manage\.sh logs/);
   assert.match(r.stdout, /观察/, 'observe 模式要提示去控制台切「启用」');
 });

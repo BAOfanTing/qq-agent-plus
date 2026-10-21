@@ -40,3 +40,4 @@ deploy-all.sh
 install.sh
 manage.sh
 console-tunnel.bat
+console-tunnel.sh

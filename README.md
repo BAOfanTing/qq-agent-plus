@@ -425,10 +425,19 @@ QQ 未登录不属于“未连接”：此时 WS 连接正常，只是无法获�
 
 控制台默认端口为 `3210`。仅部署 Agent（`deploy.sh`）时默认仅监听 `127.0.0.1`，本机通过 SSH 隧道
 访问即可，无需开放任何公网端口；全栈安装器（`deploy-all.sh`）以 `--host 0.0.0.0` 启动控制台，
-跨主机访问时应仅向可信局域网或 VPN 放行。Windows 用户可直接双击仓库中的
-[`console-tunnel.bat`](console-tunnel.bat)：首次输入一次 `user@host` 并记住，之后自动从服务器读取控制台
-令牌、建立 SSH 隧道并免登录打开浏览器，同时转发 `5099`（SnowLuma WebUI）与 `6081`（QQ 扫码登录）。
-macOS、Linux 或已安装 Node 的机器可使用 `node src/ops.js console --open`，效果相同。
+跨主机访问时应仅向可信局域网或 VPN 放行。推荐从**你自己的电脑**建 SSH 隧道：
+
+```bash
+ssh -N -L 3210:127.0.0.1:3210 -L 5099:127.0.0.1:5099 -L 6081:127.0.0.1:6081 <用户>@<服务器>
+```
+
+本地不需要克隆仓库。也可以只下载一个连接脚本，它会自动从服务器读取令牌、建隧道并免登录打开浏览器：
+
+- Windows：`scp <用户>@<服务器>:/data/qq-agent/app/console-tunnel.bat .`，双击运行。
+- macOS/Linux：`scp <用户>@<服务器>:/data/qq-agent/app/console-tunnel.sh .`，然后 `bash console-tunnel.sh`。
+- 已安装 Node：`node src/ops.js console --open`，效果相同。
+
+两个脚本都会同时转发 `5099`（SnowLuma WebUI）与 `6081`（QQ 扫码登录），并读取服务器上的登录凭据。
 
 Token 可在「设置 -> 系统 -> 控制台安全」中轮换。控制台一旦可被其他主机访问，令牌即为唯一凭据，只能自己使用。
 

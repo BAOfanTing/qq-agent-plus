@@ -472,11 +472,20 @@ same procedure is documented in more detail in
 The console listens on `3210` by default. An agent-only installation (`deploy.sh`) binds `127.0.0.1`
 only, so local access requires no public port; the full-stack installer (`deploy-all.sh`) starts the
 console with `--host 0.0.0.0`, and cross-host access should be limited to a trusted LAN or VPN. On
-Windows, [`console-tunnel.bat`](console-tunnel.bat) in the repository root reads the console token
-from the server, opens an SSH tunnel and launches the browser without a login prompt; the host is
-entered once as `user@host` and remembered. It also forwards `5099` (SnowLuma WebUI) and `6081` (QQ
-login). On macOS, Linux or any machine with Node installed, `node src/ops.js console --open` has the
-same effect.
+No local project is required. Use Windows `console-tunnel.bat` or macOS/Linux
+`console-tunnel.sh`; both read the console token from the server, open an SSH tunnel and launch the
+browser without a login prompt. The host is entered once as `user@host` and remembered. They also
+forward `5099` (SnowLuma WebUI) and `6081` (QQ login). Download one file from the server:
+
+```bash
+# macOS / Linux
+scp user@server:/data/qq-agent/app/console-tunnel.sh .
+bash console-tunnel.sh user@server
+```
+
+On Windows use the matching `.bat` file. With Node installed, `node src/ops.js console --open` has
+the same effect. A manual tunnel is also enough:
+`ssh -N -L 3210:127.0.0.1:3210 -L 5099:127.0.0.1:5099 -L 6081:127.0.0.1:6081 user@server`.
 
 The token can be rotated under “设置 -> 系统 -> 控制台安全”. Once the console is reachable from
 other hosts, the token is its only credential and must be kept private.

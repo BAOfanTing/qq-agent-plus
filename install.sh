@@ -149,15 +149,22 @@ NOVNC_PORT="$(port_of "$VNC_URL")"
 
 printf '\n============================================================\n'
 printf '安装完成。接下来三步（都在浏览器里做）：\n\n'
-if [[ -n "$CONSOLE_URL" ]]; then
-  printf '① 打开控制台（链接已带登录令牌，点开即进）：\n     %s/?token=%s\n' "$CONSOLE_URL" "$CONSOLE_TOKEN"
-  printf '   在「设置 → 模型 API」里选服务、填 Key、保存，点「测试连通性」通过即可。\n\n'
-else
-  printf '① 打开控制台，在「设置 → 模型 API」里填好模型（地址、Key、模型名）。\n'
-  printf '   控制台地址与令牌见凭据文件：%s\n\n' "$ACCESS_FILE"
-fi
+printf '① 打开控制台\n'
+printf '   推荐：在你自己的电脑上建 SSH 隧道（不用下载项目）：\n'
+printf '     ssh -N -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s <你的登录用户>@<服务器公网IP>\n' \
+  "$CONSOLE_PORT" "$CONSOLE_PORT" "$SNOWLUMA_PORT" "$SNOWLUMA_PORT" "$NOVNC_PORT" "$NOVNC_PORT"
+printf '   然后打开（链接已带登录令牌）：http://127.0.0.1:%s/?token=%s\n' "$CONSOLE_PORT" "$CONSOLE_TOKEN"
+printf '   只有当你已经在云安全组放行 %s 时，才能直接打开：%s/?token=%s\n' \
+  "$CONSOLE_PORT" "$CONSOLE_URL" "$CONSOLE_TOKEN"
+printf '   也可以只下载一个连接脚本（Windows / macOS / Linux 都有，不用克隆项目）：\n'
+printf '     Windows:  scp <你的登录用户>@<服务器公网IP>:%s/app/console-tunnel.bat .  然后双击\n' "$ROOT_GUESS"
+printf '     macOS/Linux: scp <你的登录用户>@<服务器公网IP>:%s/app/console-tunnel.sh .  然后 bash console-tunnel.sh\n' "$ROOT_GUESS"
+printf '     （把 <你的登录用户>@<服务器公网IP> 换成你平时 SSH 登录用的地址）\n'
+printf '   （Windows 10+ 自带 ssh；没有就在“设置 → 应用 → 可选功能”里装 OpenSSH 客户端。）\n'
+printf '   在「设置 → 模型 API」里选服务、填 Key、保存，点「测试连通性」通过即可。\n\n'
 if [[ -n "$VNC_URL" ]]; then
-  printf '② 登录 QQ：打开 %s（密码：%s）→ 按页面提示扫码登录。\n' "$VNC_URL" "$VNC_PASSWORD"
+  printf '② 登录 QQ：隧道里打开 http://127.0.0.1:%s（密码：%s）→ 按页面提示扫码登录。\n' "$NOVNC_PORT" "$VNC_PASSWORD"
+  printf '   （若已放行 %s，也可直接打开 %s）\n' "$NOVNC_PORT" "$VNC_URL"
 else
   printf '② 扫码登录 QQ（登录入口与控制台在同一份凭据文件里）。\n'
 fi
@@ -166,13 +173,7 @@ printf '③ 把要用它的群加进白名单：控制台「设置 → 聊天白
 if [[ "$MODE" == "observe" ]]; then
   printf '   （机器人默认「观察」模式只看不说话；确认没问题后在控制台首页把运行模式切到「启用」。）\n'
 fi
-printf '\n打不开上面的地址？\n'
-printf '   %s 控制台：只对你的 IP / VPN 放行，或走 SSH 隧道。\n' "$CONSOLE_PORT"
-printf '   %s 协议端后台 / %s 扫码登录：建议不要直接开公网，用 SSH 隧道：\n' "$SNOWLUMA_PORT" "$NOVNC_PORT"
-printf '     ssh -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s -L %s:127.0.0.1:%s <用户>@<服务器>\n' \
-  "$CONSOLE_PORT" "$CONSOLE_PORT" "$SNOWLUMA_PORT" "$SNOWLUMA_PORT" "$NOVNC_PORT" "$NOVNC_PORT"
-printf '   然后浏览器打开 http://127.0.0.1:%s\n' "$CONSOLE_PORT"
-printf '   全套凭据也在：%s\n' "$ACCESS_FILE"
+printf '\n全套凭据也在：%s\n' "$ACCESS_FILE"
 if [[ "${QQ_AGENT_ROOT_INSTALL_WRAPPED:-}" == "1" ]]; then
   printf '\n出问题先看日志：\n   sudo qq-agent-manage logs\n'
   printf '（服务用户是 qqagent；机器人进程不是 root）\n'
