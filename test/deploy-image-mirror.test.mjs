@@ -47,7 +47,7 @@ function mirrorListBlock() {
   return lines.slice(start, end + 1).join('\n');
 }
 
-function runBlock({ image, mirrors = [], argMirror = '', succeedFor }) {
+function runBlock({ image, mirrors = [], argMirror = '', succeedFor, hasLocalImage = false }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-pull-'));
   const envFile = path.join(dir, '.env');
   fs.writeFileSync(envFile, `SNOWLUMA_IMAGE=${image}\nSNOWLUMA_CONTAINER=qq-agent-snowluma\n`, { mode: 0o600 });
@@ -58,12 +58,18 @@ IMAGE=${JSON.stringify(image)}
 QQ_AGENT_IMAGE_MIRROR=${JSON.stringify(mirrors.join(','))}
 IMAGE_MIRROR_ARG=${JSON.stringify(argMirror)}
 STUB_DIR=${JSON.stringify(dir)}
+HAS_LOCAL_IMAGE=${hasLocalImage ? 1 : 0}
 die() { printf 'DIE: %s\\n' "$*" >&2; exit 3; }
 step() { printf 'STEP: %s\\n' "$*"; }
+info() { printf 'INFO: %s\\n' "$*"; }
 sleep() { :; }
-# 桩：只有落在 succeedFor 里的引用才拉得动
+# 桩：默认本地没有镜像；只有 succeedFor 里的引用才拉得动
 docker_call() {
   local sub="$1" ref="$2"
+  if [[ "$sub" == image ]]; then
+    [[ "$HAS_LOCAL_IMAGE" == 1 && "$2" == inspect ]] && return 0
+    return 1
+  fi
   if [[ "$sub" == pull ]]; then
     for want in ${succeedFor.map((s) => JSON.stringify(s)).join(' ')}; do
       [[ "$ref" == "$want" ]] && { printf 'PULLED %s\\n' "$ref"; return 0; }
@@ -106,6 +112,15 @@ test('直连成功就不碰镜像站', { skip: !hasBash() && '需要 bash' }, ()
   const r = runBlock({ image, mirrors: ['docker.m.daocloud.io'], succeedFor: [image] });
   assert.equal(r.status, 0, r.out);
   assert.doesNotMatch(r.out, /Retrying through image mirror/);
+  assert.ok(r.envAfter.includes(`SNOWLUMA_IMAGE=${image}`));
+});
+
+test('本地已有镜像时跳过拉取（离线 docker load 场景）', { skip: !hasBash() && '需要 bash' }, () => {
+  const image = 'motricseven7/snowluma:v1.14.15';
+  const r = runBlock({ image, mirrors: ['docker.m.daocloud.io'], succeedFor: [], hasLocalImage: true });
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /Using locally loaded image/);
+  assert.doesNotMatch(r.out, /PULLED /, '本地已有镜像就不要再访问 registry');
   assert.ok(r.envAfter.includes(`SNOWLUMA_IMAGE=${image}`));
 });
 
