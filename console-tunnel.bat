@@ -32,7 +32,10 @@ rem ── 解析参数、读取/记住服务器地址 ────────�
 set "MODE=run"
 set "SRV="
 if /i "%~1"=="forget" goto forget
-if /i "%~1"=="test" (set "MODE=test") else if not "%~1"=="" set "SRV=%~1"
+if /i "%~1"=="test" (
+  set "MODE=test"
+  if not "%~2"=="" set "SRV=%~2"
+) else if not "%~1"=="" set "SRV=%~1"
 
 if "%SRV%"=="" if exist "%CFG%" set /p SRV=<"%CFG%"
 if "%SRV%"=="" (

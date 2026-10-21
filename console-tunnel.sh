@@ -4,7 +4,7 @@
 # 用法（在本文件所在目录）：
 #   bash console-tunnel.sh                 # 首次提示输入 user@host，之后记住
 #   bash console-tunnel.sh user@host       # 指定服务器并记住
-#   bash console-tunnel.sh test            # 只验证隧道/控制台，不开浏览器
+#   bash console-tunnel.sh test [user@host] # 只验证隧道/控制台，不开浏览器
 #   bash console-tunnel.sh forget          # 清除记住的服务器地址
 #
 # 依赖：本机 ssh（Windows 10+、macOS、Linux 一般自带）与可选 curl。
@@ -40,6 +40,7 @@ case "${1:-}" in
     ;;
   test)
     MODE=test
+    [[ -n "${2:-}" ]] && SRV="$2"
     ;;
   -h|--help)
     sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'

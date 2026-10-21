@@ -29,6 +29,11 @@ test('console-tunnel.bat：密钥失败时退回密码登录，不再硬卡 Batc
     '失败后退回不带 BatchMode 的 SSH，让密码提示能出来');
   assert.match(bat, /ssh %SSH_READ% %SRV% "!REMOTE_CMD!"/);
   assert.match(bat, /ssh %SSH_READ% %SRV% "%CRED_CMD%"/);
+  assert.match(bat, /if not "%~2"=="" set "SRV=%~2"/, 'test 后可以直接带服务器地址');
+});
+
+test('console-tunnel.sh：test 后可以直接带服务器地址，不再交互式询问', () => {
+  assert.match(source, /test\)\s*\n\s*MODE=test\s*\n\s*\[\[ -n "\$\{2:-\}" \]\] && SRV="\$2"/);
 });
 
 test('release 工作流：把两个连接脚本挂到 Release 资产', { skip }, () => {
