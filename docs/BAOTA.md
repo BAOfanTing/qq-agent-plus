@@ -175,8 +175,8 @@ cat /安装根目录/data/console-access.txt      # 查看 Token 那一行
 bash /安装根目录/app/manage.sh token         # 等价
 ```
 
-或在客户端设置 `QQ_AGENT_CONSOLE_TOKEN=<令牌>`。`.bat` 使用密钥登录（`BatchMode=yes`）；
-`.sh` 优先用密钥，没有密钥时会退回普通 SSH，密码登录可能提示两次。
+或在客户端设置 `QQ_AGENT_CONSOLE_TOKEN=<令牌>`。`.bat` / `.sh` 都优先用密钥；没有密钥时
+退回普通 SSH，密码登录可能提示两次。
 读取令牌的账号须能读取 `data/`（权限 `0600`，属主 `qqagent`），因此隧道账号使用 `qqagent`
 或 root 最为简便。
 

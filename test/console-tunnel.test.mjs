@@ -22,6 +22,21 @@ test('console-tunnel.sh：不依赖本地项目，能读令牌/凭据并建三�
   assert.match(source, /forget/);
 });
 
+test('console-tunnel.bat：密钥失败时退回密码登录，不再硬卡 BatchMode', { skip }, () => {
+  const bat = fs.readFileSync(path.join(repo, 'console-tunnel.bat'), 'utf8');
+  assert.match(bat, /if errorlevel 1 \(/);
+  assert.match(bat, /set "SSH_READ=-o"ConnectTimeout=10""/,
+    '失败后退回不带 BatchMode 的 SSH，让密码提示能出来');
+  assert.match(bat, /ssh %SSH_READ% %SRV% "!REMOTE_CMD!"/);
+  assert.match(bat, /ssh %SSH_READ% %SRV% "%CRED_CMD%"/);
+});
+
+test('release 工作流：把两个连接脚本挂到 Release 资产', { skip }, () => {
+  const release = fs.readFileSync(path.join(repo, '.github/workflows/release.yml'), 'utf8');
+  assert.match(release, /gh release upload/);
+  assert.match(release, /console-tunnel\.bat console-tunnel\.sh/);
+});
+
 test('console-tunnel.sh：语法正确，--help 可独立运行', { skip }, () => {
   const syntax = spawnSync('bash', ['-n', file], { encoding: 'utf8' });
   assert.equal(syntax.status, 0, syntax.stderr);

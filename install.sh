@@ -160,6 +160,9 @@ printf '   也可以只下载一个连接脚本（Windows / macOS / Linux 都有
 printf '     Windows:  scp <你的登录用户>@<服务器公网IP>:%s/app/console-tunnel.bat .  然后双击\n' "$ROOT_GUESS"
 printf '     macOS/Linux: scp <你的登录用户>@<服务器公网IP>:%s/app/console-tunnel.sh .  然后 bash console-tunnel.sh\n' "$ROOT_GUESS"
 printf '     （把 <你的登录用户>@<服务器公网IP> 换成你平时 SSH 登录用的地址）\n'
+printf '     也可以直接从 GitHub 下载（GitHub 可达时）：\n'
+printf '       https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/console-tunnel.bat\n'
+printf '       https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/console-tunnel.sh\n'
 printf '   （Windows 10+ 自带 ssh；没有就在“设置 → 应用 → 可选功能”里装 OpenSSH 客户端。）\n'
 printf '   在「设置 → 模型 API」里选服务、填 Key、保存，点「测试连通性」通过即可。\n\n'
 if [[ -n "$VNC_URL" ]]; then

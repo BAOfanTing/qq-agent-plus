@@ -80,6 +80,8 @@ test('零问答装配：--yes + 默认跳过模型配置，装完打印接下来
   assert.match(r.stdout, /46081:127\.0\.0\.1:46081/);
   assert.match(r.stdout, /console-tunnel\.bat/);
   assert.match(r.stdout, /console-tunnel\.sh/);
+  assert.match(r.stdout, /raw\.githubusercontent\.com\/sakurawwwxh\/qq-agent-plus\/main\/console-tunnel\.bat/,
+    '给一个不用 scp 的下载地址');
   assert.match(r.stdout, /manage\.sh logs/);
   assert.match(r.stdout, /观察/, 'observe 模式要提示去控制台切「启用」');
 });
