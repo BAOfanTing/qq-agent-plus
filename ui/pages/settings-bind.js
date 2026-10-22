@@ -974,6 +974,10 @@ function bindSettingsListsAndGroups(c) {
   });
   syncConversationMode(conversationModeInput?.value);
 
+  const ioProfile = $('#cfg-store-ioprofile'), ioCustom = $('#cfg-store-iocustom');
+  const syncIo = () => { if (ioCustom) ioCustom.style.display = ioProfile?.value === 'custom' ? '' : 'none'; };
+  ioProfile?.addEventListener('change', syncIo); syncIo();
+
   // ── 对话机制：全局默认 + 分群覆盖 ──
   const conversationUnified = $('#cfg-conversation-unified');
   if (conversationUnified) conversationUnified.addEventListener('change', () => {

@@ -834,8 +834,8 @@ async function saveConfig({ quiet = false } = {}) {
         return preset
           ? { sessionPersistMs: preset.persistMs, sqliteSynchronous: preset.synchronous }
           : {
-            sessionPersistMs: clampInt(c.store?.sessionPersistMs ?? 10000, 2000, 60000, 10000),
-            sqliteSynchronous: c.store?.sqliteSynchronous === 'NORMAL' ? 'NORMAL' : 'FULL'
+            sessionPersistMs: clampInt(val('#cfg-store-persistms', c.store?.sessionPersistMs ?? 10000), 2000, 60000, 10000),
+            sqliteSynchronous: val('#cfg-store-sqlitesync', c.store?.sqliteSynchronous || 'FULL') === 'NORMAL' ? 'NORMAL' : 'FULL'
           };
       })()
     };

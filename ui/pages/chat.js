@@ -227,21 +227,29 @@ return `
       <select id="cfg-store-ioprofile">
         ${(() => {
           const current = ioProfileOf(st);
-          const custom = current === 'custom' ? `（当前 ${esc(st.sessionPersistMs ?? 10000)} 毫秒 / ${esc(st.sqliteSynchronous || 'FULL')}）` : '';
           const option = (value, label) => `<option value="${value}" ${current === value ? 'selected' : ''}>${label}</option>`;
           return [
             option('balanced', '均衡（推荐）：每 10 秒落盘一次，消息库 FULL'),
             option('low', '省 IO：每 30 秒落盘一次，消息库 NORMAL'),
             option('minimal', '最省 IO：每 60 秒落盘一次，消息库 NORMAL'),
-            option('custom', `自定义${custom}`)
+            option('custom', '自定义：自己填落盘间隔和消息库同步级别')
           ].join('');
         })()}
       </select>
     </div>
+    <div id="cfg-store-iocustom" class="field-row"${ioProfileOf(st) === 'custom' ? '' : ' style="display:none"'}>
+      <div class="field"><label for="cfg-store-persistms">运行中会话落盘间隔（毫秒，2000~60000）</label>
+        <input type="number" id="cfg-store-persistms" min="2000" max="60000" step="1000" value="${esc(st.sessionPersistMs ?? 10000)}" /></div>
+      <div class="field"><label for="cfg-store-sqlitesync">消息库写入同步</label>
+        <select id="cfg-store-sqlitesync">
+          <option value="FULL" ${(st.sqliteSynchronous || 'FULL') === 'FULL' ? 'selected' : ''}>FULL：最稳，每条提交都等落盘</option>
+          <option value="NORMAL" ${st.sqliteSynchronous === 'NORMAL' ? 'selected' : ''}>NORMAL：省磁盘 IOPS，掉电可能丢最近几条</option>
+        </select></div>
+    </div>
     <div class="hint">
       大多数服务器用「均衡」就行。磁盘 IOPS 紧张（例如 2 核 2G 小云盘、控制台常开）时选「省 IO」或「最省 IO」，
       会减少运行中会话的落盘频率，并把消息库改成 NORMAL 同步；代价是进程异常退出时最多丢对应间隔内的运行记录，
-      消息库掉电可能丢最近几条提交。正常结束的会话始终立即完整落盘。
+      消息库掉电可能丢最近几条提交。正常结束的会话始终立即完整落盘。选「自定义」才会显示具体数值。
     </div>
 
     <h3>所有模式 · 表情包</h3>
