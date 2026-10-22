@@ -65,6 +65,7 @@ import { DEFAULT_CONFIG } from '../core/config.js';
 import { uiBuildStamp } from './ui-build.js';
 import { installPlugin, uninstallPlugin, fetchPluginIndexes, sha256Of, MAX_PLUGIN_ARCHIVE_BYTES, rollbackPlugin, createIndexRevokedCache, indexResultForDisplay } from '../plugins/install.js';
 import { DEFAULT_MIRROR_PREFIXES, fetchBinaryWithMirrors } from '../plugins/mirrors.js';
+import { createIndexTextFetcher } from '../plugins/index-fetch.js';
 // 平台能力门控的元数据（键→标签/工具/默认取向/配额默认）：控制台不手抄第二份，防漂移
 import {
   PLATFORM_DEFAULT_OFF, PLATFORM_GATE_LABELS, PLATFORM_QUOTA_DEFAULTS, PLATFORM_TOOL_GATES,
@@ -2688,13 +2689,18 @@ export function createApp({
     // 因为索引是信任根：镜像能替换"该装什么"（塞一条它自己的插件 + 它自己的 sha256），
     // 而 sha256 只能证明"包与索引里写的一致"——索引被换掉时它救不了你。
     // 包则不同：包被 sha256 钉住，走镜像最多是"取不到"，不可能"取到假的还装上"（见 mirrors.js）。
-    // 索引拉不动时的兜底是三件事：10 分钟缓存、页面明确报错、以及你可以把 indexUrls 指向自己的 fork/镜像。
+    // 索引拉不动时的兜底：10 分钟缓存、页面明确报错、把 indexUrls 指向自己的 fork，
+    // 以及 raw.githubusercontent.com 超时时自动换 GitHub Contents API（见 index-fetch.js；
+    // 仍然只信任 GitHub，不经过第三方 CDN）。
     // 索引是结构化文件，会随条目增多长过网页那份 50KB 上限：给它单独的体积上限
     //（SSRF / 超时 / 重定向守卫仍是 safeFetch 那一套）
     const fresh = await fetchPluginIndexes({
       sources,
-      // 总截止 25 秒（不是空闲超时）：索引源可以慢，但不能靠"每 19 秒吐一个字节"把请求吊住
-      fetchText: (url) => safeFetch(url, { maxBytes: 4 * 1024 * 1024, signal: AbortSignal.timeout(25_000) }),
+      // 原始地址 10 秒（被墙时别让页面干等 25 秒），API 兜底 15 秒；两者都是总截止
+      fetchText: createIndexTextFetcher({
+        fetchImpl: (url, options) => safeFetch(url, options),
+        log: moduleLog('plugins')
+      }),
       log: moduleLog('plugins'), hostVersion: PKG.version
     });
     // 拉不到就用上次成功读到的（见 indexResultForDisplay）：索引挂在第三方托管上，偶发超时是常态，

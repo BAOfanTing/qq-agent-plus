@@ -453,6 +453,8 @@ node scripts/plugin-sign.mjs --key ~/.qq-agent-plugin-key.key --pack plugins/pac
   默认用内置的几个；**空数组＝只用原始地址**（不绕第三方）；也可以写自己的代理。
   **索引不走镜像** —— 索引是信任根，镜像能替换"该装什么"，而 sha256 只能证明"包与索引里写的一致"；
   包则被 sha256 钉住，走镜像最多是"取不到"，不可能"取到假的还装上"。
+  唯一例外是 GitHub 自己的 Contents API：`raw.githubusercontent.com` 超时时会换
+  `api.github.com/repos/.../contents/...`（raw 媒体类型）取同一份文件，信任根没有变化。
 
 ## 分期
 

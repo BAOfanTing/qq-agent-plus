@@ -27,6 +27,19 @@ export const DEFAULT_MIRROR_PREFIXES = Object.freeze([
   'https://gh.llkk.cc/'
 ]);
 
+/**
+ * GitHub raw → Contents API 的等价地址（信任根仍是 GitHub，适合 raw 域名被墙的机器）。
+ * 注意：分支名带斜杠时（feature/x）无法从 raw URL 里区分 ref 与路径，这里按第一段解析，
+ * 只作为兜底（官方索引用 main，不受影响；解析错了最多是 API 404，仍会如实报错）。
+ */
+export function githubContentsApiUrl(rawUrl) {
+  const match = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/.exec(String(rawUrl || ''));
+  if (!match) return '';
+  const [, owner, repo, ref, rest] = match;
+  if (ref.includes('%2F') || rest.includes('..') || /[?#]/.test(rest)) return '';
+  return `https://api.github.com/repos/${owner}/${repo}/contents/${rest}?ref=${encodeURIComponent(ref)}`;
+}
+
 /** GitHub raw 的 jsDelivr 等价地址（只对 raw.githubusercontent.com 有确定的换法）。 */
 export function jsdelivrForRaw(url) {
   const match = /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/.exec(String(url || ''));

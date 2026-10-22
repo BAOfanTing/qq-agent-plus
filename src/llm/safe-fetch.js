@@ -200,9 +200,18 @@ export function readBounded(res, maxBytes, asText) {
 }
 
 // 使用已校验的 IP 发起请求（保留 Host/SNI），从根上消除 DNS rebinding。
-function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal } = {}) {  return new Promise((resolve, reject) => {
+function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, headers } = {}) {  return new Promise((resolve, reject) => {
     const mod = url.protocol === 'https:' ? https : http;
     const port = url.port || (url.protocol === 'https:' ? 443 : 80);
+    // 调用方只传静态 Accept 这类头（GitHub API 的 raw 内容）；不允许带换行，避免头注入
+    const extraHeaders = {};
+    for (const [key, value] of Object.entries(headers && typeof headers === 'object' ? headers : {})) {
+      const name = String(key).toLowerCase();
+      // host 不能由调用方覆盖（SSRF 校验按目标 URL 做 DNS/IP 钉扎）；其余是请求体头，GET 不需要
+      if (['host', 'content-length', 'transfer-encoding'].includes(name)) continue;
+      if (/[\r\n]/.test(String(key)) || /[\r\n]/.test(String(value))) continue;
+      extraHeaders[name] = String(value);
+    }
     const req = mod.request({
       hostname: ip,
       port,
@@ -212,7 +221,8 @@ function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal } = {
         host: url.host,
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) qq-agent/1.0',
         accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,image/avif,image/webp,image/*;q=0.8',
-        'accept-language': 'zh-CN,zh;q=0.9'
+        'accept-language': 'zh-CN,zh;q=0.9',
+        ...extraHeaders
       },
       servername: url.protocol === 'https:' ? url.hostname : undefined,
       rejectUnauthorized: url.protocol === 'https:',
@@ -243,13 +253,13 @@ const MAX_REDIRECTS = 5;
  * `maxBytes` 只给"结构化文件"用（插件索引随条目增多会长过网页那份上限）；
  * 网页抓取保持默认值，避免把整页塞进上下文。
  */
-export async function safeFetch(urlString, { maxBytes = 50000, signal } = {}) {
+export async function safeFetch(urlString, { maxBytes = 50000, signal, headers } = {}) {
   const cap = Math.max(1, Math.floor(Number(maxBytes) || 50000));
   let { url, ip } = await validateFetchUrl(urlString);
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     // signal 用于"整次抓取的总截止时间"：默认的 timeout 是**空闲超时**，对端每隔十几秒吐一个
     // 字节就能把连接一直吊着（慢速攻击面，2026-10-17 审查 P3）
-    const result = await requestOnce(url, ip, { asBinary: false, maxBytes: cap, signal });
+    const result = await requestOnce(url, ip, { asBinary: false, maxBytes: cap, signal, headers });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();

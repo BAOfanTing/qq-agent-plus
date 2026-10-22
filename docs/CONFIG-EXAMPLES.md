@@ -697,7 +697,9 @@
   —— 先按索引里的 sha256 校验再换入，最多是"取不到"。
 - `indexUrl`：单条索引地址（默认官方索引，住在独立仓库 `qq-agent-plugins`）。它等价于 `indexUrls` 里排在最后的一项；
   两个都留空 = 完全不看索引（控制台那一栏会说清"没有配置来源"，手动填地址仍然可用）。
-  拉取走 safe-fetch：内网地址被拦、有体积与超时上限。
+  拉取走 safe-fetch：内网地址被拦、有体积与超时上限。官方索引先从 `raw.githubusercontent.com` 取，
+  该域名超时（国内常见）时自动改用 GitHub Contents API 的 raw 媒体类型——仍然是 GitHub 自己的
+  地址，不经过第三方 CDN。
 - `networkIsolation`：Linux 上把插件进程放进**没有网络接口**的命名空间（默认开，有就用）；
   做不到的平台（Windows/macOS）控制台会明说"网络未隔离"。`requireNetworkIsolation: true` 是严格档：
   本机做不到就**拒绝加载插件**（默认关 —— 打开等于在那些平台禁用整个插件生态）。
