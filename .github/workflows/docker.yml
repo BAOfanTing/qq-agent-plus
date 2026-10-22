@@ -33,6 +33,10 @@ on:
         description: '允许覆盖已存在的版本 tag（慎用）'
         type: boolean
         default: false
+      cn_only:
+        description: '只把 GHCR 上已存在的版本复制到国内镜像，不重新构建（补发国内 tag 用）'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -106,7 +110,7 @@ jobs:
 
   build:
     needs: [verify, smoke]
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && inputs.cn_only != true
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -173,7 +177,8 @@ jobs:
   # 推荐阿里云 ACR 个人版（免费、可公开拉取）或腾讯云 TCR。
   publish-cn:
     needs: build
-    if: vars.CN_REGISTRY != '' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.push_cn == true && inputs.version != ''))
+    # cn_only 时 build 被跳过，这里仍要执行（复制 GHCR 上已有的清单，不重建）
+    if: always() && vars.CN_REGISTRY != '' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.push_cn == true && inputs.version != '')) && (needs.build.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.cn_only == true))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -207,15 +212,19 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION_INPUT: ${{ inputs.version }}
           OVERWRITE_INPUT: ${{ inputs.overwrite }}
+          CN_ONLY_INPUT: ${{ inputs.cn_only }}
         run: |
           set -eu
           SRC="ghcr.io/${{ github.repository }}"
           DST="${CN_REGISTRY}/${CN_NAMESPACE}/${CN_IMAGE_NAME:-qq-agent-plus}"
           VERSION="${VERSION_INPUT:-${GITHUB_REF_NAME#v}}"
           MAJOR_MINOR="$(printf '%s' "$VERSION" | awk -F. '{print $1"."$2}')"
-          # 手动运行只推 VERSION；正式稳定 tag 才带 0.9 与 latest（预发布不带）
+          # 手动构建只推 VERSION；正式稳定 tag 才带 0.9 与 latest（预发布不带）。
+          # cn_only 补发是把已发布的同一个版本补齐国内 tag，同样要带 0.9 与 latest。
           TAGS="${VERSION}"
-          if [ "${{ github.ref_type }}" = "tag" ] && [ "${VERSION#*-}" = "$VERSION" ]; then
+          STABLE=false
+          [ "${VERSION#*-}" = "$VERSION" ] && STABLE=true
+          if { [ "${{ github.ref_type }}" = "tag" ] || [ "${CN_ONLY_INPUT:-false}" = "true" ]; } && [ "$STABLE" = true ]; then
             TAGS="${TAGS} ${MAJOR_MINOR} latest"
           fi
 
@@ -225,8 +234,11 @@ jobs:
           for tag in $TAGS; do
             SRC_DIGEST="$(skopeo inspect --format '{{.Digest}}' "docker://${SRC}:${tag}" 2>/dev/null || true)"
             DST_DIGEST="$(skopeo inspect --format '{{.Digest}}' "docker://${DST}:${tag}" 2>/dev/null || true)"
+            # 精确版本 tag 不可覆盖；0.9 / latest 是跟随最新稳定版的移动 tag，每次发版本来就要改
+            TAG_IS_MOVING=false
+            if [ "$tag" = "$MAJOR_MINOR" ] || [ "$tag" = "latest" ]; then TAG_IS_MOVING=true; fi
             if [ -n "$DST_DIGEST" ] && [ "$DST_DIGEST" != "$SRC_DIGEST" ] \
-              && [ "${OVERWRITE_INPUT:-false}" != "true" ]; then
+              && [ "$TAG_IS_MOVING" != true ] && [ "${OVERWRITE_INPUT:-false}" != "true" ]; then
               echo "::error::${DST}:${tag} 已存在且 digest 不同（${DST_DIGEST} != ${SRC_DIGEST}）；已发布 tag 不可覆盖"
               exit 1
             fi
