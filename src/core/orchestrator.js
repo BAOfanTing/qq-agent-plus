@@ -250,6 +250,53 @@ export function proactiveProbability(raw) {
   return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.25;
 }
 
+/**
+ * 冷场开话题的作用范围。默认群聊开、私聊关（与升级前行为一致）；
+ * tick 的早退与候选选择共用这一处，避免两处各写一份默认值后漂移。
+ */
+export function proactiveScopes(cfg = {}) {
+  return {
+    groups: cfg.proactive?.groupEnabled !== false,
+    private: cfg.proactive?.privateEnabled === true
+  };
+}
+
+/**
+ * 挑出这次"冷场主动开话题"可以去的会话（纯函数，便于单测）。
+ *
+ * 作用范围由控制台两个复选框决定：
+ *   · 群聊（proactive.groupEnabled，默认开）：沿用 allow.groups / allowAllWhenEmpty；
+ *   · 私聊（proactive.privateEnabled，默认关）：沿用 allow.private（deny 优先、名单空时看
+ *     allowAllWhenEmpty），与平时回复私聊的白名单规则一致，不另建名单。
+ */
+export function proactiveCandidates({
+  chatKeys = [], cfg = {}, metaOf = () => ({}), now = Date.now(),
+  canWake = () => true, isRunning = () => false
+} = {}) {
+  const idleMs = Math.max(300000, Number(cfg.proactive?.idleThresholdMs) || 1800000);
+  const allowGroups = idList(cfg.allow?.groups);
+  const scopes = proactiveScopes(cfg);
+  const out = [];
+  for (const chatKey of chatKeys) {
+    const [kind, id] = String(chatKey).split(':');
+    if (kind === 'group') {
+      if (!scopes.groups) continue;
+      if (allowGroups.length > 0 ? !allowGroups.includes(id) : !cfg.allowAllWhenEmpty) continue;
+    } else if (kind === 'private') {
+      if (!scopes.private) continue;
+    } else {
+      continue;
+    }
+    if (!canWake(chatKey)) continue;
+    if (isRunning(chatKey)) continue;
+    const meta = metaOf(chatKey) || {};
+    if (meta.unread > 0) continue;
+    if (now - (Number(meta.lastTs) || 0) < idleMs) continue;
+    out.push(chatKey);
+  }
+  return out;
+}
+
 export function triggerKindForTier(result = {}, {
   manual = false,
   proactive = false,
@@ -2071,11 +2118,14 @@ export class Orchestrator {
     this.sessions.update(session.id);
     this.emit('session-update', session.id);
 
+    const privateChat = String(chatKey).startsWith('private:');
     const wakeLead = wakeNote
       ? (String(wakeNote).startsWith('【系统提醒】')
         ? safeSlice(String(wakeNote), 300)
         : `这是你自己之前安排的：${safeSlice(String(wakeNote), 300)}。现在时间到了，看看当前情况决定要不要说话。`)
-      : '（主动机会）群里已经安静了一会儿。';
+      : (privateChat
+        ? '（主动机会）私聊里已经安静了一会儿，你想起了对方。'
+        : '（主动机会）群里已经安静了一会儿。');
     const selfWakeOn = cfg.proactive?.selfWakeEnabled !== false;
     // 600 而不是 200：定时提醒合并派发时 note 可能有多条（单条正文上限 200），
     // 这里截到 200 会把第二条整体截掉，而它们已经被 markFired（2026-09-29 审查 P2）
@@ -2096,7 +2146,9 @@ export class Orchestrator {
             : '。（自安排唤醒已关闭，不用安排下次唤醒，系统会按配置的节奏再唤醒你。）'));
     const wakeTail = String(wakeNote).startsWith('【系统提醒】')
       ? '就按上面那条提醒处理：想补就补一句很短的，补完就放下；不想补就安静结束。'
-      : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。';
+      : (privateChat
+        ? '你可以主动找个由头说一句（分享点见闻、接着上次的话题、或单纯问候一下），也可以判断现在不该打扰就安静结束。'
+        : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。');
     const currentUserMessage = {
       role: 'user',
       content: proactive && !manual
@@ -2750,6 +2802,12 @@ export class Orchestrator {
       this.proactiveTimer.unref?.();
       if (this.aborted || this.paused || cfg.proactive?.enabled !== true) return;
       if (!window.active) return;
+      // 两个范围都没勾：主开关开着也不会有候选，别在每个间隔空扫一遍
+      const scopes = proactiveScopes(cfg);
+      if (!scopes.groups && !scopes.private) {
+        log.info('[proactive] 跳过：群聊与私聊都没有勾选');
+        return;
+      }
       // 距上次判定不足一个间隔（例如刚重启过）就跳过：重启不额外换来一次开话题的机会
       const minGapMs = Math.max(60000, Number(cfg.proactive?.checkIntervalMinMs) || 1800000);
       if (nowTick - readProactiveLastAttempt() < minGapMs * 0.8) {
@@ -2770,11 +2828,11 @@ export class Orchestrator {
         writeProactiveLastAttempt(nowTick);
         return;
       }
-      // 挑一个"安静且允许"的群
+      // 按勾选范围挑一个"安静且允许"的会话（群聊 / 私聊）
       const candidates = this.#proactiveCandidates(cfg);
       if (!candidates.length) {
-        // 群里正热闹、或都在忙：这不算消耗，45 分钟后再看，别白瞎一个间隔
-        log.info('[proactive] 跳过：没有安静下来的群，45 分钟后再看');
+        // 选中的会话都正热闹、或都在忙：这不算消耗，45 分钟后再看，别白瞎一个间隔
+        log.info('[proactive] 跳过：没有安静下来的会话，45 分钟后再看');
         clearTimeout(this.proactiveTimer);
         this.proactiveTimer = setTimeout(() => { tick().catch(() => {}); }, 45 * 60 * 1000);
         this.proactiveTimer.unref?.();
@@ -2791,21 +2849,13 @@ export class Orchestrator {
   }
 
   #proactiveCandidates(cfg) {
-    const idleMs = Math.max(300000, Number(cfg.proactive?.idleThresholdMs) || 1800000);
-    const allowGroups = idList(cfg.allow?.groups);
-    const out = [];
-    for (const chatKey of this.store.listChats()) {
-      const [kind, id] = chatKey.split(':');
-      if (kind !== 'group') continue;
-      if (!canRun(chatKey)) continue;
-      if (allowGroups.length > 0 ? !allowGroups.includes(id) : !cfg.allowAllWhenEmpty) continue;
-      const meta = this.store.getChatMeta(chatKey);
-      if (meta.unread > 0) continue;
-      if (Date.now() - meta.lastTs < idleMs) continue;
-      if (this.runningChats.has(chatKey)) continue;
-      out.push(chatKey);
-    }
-    return out;
+    return proactiveCandidates({
+      chatKeys: this.store.listChats(),
+      cfg,
+      metaOf: (chatKey) => this.store.getChatMeta(chatKey),
+      canWake: (chatKey) => canRun(chatKey),
+      isRunning: (chatKey) => this.runningChats.has(chatKey)
+    });
   }
 
   // ── 群友印象自动整理 ──

@@ -10,7 +10,9 @@ const {
   Orchestrator,
   estimateNextPromptTokens,
   followUpPlan,
+  proactiveCandidates,
   proactiveProbability,
+  proactiveScopes,
   randomWakeDelay,
   triggerKindForTier
 } = await import('../src/core/orchestrator.js');
@@ -19,6 +21,7 @@ const { SessionRegistry } = await import('../src/core/sessions.js');
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
 const { ReminderStore } = await import('../src/core/reminders.js');
 const { timeControlState } = await import('../src/core/time-control.js');
+const { canRun } = await import('../src/core/access.js');
 const { todayKey } = await import('../src/core/util.js');
 const { currentTraceId, lastTraceId } = await import('../src/core/logger.js');
 
@@ -2049,6 +2052,24 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
       'proactive 不该往群里发"额度用完"（那是新消息场景的回话）');
   });
 
+  it('主动机会落在私聊时用私聊措辞，不说"群里"', async (t) => {
+    const { runner, cfg } = fixture(t);
+    cfg.allow.private = ['42'];
+    cfg.proactive.privateEnabled = true;
+    setRuntimeConfig(cfg);
+    const bodies = [];
+    globalThis.fetch = async (_url, options) => {
+      bodies.push(JSON.parse(options.body));
+      return Response.json({ choices: [{ message: { content: 'done' } }], usage: { total_tokens: 10 } });
+    };
+    await runner.wake('private:42', { proactive: true });
+    assert.equal(bodies.length, 1);
+    const wake = bodies[0].messages.at(-1).content;
+    assert.match(wake, /私聊里已经安静了一会儿/);
+    assert.match(wake, /不该打扰就安静结束/);
+    assert.doesNotMatch(wake, /群里已经安静了一会儿/, '私聊里不该套群聊的开场白');
+  });
+
   it('"今天的额度用完了"同一天同一会话只发一次（否则兜底回收每 5~25s 重排一次 → 刷屏）', async (t) => {
     const sentTo = [];
     const { runner, store, cfg, append } = fixture(t, {
@@ -2177,6 +2198,125 @@ it('换卡后 24 小时内，历史与交接口径会说明"旧口癖不作数"'
     await runner.wake('group:1');
     assert.ok(!bodies[2].tools.some((tool) => tool.function.name === 'demo__echo'),
       '注册表不给的时候，插件工具一个都不该出现');
+  });
+});
+
+describe('proactiveCandidates（冷场开话题挑会话）', () => {
+  const now = 10_000_000;
+  const quiet = now - 60 * 60 * 1000;
+  const cfg = (over = {}) => ({
+    allow: { groups: ['1'], private: ['900001', '777777'] },
+    allowAllWhenEmpty: false,
+    proactive: {
+      idleThresholdMs: 1800000,
+      groupEnabled: true,
+      privateEnabled: false,
+      ...over
+    }
+  });
+  const metas = (over = {}) => ({
+    'group:1': { lastTs: quiet, unread: 0, ...(over['group:1'] || {}) },
+    'private:900001': { lastTs: quiet, unread: 0, ...(over['private:900001'] || {}) },
+    'private:777777': { lastTs: quiet, unread: 0, ...(over['private:777777'] || {}) }
+  });
+
+  it('默认只挑群聊，不会主动私聊任何人', () => {
+    const out = proactiveCandidates({
+      chatKeys: ['group:1', 'private:900001'],
+      cfg: cfg(),
+      metaOf: (key) => metas()[key],
+      now
+    });
+    assert.deepEqual(out, ['group:1']);
+  });
+
+  it('配置里没有两个范围键时：群聊开、私聊关（升级前行为）', () => {
+    const out = proactiveCandidates({
+      chatKeys: ['group:1', 'private:900001'],
+      cfg: { allow: { groups: ['1'] }, allowAllWhenEmpty: false, proactive: {} },
+      metaOf: () => ({ lastTs: quiet, unread: 0 }),
+      now
+    });
+    assert.deepEqual(out, ['group:1']);
+    assert.deepEqual(proactiveScopes({}), { groups: true, private: false });
+    assert.equal(DEFAULT_CONFIG.proactive.groupEnabled, true);
+    assert.equal(DEFAULT_CONFIG.proactive.privateEnabled, false);
+  });
+
+  it('私聊候选受 allow.private / deny.private 约束（与 canRun 同口径）', () => {
+    const cfg = structuredClone(DEFAULT_CONFIG);
+    cfg.runtime.mode = 'active';
+    cfg.runtime.paused = false;
+    cfg.allow.groups = [];
+    cfg.allow.private = ['900001'];
+    cfg.deny.private = ['777777'];
+    cfg.allowAllWhenEmpty = false;
+    cfg.proactive.privateEnabled = true;
+    setRuntimeConfig(cfg);
+    try {
+      const out = proactiveCandidates({
+        chatKeys: ['private:900001', 'private:777777', 'private:555555'],
+        cfg,
+        metaOf: () => ({ lastTs: quiet, unread: 0 }),
+        canWake: canRun,
+        now
+      });
+      assert.deepEqual(out, ['private:900001'],
+        '白名单外的 555555 与 deny 里的 777777 都必须被 canRun 挡掉');
+    } finally {
+      setRuntimeConfig(structuredClone(DEFAULT_CONFIG));
+    }
+  });
+
+  it('生产路径把 canWake 接到 canRun，候选选择不绕过白名单', () => {
+    const src = fs.readFileSync(new URL('../src/core/orchestrator.js', import.meta.url), 'utf8');
+    assert.match(src, /canWake: \(chatKey\) => canRun\(chatKey\)/);
+  });
+
+  it('勾选私聊后按私聊白名单挑人，不限于管理员', () => {
+    const out = proactiveCandidates({
+      chatKeys: ['group:1', 'private:900001', 'private:777777'],
+      cfg: cfg({ privateEnabled: true }),
+      metaOf: (key) => metas()[key],
+      now
+    });
+    assert.deepEqual(out, ['group:1', 'private:900001', 'private:777777']);
+  });
+
+  it('只勾私聊时不再挑群聊', () => {
+    const out = proactiveCandidates({
+      chatKeys: ['group:1', 'private:900001'],
+      cfg: cfg({ groupEnabled: false, privateEnabled: true }),
+      metaOf: (key) => metas()[key],
+      now
+    });
+    assert.deepEqual(out, ['private:900001']);
+  });
+
+  it('两个范围都不勾时没有候选', () => {
+    const out = proactiveCandidates({
+      chatKeys: ['group:1', 'private:900001'],
+      cfg: cfg({ groupEnabled: false, privateEnabled: false }),
+      metaOf: (key) => metas()[key],
+      now
+    });
+    assert.deepEqual(out, []);
+  });
+
+  it('私聊仍有未读、刚说过话、正在运行或不在允许名单时不挑', () => {
+    const base = {
+      chatKeys: ['private:900001', 'private:777777'],
+      cfg: cfg({ privateEnabled: true }),
+      now
+    };
+    assert.deepEqual(proactiveCandidates({ ...base, metaOf: () => ({ lastTs: quiet, unread: 1 }) }), []);
+    assert.deepEqual(proactiveCandidates({ ...base, metaOf: () => ({ lastTs: now - 60000, unread: 0 }) }), []);
+    assert.deepEqual(proactiveCandidates({ ...base, metaOf: () => ({ lastTs: quiet, unread: 0 }), isRunning: () => true }), []);
+    assert.deepEqual(proactiveCandidates({
+      ...base,
+      metaOf: () => ({ lastTs: quiet, unread: 0 }),
+      canWake: (key) => key === 'private:900001'
+    }), ['private:900001'], 'canRun 会挡住不在私聊白名单里的人，候选选择不绕过它');
   });
 });
 

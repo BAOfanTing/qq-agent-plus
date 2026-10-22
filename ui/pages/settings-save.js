@@ -757,7 +757,11 @@ async function saveConfig({ quiet = false } = {}) {
       idleThresholdMs: clampInt(val('#cfg-pro-idle', c.proactive?.idleThresholdMs ?? 1800000), 300000, 86400000, 1800000),
       // 默认 true（与升级前行为一致）：没这个控件时才退回已保存配置
       followUpEnabled: chk('#cfg-pro-followup', c.proactive?.followUpEnabled !== false),
-      selfWakeEnabled: chk('#cfg-pro-selfwake', c.proactive?.selfWakeEnabled !== false)
+      selfWakeEnabled: chk('#cfg-pro-selfwake', c.proactive?.selfWakeEnabled !== false),
+      // 范围：群聊默认 true（升级前行为），私聊默认 false（主动私聊需显式打开）；
+      // 控件缺失时都按已保存值回退。
+      groupEnabled: chk('#cfg-pro-group', c.proactive?.groupEnabled !== false),
+      privateEnabled: chk('#cfg-pro-private', c.proactive?.privateEnabled === true)
     };
     // 收藏总闸（2026-10-02 用户反馈"乱收藏"）：界面是**一个开关** = collectEnabled 与
     // autoCollect 一起开/一起关（自动收与主动收都归它管，两个名字太像、分开摆会造成误解）。

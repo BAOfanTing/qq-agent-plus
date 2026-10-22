@@ -93,6 +93,8 @@
     "checkIntervalMaxMs": 12600000,
     "idleThresholdMs": 1800000,
     "probability": 0.55,
+    "groupEnabled": true,
+    "privateEnabled": false,
     "followUpEnabled": true,
     "selfWakeEnabled": true,
     "activeHours": {
@@ -105,12 +107,17 @@
 ```
 
 - `enabled`：冷场时按概率主动开话题（控制台「设置 → 聊天设置 → 主动开话题」第一条），只管这一条链路。
+- `groupEnabled`：冷场开话题是否挑群聊，默认 `true`；候选沿用 `allow.groups` 与 `allowAllWhenEmpty`。
+- `privateEnabled`：是否也挑私聊，默认 `false`。打开后（且 `enabled: true`）按 `allow.private`
+  的私聊白名单挑人，`deny.private` 仍然优先；规则与平时回复私聊一致，不另建名单。
+  被选中的私聊同样要满足：没有未读、安静超过 `idleThresholdMs`、当前允许运行。
+  控制台「群聊 / 私聊」两个复选框分别对应这两项；两个都不勾时不会主动开话题。
 - `followUpEnabled`：说完话没人接话时补一句（约 10 分钟后给一次机会）。与控制台同名的复选框对应。
 - `selfWakeEnabled`：允许模型用 `schedule_wake` 给自己安排稍后的主动发言；关掉后该工具会从工具列表里摘掉。
-- 这两项**独立于 `enabled`**，默认 `true`（与引入开关之前的行为一致）。想让它完全不主动开口，三个都要关；
-  只想关掉"补话"或"自安排唤醒"的，各关各的。
+- 这两项**独立于 `enabled`**，默认 `true`（与引入开关之前的行为一致）。想让它完全不主动开口，
+  所有相关勾选都要关；只想关掉"补话"或"自安排唤醒"的，各关各的。
 - `activeHours.windows`：生效时段，窗口外不开口，也不消耗间隔；`24:00` 表示到当天结束（补话与自安排唤醒同样受这个窗口约束）。
-- `idleThresholdMs`：群里安静这么久才考虑开口。
+- `idleThresholdMs`：会话安静这么久才考虑开口（群聊与私聊同一口径）。
 - `probability`：每次判定开口的概率。
 - 冷场判定（`idleThresholdMs`）的时间会落盘：重启后不足一个间隔会跳过（避免"重启一次多一次判定"）。
   补话的 20 分钟节流**只在内存里**，重启后从零算，可能比预期多补一次（2026-09-26 审查发现文档与实现不一致）。

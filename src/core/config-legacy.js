@@ -336,11 +336,16 @@ export const DEFAULT_CONFIG = {
     enabled: false,
     checkIntervalMinMs: 1800000,
     checkIntervalMaxMs: 5400000,
-    idleThresholdMs: 1800000,   // 群里静默多久才算"冷场"
+    idleThresholdMs: 1800000,   // 会话静默多久才算"冷场"
     probability: 0.25,
+    // 冷场开话题的作用范围（控制台「主动开话题」的两个复选框）：
+    // groupEnabled 沿用 allow.groups；privateEnabled 沿用 allow.private（deny 优先）。
+    // 群聊默认开（保持升级前行为）；私聊默认关 —— 主动私聊是直接打扰，需显式打开。
+    groupEnabled: true,
+    privateEnabled: false,
     // 下面两条是独立开关（控制台「主动开话题」分区各一个复选框），**不跟随上面的 enabled**：
     // 补话与模型自安排唤醒在引入开关之前一直是常开，默认 true 保持升级前后行为一致；
-    // 只想关掉它们的人各关各的，不想主动开口的三个一起关。
+    // 只想关掉它们的人各关各的，不想主动开口的几个一起关。
     followUpEnabled: true,      // 发言后没人接话，过十来分钟补一句
     selfWakeEnabled: true       // 模型用 schedule_wake 给自己安排稍后的主动发言
   },
