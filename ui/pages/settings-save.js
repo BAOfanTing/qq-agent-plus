@@ -827,7 +827,10 @@ async function saveConfig({ quiet = false } = {}) {
         __replace__: (() => { try { return JSON.parse($('#tier-group-json')?.value || '{}'); } catch { return {}; } })()
       },
       maxMessagesPerChat: clampInt(val('#cfg-store-maxmessages', c.store?.maxMessagesPerChat ?? 0), 0, 1000000, 0),
-      keepSessionFiles: clampInt(val('#cfg-store-keepsessions', c.store?.keepSessionFiles ?? 2000), 0, 100000, 2000)
+      keepSessionFiles: clampInt(val('#cfg-store-keepsessions', c.store?.keepSessionFiles ?? 2000), 0, 100000, 2000),
+      // 与后端 clampPersistMs 同口径（2~60 秒）：第 1 项省 IO，第 2 项是持久化强度
+      sessionPersistMs: clampInt(val('#cfg-store-persistms', c.store?.sessionPersistMs ?? 10000), 2000, 60000, 10000),
+      sqliteSynchronous: val('#cfg-store-sqlitesync', 'FULL') === 'NORMAL' ? 'NORMAL' : 'FULL'
     };
     // 注：老字段 pastStateLimit 已无读取方；pastStateMaxChars 仍在用（prompt.js 读它夹"过去
     // 状态"上限）—— 别误删。这里不再做 delete：patch 只是发给服务端的合并片段，

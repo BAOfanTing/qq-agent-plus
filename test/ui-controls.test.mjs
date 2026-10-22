@@ -18,7 +18,7 @@ const platform = read('ui/pages/platform.js');
 test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控件与保存接线', () => {
   for (const id of ['cfg-reply-guard', 'cfg-poke-reply', 'cfg-pacing-enabled',
     'cfg-pacing-default', 'cfg-pacing-min', 'cfg-pacing-max', 'cfg-pacing-instant',
-    'cfg-store-maxmessages', 'cfg-store-keepsessions']) {
+    'cfg-store-maxmessages', 'cfg-store-keepsessions', 'cfg-store-persistms', 'cfg-store-sqlitesync']) {
     assert.ok(chat.includes(`id="${id}"`), `缺少控件 ${id}`);
   }
   for (const key of ['replyGuardEnabled', 'pokeReplyEnabled']) {
@@ -27,6 +27,8 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   assert.match(save, /patch\.pacing = \{/);
   assert.match(save, /maxMessagesPerChat: clampInt/);
   assert.match(save, /keepSessionFiles: clampInt/);
+  assert.match(save, /sessionPersistMs: clampInt/);
+  assert.match(save, /sqliteSynchronous: val\(/);
 });
 
 test('记忆 / 预算 / 图片生成 / 群游戏：新开关都接到保存端', () => {

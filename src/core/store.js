@@ -64,8 +64,14 @@ function normalizeMid(value) {
   return String(value ?? '').trim().replace(/^(?:#+|collected_)+/, '').trim();
 }
 
+// WAL 下 synchronous=NORMAL 仍然保证崩溃一致性，只是掉电可能丢最近几条提交；
+// 默认 FULL 保持原口径，磁盘 IOPS 紧张时由 store.sqliteSynchronous 切到 NORMAL（Issue #45）。
+function normalizeSynchronous(value) {
+  return String(value || '').toUpperCase() === 'NORMAL' ? 'NORMAL' : 'FULL';
+}
+
 export class ChatStore {
-  constructor(maxPerChat = 0, { dataDir = DATA_DIR, filename } = {}) {
+  constructor(maxPerChat = 0, { dataDir = DATA_DIR, filename, synchronous = 'FULL' } = {}) {
     this.maxPerChat = Math.max(0, Number(maxPerChat) || 0);
     this.transactionDepth = 0;
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -80,7 +86,7 @@ export class ChatStore {
     // 对本库走一致性快照）；busy_timeout/foreign_keys 由 core/sqlite.js 统一设置
     this.db.exec(`
       PRAGMA journal_mode=WAL;
-      PRAGMA synchronous=FULL;
+      PRAGMA synchronous=${normalizeSynchronous(synchronous)};
       CREATE TABLE IF NOT EXISTS chats (chat_key TEXT PRIMARY KEY, next_id INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE IF NOT EXISTS messages (
         chat_key TEXT NOT NULL, id INTEGER NOT NULL, mid TEXT, ts INTEGER NOT NULL,
@@ -291,6 +297,11 @@ export class ChatStore {
   }
 
   setMaxPerChat(cap) { this.maxPerChat = Math.max(0, Number(cap) || 0); }
+
+  /** 控制台保存后即时生效；正在进行的写入不受影响（PRAGMA 对后续事务生效）。 */
+  setSynchronous(mode) {
+    this.db.exec(`PRAGMA synchronous=${normalizeSynchronous(mode)}`);
+  }
   listChats() { return this.db.prepare('SELECT chat_key FROM chats ORDER BY chat_key').all().map((r) => r.chat_key); }
   close() { this.db.close(); }
 

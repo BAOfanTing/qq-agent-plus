@@ -50,3 +50,14 @@ test('pruneSessions：方法可复用（每日调度）、内存索引同步收�
   assert.equal(reg.index.some((e) => e.id === 'old-2'), false, '内存索引要同步收缩');
   assert.equal(reg.index.some((e) => e.id === 'keep-2'), true);
 });
+
+test('落盘间隔可配并即时生效（Issue #45）', () => {
+  const reg = new SessionRegistry(0);
+  assert.equal(reg.persistIntervalMs, 10000, '默认 10 秒，减少小云盘写放大');
+  const low = new SessionRegistry(0, { persistIntervalMs: 500 });
+  assert.equal(low.persistIntervalMs, 2000, '低于 2 秒按 2 秒收口');
+  const high = new SessionRegistry(0, { persistIntervalMs: 999999 });
+  assert.equal(high.persistIntervalMs, 60000, '高于 60 秒按 60 秒收口');
+  low.setPersistIntervalMs(30000);
+  assert.equal(low.persistIntervalMs, 30000, '控制台保存后无需重启');
+});

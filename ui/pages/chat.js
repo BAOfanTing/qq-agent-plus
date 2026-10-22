@@ -222,6 +222,19 @@ return `
       消息保留上限只清理已经处理完的历史，不会删待处理或结果未知的消息，填 0 表示不清理，保存后即时生效。
       审计文件条数在下次重启后生效；占用磁盘时再调小。
     </div>
+    <div class="field-row" style="margin-top:12px">
+      <div class="field"><label for="cfg-store-persistms">运行中会话落盘间隔（毫秒，2000~60000）</label>
+        <input type="number" id="cfg-store-persistms" min="2000" max="60000" step="1000" value="${esc(st.sessionPersistMs ?? 10000)}" /></div>
+      <div class="field"><label for="cfg-store-sqlitesync">消息库写入同步</label>
+        <select id="cfg-store-sqlitesync">
+          <option value="FULL" ${(st.sqliteSynchronous || 'FULL') === 'FULL' ? 'selected' : ''}>FULL：最稳，每条提交都等落盘</option>
+          <option value="NORMAL" ${st.sqliteSynchronous === 'NORMAL' ? 'selected' : ''}>NORMAL：省磁盘 IOPS，掉电可能丢最近几条</option>
+        </select></div>
+    </div>
+    <div class="hint">
+      磁盘 IOPS 紧张（例如 2 核 2G 小云盘）时，把落盘间隔调大、消息库同步切到 NORMAL 能明显减少写入；
+      代价是进程异常退出时最多丢对应间隔内的运行记录。正常结束的会话始终立即完整落盘。
+    </div>
 
     <h3>所有模式 · 表情包</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-sticker" ${c.sticker.enabled ? 'checked' : ''} />

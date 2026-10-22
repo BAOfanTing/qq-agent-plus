@@ -10,6 +10,13 @@ import { todayKey } from './util.js';
 
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 
+// 运行中会话的落盘间隔：小于 2 秒等于没节流，大于 60 秒崩溃丢的进度太多。
+function clampPersistMs(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 10000;
+  return Math.min(60000, Math.max(2000, Math.round(n)));
+}
+
 export function newSessionId() {
   return `${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
 }
@@ -41,15 +48,20 @@ export class SessionRegistry {
    * @param {number} keepFiles 保留最近多少个会话记录文件；**0 = 不限制**。
    *   注意：不能用 `x || 300` 兜底 —— 0 是 falsy 会被误当成"未设置"变回 300，
    *   用户想"取消上限"就永远改不掉。也不能 Math.max(20,…) 强制下限。
+   * @param {{persistIntervalMs?: number}} [options] 运行中会话的落盘间隔（默认 10 秒）
    */
-  constructor(keepFiles = 0) {
+  constructor(keepFiles = 0, { persistIntervalMs = 10000 } = {}) {
     this.keepFiles = Math.max(0, Number.isFinite(Number(keepFiles)) ? Math.round(Number(keepFiles)) : 0);
+    this.persistIntervalMs = clampPersistMs(persistIntervalMs);
     this.index = [];   // [{ id, chatKey, startedAt, endedAt, status, outcome, usage, trigger, model, promptChars }]
     this.current = new Map(); // id -> session object（运行中的在内存里）
     fs.mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
     this.#loadIndex();
     this.pruneSessions();   // 与运行台账同款：构造时清一次（常驻期间每日调度再跑）
   }
+
+  /** 控制台保存后即时生效，不必重启。 */
+  setPersistIntervalMs(ms) { this.persistIntervalMs = clampPersistMs(ms); }
 
   #loadIndex() {
     try {
@@ -484,7 +496,7 @@ export class SessionRegistry {
     const now = Date.now();
     this._lastPersistAt ||= new Map();
     const last = this._lastPersistAt.get(s.id) || 0;
-    if (now - last < 2000) return;
+    if (now - last < this.persistIntervalMs) return;
     this._lastPersistAt.set(s.id, now);
     this.#persist(s);
   }
@@ -497,7 +509,9 @@ export class SessionRegistry {
       fs.mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
       const tmp = `${sessionFile(s.id)}.${process.pid}.tmp`;
       try { fs.rmSync(tmp, { force: true }); } catch { /* 不存在就算了 */ }
-      fs.writeFileSync(tmp, JSON.stringify(s, null, 1), { encoding: 'utf8', mode: 0o600 });
+      // 紧凑 JSON：运行中每 10 秒整份重写，缩进会白白多写三成字节（Issue #45）。
+      // 文件仍可被 JSON.parse / 人眼查看，只是不再逐行缩进。
+      fs.writeFileSync(tmp, JSON.stringify(s), { encoding: 'utf8', mode: 0o600 });
       fs.renameSync(tmp, sessionFile(s.id));
       fs.chmodSync(sessionFile(s.id), 0o600);
       if (s.status !== 'running' && s.status !== 'waiting') this.#bumpTodayUsage(s);

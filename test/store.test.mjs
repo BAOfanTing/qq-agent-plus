@@ -7,9 +7,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { ChatStore } from '../src/core/store.js';
 
 describe('ChatStore', () => {
-  function fixture(t, cap = 0) {
+  function fixture(t, cap = 0, opts = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-store-'));
-    const store = new ChatStore(cap, { dataDir: dir });
+    const store = new ChatStore(cap, { dataDir: dir, ...opts });
     t.after(() => { store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
     return { store, dir };
   }
@@ -464,5 +464,17 @@ describe('ChatStore', () => {
     store.ackLease(lease.id);
     assert.equal(store.hasLeasedRun('group:1'), false);
     assert.equal(store.hasLeasedRun('group:2'), false, '只作用于指定会话');
+  });
+
+  it('honours store.sqliteSynchronous and can switch it at runtime (Issue #45)', (t) => {
+    const sync = (store) => store.db.prepare('PRAGMA synchronous').get().synchronous;
+    const { store } = fixture(t);
+    assert.equal(sync(store), 2, '默认 FULL');
+    store.setSynchronous('NORMAL');
+    assert.equal(sync(store), 1, '切到 NORMAL 后即时生效');
+    store.setSynchronous('not-a-mode');
+    assert.equal(sync(store), 2, '非法值回到 FULL');
+    const { store: normal } = fixture(t, 0, { synchronous: 'NORMAL' });
+    assert.equal(sync(normal), 1, '构造参数也生效');
   });
 });

@@ -527,9 +527,13 @@ export function createApp({
 
   // ── 组件 ──
   const visionScan = { running: false };   // 模型图片输入能力扫描的运行状态
-  const store = new ChatStore(cfg.store?.maxMessagesPerChat ?? 0);   // 0 = 不限
+  const store = new ChatStore(cfg.store?.maxMessagesPerChat ?? 0, {
+    synchronous: cfg.store?.sqliteSynchronous   // FULL（默认）/ NORMAL，Issue #45
+  });   // 0 = 不限
   const memory = new MemoryStore();
-  const sessions = new SessionRegistry(cfg.store?.keepSessionFiles ?? 0);   // 0 = 不限
+  const sessions = new SessionRegistry(cfg.store?.keepSessionFiles ?? 0, {
+    persistIntervalMs: cfg.store?.sessionPersistMs
+  });   // 0 = 不限
   let incidentPilot = null;
   let incidentPilotError = '';
   let autoUpdate = null;
@@ -3811,12 +3815,14 @@ export function createApp({
     const totals = dailyStats.totals;
     const usage = {
       dayKey,
-      promptTokens: totals.promptTokens,
-      completionTokens: totals.completionTokens,
-      totalTokens: totals.totalTokens,
-      cachedTokens: totals.cachedTokens,
+      // token / 次数从 usage-today + 运行中会话直接取（实时）；cost 仍来自会话文件聚合，
+      // 最多滞后 USAGE_CACHE_TTL_MS（Issue #45：不能让顶栏轮询驱动全量扫盘）。
+      promptTokens: sessionUsage.promptTokens,
+      completionTokens: sessionUsage.completionTokens,
+      totalTokens: sessionUsage.totalTokens,
+      cachedTokens: sessionUsage.cachedTokens,
       runs: sessionUsage.runs,
-      webSearchCount: dailyStats.searchCount,
+      webSearchCount: sessionUsage.webSearchCount,
       // 改进方案 #8：当日估算金额与未计价运行数（budgetStatus 的口径来源）
       estimatedYuan: Number(sessionUsage.estimatedYuan) || 0,
       unpricedRuns: Number(sessionUsage.unpricedRuns) || 0
@@ -3882,7 +3888,8 @@ export function createApp({
       // 改进方案 #6：最近一次运行的 trace id（拿它去 journalctl / 日志文件捞整条链路）
       lastTraceId: lastTraceId(),
       cost,
-      cacheHitRate: totals.cacheHitRate,
+      // 与 usage 同口径（实时）：cached/prompt；totals 的命中率来自滞后的会话聚合
+      cacheHitRate: usage.promptTokens ? Math.min(1, usage.cachedTokens / usage.promptTokens) : 0,
       webSearchCount: usage.webSearchCount || 0,
       // 前端构建戳：轮询时发现它变了 → 前端提示"控制台已更新，点击刷新"
       uiBuild: uiBuildStamp(UI_DIR),
@@ -4354,6 +4361,8 @@ export function createApp({
     }
     auditWrite('config.update', 'config', { req, before: auditBefore, after: next, changed: changedTopKeys(auditBefore, next) });
     store.setMaxPerChat(next.store?.maxMessagesPerChat ?? 0);
+    store.setSynchronous(next.store?.sqliteSynchronous);
+    sessions.setPersistIntervalMs(next.store?.sessionPersistMs);
     let closedThreads = 0;
     for (const [chatKey, previousMode] of previousModes) {
       if (conversationConfigForChat(chatKey).mode !== previousMode) {
@@ -5449,25 +5458,30 @@ function buildSessionView(s, store, options = {}) {
 // 所以可靠性绑定在下面两条失效策略上，别把它当不可变数据用。
 //
 // 失效策略（双保险，任一条命中就重算）：
-//   1. 目录快照变化：文件数或目录 mtime 变了（新增/删除会话）
-//   2. TTL 到期：60 秒（见 USAGE_CACHE_TTL_MS）。兜住"内容被改写但目录快照不变"这类边缘情况。
-//      用量统计不是实时数据，1 分钟的新鲜度完全够用。
+//   1. 文件集合变化：新增/删除会话文件（Issue #45：以前用目录 mtime，而运行中的会话每
+//      2 秒 rename 重写一次会话文件 —— rename 会改目录 mtime，等于每次写盘都让缓存失效，
+//      控制台开着时 /api/status 几乎每次都全量扫盘。文件名集合只在增删时变）。
+//   2. TTL 到期：120 秒（见 USAGE_CACHE_TTL_MS），兜住"内容被改写但文件名不变"（会话结束时
+//      的最终统计最多晚 2 分钟进用量页；顶栏的 token 数另有实时来源）。
+//      用量统计不是实时数据，2 分钟的新鲜度可以接受。
 //      另外前端还有一层：切过去先用上次数据立即渲染，不等网络。
 // 2026-10-02 复审：缓存改成**按 range 分槽的 Map** —— 单槽时 /api/status 每 15 秒用
 // range='today' 调一次（它要日统计），与用量页的 range='7' 交替覆盖同一个槽，导致 key
 // 永远对不上、缓存实际从未命中（用量页每次打开仍全量扫）。分槽后各自的 TTL 独立生效。
 const usageRowsCache = new Map();
 const USAGE_CACHE_MAX_KEYS = 8;
-const USAGE_CACHE_TTL_MS = 60000;   // 2026-10-02：20 秒 → 60 秒，打开用量页大多命中缓存；
-                                    // 新会话最多晚 1 分钟进统计，换来不再每次打开都全量扫描
+const USAGE_CACHE_TTL_MS = 120000;  // Issue #45：60 → 120 秒。签名不再随运行中重写抖动，
+                                    // 2 分钟一次全量扫描足以覆盖新会话与最终统计
 
-/** 目录快照：文件数 + 目录 mtime。成本低（一次 stat），足以捕捉增删。 */
-function sessionsDirSignature() {
+/**
+ * 缓存签名：排序后的文件名集合（哈希）。只看增删，不看 mtime —— 运行中的会话重写
+ * 不会让缓存失效；会话结束的最终统计由 TTL 兜住。
+ */
+export function sessionsDirSignature() {
   const dir = path.join(DATA_DIR, 'sessions');
   try {
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
-    const st = fs.statSync(dir);
-    return files.length + ':' + st.mtimeMs;
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+    return crypto.createHash('sha1').update(files.join('\n')).digest('hex');
   } catch {
     return '';
   }

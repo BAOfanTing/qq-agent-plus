@@ -619,6 +619,28 @@
 `scope` 目前只在配置文件里可调：私聊永远即时，所以 `all` 与 `group` 在当前只有群聊与私聊两种
 会话时效果一致，控制台不暴露这个选项。
 
+## store：会话数据与磁盘写入（可选）
+
+```json
+{
+  "store": {
+    "maxMessagesPerChat": 0,
+    "keepSessionFiles": 2000,
+    "sessionPersistMs": 10000,
+    "sqliteSynchronous": "FULL"
+  }
+}
+```
+
+- `maxMessagesPerChat`：每个会话最多保留的消息条数，`0` = 不限；只清理已处理完的历史，
+  不会删待处理或结果未知的消息。
+- `keepSessionFiles`：`data/sessions` 审计文件保留条数，`0` = 不限；重启后生效。
+- `sessionPersistMs`：运行中会话 JSON 的落盘间隔，默认 10 秒（2~60 秒）。会话文件包含完整
+  提示词与记录，间隔越小崩溃时丢的进度越少，但磁盘写入越多。
+- `sqliteSynchronous`：`messages.sqlite` 的同步级别。默认 `FULL`（每条提交等落盘）；
+  小云盘 IOPS 紧张时可设 `NORMAL`——WAL 下仍保证崩溃一致性，但掉电可能丢最近几条提交。
+- 控制台入口：设置 → 聊天设置 → 数据保留。除审计文件条数外均即时生效。
+
 ## tokenSaver：省 Token 模式
 
 ```json

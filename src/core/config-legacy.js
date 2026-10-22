@@ -683,7 +683,13 @@ export const DEFAULT_CONFIG = {
     // ── 响应档位的作用范围 ──
     unifiedTier: true,          // true = 上方滑条对所有会话生效；false = 可按群单独设置
     groupSliderPos: {},         // { [群号]: 概率 0~100 } 仅 unifiedTier=false 时生效；未设置的群/私聊跟随全局
-    keepSessionFiles: 2000
+    keepSessionFiles: 2000,
+    // 运行中会话 JSON 的落盘间隔（毫秒）。会话文件含完整记录、越跑越大，2 秒一次会把
+    // 小云盘的 IOPS 打满（Issue #45）；10 秒一次最多丢 10 秒运行中进度，finish 仍立即落盘。
+    sessionPersistMs: 10000,
+    // messages.sqlite 的 synchronous：FULL（默认，最稳）/ NORMAL（WAL 下同样防损坏，
+    // 但掉电可能丢最近几条提交；磁盘 IOPS 紧张时可选）。见 Issue #45。
+    sqliteSynchronous: 'FULL'
   },
   // 屏蔽名单：{ [群号]: [QQ号, ...] }
   // 被屏蔽群员的消息在入口处直接丢弃——不存档、不触发会话、不作为提示词背景。
