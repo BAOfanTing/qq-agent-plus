@@ -5496,7 +5496,9 @@ export function sessionsDirSignature() {
 function collectUsageRows({ range }) {
   const win = resolveRange(range);
   // 命中缓存就直接返回（注意 rows 会被调用方改写字段，所以必须给副本）
-  const sig = sessionsDirSignature() + '@' + String(range);
+  // 窗口也进签名：TTL 跨过午夜时，同一个文件名集合下 today/7 天的起点已经变了，
+  // 不能再命中前一天算好的 rows（否则今日花费会把昨天整天算进来）。
+  const sig = sessionsDirSignature() + '@' + String(range) + '@' + String(win?.start ?? '') + '-' + String(win?.end ?? '');
   const hit = usageRowsCache.get(sig);
   if (hit && (Date.now() - hit.at) < USAGE_CACHE_TTL_MS) {
     return {

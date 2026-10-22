@@ -181,6 +181,21 @@ test('finish conservatively repairs unescaped quotes inside string values', asyn
   assert.equal(f.ctx.session.threadDisposition, 'listening');
 });
 
+test('会话交接关闭时 finish 不再写交接草稿', async () => {
+  const { updateConfig } = await import('../src/core/config.js');
+  updateConfig({ memory: { handoffEnabled: false } });
+  try {
+    const f = context();
+    const result = await tool('finish').execute(f.ctx, { summary: '本轮结束', topic: '不该被交接' });
+    assert.equal(result.isError, undefined, result.content);
+    assert.equal(f.ctx.session.finishReason, '本轮结束', '结论仍要记在会话上');
+    assert.equal(f.ctx.session.handoffDraft, undefined, '关掉交接后不能再生成草稿');
+    assert.match(result.content, /"handoffPending":\s*false/);
+  } finally {
+    updateConfig({ memory: { handoffEnabled: true } });
+  }
+});
+
 test('memory_append 私聊同样只认出现过的成员（编错号不给陌生人永久挂印象）', async () => {
   const appended = [];
   const f = context({

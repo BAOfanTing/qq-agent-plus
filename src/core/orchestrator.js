@@ -1615,7 +1615,9 @@ export class Orchestrator {
       const persistThread = triggerEntries.length > 0
         || session.sent.length > 0
         || Boolean(session.threadDisposition);
-      const checkpointState = handoff || session.handoffDraft || {
+      // 关掉会话交接后，旧会话对象里残留的 handoffDraft 也不能再进检查点
+      const draftForCheckpoint = getConfig().memory?.handoffEnabled === false ? null : session.handoffDraft;
+      const checkpointState = handoff || draftForCheckpoint || {
         summary: session.sent.length
           ? `本轮已发送 ${session.sent.length} 条消息`
           : '本轮已读取消息并保持沉默',

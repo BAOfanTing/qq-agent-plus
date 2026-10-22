@@ -2507,11 +2507,15 @@ export function buildToolDefs() {
           if (Object.hasOwn(args, key)) draft[key] = args[key];
         }
         ctx.session.finishReason = summary;
-        ctx.session.handoffDraft = draft;
+        // 交接总开关关闭时不再生成工作状态（否则 lifecycle 检查点仍会把它带上，
+        // 控制台的开关就变成半生效）。
+        const handoffEnabled = getConfig().memory?.handoffEnabled !== false;
+        if (handoffEnabled) ctx.session.handoffDraft = draft;
+        else delete ctx.session.handoffDraft;
         ctx.session.threadDisposition = ['active', 'listening', 'close'].includes(args.threadDisposition)
           ? args.threadDisposition
           : null;
-        return ok({ finished: true, handoffPending: true });
+        return ok({ finished: true, handoffPending: handoffEnabled });
       }
     }
   ];

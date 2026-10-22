@@ -16,20 +16,24 @@ export function createIndexTextFetcher({
   log = () => {},
   rawTimeoutMs = 10000,
   apiTimeoutMs = 15000,
+  totalTimeoutMs = 25000,
   maxBytes = DEFAULT_MAX_BYTES
 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('createIndexTextFetcher 需要 fetchImpl');
   const grab = fetchImpl;
   return async function fetchIndexText(url) {
+    const apiUrl = githubContentsApiUrl(url);
+    // 只有能换 GitHub API 的 raw 地址才用 10 秒快速失败；自建/第三方索引沿用原来的 25 秒，
+    // 不能因为加了兜底就把慢但可用的源判死。
+    const firstTimeout = apiUrl ? rawTimeoutMs : totalTimeoutMs;
     let firstError = null;
     try {
-      const result = await grab(url, { maxBytes, signal: AbortSignal.timeout(rawTimeoutMs) });
+      const result = await grab(url, { maxBytes, signal: AbortSignal.timeout(firstTimeout) });
       if (Number(result?.statusCode) === 200) return result;
       firstError = new Error(`索引拉取失败：HTTP ${result?.statusCode ?? '?'}`);
     } catch (error) {
       firstError = error;
     }
-    const apiUrl = githubContentsApiUrl(url);
     if (!apiUrl) throw firstError;
     log(`[plugins] ${url} 取不动（${firstError?.message ?? firstError}），改走 GitHub API`);
     return grab(apiUrl, {

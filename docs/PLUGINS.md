@@ -388,7 +388,8 @@ CI 里可选），`--json` 给机器读。
 - **资源上限由宿主强制**：堆上限默认 128MB（`--max-old-space-size`），常驻内存（RSS）超过
   **堆上限的 1.5 倍**就重启该插件进程（Linux 上采样 `/proc/<pid>/statm`；两者不用同一个数是因为
   RSS 还要装 Node 二进制与堆外开销，用同一个数会变成插件刚起来就被判超限）；工具调用每分钟
-  上限 120 次（防模型连调或失败重试风暴打爆宿主），周期任务不受此限。都在 `plugins.limits` 里调。
+  上限 120 次（防模型连调或失败重试风暴打爆宿主），周期任务不受此限。这两项在 `plugins.limits`
+  里调，也可以走控制台「设置 → 平台能力 → 插件宿主（高级）」；保存后按新上限重排插件进程。
 - **懒启动**：只有工具、不观察消息也不起周期任务的插件，进程**按需起、空闲停**
   （`plugins.lazy` 默认开，空闲 `plugins.idleMinutes` 默认 15 分钟）。工具在模型那边一直可见，
   第一次调用时宿主才起进程 —— 装了十个插件不会常驻十个进程，代价是首次调用多约 100ms。
@@ -453,7 +454,7 @@ node scripts/plugin-sign.mjs --key ~/.qq-agent-plugin-key.key --pack plugins/pac
   默认用内置的几个；**空数组＝只用原始地址**（不绕第三方）；也可以写自己的代理。
   **索引不走镜像** —— 索引是信任根，镜像能替换"该装什么"，而 sha256 只能证明"包与索引里写的一致"；
   包则被 sha256 钉住，走镜像最多是"取不到"，不可能"取到假的还装上"。
-  唯一例外是 GitHub 自己的 Contents API：`raw.githubusercontent.com` 超时时会换
+  唯一例外是 GitHub 自己的 Contents API：`raw.githubusercontent.com` 请求失败（超时或非 200）时会换
   `api.github.com/repos/.../contents/...`（raw 媒体类型）取同一份文件，信任根没有变化。
 
 ## 分期

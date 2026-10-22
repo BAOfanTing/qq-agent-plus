@@ -28,7 +28,7 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   }
   assert.match(save, /patch\.pacing = \{/);
   assert.match(save, /maxMessagesPerChat: clampInt/);
-  assert.match(save, /keepSessionFiles: clampInt/);
+  assert.match(save, /keepSessionFiles: numKeep/);
   // 只给三个预设档位，不把毫秒数与 SQLite 同步级别直接丢给用户
   assert.match(save, /IO_PROFILES\[val\('#cfg-store-ioprofile'/);
   for (const [key, ms, sync] of [['balanced', 10000, 'FULL'], ['low', 30000, 'NORMAL'], ['minimal', 60000, 'NORMAL']]) {
@@ -44,7 +44,7 @@ test('记忆 / 预算 / 图片生成 / 群游戏：新开关都接到保存端',
   assert.ok(voice.includes('id="cfg-img-autosend"'));
   assert.ok(save.includes('autoSend: chk('));
   assert.ok(moments.includes('id="cfg-game-maxtime"'));
-  assert.ok(save.includes('maxDurationMin: clampInt'));
+  assert.ok(save.includes('maxDurationMin: numKeep'));
 });
 
 test('平台能力：插件宿主高级项有控件、保存时只提交这几个键', () => {

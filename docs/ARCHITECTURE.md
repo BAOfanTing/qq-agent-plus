@@ -102,7 +102,8 @@ The deployment data directory contains:
 - Optional feature-specific SQLite databases, such as the identity index.
 - Qzone task state and managed sticker metadata.
 
-SQLite uses WAL and `synchronous=FULL`. JSON stores use temporary-file rename
+SQLite uses WAL and `synchronous=FULL` by default; `store.sqliteSynchronous`
+can be set to `NORMAL` on IOPS-constrained disks. JSON stores use temporary-file rename
 where their modules require atomic replacement. These stores and remote API
 effects do not form one global transaction, so each background manager defines
 its own idempotency and recovery rules.

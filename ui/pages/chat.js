@@ -108,6 +108,7 @@ function renderConversationModePanels(conversation = {}) {
 
 function renderChatSection(c) {
   const st = c.store || {};
+  const storeSync = String(st.sqliteSynchronous || 'FULL').toUpperCase();
   const conversation = c.conversation || {};
   // 滑条位置是唯一真相，而且**滑条上的数字就是概率**（与后端 tier-slider.js 同一套规则）
   const sliderPos = sliderToTierUI_tierToSlider(st);
@@ -242,8 +243,8 @@ return `
         <input type="number" id="cfg-store-persistms" min="2000" max="60000" step="1000" value="${esc(st.sessionPersistMs ?? 10000)}" /></div>
       <div class="field"><label for="cfg-store-sqlitesync">消息库写入同步</label>
         <select id="cfg-store-sqlitesync">
-          <option value="FULL" ${(st.sqliteSynchronous || 'FULL') === 'FULL' ? 'selected' : ''}>FULL：最稳，每条提交都等落盘</option>
-          <option value="NORMAL" ${st.sqliteSynchronous === 'NORMAL' ? 'selected' : ''}>NORMAL：省磁盘 IOPS，掉电可能丢最近几条</option>
+          <option value="FULL" ${storeSync === 'FULL' ? 'selected' : ''}>FULL：最稳，每条提交都等落盘</option>
+          <option value="NORMAL" ${storeSync === 'NORMAL' ? 'selected' : ''}>NORMAL：省磁盘 IOPS，掉电可能丢最近几条</option>
         </select></div>
     </div>
     <div class="hint">

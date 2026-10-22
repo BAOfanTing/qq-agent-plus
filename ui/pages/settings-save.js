@@ -153,7 +153,7 @@ async function saveConfig({ quiet = false } = {}) {
       // 游戏期间私聊豁免：只影响引擎发给"本局在册玩家"的私聊；模型发送永远受白名单
       allowGamePrivateDm: chk('#cfg-game-privatedm', c.groupGame?.allowGamePrivateDm === true),
       dailyLimitPerChat: clampInt(val('#cfg-game-daily', c.groupGame?.dailyLimitPerChat ?? 6), 1, 50, 6),
-      maxDurationMin: clampInt(val('#cfg-game-maxtime', c.groupGame?.maxDurationMin ?? 60), 5, 180, 60),
+      maxDurationMin: numKeep(val('#cfg-game-maxtime', c.groupGame?.maxDurationMin ?? 60), c.groupGame?.maxDurationMin, 5, 180, 60),
       maxPlayers: clampInt(val('#cfg-game-maxplayers', c.groupGame?.maxPlayers ?? 10), 2, 30, 10),
       roundSeconds: clampInt(val('#cfg-game-round', c.groupGame?.roundSeconds ?? 0), 0, 600, 0),
       discussSeconds: clampInt(val('#cfg-game-discuss', c.groupGame?.discussSeconds ?? 0), 0, 600, 0),
@@ -827,15 +827,16 @@ async function saveConfig({ quiet = false } = {}) {
         __replace__: (() => { try { return JSON.parse($('#tier-group-json')?.value || '{}'); } catch { return {}; } })()
       },
       maxMessagesPerChat: clampInt(val('#cfg-store-maxmessages', c.store?.maxMessagesPerChat ?? 0), 0, 1000000, 0),
-      keepSessionFiles: clampInt(val('#cfg-store-keepsessions', c.store?.keepSessionFiles ?? 2000), 0, 100000, 2000),
+      keepSessionFiles: numKeep(val('#cfg-store-keepsessions', c.store?.keepSessionFiles ?? 2000), c.store?.keepSessionFiles, 0, 100000, 2000),
       // 磁盘写入档位：只暴露三个预设，选「自定义」时保持配置文件里的原值
       ...(() => {
         const preset = IO_PROFILES[val('#cfg-store-ioprofile', 'balanced')];
         return preset
           ? { sessionPersistMs: preset.persistMs, sqliteSynchronous: preset.synchronous }
           : {
-            sessionPersistMs: clampInt(val('#cfg-store-persistms', c.store?.sessionPersistMs ?? 10000), 2000, 60000, 10000),
-            sqliteSynchronous: val('#cfg-store-sqlitesync', c.store?.sqliteSynchronous || 'FULL') === 'NORMAL' ? 'NORMAL' : 'FULL'
+            // 清空 = 保持原值（不能变成 2000ms：那会把「省 IO」反向改成最费 IO 的 2 秒）
+            sessionPersistMs: numKeep(val('#cfg-store-persistms', c.store?.sessionPersistMs ?? 10000), c.store?.sessionPersistMs, 2000, 60000, 10000),
+            sqliteSynchronous: String(val('#cfg-store-sqlitesync', c.store?.sqliteSynchronous || 'FULL')).toUpperCase() === 'NORMAL' ? 'NORMAL' : 'FULL'
           };
       })()
     };
@@ -896,8 +897,8 @@ async function saveConfig({ quiet = false } = {}) {
     // requireIsolation 保持配置默认的 fail-closed，不在界面提供关闭。
     patch.plugins = {
       limits: {
-        memoryMb: clampInt(val('#cfg-plugin-memory', c.plugins?.limits?.memoryMb ?? 128), 32, 1024, 128),
-        callsPerMinute: clampInt(val('#cfg-plugin-calls', c.plugins?.limits?.callsPerMinute ?? 120), 10, 1000, 120)
+        memoryMb: numKeep(val('#cfg-plugin-memory', c.plugins?.limits?.memoryMb ?? 128), c.plugins?.limits?.memoryMb, 32, 1024, 128),
+        callsPerMinute: numKeep(val('#cfg-plugin-calls', c.plugins?.limits?.callsPerMinute ?? 120), c.plugins?.limits?.callsPerMinute, 10, 1000, 120)
       },
       networkIsolation: chk('#cfg-plugin-netiso', c.plugins?.networkIsolation !== false),
       requireNetworkIsolation: chk('#cfg-plugin-requirenetiso', c.plugins?.requireNetworkIsolation === true)
