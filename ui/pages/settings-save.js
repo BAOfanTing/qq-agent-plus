@@ -14,7 +14,7 @@ import {
 } from '../core/dom-util.js';
 import { $, $$ } from '../core/dom.js';
 import {
-  asrHostOf, clampInt, hasOwnPrice, hostOfUrl, memThreshold, mulOf, normalizeAsrMax, normalizeImageGenMax,
+  IO_PROFILES, asrHostOf, clampInt, hasOwnPrice, hostOfUrl, memThreshold, mulOf, normalizeAsrMax, normalizeImageGenMax,
   normalizeStickerCollectMax, normalizeStickerMax, parseList, sliderToTierUI
 } from '../core/format.js';
 import { pickedGroups, state } from '../core/state.js';
@@ -828,9 +828,16 @@ async function saveConfig({ quiet = false } = {}) {
       },
       maxMessagesPerChat: clampInt(val('#cfg-store-maxmessages', c.store?.maxMessagesPerChat ?? 0), 0, 1000000, 0),
       keepSessionFiles: clampInt(val('#cfg-store-keepsessions', c.store?.keepSessionFiles ?? 2000), 0, 100000, 2000),
-      // 与后端 clampPersistMs 同口径（2~60 秒）：第 1 项省 IO，第 2 项是持久化强度
-      sessionPersistMs: clampInt(val('#cfg-store-persistms', c.store?.sessionPersistMs ?? 10000), 2000, 60000, 10000),
-      sqliteSynchronous: val('#cfg-store-sqlitesync', 'FULL') === 'NORMAL' ? 'NORMAL' : 'FULL'
+      // 磁盘写入档位：只暴露三个预设，选「自定义」时保持配置文件里的原值
+      ...(() => {
+        const preset = IO_PROFILES[val('#cfg-store-ioprofile', 'balanced')];
+        return preset
+          ? { sessionPersistMs: preset.persistMs, sqliteSynchronous: preset.synchronous }
+          : {
+            sessionPersistMs: clampInt(c.store?.sessionPersistMs ?? 10000, 2000, 60000, 10000),
+            sqliteSynchronous: c.store?.sqliteSynchronous === 'NORMAL' ? 'NORMAL' : 'FULL'
+          };
+      })()
     };
     // 注：老字段 pastStateLimit 已无读取方；pastStateMaxChars 仍在用（prompt.js 读它夹"过去
     // 状态"上限）—— 别误删。这里不再做 delete：patch 只是发给服务端的合并片段，

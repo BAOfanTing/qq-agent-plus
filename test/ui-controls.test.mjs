@@ -14,11 +14,12 @@ const settings = read('ui/pages/settings.js');
 const voice = read('ui/pages/settings-voice.js');
 const moments = read('ui/pages/moments.js');
 const platform = read('ui/pages/platform.js');
+const format = read('ui/core/format.js');
 
 test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控件与保存接线', () => {
   for (const id of ['cfg-reply-guard', 'cfg-poke-reply', 'cfg-pacing-enabled',
     'cfg-pacing-default', 'cfg-pacing-min', 'cfg-pacing-max', 'cfg-pacing-instant',
-    'cfg-store-maxmessages', 'cfg-store-keepsessions', 'cfg-store-persistms', 'cfg-store-sqlitesync']) {
+    'cfg-store-maxmessages', 'cfg-store-keepsessions', 'cfg-store-ioprofile']) {
     assert.ok(chat.includes(`id="${id}"`), `缺少控件 ${id}`);
   }
   for (const key of ['replyGuardEnabled', 'pokeReplyEnabled']) {
@@ -27,8 +28,11 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   assert.match(save, /patch\.pacing = \{/);
   assert.match(save, /maxMessagesPerChat: clampInt/);
   assert.match(save, /keepSessionFiles: clampInt/);
-  assert.match(save, /sessionPersistMs: clampInt/);
-  assert.match(save, /sqliteSynchronous: val\(/);
+  // 只给三个预设档位，不把毫秒数与 SQLite 同步级别直接丢给用户
+  assert.match(save, /IO_PROFILES\[val\('#cfg-store-ioprofile'/);
+  for (const [key, ms, sync] of [['balanced', 10000, 'FULL'], ['low', 30000, 'NORMAL'], ['minimal', 60000, 'NORMAL']]) {
+    assert.match(format, new RegExp(`${key}: \\{ persistMs: ${ms}, synchronous: '${sync}' \\}`), `${key} 档位映射`);
+  }
 });
 
 test('记忆 / 预算 / 图片生成 / 群游戏：新开关都接到保存端', () => {

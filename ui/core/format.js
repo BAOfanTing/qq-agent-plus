@@ -768,8 +768,27 @@ function parseList(s) {
   return String(s || '').split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean);
 }
 
+// 磁盘写入档位：绝大多数用户不该自己算毫秒和 SQLite 同步级别（Issue #45）。
+// 值仍是 store.sessionPersistMs / store.sqliteSynchronous，配置文件照旧可手调。
+const IO_PROFILES = Object.freeze({
+  balanced: { persistMs: 10000, synchronous: 'FULL' },
+  low: { persistMs: 30000, synchronous: 'NORMAL' },
+  minimal: { persistMs: 60000, synchronous: 'NORMAL' }
+});
+
+/** 已存配置 → 档位；不在三档里就显示为自定义（保存时保持原值）。 */
+function ioProfileOf(store = {}) {
+  const ms = Number(store.sessionPersistMs ?? IO_PROFILES.balanced.persistMs);
+  const sync = String(store.sqliteSynchronous || IO_PROFILES.balanced.synchronous).toUpperCase();
+  for (const [key, profile] of Object.entries(IO_PROFILES)) {
+    if (profile.persistMs === ms && profile.synchronous === sync) return key;
+  }
+  return 'custom';
+}
+
 
 export {
+  IO_PROFILES, ioProfileOf,
   asrHostOf, asrServiceOf, asrServiceOptions, asrSlotOf, chatNameOf, clampInt, effectivePriceFor, fmtClock, fmtRate,
   fmtRemainingMs, fmtTime, fmtTok, fmtTokens, fmtWaitRemain, fmtYuan, formatChatTitle, formatElapsed,
   formatMinimalMarkdown, formatReleaseNotes, formatRevision, groupSliderPosForUi, hasOwnPrice, hostOfUrl, initialServiceNote,
