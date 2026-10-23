@@ -566,6 +566,20 @@ function renderSearchSection(c) {
   const prov = String(c.webSearch?.provider || 'bing');
   // 自定义搜索提供商列表（可多个），用于动态生成下拉框选项
   const customProvs = Array.isArray(c.webSearch?.providers) ? c.webSearch.providers : [];
+  const providerLabel = {
+    bing: 'Bing 网页解析', deepseek: 'DeepSeek 原生搜索', zhipu: '智谱 Web Search',
+    bocha: '博查 AI Search', baidu: '百度千帆 AI Search', metaso: '秘塔 AI 搜索',
+    doubao: '豆包搜索', tavily: 'Tavily', so360: '360 网页解析', sogou: '搜狗网页解析',
+    bilibili: 'B 站搜索', aggregate: '聚合搜索'
+  }[prov] || (prov.startsWith('custom:')
+    ? (customProvs.find((p) => `custom:${p.id}` === prov)?.name || prov)
+    : prov);
+  const supplementText = prov === 'bing'
+    ? '搜狗 → B 站 → Bing 站内限定 → 360'
+    : (prov === 'aggregate' ? '按下方聚合源列表并发（不再叠加梗补充）' : '不启用（只有主源是 Bing 时自动补）');
+  const supplementHint = prov === 'bing'
+    ? '只有含“梗 / 抖音 / 什么意思 / 出处 / 热梗”或很短的中文词的查询才会补；普通查询只走主搜索。补充源不需要 Key；搜狗和 360 可能被出口 IP 风控，失败会自动换下一个。'
+    : '当前主源不是 Bing：梗查询不会走自动补充链；自测按钮仍按当前配置执行。';
   return `
     <h3 id="settings-search">搜索服务</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-websearch" ${c.webSearch?.enabled !== false ? 'checked' : ''} />
@@ -586,6 +600,22 @@ function renderSearchSection(c) {
         <option value="aggregate" ${prov === 'aggregate' ? 'selected' : ''}>聚合搜索（多源并发）</option>
         ${customProvs.map((p) => `<option value="custom:${esc(p.id)}" ${prov === `custom:${p.id}` ? 'selected' : ''}>${esc(p.name || p.baseUrl)}（自定义 · ${p.type === 'bing' ? '网页解析' : 'JSON 接口'}）</option>`).join('')}
       </select></div>
+    <div class="field" id="search-chain-summary">
+      <label>实际搜索方式</label>
+      <div class="hint">
+        <div><b>主搜索：</b>${esc(providerLabel)}</div>
+        <div><b>梗查询自动补充：</b>${esc(supplementText)}</div>
+        <div>${esc(supplementHint)}</div>
+      </div>
+    </div>
+    <div class="field">
+      <label for="cfg-search-test-query">测试搜索（输入梗词，看实际走了哪些源）</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="cfg-search-test-query" placeholder="例如：扎啤 什么梗" style="flex:1" maxlength="120" />
+        <button class="btn btn-small" id="cfg-search-test-btn" type="button">测试</button>
+      </div>
+      <div class="hint" id="cfg-search-test-result">还没有测试。</div>
+    </div>
     <div class="field" id="custom-provider-manage" style="${prov.startsWith('custom:') ? '' : 'display:none'}">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-small" id="test-search-provider-btn">测试这个搜索服务</button>

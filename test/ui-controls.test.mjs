@@ -102,3 +102,12 @@ test('平台能力：插件宿主高级项有控件、保存时只提交这几�
   assert.match(save, /networkIsolation: chk\(/);
   assert.match(save, /requireNetworkIsolation: chk\(/);
 });
+
+test('搜索设置：显示真实搜索链路，并提供搜索自测入口', () => {
+  for (const id of ['cfg-searchprovider', 'search-chain-summary', 'cfg-search-test-query', 'cfg-search-test-btn']) {
+    assert.ok(settings.includes(`id="${id}"`), `缺少搜索控件 ${id}`);
+  }
+  assert.match(settings, /梗查询自动补充/);
+  assert.match(read('ui/pages/search-test.js'), /\/api\/web-search\/test/);
+  assert.match(read('src/console/app.js'), /'\/api\/web-search\/test'/);
+});

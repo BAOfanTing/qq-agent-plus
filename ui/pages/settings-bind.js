@@ -26,6 +26,7 @@ import {
 import { saveConfig } from './settings-save.js';
 import { bindImageGenPreset, bindTtsControls } from './settings-voice.js';
 import { bindHumanizePreset, bindProactiveWindowEditor, loadHumanizeState } from './chat.js';
+import { bindSearchTest } from './search-test.js';
 import { hydrateExtensionStatus } from './settings-extensions.js';
 import {
   openBlocklistModal, openModelAddModal, openModelDeleteModal, openModelPicker, openPriceDialog,
@@ -776,8 +777,7 @@ function bindSettingsListsAndGroups(c) {
   for (const field of ['current', 'new', 'confirm']) {
     bindPeekToggle(`cfg-console-token-${field}-peek`, `cfg-console-token-${field}`);
   }
-
-  // 搜索提供方切换
+  bindSearchTest();
   const searchProviderSel = $('#cfg-searchprovider');
   if (searchProviderSel) searchProviderSel.addEventListener('change', () => {
     const v = searchProviderSel.value;

@@ -16,7 +16,7 @@ import { budgetStatus } from '../core/budget.js';
 import { sanitizeConfigSecrets } from '../core/secret-keys.js';
 import { appendAudit, queryAudit } from '../core/audit-log.js';
 import { lastTraceId } from '../core/logger.js';
-import { customSearch } from '../llm/web-search.js';
+import { customSearch, webSearch } from '../llm/web-search.js';
 import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes } from '../onebot/onebot.js';
 import { faceNameOf } from '../onebot/face-catalog.js';
 import { readForwardMessages, readForwardNodesById, forwardResIdFromSegment } from '../onebot/forward-reader.js';
@@ -3863,6 +3863,40 @@ export function createApp({
       return json(res, 200, {
         ok: true,
         result: { ok: false, note: String(error?.message ?? error), latencyMs: Date.now() - startedAt }
+      });
+    }
+  });
+  router.add('POST', '/api/web-search/test', async (req, res) => {
+    const startedAt = Date.now();
+    try {
+      const body = await readBody(req).catch(() => ({}));
+      const query = String(body.query ?? '').trim().slice(0, 120);
+      if (!query) return json(res, 400, { ok: false, error: '请输入要测试的搜索词' });
+      const result = await webSearch(query);
+      const sources = Array.isArray(result.sources) && result.sources.length
+        ? result.sources
+        : [String(getConfig().webSearch?.provider || 'bing')];
+      return json(res, 200, {
+        ok: true,
+        query,
+        sources,
+        supplemented: sources.some((source) => source !== 'bing'),
+        count: result.results.length,
+        latencyMs: Date.now() - startedAt,
+        results: result.results.slice(0, 8).map((item) => {
+          const url = String(item?.url ?? '');
+          return {
+            title: sanitizeUserText(String(item?.title ?? '')).slice(0, 200),
+            url: /^https?:\/\//i.test(url) ? url.slice(0, 500) : '',
+            snippet: sanitizeUserText(String(item?.snippet ?? '')).slice(0, 400)
+          };
+        })
+      });
+    } catch (error) {
+      return json(res, 200, {
+        ok: false,
+        error: String(error?.message ?? error).slice(0, 300),
+        latencyMs: Date.now() - startedAt
       });
     }
   });
