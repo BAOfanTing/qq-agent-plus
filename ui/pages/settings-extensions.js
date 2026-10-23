@@ -38,7 +38,7 @@ function renderMcpSection(c) {
     <div class="checkbox-row"><input type="checkbox" id="cfg-mcp-enabled" ${mcp.enabled === true ? 'checked' : ''} />
       <label for="cfg-mcp-enabled">启用 MCP（外部 MCP Server 的工具会接进模型）</label></div>
     <div class="hint">MCP Server 等价于执行本机命令，只填你信任的 server。保存后点「重新加载」生效；命令与参数只在本页显示，不回传密钥。</div>
-    <div id="mcp-servers">${servers.map((server) => mcpServerRowHtml(server)).join('')}</div>
+    <div id="mcp-servers">${servers.length ? servers.map((server) => mcpServerRowHtml(server)).join('') : '<div class="hint">还没有 server：点下面「＋ 添加 server」，填命令和参数。</div>'}</div>
     <div class="settings-inline-actions">
       <button type="button" class="btn btn-small" id="mcp-add-server">＋ 添加 server</button>
       <button type="button" class="btn btn-small" id="mcp-reload">重新加载</button>
