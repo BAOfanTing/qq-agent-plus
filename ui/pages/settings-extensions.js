@@ -4,30 +4,44 @@
 import { api } from '../core/api.js';
 import { $, esc } from '../core/dom.js';
 
-function mcpServerRowHtml(server = {}) {
+function mcpServerRowHtml(server = {}, { open = false } = {}) {
   const id = esc(server.id || '');
   const args = esc(JSON.stringify(Array.isArray(server.args) ? server.args : []));
   const env = esc(JSON.stringify(server.env && typeof server.env === 'object' ? server.env : {}));
   const mounting = String(server.toolMounting || 'direct');
   return `
-    <div class="mcp-server">
-      <div class="field-row">
-        <div class="field"><label>ID</label><input class="mcp-id" type="text" value="${id}" placeholder="files" /></div>
-        <div class="field"><label>命令</label><input class="mcp-command" type="text" value="${esc(server.command || '')}" placeholder="npx" /></div>
-        <div class="field"><label>超时（毫秒）</label><input class="mcp-timeout" type="number" min="1000" max="300000" value="${esc(server.timeoutMs ?? 30000)}" /></div>
-        <div class="field"><label>每分钟上限</label><input class="mcp-maxcalls" type="number" min="1" max="600" value="${esc(server.maxCallsPerMinute ?? 30)}" /></div>
+    <details class="mcp-server" data-id="${id}" ${open ? 'open' : ''}>
+      <summary>
+        <span class="mcp-server-dot"></span>
+        <span class="mcp-server-name">${id || '新 server'}</span>
+        <span class="mcp-server-cmd">${esc(server.command || '未填命令')}</span>
+        <span class="mcp-server-state" data-mcp-state="${id}">未保存</span>
+      </summary>
+      <div class="mcp-server-body">
+        <div class="field-row">
+          <div class="field"><label>ID</label><input class="mcp-id" type="text" value="${id}" placeholder="files" /></div>
+          <div class="field"><label>命令</label><input class="mcp-command" type="text" value="${esc(server.command || '')}" placeholder="npx" /></div>
+          <div class="field"><label>超时（毫秒）</label><input class="mcp-timeout" type="number" min="1000" max="300000" value="${esc(server.timeoutMs ?? 30000)}" /></div>
+          <div class="field"><label>每分钟上限</label><input class="mcp-maxcalls" type="number" min="1" max="600" value="${esc(server.maxCallsPerMinute ?? 30)}" /></div>
+        </div>
+        <div class="field"><label>参数（JSON 数组）</label><input class="mcp-args" type="text" value="${args}" placeholder='["-y","@modelcontextprotocol/server-filesystem","/data"]' /></div>
+        <div class="field"><label>环境变量（JSON 对象，可留空）</label><input class="mcp-env" type="text" value="${env}" placeholder='{"TOKEN":"..."}' /></div>
+        <div class="field-row">
+          <div class="field"><label>挂载方式</label><select class="mcp-mounting">
+            <option value="direct" ${mounting === 'direct' ? 'selected' : ''}>direct（每个工具一个定义）</option>
+            <option value="meta" ${mounting === 'meta' ? 'selected' : ''}>meta（只挂 mcp_call）</option>
+          </select></div>
+          <div class="field"><label><input class="mcp-enabled" type="checkbox" ${server.enabled !== false ? 'checked' : ''} /> 启用这个 server</label></div>
+          <div class="field"><button type="button" class="btn btn-danger btn-small mcp-remove">删除</button></div>
+        </div>
       </div>
-      <div class="field"><label>参数（JSON 数组）</label><input class="mcp-args" type="text" value="${args}" placeholder='["-y","@modelcontextprotocol/server-filesystem","/data"]' /></div>
-      <div class="field"><label>环境变量（JSON 对象，可留空）</label><input class="mcp-env" type="text" value="${env}" placeholder='{"TOKEN":"..."}' /></div>
-      <div class="field-row">
-        <div class="field"><label>挂载方式</label><select class="mcp-mounting">
-          <option value="direct" ${mounting === 'direct' ? 'selected' : ''}>direct（每个工具一个定义）</option>
-          <option value="meta" ${mounting === 'meta' ? 'selected' : ''}>meta（只挂 mcp_call）</option>
-        </select></div>
-        <div class="field"><label><input class="mcp-enabled" type="checkbox" ${server.enabled !== false ? 'checked' : ''} /> 启用这个 server</label></div>
-        <div class="field"><button type="button" class="btn btn-danger btn-small mcp-remove">删除</button></div>
-      </div>
-    </div>`;
+    </details>`;
+}
+
+function hueOf(text) {
+  let hash = 0;
+  for (const char of String(text || '')) hash = (hash * 31 + char.codePointAt(0)) % 360;
+  return hash;
 }
 
 function renderMcpSection(c) {
@@ -35,33 +49,35 @@ function renderMcpSection(c) {
   const servers = Array.isArray(mcp.servers) ? mcp.servers : [];
   return `
     <h3 id="settings-mcp">MCP 工具</h3>
-    <div class="checkbox-row"><input type="checkbox" id="cfg-mcp-enabled" ${mcp.enabled === true ? 'checked' : ''} />
-      <label for="cfg-mcp-enabled">启用 MCP（外部 MCP Server 的工具会接进模型）</label></div>
-    <div class="hint">MCP Server 等价于执行本机命令，只填你信任的 server。保存后点「重新加载」生效；命令与参数只在本页显示，不回传密钥。</div>
-    <div class="field-row">
-      <div class="field"><label>从官方 MCP Registry 搜索</label>
-        <input type="text" id="mcp-registry-query" placeholder="filesystem / github / sqlite" /></div>
-      <div class="field"><label>操作</label>
-        <div class="settings-inline-actions">
-          <button type="button" class="btn btn-small" id="mcp-preset-search">搜索预设</button>
-          <button type="button" class="btn btn-small" id="mcp-registry-search">官方 Registry</button>
-          <span class="muted" id="mcp-registry-result"></span>
-        </div>
+    <div class="mcp-hero">
+      <div>
+        <div class="mcp-hero-title">把外部工具接进群聊</div>
+        <div class="hint">MCP Server 等价于执行本机命令，只接你信任的。导入后先改目录/令牌，保存再重载。</div>
       </div>
+      <label class="mcp-master"><input type="checkbox" id="cfg-mcp-enabled" ${mcp.enabled === true ? 'checked' : ''} /> 启用 MCP</label>
     </div>
-    <div id="mcp-registry-results"></div>
-    <div class="field"><label>常用预设</label><div id="mcp-preset-list" class="hint">加载中…</div></div>
-    <div class="field"><label>官方 Registry 最近更新（仅可导入的 stdio）</label><div id="mcp-registry-default" class="hint">加载中…</div></div>
-    <div class="hint">官方 Registry 是目录/API，不是一键安装商店；要浏览完整目录可以看
+    <div class="mcp-toolbar">
+      <input type="search" id="mcp-registry-query" placeholder="搜索预设或官方 Registry…" />
+      <button type="button" class="btn btn-small" id="mcp-preset-search">搜索预设</button>
+      <button type="button" class="btn btn-small" id="mcp-registry-search">官方 Registry</button>
+      <button type="button" class="btn btn-small" id="mcp-add-server">＋ 自定义 server</button>
+      <span class="muted" id="mcp-registry-result"></span>
+    </div>
+    <div id="mcp-registry-results" class="mcp-catalog-grid"></div>
+    <div class="mcp-section-label">常用预设 <span>按群聊场景挑的，导入后仍要确认命令和权限</span></div>
+    <div id="mcp-preset-list" class="mcp-catalog-grid"><div class="mcp-empty">加载中…</div></div>
+    <div class="mcp-section-label">官方 Registry 最近更新 <span>只列可导入的 stdio server</span></div>
+    <div id="mcp-registry-default" class="mcp-catalog-grid"><div class="mcp-empty">加载中…</div></div>
+    <div class="hint">官方 Registry 是目录/API，不是一键安装商店；完整目录见
       <a href="https://registry.modelcontextprotocol.io/" target="_blank" rel="noreferrer">registry.modelcontextprotocol.io</a> 或
       <a href="https://glama.ai/mcp/servers" target="_blank" rel="noreferrer">Glama</a>。</div>
-    <div id="mcp-servers">${servers.length ? servers.map((server) => mcpServerRowHtml(server)).join('') : '<div class="hint">还没有 server：点下面「＋ 添加 server」，填命令和参数。</div>'}</div>
-    <div class="settings-inline-actions">
-      <button type="button" class="btn btn-small" id="mcp-add-server">＋ 添加 server</button>
+    <h3 id="settings-mcp-servers">已配置的 server</h3>
+    <div class="mcp-toolbar">
       <button type="button" class="btn btn-small" id="mcp-reload">重新加载</button>
       <span class="muted" id="mcp-reload-result"></span>
+      <span class="mcp-status-line" id="mcp-status">读取中…</span>
     </div>
-    <div class="field"><label>运行状态</label><div class="hint" id="mcp-status">读取中…</div></div>`;
+    <div id="mcp-servers" class="mcp-server-list">${servers.length ? servers.map((server) => mcpServerRowHtml(server)).join('') : '<div class="mcp-empty">还没有 server：从上面的预设导入，或点「＋ 自定义 server」。</div>'}</div>`;
 }
 
 function renderKnowledgeSection(c) {
@@ -133,12 +149,27 @@ function renderCatalog(box, items) {
   if (!box) return;
   box.__results = Array.isArray(items) ? items : [];
   box.innerHTML = box.__results.length
-    ? box.__results.map((item, index) => `<div class="mcp-registry-item">
-        <div><strong>${esc(item.title || item.name)}</strong> <span class="muted">${esc(item.name)} ${esc(item.version || '')}</span></div>
-        <div class="hint">${esc(item.description || '')}</div>
-        <button type="button" class="btn btn-small mcp-registry-import" data-index="${index}" ${item.unsupported ? 'disabled' : ''}>${item.unsupported ? esc(item.reason || '不支持 stdio') : '导入'}</button>
-      </div>`).join('')
-    : '<div class="hint">没有可导入的 stdio server。</div>';
+    ? box.__results.map((item, index) => {
+      const source = item.source === 'preset' ? '预设' : '官方';
+      const category = item.category || (item.source === 'preset' ? '效率' : '官方目录');
+      const initial = String(item.title || item.name || '?').slice(0, 1).toUpperCase();
+      const meta = [source, category, item.version ? `v${item.version}` : ''].filter(Boolean).join(' · ');
+      const command = item.config?.command || '';
+      return `<article class="mcp-card">
+        <div class="mcp-card-head">
+          <span class="mcp-tile" style="--mcp-h:${hueOf(item.id || item.name)}">${esc(initial)}</span>
+          <div class="mcp-card-title"><strong>${esc(item.title || item.name)}</strong><span>${esc(meta)}</span></div>
+          <button type="button" class="btn btn-small mcp-registry-import" data-index="${index}" ${item.unsupported ? 'disabled' : ''}>${item.unsupported ? '仅远程' : '导入'}</button>
+        </div>
+        <div class="mcp-card-desc">${esc(item.description || '')}</div>
+        <div class="mcp-card-foot">
+          <span class="mcp-badge">stdio</span>
+          ${command ? `<span class="mcp-badge">${esc(command)}</span>` : ''}
+          ${item.unsupported ? `<span class="mcp-badge is-warn">${esc(item.reason || '不支持 stdio')}</span>` : ''}
+        </div>
+      </article>`;
+    }).join('')
+    : '<div class="mcp-empty">没有可导入的 stdio server。</div>';
 }
 
 function attachCatalogImport(box) {
@@ -151,8 +182,8 @@ function attachCatalogImport(box) {
     if (!item?.config) return;
     const servers = $('#mcp-servers');
     if (!servers) return;
-    servers.querySelector('.hint')?.remove();
-    servers.insertAdjacentHTML('beforeend', mcpServerRowHtml(item.config));
+    servers.querySelector('.mcp-empty')?.remove();
+    servers.insertAdjacentHTML('beforeend', mcpServerRowHtml(item.config, { open: true }));
     servers.lastElementChild?.scrollIntoView({ block: 'nearest' });
     button.disabled = true;
     button.textContent = '已导入，记得保存';
@@ -199,7 +230,7 @@ function bindExtensionSettings() {
         timeoutMs: 30000,
         maxCallsPerMinute: 30,
         toolMounting: 'direct'
-      }));
+      }, { open: true }));
     });
   }
   if (box) {
@@ -311,6 +342,12 @@ async function hydrateExtensionStatus() {
           const err = row.error ? ` · ${row.error}` : '';
           return `<div>${esc(row.id)}：${stateText}${esc(tools)}${esc(err)}</div>`;
         }).join('');
+      }
+      for (const badge of document.querySelectorAll('[data-mcp-state]')) {
+        const row = rows.find((item) => item.id === badge.dataset.mcpState);
+        if (!row) continue;
+        badge.textContent = row.ready ? '就绪' : row.starting ? '启动中' : row.error ? '未就绪' : '未启用';
+        badge.className = `mcp-server-state ${row.ready ? 'is-ready' : row.error ? 'is-error' : ''}`;
       }
     } catch (error) {
       mcpBox.textContent = `读取失败：${error.message}`;

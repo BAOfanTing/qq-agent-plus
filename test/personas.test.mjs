@@ -70,6 +70,13 @@ test('roles/ 下的每个文件都已登记（新增卡忘了登记会失败）'
   }
 });
 
+test('示例的分条说明与平台口径一致：用 send_message 数组，不用空格分句', () => {
+  for (const [id, p] of Object.entries(PERSONAS)) {
+    assert.doesNotMatch(p.text, /空格表示分成两条消息/, `${id} 还在教模型用空格分句`);
+    assert.match(p.text, /实际发送用 send_message 数组/, `${id} 的示例缺少"用数组发送"的说明`);
+  }
+});
+
 test('角色卡不引用旧架构指令，提到的工具都真实存在', () => {
   const toolsSource = fs.readFileSync(path.join(repoRoot, 'src/tools/tools-core.js'), 'utf8');
   const tools = new Set([...toolsSource.matchAll(/name: '([a-z][a-z0-9_]*)'/g)].map((m) => m[1]));

@@ -56,6 +56,8 @@ export function mapRegistryEntry(entry) {
       description: String(entry.description || ''),
       repository: String(entry.repository?.url || ''),
       version: String(entry.version || ''),
+      category: '官方目录',
+      source: 'registry',
       unsupported: true,
       reason: '只提供远程 HTTP 或未声明可运行的 stdio 包'
     };
@@ -69,6 +71,8 @@ export function mapRegistryEntry(entry) {
     description: String(entry.description || ''),
     repository: String(entry.repository?.url || ''),
     version: String(entry.version || ''),
+    category: '官方目录',
+    source: 'registry',
     unsupported: false,
     config: {
       id: safeId(name),
