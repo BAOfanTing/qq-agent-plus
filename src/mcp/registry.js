@@ -86,8 +86,10 @@ export function mapRegistryEntry(entry) {
 
 export async function searchRegistry(query, { fetchImpl = safeFetch, limit = 20 } = {}) {
   const q = String(query || '').trim();
-  if (!q) return [];
-  const url = `${REGISTRY_URL}?search=${encodeURIComponent(q)}&limit=${Math.max(1, Math.min(50, Number(limit) || 20))}`;
+  const size = Math.max(1, Math.min(50, Number(limit) || 20));
+  const url = q
+    ? `${REGISTRY_URL}?search=${encodeURIComponent(q)}&limit=${size}`
+    : `${REGISTRY_URL}?limit=${size}`;
   const res = await fetchImpl(url, { maxBytes: 500000, signal: AbortSignal.timeout(15000) });
   if (!res || res.statusCode >= 400) throw new Error(`MCP Registry 返回 ${res?.statusCode || '未知状态'}`);
   let data = null;

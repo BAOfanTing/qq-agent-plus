@@ -1237,6 +1237,17 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .knowledge-file-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; flex-wrap: wrap; }
 .mcp-registry-item { padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent); }
 .mcp-registry-item:first-child { border-top: 0; }
+.file-picker { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.file-picker .btn { pointer-events: none; }
+.file-picker-name { color: var(--muted); font-size: var(--fs-sm); }
+.file-picker-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
 
 /* 时段编辑器：复用时间控制的 .tc-window，但只有"开始/结束/删除"三列 */
 .pro-window { grid-template-columns: minmax(0, 1fr) 130px 28px; }

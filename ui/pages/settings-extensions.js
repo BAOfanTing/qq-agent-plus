@@ -4,8 +4,6 @@
 import { api } from '../core/api.js';
 import { $, esc } from '../core/dom.js';
 
-let registryResults = [];
-
 function mcpServerRowHtml(server = {}) {
   const id = esc(server.id || '');
   const args = esc(JSON.stringify(Array.isArray(server.args) ? server.args : []));
@@ -52,6 +50,11 @@ function renderMcpSection(c) {
       </div>
     </div>
     <div id="mcp-registry-results"></div>
+    <div class="field"><label>常用预设</label><div id="mcp-preset-list" class="hint">加载中…</div></div>
+    <div class="field"><label>官方 Registry 最近更新（仅可导入的 stdio）</label><div id="mcp-registry-default" class="hint">加载中…</div></div>
+    <div class="hint">官方 Registry 是目录/API，不是一键安装商店；要浏览完整目录可以看
+      <a href="https://registry.modelcontextprotocol.io/" target="_blank" rel="noreferrer">registry.modelcontextprotocol.io</a> 或
+      <a href="https://glama.ai/mcp/servers" target="_blank" rel="noreferrer">Glama</a>。</div>
     <div id="mcp-servers">${servers.length ? servers.map((server) => mcpServerRowHtml(server)).join('') : '<div class="hint">还没有 server：点下面「＋ 添加 server」，填命令和参数。</div>'}</div>
     <div class="settings-inline-actions">
       <button type="button" class="btn btn-small" id="mcp-add-server">＋ 添加 server</button>
@@ -76,7 +79,12 @@ function renderKnowledgeSection(c) {
     <div class="hint">把群规/FAQ/手册放进这个目录，保存后模型可通过 knowledge_search 检索并带来源回答。不是完整 RAG：没有向量检索、没有 PDF/DOCX 解析。</div>
     <div class="field"><label>文档</label><div class="hint" id="knowledge-files">读取中…</div></div>
     <div class="field"><label>上传文档（.md / .txt，可多选）</label>
-      <input type="file" id="knowledge-file-upload" accept=".md,.txt,text/plain,text/markdown" multiple /></div>
+      <label class="file-picker" for="knowledge-file-upload">
+        <span class="btn btn-small">选择文件</span>
+        <span class="file-picker-name" id="knowledge-file-upload-name">未选择文件</span>
+        <input type="file" id="knowledge-file-upload" class="file-picker-input" accept=".md,.txt,text/plain,text/markdown" multiple />
+      </label>
+    </div>
     <div class="field-row">
       <div class="field"><label>文件名</label><input type="text" id="knowledge-file-name" placeholder="群规.md" /></div>
       <div class="field"><label>操作</label>
@@ -121,6 +129,36 @@ async function reloadMcp() {
   await hydrateExtensionStatus();
 }
 
+function renderCatalog(box, items) {
+  if (!box) return;
+  box.__results = Array.isArray(items) ? items : [];
+  box.innerHTML = box.__results.length
+    ? box.__results.map((item, index) => `<div class="mcp-registry-item">
+        <div><strong>${esc(item.title || item.name)}</strong> <span class="muted">${esc(item.name)} ${esc(item.version || '')}</span></div>
+        <div class="hint">${esc(item.description || '')}</div>
+        <button type="button" class="btn btn-small mcp-registry-import" data-index="${index}" ${item.unsupported ? 'disabled' : ''}>${item.unsupported ? esc(item.reason || '不支持 stdio') : '导入'}</button>
+      </div>`).join('')
+    : '<div class="hint">没有可导入的 stdio server。</div>';
+}
+
+function attachCatalogImport(box) {
+  if (!box || box.dataset.importBound === '1') return;
+  box.dataset.importBound = '1';
+  box.addEventListener('click', (event) => {
+    const button = event.target.closest('.mcp-registry-import');
+    if (!button) return;
+    const item = box.__results?.[Number(button.dataset.index)];
+    if (!item?.config) return;
+    const servers = $('#mcp-servers');
+    if (!servers) return;
+    servers.querySelector('.hint')?.remove();
+    servers.insertAdjacentHTML('beforeend', mcpServerRowHtml(item.config));
+    servers.lastElementChild?.scrollIntoView({ block: 'nearest' });
+    button.disabled = true;
+    button.textContent = '已导入，记得保存';
+  });
+}
+
 function bindExtensionSettings() {
   const runRegistrySearch = async (endpoint, button) => {
     const query = String($('#mcp-registry-query')?.value || '').trim();
@@ -131,17 +169,9 @@ function bindExtensionSettings() {
     if (result) result.textContent = '搜索中…';
     try {
       const data = await api(`${endpoint}?query=${encodeURIComponent(query)}`);
-      registryResults = Array.isArray(data.results) ? data.results : [];
-      if (result) result.textContent = registryResults.length ? `${registryResults.length} 个结果` : '没有结果';
-      if (box) {
-        box.innerHTML = registryResults.length
-          ? registryResults.map((item, index) => `<div class="mcp-registry-item">
-              <div><strong>${esc(item.title || item.name)}</strong> <span class="muted">${esc(item.name)} ${esc(item.version || '')}</span></div>
-              <div class="hint">${esc(item.description || '')}</div>
-              <button type="button" class="btn btn-small mcp-registry-import" data-index="${index}" ${item.unsupported ? 'disabled' : ''}>${item.unsupported ? esc(item.reason || '不支持 stdio') : '导入'}</button>
-            </div>`).join('')
-          : '<div class="hint">没有匹配的 stdio server。目录里很多 server 只支持远程 HTTP，当前客户端只支持 stdio。</div>';
-      }
+      const items = Array.isArray(data.results) ? data.results : [];
+      if (result) result.textContent = items.length ? `${items.length} 个结果` : '没有结果';
+      renderCatalog(box, items);
     } catch (error) {
       if (result) result.textContent = `失败：${error.message}`;
     } finally {
@@ -152,21 +182,8 @@ function bindExtensionSettings() {
   if (presetSearch) presetSearch.addEventListener('click', () => runRegistrySearch('/api/mcp/presets', presetSearch));
   const registrySearch = $('#mcp-registry-search');
   if (registrySearch) registrySearch.addEventListener('click', () => runRegistrySearch('/api/mcp/registry', registrySearch));
-  const registryBox = $('#mcp-registry-results');
-  if (registryBox) {
-    registryBox.addEventListener('click', (event) => {
-      const button = event.target.closest('.mcp-registry-import');
-      if (!button) return;
-      const item = registryResults[Number(button.dataset.index)];
-      if (!item?.config) return;
-      const servers = $('#mcp-servers');
-      if (!servers) return;
-      servers.querySelector('.hint')?.remove();
-      servers.insertAdjacentHTML('beforeend', mcpServerRowHtml(item.config));
-      servers.lastElementChild?.scrollIntoView({ block: 'nearest' });
-      button.disabled = true;
-      button.textContent = '已导入，记得保存';
-    });
+  for (const id of ['#mcp-registry-results', '#mcp-preset-list', '#mcp-registry-default']) {
+    attachCatalogImport($(id));
   }
   const add = $('#mcp-add-server');
   const box = $('#mcp-servers');
@@ -207,6 +224,8 @@ function bindExtensionSettings() {
     upload.addEventListener('change', async () => {
       const result = $('#knowledge-file-result');
       const files = [...(upload.files || [])];
+      const nameBox = $('#knowledge-file-upload-name');
+      if (nameBox) nameBox.textContent = files.length ? files.map((file) => file.name).join('、') : '未选择文件';
       if (!files.length) return;
       upload.disabled = true;
       const done = [];
@@ -224,6 +243,7 @@ function bindExtensionSettings() {
       }
       if (result) result.textContent = done.join('；');
       upload.value = '';
+      if (nameBox) nameBox.textContent = '未选择文件';
       upload.disabled = false;
       await hydrateExtensionStatus();
     });
@@ -295,6 +315,31 @@ async function hydrateExtensionStatus() {
     } catch (error) {
       mcpBox.textContent = `读取失败：${error.message}`;
     }
+  }
+  const presetList = $('#mcp-preset-list');
+  if (presetList) {
+    try {
+      const data = await api('/api/mcp/presets');
+      renderCatalog(presetList, Array.isArray(data.results) ? data.results : []);
+    } catch (error) {
+      presetList.textContent = `读取失败：${error.message}`;
+    }
+  }
+  const registryDefault = $('#mcp-registry-default');
+  if (registryDefault) {
+    void (async () => {
+      try {
+        const data = await api('/api/mcp/registry');
+        const items = (Array.isArray(data.results) ? data.results : []).filter((item) => !item.unsupported);
+        if (!items.length) {
+          registryDefault.innerHTML = '<div class="hint">官方 Registry 最近更新里没有可直接导入的 stdio server；可以用上面的搜索，或先用常用预设。</div>';
+        } else {
+          renderCatalog(registryDefault, items.slice(0, 10));
+        }
+      } catch (error) {
+        registryDefault.innerHTML = `<div class="hint">官方 Registry 暂时不可达：${esc(error.message)}。常用预设仍可离线使用。</div>`;
+      }
+    })();
   }
   const kbBox = $('#knowledge-status');
   if (kbBox) {

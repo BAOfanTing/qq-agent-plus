@@ -60,6 +60,18 @@ it('内置预设离线可用，按关键词过滤', () => {
   assert.equal(searchPresets('no-such-server').length, 0);
 });
 
+it('空查询走“最近更新”列表（不带 search 参数）', async () => {
+  let calledUrl = '';
+  const fetchImpl = async (url) => {
+    calledUrl = url;
+    return { statusCode: 200, body: JSON.stringify([npmEntry]) };
+  };
+  const results = await searchRegistry('', { fetchImpl });
+  assert.match(calledUrl, /\?limit=/);
+  assert.doesNotMatch(calledUrl, /search=/);
+  assert.equal(results.length, 1);
+});
+
 it('同名多版本只保留最高版本；兼容数组/对象两种响应', async () => {
   const fetchImpl = async () => ({
     statusCode: 200,

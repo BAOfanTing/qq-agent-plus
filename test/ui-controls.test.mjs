@@ -52,7 +52,8 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
     'cfg-knowledge-enabled', 'cfg-knowledge-dir', 'cfg-knowledge-maxresults',
     'cfg-knowledge-chunk', 'cfg-knowledge-overlap', 'knowledge-status',
     'knowledge-file-name', 'knowledge-file-content', 'knowledge-file-save', 'knowledge-reindex', 'knowledge-files',
-    'knowledge-file-upload', 'mcp-registry-query', 'mcp-registry-search', 'mcp-registry-results', 'mcp-preset-search',
+    'knowledge-file-upload', 'knowledge-file-upload-name', 'mcp-registry-query', 'mcp-registry-search', 'mcp-registry-results', 'mcp-preset-search',
+    'mcp-preset-list', 'mcp-registry-default',
     'cfg-moderation-enabled', 'cfg-moderation-ban', 'cfg-moderation-kick',
     'cfg-moderation-recall', 'cfg-moderation-admin', 'cfg-moderation-groups']) {
     assert.ok(extensions.includes(`id="${id}"`), `缺少扩展设置控件 ${id}`);
