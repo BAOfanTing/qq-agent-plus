@@ -53,6 +53,34 @@ export const MCP_PRESETS = [
     { GITHUB_PERSONAL_ACCESS_TOKEN: '' }
   ),
   preset(
+    'everything',
+    'Everything',
+    '官方参考实现，包含多种示例工具，适合先验证 MCP 接入是否正常。',
+    'npx',
+    ['-y', '@modelcontextprotocol/server-everything']
+  ),
+  preset(
+    'sequential-thinking',
+    'Sequential Thinking',
+    '把复杂问题拆成可回溯的思考步骤，适合规划和推理。',
+    'npx',
+    ['-y', '@modelcontextprotocol/server-sequential-thinking']
+  ),
+  preset(
+    'fetch',
+    'Fetch',
+    '抓取网页并转成 markdown，适合给模型读文章。需要本机有 uv/uvx。',
+    'uvx',
+    ['mcp-server-fetch']
+  ),
+  preset(
+    'time',
+    'Time',
+    '时区/时间换算。需要本机有 uv/uvx。',
+    'uvx',
+    ['mcp-server-time']
+  ),
+  preset(
     'playwright',
     'Playwright',
     '浏览器自动化：打开网页、点击、抓页面。首次运行可能需要安装浏览器。',
