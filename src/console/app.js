@@ -2828,7 +2828,8 @@ export function createApp({
   );
   router.add('GET', '/api/memes', async (_req, res, params, url) => {
     const chatKey = String(url?.searchParams?.get('chatKey') || '').trim();
-    return json(res, 200, { ok: true, entries: listMemes(chatKey), ...memeStats() });
+    const stats = memeStats();
+    return json(res, 200, { ok: true, entries: listMemes(chatKey), count: stats.entries, chats: stats.chats });
   });
   router.add('POST', '/api/memes', async (req, res) => {
     const body = await readBody(req).catch(() => ({}));

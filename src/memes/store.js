@@ -91,6 +91,7 @@ export function lookupMemes(chatKey, query = '', limit = 6) {
 }
 
 export function memesForPrompt(chatKey, text = '') {
+  if (!String(text || '').trim()) return '';
   const hits = lookupMemes(chatKey, text, 6);
   if (!hits.length) return '';
   const lines = hits.map((entry) => {

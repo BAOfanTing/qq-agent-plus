@@ -118,22 +118,38 @@ function renderKnowledgeSection(c) {
     <div class="field"><label>索引状态</label><div class="hint" id="knowledge-status">读取中…</div></div>`;
 }
 
-function renderMemesSection() {
+function renderMemesSection(c) {
+  const groups = Array.isArray(c?.allow?.groups) ? c.allow.groups.map((id) => String(id).trim()).filter(Boolean) : [];
+  const privates = Array.isArray(c?.allow?.private) ? c.allow.private.map((id) => String(id).trim()).filter(Boolean) : [];
+  const chats = [...new Set([
+    ...groups.map((id) => `group:${id}`),
+    ...privates.map((id) => `private:${id}`)
+  ])];
+  const chatRows = chats.map((key, index) => {
+    const [kind, id] = key.split(':');
+    return `<label class="checkbox-row meme-chat-row"><input type="checkbox" class="meme-chat-check" id="meme-chat-${index}" data-chatkey="${esc(key)}" />
+      <span>${kind === 'group' ? '群' : '私聊'} ${esc(id)}</span></label>`;
+  }).join('');
   return `
     <h3 id="settings-memes">群梗库</h3>
     <div class="hint">群友解释过一次的梗/黑话/外号，按会话保存。机器人会优先按这里的含义理解，不必每次重新搜索；也可以手动补充、删除。
       这里只记梗的含义/用法，不记隐私和人物评价。</div>
-    <div class="field-row">
-      <div class="field"><label>会话（group:群号 或 private:QQ）</label><input type="text" id="meme-chatkey" placeholder="group:123456789" /></div>
-      <div class="field"><label>梗 / 黑话 / 外号</label><input type="text" id="meme-term" placeholder="扎啤" maxlength="40" /></div>
+    <div class="field"><label>添加到哪些会话（可多选）</label>
+      <div id="memes-chat-list">
+        ${chats.length
+          ? `<label class="checkbox-row"><input type="checkbox" id="memes-select-all" /> <span>全选</span></label>${chatRows}`
+          : '<div class="hint">还没有已添加的群聊/私聊；先在「聊天白名单」里加一个。</div>'}
+      </div>
+      <div class="hint">列表来自已添加的群聊/私聊白名单；已保存但不在白名单里的旧条目仍可在下方删除。</div>
     </div>
-    <div class="field"><label>含义</label><input type="text" id="meme-meaning" placeholder="杂鱼的谐音，用来阴阳人菜/不行" maxlength="500" /></div>
     <div class="field-row">
-      <div class="field"><label>用法 / 例句（可选）</label><input type="text" id="meme-usage" placeholder="你太扎啤了 = 你太菜了" maxlength="300" /></div>
+      <div class="field"><label>梗 / 黑话 / 外号</label><input type="text" id="meme-term" placeholder="扎啤" maxlength="40" /></div>
       <div class="field"><label>别名（逗号分隔，可选）</label><input type="text" id="meme-aliases" placeholder="扎啤吧, 杂鱼" maxlength="200" /></div>
     </div>
+    <div class="field"><label>含义</label><input type="text" id="meme-meaning" placeholder="杂鱼的谐音，用来阴阳人菜/不行" maxlength="500" /></div>
+    <div class="field"><label>用法 / 例句（可选）</label><input type="text" id="meme-usage" placeholder="你太扎啤了 = 你太菜了" maxlength="300" /></div>
     <div class="settings-inline-actions">
-      <button type="button" class="btn btn-small" id="memes-add">添加 / 更新</button>
+      <button type="button" class="btn btn-small" id="memes-add">添加到选中会话</button>
       <span class="muted" id="memes-result"></span>
     </div>
     <div class="field"><label>已有梗库</label><div class="hint" id="memes-list">读取中…</div></div>`;
@@ -361,29 +377,52 @@ function bindExtensionSettings() {
   if (memeAdd) {
     memeAdd.addEventListener('click', async () => {
       const result = $('#memes-result');
-      const payload = {
-        chatKey: String($('#meme-chatkey')?.value || '').trim(),
+      const selected = [...document.querySelectorAll('.meme-chat-check:checked')]
+        .map((node) => node.dataset.chatkey)
+        .filter(Boolean);
+      const base = {
         term: String($('#meme-term')?.value || '').trim(),
         meaning: String($('#meme-meaning')?.value || '').trim(),
         usage: String($('#meme-usage')?.value || '').trim(),
         aliases: String($('#meme-aliases')?.value || '').split(/[,，、]/).map((x) => x.trim()).filter(Boolean)
       };
+      if (!selected.length) { if (result) result.textContent = '先勾选要添加到的群聊/私聊'; return; }
+      if (!base.term || !base.meaning) { if (result) result.textContent = '梗名和含义都不能为空'; return; }
       memeAdd.disabled = true;
-      if (result) result.textContent = '正在保存…';
+      if (result) result.textContent = `正在写入 ${selected.length} 个会话…`;
+      let saved = 0;
+      const failed = [];
       try {
-        const data = await api('/api/memes', { method: 'POST', body: JSON.stringify(payload) });
-        if (result) result.textContent = data.ok ? `已保存「${data.entry?.term || payload.term}」` : `失败：${data.error || ''}`;
-        if (data.ok) {
+        for (const chatKey of selected) {
+          try {
+            const data = await api('/api/memes', {
+              method: 'POST',
+              body: JSON.stringify({ ...base, chatKey })
+            });
+            if (data.ok) saved += 1;
+            else failed.push(`${chatKey}：${data.error || '失败'}`);
+          } catch (error) {
+            failed.push(`${chatKey}：${error.message}`);
+          }
+        }
+        if (result) {
+          result.textContent = `已写入 ${saved} 个会话${failed.length ? `；失败：${failed.join('；')}` : ''}`;
+        }
+        if (saved) {
           for (const id of ['#meme-term', '#meme-meaning', '#meme-usage', '#meme-aliases']) {
             const node = $(id); if (node) node.value = '';
           }
           await hydrateExtensionStatus();
         }
-      } catch (error) {
-        if (result) result.textContent = `失败：${error.message}`;
       } finally {
         memeAdd.disabled = false;
       }
+    });
+  }
+  const selectAll = $('#memes-select-all');
+  if (selectAll) {
+    selectAll.addEventListener('change', () => {
+      for (const node of document.querySelectorAll('.meme-chat-check')) node.checked = selectAll.checked;
     });
   }
   const memesBox = $('#memes-list');

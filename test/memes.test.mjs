@@ -31,6 +31,7 @@ test('记住/查找：按会话隔离，支持别名，同一个词是更新不�
   assert.equal(memeStats().entries, 2);
   assert.match(memesForPrompt('group:200', '最近都在喝大水'), /弱者喝饮料强者喝大水/);
   assert.equal(memesForPrompt('group:200', '今天天气不错'), '', '当前消息没提就不注入，省 token');
+  assert.equal(memesForPrompt('group:200', ''), '', '没有当前消息（主动发言）时不要把所有梗都灌进去');
 });
 
 test('工具：meme_remember 写进当前会话，meme_lookup 能读出来', async () => {
