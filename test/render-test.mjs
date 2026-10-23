@@ -913,7 +913,7 @@ try {
     && saverHtml.includes('档位读 80/50/30 条')
     && saverHtml.includes('<strong>80</strong>') && saverHtml.includes('（被夹住）')
     && saverHtml.includes('单次运行最大工具轮数')
-    && store.get('#settings-sidebar').innerHTML.includes('省 Token');
+    && store.get('#settings-sidebar').innerHTML.includes('Token 节省');
   saverOk ? pass++ : fail++;
   console.log('  ' + (saverOk ? 'OK   ' : 'FAIL ') + '省 Token 分区：三档选择 + 生效值对照表 + 设置菜单入口');
 

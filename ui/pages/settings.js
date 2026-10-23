@@ -71,7 +71,7 @@ function renderSettingsSidebar() {
   // （ui-smoke 断言 .settings-menu-item[data-section=...] 仍在，锚点不受影响）。
   const menu = [
     ['对话与人格', [['persona', '人设'], ['chat', '聊天设置'], ['messageTypes', '消息类型'], ['allow', '聊天白名单'], ['memory', '记忆']]],
-    ['模型与服务', [['api', '模型 API'], ['search', '搜索服务'], ['asr', '语音转文字'], ['token-saver', '省 Token']]],
+    ['模型与服务', [['api', '模型 API'], ['search', '搜索服务'], ['asr', '语音转文字'], ['token-saver', 'Token 节省']]],
     ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
     ['平台', [['platform', '平台能力'], ['onebot', 'OneBot']]],
     ['系统', [['appearance', '外观'], ['desktop', '系统']]]
@@ -892,7 +892,7 @@ function renderTokenSaverSection(c) {
       <td>${row.clamped ? `<strong>${esc(row.effective)}</strong> <span class="muted">（被夹住）</span>` : esc(row.effective)}</td>
     </tr>`).join('');
   return `
-    <h3 id="settings-token-saver">省 Token</h3>
+    <h3 id="settings-token-saver">Token 节省</h3>
     <div class="hint" style="margin-bottom:8px">开启后只给下面这些项<b>夹上限</b>，不改写你在各分区填的值 —— 关掉立刻恢复原样。
       每次模型调用的固定底（系统提示 + 工具定义，约 1.2 万-1.5 万 token）不受此影响，
       想再省就配合「聊天设置」的响应概率与「搜索服务 / 图片输入」开关。</div>
