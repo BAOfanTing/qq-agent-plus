@@ -226,11 +226,11 @@ import { api } from './core/api.js';
 
     const panel = document.createElement('section');
     panel.dataset.globalAdminSettings = 'true';
-    panel.style.cssText = 'padding-bottom:16px;margin-bottom:18px;border-bottom:1px solid var(--border)';
+    panel.className = 'settings-card';
     panel.innerHTML = `
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div>
-          <h3 style="margin:0 0 4px">全局管理员 QQ</h3>
+          <h3 style="margin:0 0 4px;color:var(--text);font-size:var(--fs-lg);font-weight:650;letter-spacing:.2px">全局管理员 QQ</h3>
           <div class="hint">好友审批、异常告警、自动更新等所有管理员能力统一使用此 QQ。保存后会自动加入私聊白名单。</div>
         </div>
         <button type="button" class="btn btn-primary btn-small" data-global-admin-save>保存管理员</button>

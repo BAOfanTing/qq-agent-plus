@@ -331,6 +331,34 @@ export const DEFAULT_CONFIG = {
     hardSplitAt: 4000,      // QQ 硬限制切分（0 = 不限制）
     typingIndicator: true   // 私聊发言前亮「正在输入」（群聊 QQ 没有这个能力）
   },
+  // 人类化（可选）：只影响"怎么发"，不改模型内容本身。
+  // 默认关闭：延迟发送会改变用户可感知的节奏，升级后应由管理员显式打开。
+  humanize: {
+    enabled: false,
+    // 回复前的等待：按本轮总字数模拟"读完再打字"的时间，夹在 [minMs,maxMs] 内再叠加字数。
+    replyDelay: {
+      enabled: true,
+      minMs: 500,
+      maxMs: 1800,
+      perCharMs: 12,
+      capMs: 8000
+    },
+    // 反 AI 味：去掉/拦截"作为一个 AI""希望对你有帮助"这类客服腔。
+    antiAi: {
+      enabled: true,
+      blockSevere: true
+    },
+    // 精力/心情/作息影响语气（同一人设跨群共享；只写一句提示词，不调模型）。
+    personaState: {
+      enabled: true,
+      sleepStart: '00:00',
+      sleepEnd: '07:00'
+    },
+    // 记住和每个人的互动次数，格式化成"关系：刚认识/有点熟/熟/很熟"。
+    relationship: {
+      enabled: true
+    }
+  },
   // 主动开话题（可选）
   proactive: {
     enabled: false,

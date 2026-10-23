@@ -15,6 +15,40 @@ import {
   sliderToTierUI_tierToSlider
 } from '../core/format.js';
 import { state } from '../core/state.js';
+
+/** 主动开话题的一个时段行（新增/删除共用同一份 HTML，避免两处漂移）。 */
+export function proactiveWindowRowHtml(window = {}) {
+  const start = esc(String(window.start ?? '09:00'));
+  const end = esc(String(window.end ?? '24:00'));
+  return `
+    <div class="tc-window pro-window">
+      <div class="field"><label>开始</label><input class="pro-start" type="time" value="${start}" /></div>
+      <div class="field"><label>结束</label><input class="pro-end" type="text" inputmode="numeric" value="${end}" placeholder="24:00" /></div>
+      <button type="button" class="icon-btn pro-remove" title="删除时段" aria-label="删除时段">×</button>
+    </div>`;
+}
+
+function proactiveWindowsForUi(activeHours) {
+  const list = Array.isArray(activeHours?.windows)
+    ? activeHours.windows
+    : (activeHours?.start && activeHours?.end ? [activeHours] : []);
+  return list
+    .filter((window) => window?.start && window?.end)
+    .map((window) => ({ start: window.start, end: window.end }));
+}
+
+/** 主动发言时段：加一行 / 删一行。保存端按 .pro-window 逐行读取，这里只改 DOM。 */
+function bindProactiveWindowEditor() {
+  const box = $('#pro-windows');
+  if (!box) return;
+  $('#pro-add-window')?.addEventListener('click', () => {
+    box.insertAdjacentHTML('beforeend', proactiveWindowRowHtml({ start: '09:00', end: '24:00' }));
+  });
+  box.addEventListener('click', (event) => {
+    const button = event.target.closest('.pro-remove');
+    if (button) button.closest('.pro-window')?.remove();
+  });
+}
 function renderConversationModePanels(conversation = {}) {
   const activeMode = ['legacy', 'threaded', 'lifecycle'].includes(conversation.mode)
     ? conversation.mode
@@ -110,6 +144,11 @@ function renderChatSection(c) {
   const st = c.store || {};
   const storeSync = String(st.sqliteSynchronous || 'FULL').toUpperCase();
   const conversation = c.conversation || {};
+  const proWindows = proactiveWindowsForUi(c.proactive?.activeHours);
+  const humanize = c.humanize || {};
+  const replyDelay = humanize.replyDelay || {};
+  const delayMinMs = Number.isFinite(Number(replyDelay.minMs)) ? Number(replyDelay.minMs) : 500;
+  const delayMaxMs = Number.isFinite(Number(replyDelay.maxMs)) ? Number(replyDelay.maxMs) : 1800;
   // 滑条位置是唯一真相，而且**滑条上的数字就是概率**（与后端 tier-slider.js 同一套规则）
   const sliderPos = sliderToTierUI_tierToSlider(st);
   const { randomPercent: curPct } = sliderToTierUI(sliderPos);
@@ -173,11 +212,21 @@ return `
       <label for="cfg-pro-group">群聊（按群白名单）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-private" ${c.proactive?.privateEnabled === true ? 'checked' : ''} />
       <label for="cfg-pro-private">私聊（按私聊白名单）</label></div>
+    <div class="field pro-windows-field">
+      <label>发言时段（窗口外不主动开口）</label>
+      <div id="pro-windows" class="pro-windows">
+        ${proWindows.map((window) => proactiveWindowRowHtml(window)).join('')}
+      </div>
+      <div class="settings-inline-actions">
+        <button type="button" class="btn btn-small" id="pro-add-window">＋ 添加时段</button>
+      </div>
+      <div class="hint">${proWindows.length ? '按上面的时段生效；跨午夜会自动识别。' : '当前没有时段限制 = 全天都可以主动开口。'}</div>
+    </div>
     <div class="field-row">
-      <div class="field"><label>检查间隔下限（毫秒）</label><input type="number" id="cfg-pro-min" min="60000" value="${esc(c.proactive.checkIntervalMinMs)}" /></div>
-      <div class="field"><label>检查间隔上限（毫秒）</label><input type="number" id="cfg-pro-max" min="120000" value="${esc(c.proactive.checkIntervalMaxMs)}" /></div>
-      <div class="field"><label>触发概率 0~1</label><input type="number" id="cfg-pro-prob" step="0.05" min="0" max="1" value="${esc(c.proactive.probability)}" /></div>
-      <div class="field"><label>冷场判定（毫秒，至少 5 分钟）</label><input type="number" id="cfg-pro-idle" min="300000" max="86400000" step="60000" value="${esc(c.proactive.idleThresholdMs ?? 1800000)}" /></div>
+      <div class="field"><label>检查间隔下限（分钟）</label><input type="number" id="cfg-pro-min" min="1" value="${esc(Math.round((Number(c.proactive.checkIntervalMinMs) || 1800000) / 60000))}" /></div>
+      <div class="field"><label>检查间隔上限（分钟）</label><input type="number" id="cfg-pro-max" min="2" value="${esc(Math.round((Number(c.proactive.checkIntervalMaxMs) || 5400000) / 60000))}" /></div>
+      <div class="field"><label>触发概率（%）</label><input type="number" id="cfg-pro-prob" step="1" min="0" max="100" value="${esc(Math.round((Number(c.proactive.probability) || 0) * 100))}" /></div>
+      <div class="field"><label>冷场判定（分钟，至少 5 分钟）</label><input type="number" id="cfg-pro-idle" min="5" max="1440" step="1" value="${esc(Math.round((Number(c.proactive.idleThresholdMs) || 1800000) / 60000))}" /></div>
     </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-followup" ${c.proactive?.followUpEnabled !== false ? 'checked' : ''} />
       <label for="cfg-pro-followup">说完话没人接，过十来分钟补一句（"？"/"人呢"）</label></div>
@@ -197,6 +246,32 @@ return `
     <div class="hint">
       回复纠正只在“模型写了正文却没调用发送工具”时触发，会多跑一次模型；关掉后这类情况不再补救。
       拍一拍必回会跳过随机概率；关掉后拍一拍按普通群消息处理。
+    </div>
+
+    <h3>所有模式 · 像真人（实验性）</h3>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-enabled" ${humanize.enabled === true ? 'checked' : ''} />
+      <label for="cfg-humanize-enabled">启用人类化节奏与反 AI 味</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-delay-enabled" ${replyDelay.enabled !== false ? 'checked' : ''} />
+      <label for="cfg-humanize-delay-enabled">回复前按字数等一会儿再发（私聊会先显示“正在输入”）</label></div>
+    <div class="field-row">
+      <div class="field"><label for="cfg-humanize-delay-min">最短等待（秒）</label>
+        <input type="number" id="cfg-humanize-delay-min" min="0" max="30" step="0.1" value="${esc((delayMinMs / 1000).toFixed(1))}" /></div>
+      <div class="field"><label for="cfg-humanize-delay-max">最长等待（秒）</label>
+        <input type="number" id="cfg-humanize-delay-max" min="0" max="30" step="0.1" value="${esc((delayMaxMs / 1000).toFixed(1))}" /></div>
+      <div class="field"><label for="cfg-humanize-delay-perchar">每字增加（毫秒）</label>
+        <input type="number" id="cfg-humanize-delay-perchar" min="0" max="200" step="1" value="${esc(Number(replyDelay.perCharMs) || 0)}" /></div>
+    </div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-antaienabled" ${humanize.antiAi?.enabled !== false ? 'checked' : ''} />
+      <label for="cfg-humanize-antaienabled">去掉“作为一个 AI / 希望对你有帮助”这类客服腔</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-blocksevere" ${humanize.antiAi?.blockSevere !== false ? 'checked' : ''} />
+      <label for="cfg-humanize-blocksevere">出现明显的 AI 自指/免责时，让模型重写一次再发</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-state-enabled" ${humanize.personaState?.enabled !== false ? 'checked' : ''} />
+      <label for="cfg-humanize-state-enabled">让精力/心情/在干嘛影响语气（同一人设跨群共享）</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-relationship-enabled" ${humanize.relationship?.enabled !== false ? 'checked' : ''} />
+      <label for="cfg-humanize-relationship-enabled">记住和每个人的关系（只对已有人物印象的人生效）</label></div>
+    <div class="hint">
+      只改变“什么时候发、怎么收尾”，不改角色设定。延迟只作用于本轮第一条，后续气泡仍按发送保护里的间隔；
+      暂停或中止会立刻取消等待。默认关闭，建议先开 0.5–2 秒试一段。
     </div>
 
     <h3>所有模式 · 自主节奏（实验性）</h3>
@@ -870,4 +945,4 @@ function conversationModeForChat(chatKey, cfg = state.config) {
 }
 
 
-export { appendChatMessageRows, loadChats, renderChatSection, updateChatMessagesBody };
+export { appendChatMessageRows, bindProactiveWindowEditor, loadChats, renderChatSection, updateChatMessagesBody };

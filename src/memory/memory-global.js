@@ -3,7 +3,7 @@ import path from 'node:path';
 import { DATA_DIR, getConfig, updateConfig } from '../core/config.js';
 import { todayKey, sanitizeUserText, ZONE_OFFSET_MS } from '../core/util.js';
 import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
-import { GlobalPersonMemoryStore } from './global-person-memory-store.js';
+import { GlobalPersonMemoryStore, relationshipLabel } from './global-person-memory-store.js';
 import { memoryVisibilityOf, visibleImpressions } from '../core/memory-visibility.js';
 
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
@@ -130,8 +130,7 @@ export class MemoryStore {
       tokenSaverCapsOf(getConfig())?.handoffMaxChars
     ))));
   }
-  append(chatKey, category, content, extra = {}) {
-    if (category !== 'memberImpression') return null;
+  append(chatKey, category, content, extra = {}) {    if (category !== 'memberImpression') return null;
     const userId = String(extra.userId || '').trim(); const target = clean(extra.target, 60);
     if (!userId && !target) return null;
     // origin 默认 model（机器人自己记的）；控制台手动新增的传 'manual'
@@ -139,6 +138,7 @@ export class MemoryStore {
   }
   members(chatKey = '') { return this.people.members(chatKey); }
   getMember(chatKey, userId) { return this.people.get(userId); }
+  noteInteraction(userId, opts = {}) { return this.people.noteInteraction(userId, opts); }
   query(chatKey, category = '') {
     if (category && category !== 'memberImpression') return { [category]: [] };
     const memberImpression = [];
@@ -198,6 +198,7 @@ export class MemoryStore {
     const cfg = getConfig();
     const notes = cfg.memberNotes || {};
     const ownerUin = String(cfg?.admin?.ownerUin || '').trim();
+    const relationshipOn = cfg.humanize?.enabled === true && cfg.humanize?.relationship?.enabled !== false;
     const raw = userIds ? [...new Set([...userIds].map(String))].map((id) => this.people.get(id)).filter((m) => m.impressions.length) : this.people.members(chatKey).slice(0, 15);
     // #13：按 memory.visibility 策略过滤到「对这个 chatKey 可见」的印象（默认策略下与历史逐字一致）
     const vis = memoryVisibilityOf(getConfig());
@@ -215,6 +216,9 @@ export class MemoryStore {
       // 说的是管理员本人就要点明：否则模型读到"他自称管理员、要改人设"这类印象时，
       // 不知道说的是自己的设置者，容易当成外人来试探它。
       if (ownerUin && String(m.userId) === ownerUin) who += `（QQ ${ownerUin}，就是管理员本人）`;
+      if (relationshipOn && m.relationship?.interactions > 0) {
+        who += `（关系：${relationshipLabel(m.relationship.interactions)}）`;
+      }
       const recent = [...m.impressions].sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt)).slice(0, 3).reverse();
       // 带上日期：模型才能判断"这是昨天还是两周前"，别把过期印象当现状用。
       // 今年的省掉年份（[09-20]），往年的必须带年份（[2025-12-20]）——

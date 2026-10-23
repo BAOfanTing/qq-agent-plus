@@ -49,6 +49,13 @@ function numKeep(raw, current, min, max, fallback) {
   return Math.min(max, Math.max(min, n));
 }
 
+/** 主动发言时段：HH:MM；结束允许 24:00（表示到当天结束）。 */
+function isClock(value, { end = false } = {}) {
+  const text = String(value ?? '').trim();
+  if (/^([01]\d|2[0-3]):[0-5]\d$/.test(text)) return true;
+  return end && text === '24:00';
+}
+
 async function saveConfig({ quiet = false } = {}) {
   const c = state.config;
   // 只在当前区块的元素存在时才读取，避免“每个区块保存时读取其他区块元素”导致的 null 报错。
@@ -750,18 +757,84 @@ async function saveConfig({ quiet = false } = {}) {
     patch.proactive = {
       ...c.proactive,
       enabled: chk('#cfg-proactive', !!c.proactive?.enabled),
-      checkIntervalMinMs: Number(val('#cfg-pro-min', c.proactive?.checkIntervalMinMs)) || 1800000,
-      checkIntervalMaxMs: Number(val('#cfg-pro-max', c.proactive?.checkIntervalMaxMs)) || 5400000,
-      probability: numKeep(val('#cfg-pro-prob', c.proactive?.probability), c.proactive?.probability, 0, 1, 0.25),
+      checkIntervalMinMs: Math.round(numKeep(
+        val('#cfg-pro-min', (Number(c.proactive?.checkIntervalMinMs) || 1800000) / 60000),
+        (Number(c.proactive?.checkIntervalMinMs) || 1800000) / 60000, 1, 1440, 30
+      ) * 60000),
+      checkIntervalMaxMs: Math.round(numKeep(
+        val('#cfg-pro-max', (Number(c.proactive?.checkIntervalMaxMs) || 5400000) / 60000),
+        (Number(c.proactive?.checkIntervalMaxMs) || 5400000) / 60000, 2, 1440, 90
+      ) * 60000),
+      probability: numKeep(val('#cfg-pro-prob', (Number(c.proactive?.probability) || 0) * 100), (Number(c.proactive?.probability) || 0) * 100, 0, 100, 25) / 100,
       // 后端按 max(300000, …) 收口；这里同口径，避免界面显示 2 分钟、实际按 5 分钟算
-      idleThresholdMs: clampInt(val('#cfg-pro-idle', c.proactive?.idleThresholdMs ?? 1800000), 300000, 86400000, 1800000),
+      idleThresholdMs: Math.round(numKeep(
+        val('#cfg-pro-idle', (Number(c.proactive?.idleThresholdMs) || 1800000) / 60000),
+        (Number(c.proactive?.idleThresholdMs) || 1800000) / 60000, 5, 1440, 30
+      ) * 60000),
       // 默认 true（与升级前行为一致）：没这个控件时才退回已保存配置
       followUpEnabled: chk('#cfg-pro-followup', c.proactive?.followUpEnabled !== false),
       selfWakeEnabled: chk('#cfg-pro-selfwake', c.proactive?.selfWakeEnabled !== false),
       // 范围：群聊默认 true（升级前行为），私聊默认 false（主动私聊需显式打开）；
       // 控件缺失时都按已保存值回退。
       groupEnabled: chk('#cfg-pro-group', c.proactive?.groupEnabled !== false),
-      privateEnabled: chk('#cfg-pro-private', c.proactive?.privateEnabled === true)
+      privateEnabled: chk('#cfg-pro-private', c.proactive?.privateEnabled === true),
+      // 时段：空列表 = 全天；结束允许 24:00；格式不对直接拒绝保存，不静默丢掉用户刚填的值。
+      activeHours: {
+        windows: (() => {
+          const rows = $$('#pro-windows .pro-window').map((row) => ({
+            start: String(row.querySelector('.pro-start')?.value ?? '').trim(),
+            end: String(row.querySelector('.pro-end')?.value ?? '').trim()
+          })).filter((window) => window.start || window.end);
+          for (const window of rows) {
+            if (!isClock(window.start) || !isClock(window.end, { end: true })) {
+              throw new Error('主动发言时段格式不对：开始/结束用 HH:MM，结束可以填 24:00');
+            }
+            if (window.start === window.end) {
+              throw new Error('主动发言时段的开始和结束不能相同；要全天就别加时段');
+            }
+          }
+          return rows;
+        })()
+      }
+    };
+    const savedMinMs = Number(c.humanize?.replyDelay?.minMs);
+    const savedMaxMs = Number(c.humanize?.replyDelay?.maxMs);
+    const fallbackMinMs = Number.isFinite(savedMinMs) ? savedMinMs : 500;
+    const fallbackMaxMs = Number.isFinite(savedMaxMs) ? savedMaxMs : 1800;
+    const delayMin = numKeep(
+      val('#cfg-humanize-delay-min', fallbackMinMs / 1000),
+      fallbackMinMs / 1000, 0, 30, 0.5
+    );
+    const delayMax = numKeep(
+      val('#cfg-humanize-delay-max', fallbackMaxMs / 1000),
+      fallbackMaxMs / 1000, 0, 30, 1.8
+    );
+    patch.humanize = {
+      ...(c.humanize || {}),
+      enabled: chk('#cfg-humanize-enabled', c.humanize?.enabled === true),
+      replyDelay: {
+        ...(c.humanize?.replyDelay || {}),
+        enabled: chk('#cfg-humanize-delay-enabled', c.humanize?.replyDelay?.enabled !== false),
+        minMs: Math.round(Math.min(delayMin, delayMax) * 1000),
+        maxMs: Math.round(Math.max(delayMin, delayMax) * 1000),
+        perCharMs: Math.round(numKeep(
+          val('#cfg-humanize-delay-perchar', c.humanize?.replyDelay?.perCharMs ?? 12),
+          c.humanize?.replyDelay?.perCharMs, 0, 200, 12
+        ))
+      },
+      antiAi: {
+        ...(c.humanize?.antiAi || {}),
+        enabled: chk('#cfg-humanize-antaienabled', c.humanize?.antiAi?.enabled !== false),
+        blockSevere: chk('#cfg-humanize-blocksevere', c.humanize?.antiAi?.blockSevere !== false)
+      },
+      personaState: {
+        ...(c.humanize?.personaState || {}),
+        enabled: chk('#cfg-humanize-state-enabled', c.humanize?.personaState?.enabled !== false)
+      },
+      relationship: {
+        ...(c.humanize?.relationship || {}),
+        enabled: chk('#cfg-humanize-relationship-enabled', c.humanize?.relationship?.enabled !== false)
+      }
     };
     // 收藏总闸（2026-10-02 用户反馈"乱收藏"）：界面是**一个开关** = collectEnabled 与
     // autoCollect 一起开/一起关（自动收与主动收都归它管，两个名字太像、分开摆会造成误解）。

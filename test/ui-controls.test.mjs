@@ -21,13 +21,24 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
     'cfg-pacing-default', 'cfg-pacing-min', 'cfg-pacing-max', 'cfg-pacing-instant',
     'cfg-store-maxmessages', 'cfg-store-keepsessions', 'cfg-store-ioprofile',
     'cfg-store-iocustom', 'cfg-store-persistms', 'cfg-store-sqlitesync',
-    'cfg-proactive', 'cfg-pro-group', 'cfg-pro-private', 'cfg-pro-followup', 'cfg-pro-selfwake']) {
+    'cfg-proactive', 'cfg-pro-group', 'cfg-pro-private', 'cfg-pro-followup', 'cfg-pro-selfwake',
+    'pro-add-window', 'cfg-humanize-enabled', 'cfg-humanize-delay-enabled',
+    'cfg-humanize-delay-min', 'cfg-humanize-delay-max', 'cfg-humanize-delay-perchar',
+    'cfg-humanize-antaienabled', 'cfg-humanize-blocksevere',
+    'cfg-humanize-state-enabled', 'cfg-humanize-relationship-enabled']) {
     assert.ok(chat.includes(`id="${id}"`), `缺少控件 ${id}`);
   }
   assert.match(save, /groupEnabled: chk\('#cfg-pro-group'/,
     '群聊范围开关必须接到保存端，否则界面上勾了也不生效');
   assert.match(save, /privateEnabled: chk\('#cfg-pro-private'/,
     '私聊范围开关必须接到保存端，否则界面上勾了也不生效');
+  assert.match(save, /activeHours: \{[\s\S]*?windows:/,
+    '主动发言时段必须写进 patch.proactive.activeHours.windows');
+  assert.match(save, /patch\.humanize = \{/, '人类化开关必须接到保存端');
+  // 卡片化只改外层结构：h3 分组必须真的走到 cardify，单勾选行才会变成右侧开关
+  assert.match(settings, /function cardifySettings/);
+  assert.match(settings, /function markSwitchRows/);
+  assert.match(settings, /cardifySettings\(box\)/);
   // 默认勾选状态与保存端 fallback 必须同口径：群聊默认开、私聊默认关
   assert.match(chat, /id="cfg-pro-group"[^\n]*groupEnabled !== false/);
   assert.match(chat, /id="cfg-pro-private"[^\n]*privateEnabled === true/);

@@ -13,6 +13,8 @@ const {
   proactiveCandidates,
   proactiveProbability,
   proactiveScopes,
+  proactiveWindows,
+  proactiveWindowState,
   randomWakeDelay,
   triggerKindForTier
 } = await import('../src/core/orchestrator.js');
@@ -2317,6 +2319,39 @@ describe('proactiveCandidates（冷场开话题挑会话）', () => {
       metaOf: () => ({ lastTs: quiet, unread: 0 }),
       canWake: (key) => key === 'private:900001'
     }), ['private:900001'], 'canRun 会挡住不在私聊白名单里的人，候选选择不绕过它');
+  });
+});
+
+describe('主动发言时段（控制台可配的多窗口）', () => {
+  const at = (hhmm) => new Date(`2026-10-23T${hhmm}:00+08:00`).getTime();
+
+  it('解析 windows / 旧的 start-end 两种形状', () => {
+    assert.deepEqual(proactiveWindows({ windows: [{ start: '09:00', end: '12:00' }] }),
+      [{ start: 540, end: 720 }]);
+    assert.deepEqual(proactiveWindows({ start: '14:00', end: '24:00' }), [{ start: 840, end: 1440 }]);
+    assert.deepEqual(proactiveWindows(undefined), [], '未配置 = 全天，由调用方判 active');
+  });
+
+  it('窗口内/外与 24:00 边界', () => {
+    const hours = { windows: [{ start: '09:00', end: '12:00' }] };
+    assert.equal(proactiveWindowState(hours, at('10:00')).active, true);
+    assert.equal(proactiveWindowState(hours, at('12:00')).active, false);
+    assert.equal(proactiveWindowState(hours, at('08:59')).active, false);
+    const late = { windows: [{ start: '14:00', end: '24:00' }] };
+    assert.equal(proactiveWindowState(late, at('23:30')).active, true);
+    assert.equal(proactiveWindowState(late, at('00:30')).active, false);
+  });
+
+  it('跨午夜窗口在两侧都算生效', () => {
+    const hours = { windows: [{ start: '23:00', end: '02:00' }] };
+    assert.equal(proactiveWindowState(hours, at('23:30')).active, true);
+    assert.equal(proactiveWindowState(hours, at('01:30')).active, true);
+    assert.equal(proactiveWindowState(hours, at('12:00')).active, false);
+  });
+
+  it('空列表 = 全天；非法窗口被忽略，不会把机器人永久静音', () => {
+    assert.equal(proactiveWindowState({ windows: [] }, at('03:00')).active, true);
+    assert.equal(proactiveWindowState({ windows: [{ start: 'abc', end: '12:00' }] }, at('03:00')).active, true);
   });
 });
 

@@ -4,7 +4,6 @@
 // 搬运只切不改：每个声明的源码与拆分前逐字节一致（脚本内已核对，勿手改缩进）。
 'use strict';
 
-
 import { currentThinkingRaw, loadSettings, refreshStatus, renderSettings } from '../app.js';
 import { api } from '../core/api.js';
 import { ASR_SERVICES, MODEL_SERVICES_UI, QZONE_RUN_LABELS } from '../core/constants.js';
@@ -28,6 +27,7 @@ import {
 } from './persona.js';
 import { saveConfig } from './settings-save.js';
 import { bindImageGenPreset, bindTtsControls } from './settings-voice.js';
+import { bindProactiveWindowEditor } from './chat.js';
 import {
   openBlocklistModal, openModelAddModal, openModelDeleteModal, openModelPicker, openPriceDialog,
   openWhitelistPicker, renderTimeRuleEditor, startListPoller, syncThinkingUi
@@ -238,6 +238,7 @@ function bindSettingsEvents(c) {
   bindSettingsListsAndGroups(c);
   bindSettingsModelsAndKeys(c);
   bindSettingsPersonaAndVision();
+  bindProactiveWindowEditor();
 }
 
 // ── 设置页绑定·第 1/4 段：保存按钮 + 实验/动态/语音三个分区块 ──
@@ -1795,6 +1796,5 @@ function bindSettingsPersonaAndVision() {
   const pickFriendsBtn = $('#pick-friends-btn');
   if (pickFriendsBtn) pickFriendsBtn.addEventListener('click', () => openWhitelistPicker('friends'));
 }
-
 
 export { bindCrossSectionControls, bindSettingsEvents, captureTimeControlRule, isSplitThinking };

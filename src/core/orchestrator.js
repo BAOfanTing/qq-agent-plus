@@ -80,7 +80,7 @@ function activeHoursMinuteOf(value, end = false) {
 }
 
 /** 解析时间段：支持 {start,end} 或 {windows:[{start,end},…]}；未配置 = 全天。 */
-function proactiveWindows(raw) {
+export function proactiveWindows(raw) {
   const list = [];
   const push = (w) => {
     const start = activeHoursMinuteOf(w?.start);
@@ -93,7 +93,7 @@ function proactiveWindows(raw) {
 }
 
 /** 现在是否在某个窗口内；不在时给出最近的窗口开始时间。 */
-function proactiveWindowState(raw, now) {
+export function proactiveWindowState(raw, now) {
   const windows = proactiveWindows(raw);
   if (!windows.length) return { active: true, nextActiveAt: now };
   const minute = minuteOfDayInZone(now);
@@ -116,6 +116,7 @@ import { assertTimeAllowed, isTimeActive, TimeControlError, timeUntilActive, wat
 import { vendorOfConfig, vendorOfBaseUrl } from '../pricing/model-prices.js';
 import { budgetStatus } from './budget.js';
 import { readOwnerUin } from './notify-owner.js';
+import { notePersonaInteraction, personaStatePrompt } from './persona-state.js';
 import { buildReminderNote, reminderNoteCost } from './reminders.js';
 import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, isAtMe, resolveContextTier } from '../llm/prompt.js';
@@ -1897,6 +1898,17 @@ export class Orchestrator {
     // 一次解析、多处共用 —— 提示词、群内显示名、运行记录必须是同一份，
     // 否则会出现"提示词是猫娘、落款还是小鲸鱼"。
     const persona = resolvePersona(cfg, chatKey);
+    // 人类化状态：有真实互动才轻微抬心情/掉精力；关闭时整条链路不碰。
+    if (cfg.humanize?.enabled === true && triggerEntries?.length) {
+      notePersonaInteraction(persona, { kind: 'incoming' });
+      if (cfg.humanize?.relationship?.enabled !== false) {
+        try {
+          for (const userId of handoffParticipantIds(triggerEntries)) {
+            this.memory.noteInteraction?.(userId, { at: Date.now() });
+          }
+        } catch { /* 关系记忆写盘失败不能打断本轮回复 */ }
+      }
+    }
     const conversationCfg = conversation || conversationConfigForChat(chatKey);
     const chatName = kind === 'group' ? await this.#chatName(chatId) : '';
     const selfNickname = kind === 'group' ? (persona.selfNickname || this.onebot.selfNickname || persona.botName) : persona.botName;
@@ -1998,7 +2010,7 @@ export class Orchestrator {
     const builtinToolDefs = toolDefs;   // 前缀哈希用它（见下），插件工具只按名字参与
     if (pluginToolDefs.length) toolDefs.push(...pluginToolDefs);
     const openAiTools = toOpenAiTools(toolDefs);
-    const systemPrompt = buildSystemPrompt({
+    const baseSystemPrompt = buildSystemPrompt({
       // 按群生效的人设（缺省 = 全局）
       persona,
       // 与【此刻状态】用同一个名字（群名片优先），否则同一次请求里会出现两个"你在群里的名字"
@@ -2012,6 +2024,10 @@ export class Orchestrator {
       platform: cfg.platform,
       chatKey
     });
+    // 状态行放本轮 user 消息，不拼进 system prompt：system 前缀参与 cacheKey/线程续接判定，
+    // 每半小时变一次会让前缀缓存和 lifecycle 线程反复失效。
+    const personaStateLine = personaStatePrompt(persona);
+    const systemPrompt = baseSystemPrompt;
     const promptPrefixHash = crypto.createHash('sha256')
       .update(String(cfg.api.provider || ''))
       .update('\0')
@@ -2151,9 +2167,9 @@ export class Orchestrator {
         : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。');
     const currentUserMessage = {
       role: 'user',
-      content: proactive && !manual
+      content: (personaStateLine ? `${personaStateLine}\n\n` : '') + (proactive && !manual
         ? `${userPrompt}\n\n【本次唤醒】${wakeLead}${wakeTail}`
-        : (paced ? `${userPrompt}\n\n【本次唤醒】${pacedLead}` : userPrompt)
+        : (paced ? `${userPrompt}\n\n【本次唤醒】${pacedLead}` : userPrompt))
     };
     const messages = [
       { role: 'system', content: systemPrompt },

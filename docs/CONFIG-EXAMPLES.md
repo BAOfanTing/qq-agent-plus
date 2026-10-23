@@ -117,6 +117,7 @@
 - 这两项**独立于 `enabled`**，默认 `true`（与引入开关之前的行为一致）。想让它完全不主动开口，
   所有相关勾选都要关；只想关掉"补话"或"自安排唤醒"的，各关各的。
 - `activeHours.windows`：生效时段，窗口外不开口，也不消耗间隔；`24:00` 表示到当天结束（补话与自安排唤醒同样受这个窗口约束）。
+  控制台「聊天设置 → 主动开话题 → 发言时段」可直接增删多行；空列表 = 全天。
 - `idleThresholdMs`：会话安静这么久才考虑开口（群聊与私聊同一口径）。
 - `probability`：每次判定开口的概率。
 - 冷场判定（`idleThresholdMs`）的时间会落盘：重启后不足一个间隔会跳过（避免"重启一次多一次判定"）。
@@ -124,6 +125,38 @@
 - 上面示例里的数值是**示例**、不是出厂默认：出厂 `checkIntervalMinMs` 1800000（30 分钟）、
   `checkIntervalMaxMs` 5400000（90 分钟）、`idleThresholdMs` 1800000（30 分钟）、`probability` 0.25；
   照抄示例会改变行为。
+
+## humanize：更像真人的发送节奏与状态（可选，默认关）
+
+```json
+{
+  "humanize": {
+    "enabled": true,
+    "replyDelay": {
+      "enabled": true,
+      "minMs": 500,
+      "maxMs": 1800,
+      "perCharMs": 12,
+      "capMs": 8000
+    },
+    "antiAi": { "enabled": true, "blockSevere": true },
+    "personaState": { "enabled": true, "sleepStart": "00:00", "sleepEnd": "07:00" },
+    "relationship": { "enabled": true }
+  }
+}
+```
+
+- `enabled`：总开关，默认 `false`。关闭时下面四项都不生效，提示词与发送节奏和升级前逐字一致。
+- `replyDelay`：只作用于本轮**第一条**消息，按总字数模拟"看完再打字"；后续气泡仍按 `send.minGapMs/maxGapMs` 的节奏。
+  私聊会先显示"正在输入"；暂停/中止会立即取消等待。`perCharMs` 填 0 = 不按字数增加。
+- `antiAi`：去掉"作为一个 AI / 希望对你有帮助 / 首先其次总之"这类客服腔；`blockSevere` 打开时，
+  出现明显的 AI 自指/免责会让模型用角色口吻重写一次（同一会话只拦一次，避免死循环）。
+- `personaState`：按人设（`templateId` 或 `botName`）记录精力/心情/在干嘛，每轮只往提示词注入一行；
+  状态随时间缓慢变化，互动会轻微抬心情。`sleepStart/sleepEnd` 是作息窗口，睡眠时段会提示"回复短一点、慢一点"。
+- `relationship`：只对**已经有人物印象**的人累计互动次数，格式化成"关系：刚认识/有点熟/熟/很熟"；
+  不会为陌生人新建档案，也不改变检索与排序。
+- 控制台入口：设置 → 聊天设置 → 「所有模式 · 像真人（实验性）」。
+- 边界：不伪造真人身份；被直接问"你是不是 AI"时仍按角色卡/平台安全规则处理。
 
 ## webSearch：联网搜索（多家 provider + 聚合）
 

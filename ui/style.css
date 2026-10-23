@@ -1168,6 +1168,63 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 }
 .settings-pane h3 { margin: 22px 0 12px; font-size: var(--fs-md); color: var(--accent); }
 .settings-pane h3:first-child { margin-top: 0; }
+
+/* ── 设置卡片化（2026-10-23）──
+   每个 <h3> 组一张卡：外层结构由 settings.js 的 cardifySettings 生成，控件 id 与保存逻辑不变。
+   目的是把"一整面输入框"拆成可扫读的组，而不是只调间距。 */
+.settings-card {
+  max-width: 1180px;
+  margin: 0 0 16px;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+  box-shadow: var(--shadow-sm);
+}
+.settings-card > h3 {
+  margin: 0 0 12px;
+  font-size: var(--fs-lg);
+  font-weight: 650;
+  letter-spacing: .2px;
+  color: var(--text);
+}
+.settings-card > h3:only-child { margin-bottom: 0; }
+.settings-card > .hint:last-child { margin-bottom: 0; }
+
+/* 单勾选行 → 右侧开关。只在结构确实是"一个 checkbox + 一个 label"时加 .switch-row
+   （多选列表、带额外说明的行不碰）。 */
+.settings-card .switch-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+}
+.settings-card .switch-row:last-child { border-bottom: 0; }
+.settings-card .switch-row > label {
+  order: 1;
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+  font-size: var(--fs-md);
+  font-weight: 400;
+  color: var(--text);
+  letter-spacing: normal;
+}
+.settings-card .switch-row > input[type=checkbox] {
+  order: 2;
+  margin-top: 2px;
+}
+
+/* 时段编辑器：复用时间控制的 .tc-window，但只有"开始/结束/删除"三列 */
+.pro-window { grid-template-columns: minmax(0, 1fr) 130px 28px; }
+.pro-windows-field { margin-bottom: 16px; }
+.pro-windows .pro-window:first-child { border-top: 0; }
+.settings-inline-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+@media (max-width: 900px) {
+  .pro-window { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px; }
+}
 .settings-divider { border: none; border-top: 1px dashed var(--border); margin: 22px 0; }
 .conversation-mode-shell { margin-bottom: 16px; }
 .conversation-mode-switch {

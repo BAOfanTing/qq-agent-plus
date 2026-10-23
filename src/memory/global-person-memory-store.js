@@ -63,8 +63,27 @@ function sourceKeys(value, fallback = '') {
   add(fallback);
   return out;
 }
+function emptyRelationship() {
+  return { interactions: 0, warmth: 0, lastInteractionAt: 0 };
+}
+function normalizeRelationship(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptyRelationship();
+  return {
+    interactions: Math.max(0, Number(raw.interactions) || 0),
+    warmth: Math.min(100, Math.max(-100, Number(raw.warmth) || 0)),
+    lastInteractionAt: Math.max(0, Number(raw.lastInteractionAt) || 0)
+  };
+}
+/** 关系只按"实际互动次数"分档，避免用温度数值制造看不懂的差异。 */
+export function relationshipLabel(interactions) {
+  const n = Math.max(0, Number(interactions) || 0);
+  if (n >= 50) return '很熟';
+  if (n >= 20) return '熟';
+  if (n >= 5) return '有点熟';
+  return '刚认识';
+}
 function emptyMember(userId = '', name = '') {
-  return { version: 2, userId: String(userId || ''), name: String(name || ''), impressions: [], sourceChatKeys: [], updatedAt: 0, lastConsolidatedAt: 0 };
+  return { version: 2, userId: String(userId || ''), name: String(name || ''), impressions: [], sourceChatKeys: [], updatedAt: 0, lastConsolidatedAt: 0, relationship: emptyRelationship() };
 }
 // origin：这条印象是怎么来的 —— 'model'（机器人自己 memory_append 记的）、
 // 'consolidated'（记忆整理/提炼改写的）、'manual'（控制台手动编辑的）；
@@ -103,6 +122,7 @@ function normalizeMember(raw = {}, userId = '', name = '', fallbackChatKey = '')
   member.updatedAt = Number(raw.updatedAt) || 0;
   member.lastConsolidatedAt = Number(raw.lastConsolidatedAt) || 0;
   member.sourceChatKeys = sourceKeys(raw.sourceChatKeys, fallbackChatKey);
+  member.relationship = normalizeRelationship(raw.relationship);
   for (const item of Array.isArray(raw.impressions) ? raw.impressions : []) {
     const entry = normalizeEntry(item, fallbackChatKey);
     if (entry) mergeEntry(member, entry);
@@ -116,6 +136,14 @@ function mergeMember(target, incoming) {
   if (incoming.name && (!target.name || incoming.updatedAt >= target.updatedAt)) target.name = incoming.name;
   for (const entry of incoming.impressions) mergeEntry(target, entry);
   target.sourceChatKeys = sourceKeys([...target.sourceChatKeys, ...incoming.sourceChatKeys]);
+  const a = normalizeRelationship(target.relationship);
+  const b = normalizeRelationship(incoming.relationship);
+  const newer = b.lastInteractionAt >= a.lastInteractionAt ? b : a;
+  target.relationship = {
+    interactions: Math.max(a.interactions, b.interactions),
+    warmth: newer.warmth,
+    lastInteractionAt: Math.max(a.lastInteractionAt, b.lastInteractionAt)
+  };
   target.updatedAt = Math.max(target.updatedAt || 0, incoming.updatedAt || 0);
   target.lastConsolidatedAt = Math.max(target.lastConsolidatedAt || 0, incoming.lastConsolidatedAt || 0);
 }
@@ -230,6 +258,25 @@ export class GlobalPersonMemoryStore {
     const uid = String(userId || '').trim();
     return structuredClone(this.#ensure().get(uid) || emptyMember(uid));
   }
+  /**
+   * 记一次互动（只更新已经有印象的人，不为陌生人建档案）。
+   * 关系温度只影响提示词里的一行标签，不参与检索/排序。
+   */
+  noteInteraction(userId, { at = Date.now(), delta = 0.5 } = {}) {
+    const uid = String(userId || '').trim();
+    if (!uid) return null;
+    const map = this.#ensure();
+    const member = map.get(uid);
+    if (!member || !member.impressions?.length) return null;
+    const rel = normalizeRelationship(member.relationship);
+    rel.interactions += 1;
+    rel.lastInteractionAt = Math.max(rel.lastInteractionAt, Number(at) || Date.now());
+    rel.warmth = Math.min(100, Math.max(-100, rel.warmth + (Number(delta) || 0)));
+    member.relationship = rel;
+    member.updatedAt = Date.now();
+    this.#persist(member);
+    return structuredClone(rel);
+  }
   append(chatKey, userId, name, content, createdAt = Date.now(), origin = 'model', lastObservedAt = 0) {
     const map = this.#ensure();
     const key = memberKey(userId, name);
@@ -307,6 +354,8 @@ export class GlobalPersonMemoryStore {
       member = {
         version: 2, userId: uid, name: finalName, sourceChatKeys: sources,
         updatedAt: now, lastConsolidatedAt: old.lastConsolidatedAt || 0,
+        // 关系是独立于"印象正文"的计数：整理只改写印象，不该把聊过多少次清零。
+        relationship: normalizeRelationship(old.relationship),
         impressions: incoming.map((content) => {
           const prev = previous.get(String(content));
           const createdAt = Number(prev?.createdAt) || now;

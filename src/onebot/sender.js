@@ -4,7 +4,7 @@
 // - Markdown → 纯文本、QQ 硬长度切分、CQ 转义
 // - 发出的每一条记进 ChatStore（self=true，供下一次运行当"自己的发言"）
 import { getConfig, DEFAULT_CONFIG } from '../core/config.js';
-import { sleep, randInt, createSendChain, formatClockTime, todayKey } from '../core/util.js';
+import { sleep, sleepAbortable, randInt, createSendChain, formatClockTime, todayKey } from '../core/util.js';
 import { mdToPlain, splitForQQ } from '../llm/md-to-plain.js';
 import { assertCanSend } from '../core/access.js';
 import { createLogger } from '../core/logger.js';
@@ -222,6 +222,22 @@ export class SendQueue {
   }
 
   /**
+   * 人类化首条延迟：按本批总字数模拟"看完再打字"，不改变后续气泡的间隔。
+   * 未开启时返回 null（调用方回退到原来的 #gap），保证升级前后发送节奏逐字一致。
+   */
+  #leadDelay(parts) {
+    const h = getConfig().humanize;
+    if (h?.enabled !== true || h?.replyDelay?.enabled === false) return null;
+    const n = parts.reduce((sum, part) => sum + String(part || '').length, 0);
+    const min = Math.max(0, Math.min(30000, Number(h?.replyDelay?.minMs) || 0));
+    const max = Math.max(min, Math.min(30000, Number(h?.replyDelay?.maxMs) || min));
+    const perChar = Math.max(0, Math.min(200, Number(h?.replyDelay?.perCharMs) || 0));
+    const cap = Math.max(max, Math.min(60000, Number(h?.replyDelay?.capMs) || 8000));
+    const base = min + Math.random() * (max - min) + n * perChar;
+    return Math.min(cap, Math.max(0, Math.round(base)));
+  }
+
+  /**
    * 私聊「正在输入…」（群聊没有这个能力，协议端侧会 no-op）。开关 send.typingIndicator
    * 默认开；纯装饰，任何失败（协议端不支持、超时）都吞掉，绝不影响本次发送。
    */
@@ -330,14 +346,16 @@ export class SendQueue {
     for (let i = 0; i < parts.length; i++) {
       const text = parts[i];
       const isLast = i === parts.length - 1;
-      const gap = this.#gap(text, isLast);
+      // 首条：开了人类化才用它（可为 0），否则回退到原来的 #gap —— 关闭时发送节奏与升级前一致。
+      const lead = i === 0 ? this.#leadDelay(parts) : null;
+      const gap = lead === null ? this.#gap(text, isLast) : lead;
       promises.push(chain(async () => {
         assertCanSend(chatKey, options.signal, { gameScoped: options.gameScoped === true });
         if (options.runId && this.store.hasUncertainEffects(options.runId)) throw new Error('Previous send delivery is uncertain');
         this.#checkRate(chatKey);
         // 先亮"正在输入"再等间隔：对方看到的状态是"它正在打字"，而不是干等（私聊限定）。
         await this.#signalTyping(kind, id, options);
-        if (gap > 0) await sleep(gap);
+        if (gap > 0) await sleepAbortable(gap, options.signal);
         const data = await this.#deliver(chatKey, options, { type: 'text', text }, () => this.onebot.sendText(kind, id, text, {
           replyToMessageId: i === 0 ? options.replyToMessageId : null, // 引用挂在第一条上：回的就是那条
           atUserId: i === 0 ? options.atUserId : null,

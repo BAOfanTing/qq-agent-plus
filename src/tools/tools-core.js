@@ -155,6 +155,7 @@ import { normalizeMessageList, safeSlice, sanitizeUserText, textWithQuote, unquo
 import { displayNameOf } from '../core/display-name.js';
 import { setMemberNote } from '../memory/memory-global.js';
 import { repairUnescapedStringQuotes } from '../core/json-repair.js';
+import { humanizeText } from '../llm/humanize.js';
 import { assertPublicUrlLiteral, validateImageUrl } from '../llm/safe-fetch.js';
 import { webSearch, webFetch } from '../llm/web-search.js';
 import { expandForwardNodes, extractMediaFromSegments } from '../onebot/onebot.js';
@@ -463,7 +464,21 @@ export function buildToolDefs() {
           if (!messages.length) return err('消息内容为空');
           const targetError = messageTargetError(ctx, args);
           if (targetError) return err(targetError);
-          const result = await ctx.sender.sendTextBatch(ctx.chatKey, messages, {
+          const antiAi = getConfig().humanize?.enabled === true
+            && getConfig().humanize?.antiAi?.enabled !== false;
+          const cleaned = messages.map((text) => (antiAi
+            ? humanizeText(text)
+            : { text, severe: false, tells: [], changed: false }));
+          // 严重的 AI 自指/免责只给一次重写机会：模型改口气后照发，避免一直卡在同一句。
+          if (antiAi && !ctx.session.humanizeWarned
+            && getConfig().humanize?.antiAi?.blockSevere !== false
+            && cleaned.some((item) => item.severe)) {
+            ctx.session.humanizeWarned = true;
+            return err('这句话太像 AI 助手了（自指/免责/客服收尾）。用你角色的口吻重写后再发，不要解释规则。', { reportIncident: false });
+          }
+          const outgoing = cleaned.map((item) => item.text).filter(Boolean);
+          if (!outgoing.length) return err('消息内容为空', { reportIncident: false });
+          const result = await ctx.sender.sendTextBatch(ctx.chatKey, outgoing, {
             runId: ctx.session.leaseId, signal: ctx.signal,
             // grounded 与 card（角色卡优先）都不做"空格/换行重排"：卡自己决定句式，
             // 平台只保证代码块与缩进不被拆坏（card 档不套平台语气，但技术内容仍是内容）。
