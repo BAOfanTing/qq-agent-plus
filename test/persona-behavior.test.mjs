@@ -47,7 +47,8 @@ test('grounded 档替换冲突的风格规则，但保留权限与工具', () =>
   setRuntimeConfig(structuredClone(DEFAULT_CONFIG));
   const prompt = buildSystemPrompt({ persona: groundedPersona() });
   for (const text of ['【自然交流与可靠边界】', '不受闲聊字数限制', '不能在后台持续运行',
-    '不能执行命令', '发言必须', 'send_message', 'memory_append', '不按轮数凑配额']) {
+    '不能执行命令', '发言必须', 'send_message', 'memory_append', '不按轮数凑配额',
+    '【梗的使用】', '不主动抛新梗', '不确定意思或可能冒犯就不用', '先判断是不是梗']) {
     assert.ok(prompt.includes(text), text);
   }
   for (const text of ['可以先反问、阴阳、装傻', '给一个离谱/没用的答案', '多数 ≤30 字',
@@ -59,6 +60,10 @@ test('grounded 档替换冲突的风格规则，但保留权限与工具', () =>
   const legacy = buildSystemPrompt({ persona: legacyPersona });
   assert.equal(legacy, buildSystemPrompt({ persona: DEFAULT_CONFIG.persona }));
   assert.ok(legacy.includes('【反 AI 味：拒绝有求必应】'));
+  assert.ok(legacy.includes('【梗的使用】'));
+  assert.ok(legacy.includes('一轮最多一个梗'));
+  assert.ok(legacy.includes('先接住'));
+  assert.ok(legacy.includes('搜到梗后先看摘要'), '搜到梗后要有“先看摘要/再决定用不用”的约束');
   assert.notEqual(legacy, prompt);
   assert.equal(prompt, buildSystemPrompt({ persona: groundedPersona() }));
 });
@@ -136,6 +141,7 @@ test('角色卡优先档：只留安全与机制，语气/节奏交给角色卡�
   // 平台的语气/节奏块不再注入（这些正是"换卡也同一种味道"的来源）
   for (const text of [
     '【反 AI 味：拒绝有求必应】', '【保持主体性】', '【群聊不是客服队列】', '【像真人一样】',
+    '【梗的使用】',
     '【不要当群管家/主持人】', '混在 QQ 群里当一个普通群友', '你的参与度风格',
     '单条多数 ≤30 字', '回话别只做点评', '顺手把自己的那半句补上',
     '回复保持简短，符合群友语感', '"？"/"人呢"/"算了"',
