@@ -25,6 +25,7 @@ function mcpServerRowHtml(server = {}, { open = false } = {}) {
           <div class="field"><label>每分钟上限</label><input class="mcp-maxcalls" type="number" min="1" max="600" value="${esc(server.maxCallsPerMinute ?? 30)}" /></div>
         </div>
         <div class="field"><label>参数（JSON 数组）</label><input class="mcp-args" type="text" value="${args}" placeholder='["-y","@modelcontextprotocol/server-filesystem","/data"]' /></div>
+        <div class="field"><label>工作目录（可选）</label><input class="mcp-cwd" type="text" value="${esc(server.cwd || '')}" placeholder="/srv/workspace" /></div>
         <div class="field"><label>环境变量（JSON 对象，可留空）</label><input class="mcp-env" type="text" value="${env}" placeholder='{"TOKEN":"..."}' /></div>
         <div class="field-row">
           <div class="field"><label>挂载方式</label><select class="mcp-mounting">
@@ -54,14 +55,15 @@ function renderMcpSection(c) {
         <div class="mcp-hero-title">把外部工具接进群聊</div>
         <div class="hint">MCP Server 等价于执行本机命令，只接你信任的。导入后先改目录/令牌，保存再重载。</div>
       </div>
-      <label class="mcp-master"><input type="checkbox" id="cfg-mcp-enabled" ${mcp.enabled === true ? 'checked' : ''} /> 启用 MCP</label>
+      <div class="checkbox-row mcp-master"><input type="checkbox" id="cfg-mcp-enabled" ${mcp.enabled === true ? 'checked' : ''} />
+        <label for="cfg-mcp-enabled">启用 MCP</label></div>
     </div>
     <div class="mcp-toolbar">
       <input type="search" id="mcp-registry-query" placeholder="搜索预设或官方 Registry…" />
       <button type="button" class="btn btn-small" id="mcp-preset-search">搜索预设</button>
       <button type="button" class="btn btn-small" id="mcp-registry-search">官方 Registry</button>
       <button type="button" class="btn btn-small" id="mcp-add-server">＋ 自定义 server</button>
-      <span class="muted" id="mcp-registry-result"></span>
+      <span class="muted" id="mcp-registry-result" aria-live="polite"></span>
     </div>
     <div id="mcp-registry-results" class="mcp-catalog-grid"></div>
     <div class="mcp-section-label">常用预设 <span>按群聊场景挑的，导入后仍要确认命令和权限</span></div>
@@ -139,9 +141,7 @@ function renderModerationSection(c) {
 }
 
 async function reloadMcp() {
-  try {
-    await api('/api/mcp/reload', { method: 'POST', body: JSON.stringify({}) });
-  } catch { /* 状态会显示失败原因 */ }
+  await api('/api/mcp/reload', { method: 'POST', body: JSON.stringify({}) });
   await hydrateExtensionStatus();
 }
 
@@ -211,6 +211,11 @@ function bindExtensionSettings() {
   };
   const presetSearch = $('#mcp-preset-search');
   if (presetSearch) presetSearch.addEventListener('click', () => runRegistrySearch('/api/mcp/presets', presetSearch));
+  $('#mcp-registry-query')?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    presetSearch?.click();
+  });
   const registrySearch = $('#mcp-registry-search');
   if (registrySearch) registrySearch.addEventListener('click', () => runRegistrySearch('/api/mcp/registry', registrySearch));
   for (const id of ['#mcp-registry-results', '#mcp-preset-list', '#mcp-registry-default']) {
@@ -220,9 +225,10 @@ function bindExtensionSettings() {
   const box = $('#mcp-servers');
   if (add && box) {
     add.addEventListener('click', () => {
-      const count = box.querySelectorAll('.mcp-server').length + 1;
+      let n = 1;
+      while (box.querySelector(`.mcp-server[data-id="server${n}"]`)) n += 1;
       box.insertAdjacentHTML('beforeend', mcpServerRowHtml({
-        id: `server${count}`,
+        id: `server${n}`,
         enabled: true,
         command: '',
         args: [],
@@ -245,8 +251,12 @@ function bindExtensionSettings() {
       const result = $('#mcp-reload-result');
       reload.disabled = true;
       if (result) result.textContent = '正在重载…';
-      await reloadMcp();
-      if (result) result.textContent = '已重载';
+      try {
+        await reloadMcp();
+        if (result) result.textContent = '已重载';
+      } catch (error) {
+        if (result) result.textContent = `失败：${error.message}`;
+      }
       reload.disabled = false;
     });
   }
@@ -335,6 +345,7 @@ async function hydrateExtensionStatus() {
       const data = await api('/api/mcp');
       const rows = Array.isArray(data.status) ? data.status : [];
       if (!rows.length) mcpBox.textContent = '未配置或未启用 MCP server';
+      else if (rows.every((row) => row.globalEnabled === false)) mcpBox.textContent = `MCP 未启用（已保存 ${rows.length} 个 server）`;
       else {
         mcpBox.innerHTML = rows.map((row) => {
           const stateText = row.ready ? '就绪' : row.starting ? '启动中' : '未就绪';
@@ -346,8 +357,10 @@ async function hydrateExtensionStatus() {
       for (const badge of document.querySelectorAll('[data-mcp-state]')) {
         const row = rows.find((item) => item.id === badge.dataset.mcpState);
         if (!row) continue;
-        badge.textContent = row.ready ? '就绪' : row.starting ? '启动中' : row.error ? '未就绪' : '未启用';
-        badge.className = `mcp-server-state ${row.ready ? 'is-ready' : row.error ? 'is-error' : ''}`;
+        badge.textContent = !row.globalEnabled || row.enabled === false
+          ? '未启用'
+          : row.ready ? '就绪' : row.starting ? '启动中' : row.error ? '未就绪' : '未就绪';
+        badge.className = `mcp-server-state ${row.ready && row.enabled ? 'is-ready' : row.error ? 'is-error' : ''}`;
       }
     } catch (error) {
       mcpBox.textContent = `读取失败：${error.message}`;

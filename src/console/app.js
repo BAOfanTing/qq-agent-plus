@@ -4433,6 +4433,26 @@ export function createApp({
       // 派生位（sanitize 生成的 hasApiKey）由 migrateConfig 统一剔 —— 它是所有写入路径的必经口，
       // 路由层再剥一遍是冗余（同一语义写两处，反而会让人以为两边口径不同）。
     }
+    // MCP env/args：界面拿到的是 ****** 掩码，提交时按 server id + key/下标恢复服务端原值；
+    // 用户把某个 key 删掉/填空则按新值落盘，不会被旧值偷偷补回来。
+    if (patch?.mcp && typeof patch.mcp === 'object') {
+      const mcpBody = sectionBody(patch.mcp);
+      if (Array.isArray(mcpBody.servers)) {
+        const stored = new Map((cfgNow.mcp?.servers || []).map((server) => [String(server?.id || ''), server]));
+        mcpBody.servers = mcpBody.servers.map((server) => {
+          const prev = stored.get(String(server?.id || ''));
+          if (!prev) return server;
+          const env = { ...(server.env || {}) };
+          for (const [key, value] of Object.entries(env)) {
+            if (String(value) === '******' && prev.env?.[key]) env[key] = prev.env[key];
+          }
+          const args = Array.isArray(server.args)
+            ? server.args.map((arg, index) => (arg === '******' && prev.args?.[index] ? prev.args[index] : arg))
+            : server.args;
+          return { ...server, env, args };
+        });
+      }
+    }
     let next;
     try {
       next = updateConfig(patch);
@@ -4446,6 +4466,10 @@ export function createApp({
     store.setMaxPerChat(next.store?.maxMessagesPerChat ?? 0);
     store.setSynchronous(next.store?.sqliteSynchronous);
     sessions.setPersistIntervalMs(next.store?.sessionPersistMs);
+    if (patch?.mcp) {
+      try { await mcpManager.reload(); }
+      catch (error) { moduleLog('mcp').warn?.('配置保存后重载失败:', error?.message ?? error); }
+    }
     let closedThreads = 0;
     for (const [chatKey, previousMode] of previousModes) {
       if (conversationConfigForChat(chatKey).mode !== previousMode) {

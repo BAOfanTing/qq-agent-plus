@@ -59,6 +59,8 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
     assert.ok(extensions.includes(`id="${id}"`), `缺少扩展设置控件 ${id}`);
   }
   assert.match(save, /patch\.mcp = \{ __replace__/, 'MCP server 列表要整段替换');
+  assert.match(save, /cwd: read\('\.mcp-cwd'\)/, '保存 MCP server 不能丢掉 cwd');
+  assert.match(extensions, /mcp-cwd/, 'MCP 表单要有 cwd 输入');
   assert.match(save, /patch\.knowledge = \{/);
   assert.match(save, /patch\.moderation = \{/);
   // 默认勾选状态与保存端 fallback 必须同口径：群聊默认开、私聊默认关

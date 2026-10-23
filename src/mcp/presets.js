@@ -28,16 +28,16 @@ export const MCP_PRESETS = [
   preset(
     'filesystem',
     'Filesystem',
-    '让模型读你放进去的群规/手册/资料目录。导入后把 /data 改成允许它访问的目录，不要给根目录或密钥目录。',
+    '让模型读你放进去的群规/手册/资料目录。默认只给 data/knowledge；不要改成数据根目录（里面有 config.json、密钥和人物记忆）。',
     'npx',
-    ['-y', '@modelcontextprotocol/server-filesystem', '/data'],
+    ['-y', '@modelcontextprotocol/server-filesystem', '/data/knowledge'],
     {},
     '知识'
   ),
   preset(
     'fetch',
     'Fetch',
-    '抓网页并转成 markdown，适合让它读文章、公告、文档。需要本机有 uv/uvx。',
+    '抓网页并转成 markdown，适合让它读文章、公告、文档。注意：它自己联网，不走宿主的 SSRF 拦截，不要用于内网地址。',
     'uvx',
     ['mcp-server-fetch'],
     {},
@@ -64,7 +64,7 @@ export const MCP_PRESETS = [
   preset(
     'playwright',
     'Playwright',
-    '浏览器自动化：打开网页、点击、抓页面。适合需要登录后台/看页面结果的场景，首次运行可能要装浏览器。',
+    '浏览器自动化：打开网页、点击、抓页面。注意：它自己联网，不走宿主的 SSRF 拦截；不要让它访问内网/控制台。首次运行可能要装浏览器。',
     'npx',
     ['-y', '@playwright/mcp@latest'],
     {},

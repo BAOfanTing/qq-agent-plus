@@ -5,6 +5,18 @@ import { spawn } from 'node:child_process';
 
 const DEFAULT_TIMEOUT = 30000;
 const PROTOCOL_VERSION = '2024-11-05';
+const ENV_ALLOWLIST = [
+  'PATH', 'HOME', 'USER', 'SHELL', 'LANG', 'LC_ALL', 'TMPDIR', 'TMP', 'TEMP',
+  'SystemRoot', 'WINDIR', 'APPDATA', 'LOCALAPPDATA', 'PATHEXT', 'COMSPEC'
+];
+
+function safeEnv() {
+  const out = {};
+  for (const key of ENV_ALLOWLIST) {
+    if (process.env[key] != null) out[key] = process.env[key];
+  }
+  return out;
+}
 
 export class McpStdioClient {
   constructor({ id, command, args = [], env = {}, cwd = '', timeoutMs = DEFAULT_TIMEOUT, log = () => {} }) {
@@ -40,7 +52,9 @@ export class McpStdioClient {
     this.stderrTail = '';
     const child = spawn(this.command, this.args, {
       cwd: this.cwd,
-      env: { ...process.env, ...this.env },
+      // 不继承完整 process.env：第三方 server 不该读到宿主的所有凭据/代理变量。
+      // 只带运行必需的环境，server 自己的变量由配置显式提供。
+      env: { ...safeEnv(), ...this.env },
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true
@@ -116,8 +130,7 @@ export class McpStdioClient {
       try { message = JSON.parse(line); } catch { continue; }
       if (message?.id != null && this.pending.has(message.id)) {
         const entry = this.pending.get(message.id);
-        this.pending.delete(message.id);
-        clearTimeout(entry.timer);
+        entry.cleanup?.();
         if (message.error) entry.reject(new Error(String(message.error.message || 'MCP 调用失败')));
         else entry.resolve(message.result);
       }
@@ -126,36 +139,48 @@ export class McpStdioClient {
 
   #failAll(error) {
     for (const entry of this.pending.values()) {
-      clearTimeout(entry.timer);
+      entry.cleanup?.();
       entry.reject(error);
     }
     this.pending.clear();
   }
 
-  request(method, params = {}) {
+  request(method, params = {}, { signal } = {}) {
+    if (signal?.aborted) return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('MCP 调用已取消'));
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const onAbort = () => {
+        cleanup();
+        reject(signal.reason instanceof Error ? signal.reason : new Error('MCP 调用已取消'));
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         this.pending.delete(id);
-        reject(new Error(`MCP ${this.id} ${method} 超时（${this.timeoutMs}ms）`));
+      };
+      const timer = setTimeout(() => {
+        this.ready = false;
+        this.lastError = `${method} 超时（${this.timeoutMs}ms）`;
+        cleanup();
+        reject(new Error(`MCP ${this.id} ${this.lastError}`));
       }, this.timeoutMs);
       timer.unref?.();
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, cleanup });
+      signal?.addEventListener('abort', onAbort, { once: true });
       try {
         this.#send({ jsonrpc: '2.0', id, method, params });
       } catch (error) {
-        clearTimeout(timer);
-        this.pending.delete(id);
+        cleanup();
         reject(error);
       }
     });
   }
 
-  async listTools() {
+  async listTools({ signal } = {}) {
     const out = [];
     let cursor = '';
     for (let page = 0; page < 20; page += 1) {
-      const result = await this.request('tools/list', cursor ? { cursor } : {});
+      const result = await this.request('tools/list', cursor ? { cursor } : {}, { signal });
       const tools = Array.isArray(result?.tools) ? result.tools : [];
       out.push(...tools);
       cursor = String(result?.nextCursor || '');
@@ -164,8 +189,8 @@ export class McpStdioClient {
     return out;
   }
 
-  async callTool(name, args = {}) {
-    const result = await this.request('tools/call', { name, arguments: args });
+  async callTool(name, args = {}, { signal } = {}) {
+    const result = await this.request('tools/call', { name, arguments: args }, { signal });
     return result;
   }
 

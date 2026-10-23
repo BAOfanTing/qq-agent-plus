@@ -190,8 +190,9 @@ export class MemoryStore {
       writeJson(metaFile(chatKey), { lastConsolidatedAt: Date.now() });
       return any;
     }
-    // 只按内容删时限定在本会话的人身上：同一句话在别的群也记过的话，不该被一起删掉
-    return this.people.remove({ ...options, sourceChatKey: (!uid && !target) ? chatKey : '' });
+    // 聊天工具里的删除永远限定在当前会话：按 userId/target 删也不能跨群/跨私聊清人。
+    // 真正的全局删除只走控制台（removeMember('', id)），不暴露给模型。
+    return this.people.remove({ ...options, sourceChatKey: chatKey });
   }
   /** 整份清空某个会话的记忆（印象 + 会话交接 + 整理计时）。注意：memory_remove 的"删印象"不走这里。 */
   clear(chatKey) { this.people.clearSource(chatKey); this.clearHandoff(chatKey); writeJson(metaFile(chatKey), { lastConsolidatedAt: Date.now() }); }

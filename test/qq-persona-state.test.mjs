@@ -82,12 +82,12 @@ it('控制台快照：启用时给出状态，card 档标成不注入', () => {
 
 it('互动会抬心情、掉精力，并落盘', () => {
   cfgWithHumanize();
-  const persona = { botName: '小鲸鱼' };
+  const persona = { botName: '互动测试' };
   const at = Date.now();
   const before = computePersonaState({}, persona, at);
   notePersonaInteraction(persona, { kind: 'incoming', at });
   const saved = JSON.parse(fs.readFileSync(path.join(dir, 'persona-state.json'), 'utf8'));
-  const stored = saved['小鲸鱼'];
+  const stored = saved['互动测试'];
   assert.ok(stored, '状态应按人设落盘');
   const after = computePersonaState(stored, persona, at);
   assert.ok(after.mood >= before.mood, '有互动时心情不应下降');

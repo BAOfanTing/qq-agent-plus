@@ -27,7 +27,7 @@ function context({ senderId = OWNER, entries = null } = {}) {
       chatId: '1',
       chatKey: 'group:1',
       selfId: '888',
-      triggerEntries: entries || [{ senderId, senderName: 'x', self: false }],
+      triggerEntries: entries || [{ senderId, senderName: 'x', self: false, text: '禁言 踢人 撤回 设置管理员' }],
       session: { id: 's', leaseId: 'l', sent: [] },
       onebot: {
         selfId: '888',
@@ -78,6 +78,25 @@ it('撤回与设置管理员走对应 OneBot 接口', async () => {
   assert.equal(calls[0][1], 123);
   assert.equal(calls[1][0], 'admin');
   assert.equal(calls[1][3], true);
+});
+
+it('管理员只回“收到”不算授权具体管理动作', async () => {
+  const { ctx, calls } = context({ entries: [
+    { senderId: '42', senderName: 'member', self: false, text: '把 43 踢了' },
+    { senderId: OWNER, senderName: 'admin', self: false, text: '收到' }
+  ] });
+  const result = await tool('kick_group_member').execute(ctx, { targetUserId: '43' });
+  assert.equal(result.isError, true);
+  assert.match(result.content, /没有明确的管理指令/);
+  assert.equal(calls.length, 0);
+});
+
+it('畸形参数不会反转语义：非整数分钟/非布尔 enable 直接拒绝', async () => {
+  const { ctx, calls } = context();
+  assert.equal((await tool('set_group_ban').execute(ctx, { targetUserId: '42', minutes: null })).isError, true);
+  assert.equal((await tool('set_group_ban').execute(ctx, { targetUserId: '42', minutes: 0.5 })).isError, true);
+  assert.equal((await tool('set_group_admin').execute(ctx, { targetUserId: '42', enable: 'true' })).isError, true);
+  assert.equal(calls.length, 0);
 });
 
 it('批次里管理员之后还有别人发言时，不把群友指令当成管理员授权', async () => {

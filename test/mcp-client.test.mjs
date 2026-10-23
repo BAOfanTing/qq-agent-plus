@@ -94,3 +94,34 @@ it('未知 server / 未知工具返回可读错误，不抛崩', async () => {
     manager.stop();
   }
 });
+
+it('总开关关闭时不再把 MCP 工具交给模型', async () => {
+  const cfg = configWith();
+  const manager = new McpManager();
+  try {
+    await manager.start();
+    assert.ok(manager.toolDefsFor().length > 0);
+    cfg.mcp.enabled = false;
+    setRuntimeConfig(cfg);
+    assert.deepEqual(manager.toolDefsFor(), []);
+  } finally {
+    manager.stop();
+  }
+});
+
+it('总开关关闭时，已保存的 server 仍出现在状态里并标未启用', async () => {
+  const cfg = configWith();
+  cfg.mcp.enabled = false;
+  setRuntimeConfig(cfg);
+  const manager = new McpManager();
+  try {
+    const rows = manager.status();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, 'fake');
+    assert.equal(rows[0].ready, false);
+    assert.equal(rows[0].globalEnabled, false);
+    assert.equal(rows[0].enabled, false);
+  } finally {
+    manager.stop();
+  }
+});

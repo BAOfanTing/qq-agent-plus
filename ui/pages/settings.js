@@ -241,7 +241,7 @@ function cardifySettings(box) {
   const children = [...box.children];
   let card = null;
   for (const node of children) {
-    if (node.classList.contains('save-bar')) {
+    if (node.classList.contains('save-bar') || node.classList.contains('settings-divider')) {
       card = null;
       continue;
     }

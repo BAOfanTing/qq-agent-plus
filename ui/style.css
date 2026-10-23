@@ -1273,7 +1273,7 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   display: grid;
   place-items: center;
   border-radius: var(--r-sm);
-  background: hsl(var(--mcp-h, 210) 55% 45%);
+  background: hsl(var(--mcp-h, 210) 55% 35%);
   color: #fff;
   font-weight: 700;
 }
@@ -1325,7 +1325,8 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .mcp-server-body { padding: 0 12px 12px; border-top: 1px solid var(--border); }
 .mcp-status-line { font-size: var(--fs-xs); color: var(--muted); }
 .knowledge-file-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; flex-wrap: wrap; }
-.file-picker { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.file-picker { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; border-radius: var(--r-sm); }
+.file-picker:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 .file-picker .btn { pointer-events: none; }
 .file-picker-name { color: var(--muted); font-size: var(--fs-sm); }
 .file-picker-input {

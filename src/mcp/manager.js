@@ -4,6 +4,7 @@
 import { getConfig } from '../core/config.js';
 import { createLogger } from '../core/logger.js';
 import { sanitizeUserText } from '../core/util.js';
+import { redactText } from '../core/redact.js';
 import { McpStdioClient, mcpContentToText } from './client.js';
 
 const log = createLogger('mcp');
@@ -127,6 +128,7 @@ export class McpManager {
           metaTools.push({ server: id, name: tool.name, description: cleanText(tool.description || '', 120) });
           continue;
         }
+        if (all.length >= 60) { this.log.warn?.('MCP 工具超过 60 个，后续工具未挂载'); break; }
         let name = toolNameOf(id, tool.name);
         let suffix = 2;
         while (usedNames.has(name)) name = `${toolNameOf(id, tool.name).slice(0, 60)}_${suffix++}`;
@@ -152,7 +154,7 @@ export class McpManager {
         execute: async (ctx, args) => {
           const entry = this.clients.get(String(args.server || ''));
           if (!entry) return { content: `错误：没有这个 MCP server：${cleanText(args.server, 80)}`, isError: true, reportIncident: false };
-          return this.#call(entry, String(args.tool || ''), args.arguments || {});
+          return this.#call(entry, String(args.tool || ''), args.arguments || {}, ctx);
         }
       });
     }
@@ -166,11 +168,11 @@ export class McpManager {
       parameters: tool.inputSchema && typeof tool.inputSchema === 'object'
         ? cleanSchema(tool.inputSchema)
         : { type: 'object', properties: {}, additionalProperties: true },
-      execute: async (ctx, args) => this.#call(entry, tool.name, args || {})
+      execute: async (ctx, args) => this.#call(entry, tool.name, args || {}, ctx)
     };
   }
 
-  async #call(entry, toolName, args) {
+  async #call(entry, toolName, args, ctx = {}) {
     const token = { server: entry.config.id, tool: toolName };
     const limit = Math.max(1, Number(entry.config.maxCallsPerMinute) || 30);
     const now = Date.now();
@@ -178,18 +180,19 @@ export class McpManager {
     if (entry.calls.length >= limit) {
       return { content: `错误：MCP ${cleanText(token.server, 40)} 每分钟最多 ${limit} 次调用，稍后再试`, isError: true, reportIncident: false };
     }
-    if (!entry.client.running) {
-      return { content: `错误：MCP ${cleanText(token.server, 40)} 没有运行`, isError: true, reportIncident: false };
+    if (!entry.client.running || !entry.client.ready) {
+      return { content: `错误：MCP ${cleanText(token.server, 40)} 没有就绪`, isError: true, reportIncident: false };
     }
     entry.calls.push(now);
     try {
-      const result = await entry.client.callTool(toolName, args);
+      const result = await entry.client.callTool(toolName, args, { signal: ctx?.signal });
       const text = sanitizeUserText(mcpContentToText(result));
       return {
         content: text.length > MAX_RESULT_CHARS
           ? `${text.slice(0, MAX_RESULT_CHARS)}\n…[MCP 输出过长，已截断]`
           : text,
-        isError: result?.isError === true
+        isError: result?.isError === true,
+        reportIncident: false
       };
     } catch (error) {
       return { content: `错误：MCP ${cleanText(token.server, 40)}/${cleanText(toolName, 60)} 调用失败：${cleanText(error?.message ?? error, 500)}`, isError: true, reportIncident: false };
@@ -197,19 +200,40 @@ export class McpManager {
   }
 
   toolDefsFor() {
+    if (getConfig().mcp?.enabled !== true) return [];
     return this.defs;
   }
 
   status() {
-    return [...this.clients.entries()].map(([id, entry]) => ({
+    const rows = [...this.clients.entries()].map(([id, entry]) => ({
       id,
       ready: Boolean(entry.client.running && entry.client.ready),
       starting: entry.starting === true,
-      error: cleanText(entry.error || entry.client.lastError || '', 400),
-      stderr: cleanText(entry.client.stderrTail || '', 400),
+      enabled: entry.config.enabled !== false && getConfig().mcp?.enabled === true,
+      globalEnabled: getConfig().mcp?.enabled === true,
+      error: redactText(entry.error || entry.client.lastError || '', 400),
+      stderr: redactText(entry.client.stderrTail || '', 400),
       tools: entry.tools.map((tool) => String(tool.name || '')).filter(Boolean),
-      command: cleanText(entry.config.command, 120),
+      command: redactText(entry.config.command, 120),
       argsCount: Array.isArray(entry.config.args) ? entry.config.args.length : 0
     }));
+    const seen = new Set(rows.map((row) => row.id));
+    for (const server of Array.isArray(getConfig().mcp?.servers) ? getConfig().mcp.servers : []) {
+      const id = String(server?.id || '').trim();
+      if (!id || seen.has(id)) continue;
+      rows.push({
+        id,
+        ready: false,
+        starting: false,
+        enabled: server.enabled !== false && getConfig().mcp?.enabled === true,
+        globalEnabled: getConfig().mcp?.enabled === true,
+        error: '',
+        stderr: '',
+        tools: [],
+        command: redactText(server.command || '', 120),
+        argsCount: Array.isArray(server.args) ? server.args.length : 0
+      });
+    }
+    return rows;
   }
 }

@@ -117,9 +117,10 @@ import { vendorOfConfig, vendorOfBaseUrl } from '../pricing/model-prices.js';
 import { budgetStatus } from './budget.js';
 import { readOwnerUin } from './notify-owner.js';
 import { notePersonaInteraction, personaStatePrompt } from './persona-state.js';
+import { visibleImpressions, memoryVisibilityOf } from './memory-visibility.js';
 import { knowledgeEnabled } from '../knowledge/store.js';
 import { buildReminderNote, reminderNoteCost } from './reminders.js';
-import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey } from './util.js';
+import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey, sanitizeUserText } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, isAtMe, resolveContextTier } from '../llm/prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
@@ -2235,7 +2236,9 @@ export class Orchestrator {
       reminders: this.reminders,
       // 本轮触发消息（remind 的 from 兜底要判断"是否只有一个发送者"；只带最小字段）
       triggerEntries: (triggerEntries || []).map((m) => ({
-        senderId: m?.senderId || '', senderName: m?.senderName || '', self: Boolean(m?.self)
+        senderId: m?.senderId || '', senderName: m?.senderName || '', self: Boolean(m?.self),
+        // 群管理授权要核对管理员这句到底说了什么；只留文本片段，不带媒体/原始段。
+        text: safeSlice(String(m?.text || ''), 300)
       })),
       // 群游戏（group_game 工具）：进行中的局由管理器负责推进与判定
       games: this.getGames?.() || null
@@ -2982,7 +2985,13 @@ export class Orchestrator {
       : null;
 
     const stats = this.#scanChatActivity(chatKey);
-    const existing = this.memory.members(chatKey);
+    const vis = memoryVisibilityOf(cfg);
+    // 只要这个人的任何一条印象在当前会话不可见（私聊来源/perChat），就跳过整理：
+    // 整理模型看到的是全量印象、写回也会整份替换，混着整理会把不可见内容带进群或删掉。
+    const existing = this.memory.members(chatKey).filter((member) => {
+      const impressions = Array.isArray(member.impressions) ? member.impressions : [];
+      return visibleImpressions(impressions, chatKey, vis).length === impressions.length;
+    });
 
     // ── 选出要整理的人 ──
     const targets = [];
@@ -3325,12 +3334,12 @@ export class Orchestrator {
     const isOwner = Boolean(ownerUin) && ownerUin === String(mem.userId || '').trim();
     // 要算"90 天前"就得知道今天，整理这次调用看不到别的时间来源
     const today = todayKey();
-    const lines = [`群友 QQ：${mem.userId}`, `当前名字：${mem.name}`, `今天：${today}（Asia/Shanghai）`];
+    const lines = [`群友 QQ：${sanitizeUserText(String(mem.userId || ''))}`, `当前名字：${sanitizeUserText(String(mem.name || ''))}`, `今天：${today}（Asia/Shanghai）`];
     if (isOwner) lines.push('身份：这是机器人管理员本人（设置角色卡、管这台机器人的人）');
     for (const e of mem.impressions) {
       const created = clampTs(e.createdAt);
       const observed = clampTs(e.lastObservedAt);
-      lines.push(`- ${e.content}（记于 ${fmtTs(created)}${observed && observed !== created ? `，最近观察到 ${fmtTs(observed)}` : ''}）`);
+      lines.push(`- ${sanitizeUserText(e.content)}（记于 ${fmtTs(created)}${observed && observed !== created ? `，最近观察到 ${fmtTs(observed)}` : ''}）`);
     }
     const maxKeep = Number(cfg.memory?.maxImpressionsPerMember) || 5;
     return {

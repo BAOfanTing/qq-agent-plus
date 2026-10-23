@@ -284,14 +284,19 @@ function actionDone(ctx, kind) {
  * 群管理动作只允许全局管理员在群里明确要求时执行。
  * 主动唤醒/模型自己发挥时 triggerEntries 里没有管理员，一律拒绝。
  */
-function adminRequest(ctx) {
+function adminRequest(ctx, actionPatterns = []) {
   const owner = String(getConfig().admin?.ownerUin || '').trim();
   if (!/^\d{5,15}$/.test(owner)) return { ok: false, reason: '未配置全局管理员，群管理动作不可用' };
-  // 只认批次里**最后一条**非机器人发言：管理员几小时前说过一句话，不能给后面的群友指令授权。
+  // 只认批次里**最后一条**非机器人发言，且这条发言要真的在说对应的管理动作；
+  // 群友先起哄、管理员随后回一句“收到”不能当成授权。
   const entries = (ctx.triggerEntries || []).filter((entry) => !entry?.self);
   const last = entries[entries.length - 1];
   if (!last || String(last?.senderId || '') !== owner) {
     return { ok: false, reason: '群管理动作只能由全局管理员在群里明确要求时执行' };
+  }
+  const text = String(last?.text || '');
+  if (actionPatterns.length && !actionPatterns.some((re) => re.test(text))) {
+    return { ok: false, reason: '管理员这条消息里没有明确的管理指令' };
   }
   return { ok: true, owner };
 }
@@ -1825,13 +1830,17 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           if (ctx.kind !== 'group') return err('禁言只能在群聊里执行');
-          const admin = adminRequest(ctx);
+          const admin = adminRequest(ctx, [/禁言|解禁|解除禁言|封/]);
           if (!admin.ok) return err(admin.reason, { reportIncident: false });
           const targetCheck = moderationTargetError(ctx, args.targetUserId, admin.owner);
           if (targetCheck.error) return err(targetCheck.error, { reportIncident: false });
-          const rawMinutes = Number(args.minutes);
-          if (!Number.isFinite(rawMinutes) || rawMinutes < 0) return err('minutes 必须是 0 或正整数（0 = 解禁）');
-          const minutes = Math.min(43200, Math.floor(rawMinutes));
+          const rawMinutes = args.minutes;
+          if (rawMinutes === null || rawMinutes === '' || typeof rawMinutes === 'boolean') {
+            return err('minutes 必须是 0 或正整数（0 = 解禁）');
+          }
+          const minutesValue = Number(rawMinutes);
+          if (!Number.isInteger(minutesValue) || minutesValue < 0) return err('minutes 必须是 0 或正整数（0 = 解禁）');
+          const minutes = Math.min(43200, minutesValue);
           await ctx.onebot.setGroupBan(ctx.chatId, Number(targetCheck.target), minutes * 60, ctx.signal);
           return ok({ targetUserId: targetCheck.target, minutes, note: minutes ? '已禁言。' : '已解除禁言。' });
         } catch (error) {
@@ -1854,7 +1863,7 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           if (ctx.kind !== 'group') return err('踢人只能在群聊里执行');
-          const admin = adminRequest(ctx);
+          const admin = adminRequest(ctx, [/踢|移出|请出|移除/]);
           if (!admin.ok) return err(admin.reason, { reportIncident: false });
           const targetCheck = moderationTargetError(ctx, args.targetUserId, admin.owner);
           if (targetCheck.error) return err(targetCheck.error, { reportIncident: false });
@@ -1876,7 +1885,8 @@ export function buildToolDefs() {
       },
       async execute(ctx, args) {
         try {
-          const admin = adminRequest(ctx);
+          if (ctx.kind !== 'group') return err('撤回只能在群聊里执行');
+          const admin = adminRequest(ctx, [/撤回|撤掉|删掉|删除消息/]);
           if (!admin.ok) return err(admin.reason, { reportIncident: false });
           const mid = normalizeMid(args.messageId);
           if (!/^-?\d+$/.test(mid)) return err('messageId 要是消息 id（聊天记录里的 #数字）');
@@ -1902,12 +1912,13 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           if (ctx.kind !== 'group') return err('群管理员设置只能在群聊里执行');
-          const admin = adminRequest(ctx);
+          const admin = adminRequest(ctx, [/管理员|管理|升为|取消管理/]);
           if (!admin.ok) return err(admin.reason, { reportIncident: false });
+          if (typeof args.enable !== 'boolean') return err('enable 必须是 true 或 false');
           const targetCheck = moderationTargetError(ctx, args.targetUserId, admin.owner);
           if (targetCheck.error) return err(targetCheck.error, { reportIncident: false });
-          await ctx.onebot.setGroupAdmin(ctx.chatId, Number(targetCheck.target), args.enable === true, ctx.signal);
-          return ok({ targetUserId: targetCheck.target, enable: args.enable === true, note: '群管理员设置已更新。' });
+          await ctx.onebot.setGroupAdmin(ctx.chatId, Number(targetCheck.target), args.enable, ctx.signal);
+          return ok({ targetUserId: targetCheck.target, enable: args.enable, note: '群管理员设置已更新。' });
         } catch (error) {
           return sendErr(error, {}, `设置群管理员失败：${String(error?.message ?? error).slice(0, 120)}`);
         }
@@ -2601,7 +2612,7 @@ export function buildToolDefs() {
       },
       async execute(ctx, args) {
         try {
-          const query = String(args.query ?? '').trim();
+          const query = safeSlice(String(args.query ?? '').trim(), 500);
           if (!query) return err('query 不能为空');
           const found = searchKnowledge(query, { limit: args.limit });
           if (!found.results.length) {

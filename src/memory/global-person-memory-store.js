@@ -436,6 +436,12 @@ export class GlobalPersonMemoryStore {
         member.impressions = member.impressions.filter((x) =>
           x.content !== content || (scope && !sourceKeys(x.sourceChatKeys).includes(scope)));
         removed ||= member.impressions.length !== n;
+      } else if (scope) {
+        // 按 userId/target 删但带了会话范围：只摘这个会话来源的条目，别把私聊/别的群一起清空
+        const n = member.impressions.length;
+        member.impressions = member.impressions.filter((x) =>
+          !sourceKeys(x.sourceChatKeys).includes(scope));
+        removed ||= member.impressions.length !== n;
       } else { member.impressions = []; removed = true; }
       // 摘掉印象后要重算成员级来源：否则这个人还会声称"来自 A 群"，而他在 A 群已经没有印象了
       //（members(chatKey) / consolidationState 会把他算进 A 群；2026-10-13 全项目审查 P3）。

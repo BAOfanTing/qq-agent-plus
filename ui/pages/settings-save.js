@@ -92,6 +92,7 @@ async function saveConfig({ quiet = false } = {}) {
         command: read('.mcp-command'),
         args,
         env,
+        cwd: read('.mcp-cwd'),
         timeoutMs: clampInt(read('.mcp-timeout'), 1000, 300000, 30000),
         maxCallsPerMinute: clampInt(read('.mcp-maxcalls'), 1, 600, 30),
         toolMounting: read('.mcp-mounting') === 'meta' ? 'meta' : 'direct'

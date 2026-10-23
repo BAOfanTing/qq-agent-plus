@@ -10,7 +10,7 @@ const MAX_FILES = 500;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 const MAX_CHUNKS = 5000;
-const CACHE_TTL_MS = 2000;
+const CACHE_TTL_MS = 10000;
 
 let cache = { dir: '', sig: '', chunks: [], files: 0, updatedAt: 0, checkedAt: 0 };
 
@@ -20,7 +20,8 @@ export function knowledgeDir(cfg = getConfig()) {
 }
 
 export function knowledgeEnabled(cfg = getConfig()) {
-  return cfg?.knowledge?.enabled === true && fs.existsSync(knowledgeDir(cfg));
+  if (cfg?.knowledge?.enabled !== true) return false;
+  try { return fs.statSync(knowledgeDir(cfg)).isDirectory(); } catch { return false; }
 }
 
 function listFiles(root) {
@@ -127,7 +128,7 @@ function ensureIndex() {
       const rel = path.relative(dir, file).split(path.sep).join('/');
       for (const value of chunkText(text, cfg.knowledge.chunkChars, cfg.knowledge.overlapChars)) {
         if (chunks.length >= MAX_CHUNKS) break;
-        chunks.push({ source: rel, text: value });
+        chunks.push({ source: rel, text: value, lower: value.toLowerCase() });
       }
     } catch { /* 单文件读失败不影响其他文件 */ }
   }
@@ -156,22 +157,25 @@ function safeFileName(name) {
 export function listKnowledgeFiles() {
   const cfg = getConfig();
   const dir = knowledgeDir(cfg);
-  if (cfg?.knowledge?.enabled !== true || !fs.existsSync(dir)) return [];
+  if (!fs.existsSync(dir)) return [];
   return listFiles(dir).slice(0, MAX_FILES).map((file) => {
-    const stat = fs.statSync(file);
-    return {
-      name: path.relative(dir, file).split(path.sep).join('/'),
-      size: stat.size,
-      mtime: stat.mtimeMs
-    };
-  });
+    try {
+      const stat = fs.statSync(file);
+      return {
+        name: path.relative(dir, file).split(path.sep).join('/'),
+        size: stat.size,
+        mtime: stat.mtimeMs
+      };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
 }
 
 export function writeKnowledgeFile(name, content) {
   const cfg = getConfig();
-  if (cfg?.knowledge?.enabled !== true) throw new Error('知识库未启用');
   const fileName = safeFileName(name);
-  if (!fileName) throw new Error('文件名只能是不带目录的 .md/.txt');
+  if (!fileName) throw new Error('文件名不合法（只支持 .md/.txt，不能跳出知识库目录）');
   const text = String(content ?? '');
   if (!text.trim()) throw new Error('内容不能为空');
   if (Buffer.byteLength(text) > MAX_FILE_BYTES) throw new Error('单个文件不能超过 2MB');
@@ -187,7 +191,6 @@ export function writeKnowledgeFile(name, content) {
 
 export function deleteKnowledgeFile(name) {
   const cfg = getConfig();
-  if (cfg?.knowledge?.enabled !== true) throw new Error('知识库未启用');
   const fileName = safeFileName(name);
   if (!fileName) throw new Error('文件名不合法');
   const dir = knowledgeDir(cfg);
@@ -210,8 +213,9 @@ export function searchKnowledge(query, { limit = 4 } = {}) {
   const terms = queryTerms(query);
   if (!terms.length || !idx.chunks.length) return { results: [], stats: { files: idx.files, chunks: idx.chunks.length } };
   const scored = [];
+  const needle = String(query || '').toLowerCase().trim().slice(0, 200);
   for (const chunk of idx.chunks) {
-    const lower = chunk.text.toLowerCase();
+    const lower = chunk.lower || chunk.text.toLowerCase();
     let score = 0;
     for (const term of terms) {
       let count = 0;
@@ -219,7 +223,7 @@ export function searchKnowledge(query, { limit = 4 } = {}) {
       while (at >= 0 && count < 20) { count += 1; at = lower.indexOf(term, at + term.length); }
       if (count) score += count * (term.length >= 2 ? 2 : 1);
     }
-    if (lower.includes(String(query || '').toLowerCase().trim()) && String(query).trim()) score += 8;
+    if (needle && lower.includes(needle)) score += 8;
     if (chunk.source.toLowerCase().includes(terms[0])) score += 3;
     if (score > 0) scored.push({ ...chunk, score });
   }

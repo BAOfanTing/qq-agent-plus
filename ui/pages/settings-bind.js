@@ -26,7 +26,7 @@ import {
 import { saveConfig } from './settings-save.js';
 import { bindImageGenPreset, bindTtsControls } from './settings-voice.js';
 import { bindHumanizePreset, bindProactiveWindowEditor, loadHumanizeState } from './chat.js';
-import { hydrateExtensionStatus, reloadMcp } from './settings-extensions.js';
+import { hydrateExtensionStatus } from './settings-extensions.js';
 import {
   openBlocklistModal, openModelAddModal, openModelDeleteModal, openModelPicker, openPriceDialog,
   openWhitelistPicker, renderTimeRuleEditor, startListPoller, syncThinkingUi
@@ -289,7 +289,7 @@ function bindSettingsSaveAndSections() {
         }
       }).catch(() => {});
       startListPoller();   // 刷新间隔可能刚被改过，用新值重启轮询
-      if (state.settingsSection === 'mcp') void reloadMcp(); else if (state.settingsSection === 'knowledge') void hydrateExtensionStatus();
+      if (state.settingsSection === 'knowledge') void hydrateExtensionStatus();
     } catch (e) {
       const res = $('#cfg-save-result');
       res.textContent = `保存失败：${e.message}`;

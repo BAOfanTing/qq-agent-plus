@@ -99,6 +99,23 @@ export function sanitizeConfigSecrets(cfg) {
   // 顶层 api：walk 已生成 hasApiKey，这里补一个简写的 hasKey 供旧代码读取
   if (out.api) out.api.hasKey = out.api.hasApiKey ?? Boolean(String(cfg?.api?.apiKey ?? '').trim());
 
+  // MCP env/args：第三方 server 的密钥常写在 env 或 --token=… 里。walk 会把 env 里的
+  // API_KEY 整条删掉（前端再保存时就永久丢了），所以这里用原始值重建一份带掩码的副本：
+  // 非空密钥显示 ******，保存时服务端按 server id + key 恢复；非密钥 env 原样保留。
+  if (out.mcp && Array.isArray(out.mcp.servers) && Array.isArray(cfg?.mcp?.servers)) {
+    const byId = new Map(cfg.mcp.servers.map((server) => [String(server?.id || ''), server]));
+    out.mcp.servers = out.mcp.servers.map((server) => {
+      const original = byId.get(String(server?.id || '')) || {};
+      const env = {};
+      for (const [key, value] of Object.entries(original.env || {})) {
+        env[key] = SECRET_KEY_PATTERN.test(key) && String(value ?? '').trim() ? '******' : value;
+      }
+      const args = (Array.isArray(original.args) ? original.args : []).map((arg) =>
+        /(token|key|secret|password)=/i.test(String(arg)) ? '******' : arg);
+      return { ...server, env, args };
+    });
+  }
+
   return out;
 }
 

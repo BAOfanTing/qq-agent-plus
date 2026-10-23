@@ -63,3 +63,12 @@ it('控制台文件管理：写入、列出、删除、重建索引', () => {
   assert.ok(reindexKnowledge().files >= 2);
   assert.throws(() => writeKnowledgeFile('../x.md', 'x'), /文件名/);
 });
+
+it('知识库未启用时仍可先在控制台准备文档（工具/检索仍保持关闭）', () => {
+  const cfg = enable({ enabled: false });
+  setRuntimeConfig(cfg);
+  writeKnowledgeFile('草稿.md', '还没启用，但可以先把资料放进来。');
+  assert.ok(listKnowledgeFiles().some((file) => file.name === '草稿.md'));
+  assert.deepEqual(searchKnowledge('草稿').results, [], '未启用时搜索仍然关闭');
+  deleteKnowledgeFile('草稿.md');
+});
