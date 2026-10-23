@@ -8,6 +8,7 @@ test('梗库会话选择器：搜索、分组、已选标签，不铺一长排�
     allow: { groups: ['123', '456', '456'], private: ['789'] }
   });
   assert.equal((html.match(/class="meme-chat-option"/g) || []).length, 3, '群/私聊去重后各一个可选项');
+  assert.equal((html.match(/class="meme-chat-check"/g) || []).length, 3, '每条会话前都有勾选框');
   assert.match(html, /群 123/);
   assert.match(html, /群 456/);
   assert.match(html, /私聊 789/);

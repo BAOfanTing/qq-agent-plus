@@ -7,7 +7,7 @@ globalThis.window = window;
 globalThis.document = window.document;
 globalThis.HTMLElement = window.HTMLElement;
 
-const { bindExtensionSettings, renderMemesSection } = await import('../ui/pages/settings-extensions.js');
+const { bindExtensionSettings, hydrateExtensionStatus, renderMemesSection } = await import('../ui/pages/settings-extensions.js');
 
 function mount() {
   document.body.innerHTML = renderMemesSection({
@@ -23,8 +23,9 @@ function mount() {
 
 test('会话选择器：点选/取消、搜索筛选、筛选结果全选、清空', () => {
   const ui = mount();
-  ui.option('group:123').click();
-  ui.option('private:789').click();
+  const check = (id) => ui.option(id).querySelector('input');
+  check('group:123').click();
+  check('private:789').click();
   assert.equal(ui.count(), '已选 2 个');
   assert.equal(ui.chips(), 2);
 
@@ -48,4 +49,24 @@ test('没有群/私聊时不渲染选择器，但保留手动输入入口', () =
   bindExtensionSettings();
   assert.equal(document.querySelector('.meme-chat-option'), null);
   assert.ok(document.querySelector('#meme-chatkey-manual'));
+});
+
+test('已有梗库列表加载：GET /api/memes 的 entries 数组会渲染到列表', async () => {
+  document.body.innerHTML = renderMemesSection({ allow: { groups: ['123'], private: [] } });
+  bindExtensionSettings();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, entries: [{ id: 'm1', chatKey: 'group:123', term: '测试梗', meaning: '测试含义', usage: '', aliases: [] }], count: 1 })
+  });
+  try {
+    await hydrateExtensionStatus();
+    const html = document.querySelector('#memes-list')?.innerHTML || '';
+    assert.match(html, /测试梗/);
+    assert.match(html, /测试含义/);
+    assert.match(html, /data-id="m1"/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

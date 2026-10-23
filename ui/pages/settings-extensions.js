@@ -139,10 +139,10 @@ function renderMemesSection(c) {
   const privatesList = chats.filter((chat) => chat.kind === 'private');
   const optionHtml = (chat, index) => {
     const label = chat.kind === 'group' ? `群 ${chat.id}` : `私聊 ${chat.id}`;
-    return `<button type="button" class="meme-chat-option" data-chatkey="${esc(chat.key)}"
-      data-search="${esc(`${label} ${chat.key}`)}" aria-pressed="false" id="meme-chat-${index}">
-      <span class="meme-chat-option-label">${esc(label)}</span><span class="meme-chat-option-mark">＋</span>
-    </button>`;
+    return `<label class="meme-chat-option" data-chatkey="${esc(chat.key)}" data-search="${esc(`${label} ${chat.key}`)}">
+      <input type="checkbox" class="meme-chat-check" data-chatkey="${esc(chat.key)}" id="meme-chat-${index}" />
+      <span class="meme-chat-option-label">${esc(label)}</span>
+    </label>`;
   };
   let index = 0;
   const groupRows = groupsList.map((chat) => optionHtml(chat, index++)).join('');
@@ -406,22 +406,25 @@ function bindExtensionSettings() {
   const memeChatOptions = $('#memes-chat-options');
   const memeChatChips = $('#memes-chat-chips');
   const memeSelectedCount = $('#memes-selected-count');
-  const selectedChatKeys = () => [...document.querySelectorAll('.meme-chat-option[aria-pressed="true"]')]
-    .map((node) => node.dataset.chatkey)
+  const selectedChatInputs = () => [...document.querySelectorAll('.meme-chat-check:checked')];
+  const selectedChatKeys = () => selectedChatInputs()
+    .map((input) => input.dataset.chatkey)
     .filter(Boolean);
-  const setChatOption = (button, selected) => {
-    if (!button) return;
-    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
-    const mark = button.querySelector('.meme-chat-option-mark');
-    if (mark) mark.textContent = selected ? '✓' : '＋';
+  const setChatCheck = (input, selected) => {
+    if (!input) return;
+    input.checked = selected;
+    input.closest('.meme-chat-option')?.classList.toggle('is-selected', selected);
   };
   const renderMemeChatChips = () => {
     if (!memeChatChips) return;
-    const selected = [...document.querySelectorAll('.meme-chat-option[aria-pressed="true"]')];
+    const selected = selectedChatInputs();
     if (memeSelectedCount) memeSelectedCount.textContent = `已选 ${selected.length} 个`;
     memeChatChips.innerHTML = selected.length
-      ? selected.map((node) => `<span class="meme-chat-chip">${esc(node.querySelector('.meme-chat-option-label')?.textContent || node.dataset.chatkey)}
-          <button type="button" class="meme-chat-chip-remove" data-chatkey="${esc(node.dataset.chatkey)}" aria-label="取消选择">×</button></span>`).join('')
+      ? selected.map((input) => {
+        const row = input.closest('.meme-chat-option');
+        return `<span class="meme-chat-chip">${esc(row?.querySelector('.meme-chat-option-label')?.textContent || input.dataset.chatkey)}
+          <button type="button" class="meme-chat-chip-remove" data-chatkey="${esc(input.dataset.chatkey)}" aria-label="取消选择">×</button></span>`;
+      }).join('')
       : '<span class="muted">还没选会话</span>';
   };
   const filterMemeChatOptions = () => {
@@ -442,30 +445,30 @@ function bindExtensionSettings() {
     }
   };
   if (memeChatOptions) {
-    memeChatOptions.addEventListener('click', (event) => {
-      const button = event.target.closest('.meme-chat-option');
-      if (!button) return;
-      setChatOption(button, button.getAttribute('aria-pressed') !== 'true');
+    memeChatOptions.addEventListener('change', (event) => {
+      const input = event.target.closest('.meme-chat-check');
+      if (!input) return;
+      input.closest('.meme-chat-option')?.classList.toggle('is-selected', input.checked);
       renderMemeChatChips();
     });
   }
   $('#memes-chat-search')?.addEventListener('input', filterMemeChatOptions);
   $('#memes-select-visible')?.addEventListener('click', () => {
-    for (const node of document.querySelectorAll('.meme-chat-option')) {
-      if (!node.hidden) setChatOption(node, true);
+    for (const input of document.querySelectorAll('.meme-chat-check')) {
+      if (!input.closest('.meme-chat-option')?.hidden) setChatCheck(input, true);
     }
     renderMemeChatChips();
   });
   $('#memes-clear-selected')?.addEventListener('click', () => {
-    for (const node of document.querySelectorAll('.meme-chat-option')) setChatOption(node, false);
+    for (const input of document.querySelectorAll('.meme-chat-check')) setChatCheck(input, false);
     renderMemeChatChips();
   });
   memeChatChips?.addEventListener('click', (event) => {
     const button = event.target.closest('.meme-chat-chip-remove');
     if (!button) return;
-    const option = [...document.querySelectorAll('.meme-chat-option')]
+    const input = [...document.querySelectorAll('.meme-chat-check')]
       .find((node) => node.dataset.chatkey === button.dataset.chatkey);
-    setChatOption(option, false);
+    setChatCheck(input, false);
     renderMemeChatChips();
   });
 

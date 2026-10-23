@@ -1331,15 +1331,14 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .meme-chat-options { max-height: 240px; overflow: auto; margin-top: 8px; padding-top: 4px; border-top: 1px solid var(--border); }
 .meme-chat-group-title { margin: 8px 0 2px; font-size: var(--fs-xs); color: var(--muted); font-weight: 600; }
 .meme-chat-option {
-  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 6px 8px; border: 0; border-radius: var(--r-sm); background: transparent;
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: var(--r-sm); background: transparent;
   color: var(--text); font: inherit; text-align: left; cursor: pointer;
 }
+.meme-chat-option input[type=checkbox] { accent-color: var(--accent); margin: 0; flex: 0 0 auto; }
 .meme-chat-option:hover { background: var(--hover); }
-.meme-chat-option[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.meme-chat-option.is-selected { background: var(--accent-soft); color: var(--accent); }
 .meme-chat-option[hidden] { display: none; }
-.meme-chat-option-mark { color: var(--muted); font-size: var(--fs-sm); }
-.meme-chat-option[aria-pressed="true"] .meme-chat-option-mark { color: var(--accent); }
 .meme-chat-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .meme-chat-chip {
   display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px 2px 10px;
