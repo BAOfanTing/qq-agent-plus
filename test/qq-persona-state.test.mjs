@@ -11,7 +11,7 @@ process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
 
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
 const {
-  computePersonaState, notePersonaInteraction, personaStatePrompt
+  computePersonaState, notePersonaInteraction, personaStatePrompt, personaStateSnapshot
 } = await import('../src/core/persona-state.js');
 const { MemoryStore } = await import('../src/memory/memory.js');
 
@@ -64,6 +64,20 @@ it('提示词只输出一句状态，不暴露数值；关闭时返回空串', (
   assert.equal(personaStatePrompt({ botName: '小鲸鱼', behaviorProfile: 'card' }), '');
   cfgWithHumanize({ respectPersonaCard: false });
   assert.match(personaStatePrompt({ botName: '小鲸鱼', behaviorProfile: 'card' }), /【你现在的状态】/);
+});
+
+it('控制台快照：启用时给出状态，card 档标成不注入', () => {
+  cfgWithHumanize();
+  const snap = personaStateSnapshot({ botName: '小鲸鱼' });
+  assert.equal(snap.enabled, true);
+  assert.equal(snap.injected, true);
+  assert.ok(typeof snap.energy === 'number');
+  assert.ok(snap.activity);
+
+  const card = personaStateSnapshot({ botName: '小鲸鱼', behaviorProfile: 'card' });
+  assert.equal(card.enabled, true);
+  assert.equal(card.injected, false);
+  assert.equal(card.cardFirst, true);
 });
 
 it('互动会抬心情、掉精力，并落盘', () => {

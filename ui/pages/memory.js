@@ -11,6 +11,18 @@ import { askForConfirmation, impressionMetaLabel } from '../core/dom-util.js';
 import { $, $$, esc } from '../core/dom.js';
 import { chatNameOf, fmtTime, formatChatTitle } from '../core/format.js';
 import { startConsolidateTicker, state } from '../core/state.js';
+
+/** 关系只用于控制台展示；措辞和提示词里的标签保持同一档。 */
+function relationshipText(rel) {
+  const n = Number(rel?.interactions) || 0;
+  if (!n) return '';
+  const label = n >= 50 ? '很熟' : n >= 20 ? '熟' : n >= 5 ? '有点熟' : '刚认识';
+  const last = Number(rel?.lastInteractionAt) || 0;
+  const age = last ? Date.now() - last : Infinity;
+  const when = last && new Date(last).toDateString() === new Date().toDateString() ? '今天'
+    : age < 7 * 86400000 ? '最近' : '';
+  return ` · 关系：${label}（${n} 次${when ? `，${when}互动` : ''}）`;
+}
 async function loadMemoryView() {
   try {
     const [cfg, chats] = await Promise.all([api('/api/config'), api('/api/chats')]);
@@ -197,8 +209,9 @@ async function loadMemoryDetail(chatKey) {
       const who = notes[String(m.userId)] || m.name || m.userId || '某人';
       const qq = m.userId ? ` <span class="muted">(QQ ${esc(m.userId)})</span>` : '';
       const imps = m.impressions.map((e) => `- ${impressionMetaLabel(e)}${e.content}`).join('\n');
+      const rel = relationshipText(m.relationship);
       return `<div class="collapsible" open>
-        <summary>${esc(who)}${qq}（${m.impressions.length} 条）
+        <summary>${esc(who)}${qq}（${m.impressions.length} 条${esc(rel)}）
           <button class="btn btn-small mem-edit-imp" data-qq="${esc(m.userId)}" data-name="${esc(m.name)}" style="margin-left:8px">编辑</button>
           <button class="btn btn-small mem-refresh-imp" data-qq="${esc(m.userId)}" data-name="${esc(m.name)}" style="margin-left:6px" title="让模型重新分析这个人：有印象则整理合并，没印象则从聊天记录里提炼">更新记忆</button>
         </summary>

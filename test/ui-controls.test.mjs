@@ -14,6 +14,7 @@ const settings = read('ui/pages/settings.js');
 const voice = read('ui/pages/settings-voice.js');
 const moments = read('ui/pages/moments.js');
 const platform = read('ui/pages/platform.js');
+const memory = read('ui/pages/memory.js');
 const format = read('ui/core/format.js');
 
 test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控件与保存接线', () => {
@@ -27,7 +28,7 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
     'cfg-humanize-delay-min', 'cfg-humanize-delay-max', 'cfg-humanize-delay-perchar',
     'cfg-humanize-antaienabled', 'cfg-humanize-blocksevere',
     'cfg-humanize-state-enabled', 'cfg-humanize-relationship-enabled',
-    'cfg-humanize-respect-card']) {
+    'cfg-humanize-respect-card', 'humanize-state-text']) {
     assert.ok(chat.includes(`id="${id}"`), `缺少控件 ${id}`);
   }
   assert.match(save, /groupEnabled: chk\('#cfg-pro-group'/,
@@ -44,6 +45,8 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   assert.match(settings, /id="settings-search"/, '设置侧栏应有搜索入口');
   assert.match(settings, /id="cfg-dirty-note"/, '保存条应显示未保存提示');
   assert.match(settings, /function filterSettingsMenu/);
+  assert.match(memory, /function relationshipText/, '人物记忆应展示关系档位');
+  assert.match(memory, /relationshipText\(m\.relationship\)/);
   // 默认勾选状态与保存端 fallback 必须同口径：群聊默认开、私聊默认关
   assert.match(chat, /id="cfg-pro-group"[^\n]*groupEnabled !== false/);
   assert.match(chat, /id="cfg-pro-private"[^\n]*privateEnabled === true/);

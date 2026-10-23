@@ -44,6 +44,8 @@ import { initPriceFeed, refreshPriceFeed, priceFeedStatus } from '../pricing/pri
 import { probeChannelPrices, capPrices } from '../pricing/price-probe.js';
 import { initChannelPrices, refreshChannelFeed, removeChannelFeed, channelPriceStatus, maybeAutoProbeChannel } from '../pricing/channel-prices.js';
 import { currentProviders, setProviderKey, testAllProviders, testOneProvider, testModelChat, probeThinking, fetchModelsFrom, upsertProvider, addModelsToProvider, removeModelFromProvider } from '../core/providers.js';
+import { personaStateSnapshot } from '../core/persona-state.js';
+import { resolvePersona } from '../personas.js';
 import { scanModelsVision, visionResults } from '../llm/vision-scan.js';
 import { builtinVisionResults } from '../llm/model-vision-docs.js';
 import { createEventBus, todayKey, shanghaiDayStart, isSelfSender, safeSlice, sanitizeUserText, textWithQuote } from '../core/util.js';
@@ -3814,6 +3816,16 @@ export function createApp({
     }
   });
 
+  router.add('GET', '/api/humanize/state', async (req, res, params, url) => {
+    const chatKey = String(url?.searchParams?.get('chatKey') || '').trim();
+    const cfg = getConfig();
+    const persona = resolvePersona(cfg, chatKey);
+    return json(res, 200, {
+      ...personaStateSnapshot(persona),
+      persona: persona.botName || '',
+      chatKey
+    });
+  });
   router.add('GET', '/api/status', async (req, res) => {
     const dayKey = todayKey();
     const sessionUsage = sessions.todayUsage(dayKey);

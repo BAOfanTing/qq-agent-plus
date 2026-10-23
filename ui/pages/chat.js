@@ -71,6 +71,28 @@ function bindHumanizePreset() {
     if (note) note.textContent = '有未保存改动';
   });
 }
+/** 只读展示当前会注入提示词的状态；数值只给控制台看，不进提示词。 */
+async function loadHumanizeState() {
+  const box = $('#humanize-state-text');
+  if (!box) return;
+  try {
+    const s = await api('/api/humanize/state');
+    if (!s.enabled) { box.textContent = '拟人化表达未启用'; return; }
+    if (!s.injected) {
+      box.textContent = s.cardFirst
+        ? '角色卡优先：状态不注入提示词（语气由角色卡决定）'
+        : '当前档位不注入状态';
+      return;
+    }
+    const energy = s.energy < 25 ? '低' : s.energy < 50 ? '偏低' : s.energy < 80 ? '正常' : '充足';
+    const mood = s.mood > 25 ? '不错' : s.mood < -25 ? '较差' : s.mood < -10 ? '偏低' : '一般';
+    const age = Math.max(0, Math.round((Date.now() - (Number(s.savedAt) || Date.now())) / 60000));
+    box.textContent = `${s.activity}；精力${energy}，心情${mood}${age ? `；${age} 分钟前更新` : ''}`;
+  } catch {
+    box.textContent = '状态读取失败';
+  }
+}
+
 function renderConversationModePanels(conversation = {}) {
   const activeMode = ['legacy', 'threaded', 'lifecycle'].includes(conversation.mode)
     ? conversation.mode
@@ -299,6 +321,10 @@ return `
       <label for="cfg-humanize-relationship-enabled">记录与每个人的互动关系（仅对已有人物印象的人生效）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-respect-card" ${humanize.respectPersonaCard !== false ? 'checked' : ''} />
       <label for="cfg-humanize-respect-card">角色卡优先时不覆盖角色语气（推荐）</label></div>
+    <div class="field">
+      <label>当前状态（只读）</label>
+      <div class="hint" id="humanize-state-text">读取中…</div>
+    </div>
     <div class="hint">
       只影响发送时机与措辞，不改变角色设定。延迟仅作用于本轮第一条，后续气泡仍按发送保护里的间隔；
       暂停或中止会立即取消等待。默认关闭，建议从 0.5–2 秒开始观察。
@@ -975,4 +1001,4 @@ function conversationModeForChat(chatKey, cfg = state.config) {
 }
 
 
-export { appendChatMessageRows, bindHumanizePreset, bindProactiveWindowEditor, loadChats, renderChatSection, updateChatMessagesBody };
+export { appendChatMessageRows, bindHumanizePreset, bindProactiveWindowEditor, loadChats, loadHumanizeState, renderChatSection, updateChatMessagesBody };

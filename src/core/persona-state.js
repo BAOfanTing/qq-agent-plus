@@ -104,6 +104,32 @@ function cardDecidesTone(persona = {}) {
   return h?.respectPersonaCard !== false && persona?.behaviorProfile === 'card';
 }
 
+/** 控制台只读快照：不写盘、不改状态，只告诉页面当前会注入什么。 */
+export function personaStateSnapshot(persona = {}, now = Date.now()) {
+  const h = getConfig().humanize;
+  const enabledNow = enabled() && !cardDecidesTone(persona);
+  if (!enabledNow) {
+    return {
+      enabled: h?.enabled === true,
+      injected: false,
+      cardFirst: Boolean(persona?.behaviorProfile === 'card'),
+      respectPersonaCard: h?.respectPersonaCard !== false,
+      key: personaKeyOf(persona)
+    };
+  }
+  const all = readAll();
+  const key = personaKeyOf(persona);
+  const state = computePersonaState(all[key] || {}, persona, now);
+  return {
+    enabled: true,
+    injected: true,
+    cardFirst: false,
+    respectPersonaCard: h?.respectPersonaCard !== false,
+    savedAt: Number(all[key]?.savedAt) || state.updatedAt,
+    ...state
+  };
+}
+
 /** 取当前状态并格式化；关闭时返回空串（提示词与升级前逐字一致）。 */
 export function personaStatePrompt(persona = {}, now = Date.now()) {
   if (!enabled() || cardDecidesTone(persona)) return '';

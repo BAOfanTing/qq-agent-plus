@@ -27,7 +27,7 @@ import {
 } from './persona.js';
 import { saveConfig } from './settings-save.js';
 import { bindImageGenPreset, bindTtsControls } from './settings-voice.js';
-import { bindHumanizePreset, bindProactiveWindowEditor } from './chat.js';
+import { bindHumanizePreset, bindProactiveWindowEditor, loadHumanizeState } from './chat.js';
 import {
   openBlocklistModal, openModelAddModal, openModelDeleteModal, openModelPicker, openPriceDialog,
   openWhitelistPicker, renderTimeRuleEditor, startListPoller, syncThinkingUi
@@ -231,16 +231,16 @@ function sliderFillPos(ratio) {
   return `calc(${SLIDER_THUMB_PX / 2}px + ${Number(r.toFixed(4))} * (100% - ${SLIDER_THUMB_PX}px))`;
 }
 
-// 设置页事件绑定：原来是一个 1544 行的单函数，按**安全边界**（两侧无共享局部名）切成 4 段。
-// 只切不改 —— 每段的语句与切分前逐字节一致，顺序、条件、守卫都没动；这里按原顺序调用。
+// 设置页事件绑定：原先 1544 行的单函数按安全边界切成 4 段；顺序、条件、守卫未动。
 function bindSettingsEvents(c) {
   bindSettingsSaveAndSections();
   bindSettingsListsAndGroups(c);
   bindSettingsModelsAndKeys(c);
   bindSettingsPersonaAndVision();
   bindProactiveWindowEditor();
-  bindHumanizePreset();
+  bindHumanizePreset(); if (state.settingsSection === 'chat') loadHumanizeState();
 }
+
 // ── 设置页绑定·第 1/4 段：保存按钮 + 实验/动态/语音三个分区块 ──
 // 由原 bindSettingsEvents 按"两侧无共享局部名"的安全边界切出，语句一字未改。
 function bindSettingsSaveAndSections() {
