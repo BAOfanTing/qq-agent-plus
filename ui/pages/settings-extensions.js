@@ -121,26 +121,52 @@ function renderKnowledgeSection(c) {
 function renderMemesSection(c) {
   const groups = Array.isArray(c?.allow?.groups) ? c.allow.groups.map((id) => String(id).trim()).filter(Boolean) : [];
   const privates = Array.isArray(c?.allow?.private) ? c.allow.private.map((id) => String(id).trim()).filter(Boolean) : [];
-  const chats = [...new Set([
-    ...groups.map((id) => `group:${id}`),
-    ...privates.map((id) => `private:${id}`)
-  ])];
-  const chatRows = chats.map((key, index) => {
-    const [kind, id] = key.split(':');
-    return `<label class="checkbox-row meme-chat-row"><input type="checkbox" class="meme-chat-check" id="meme-chat-${index}" data-chatkey="${esc(key)}" />
-      <span>${kind === 'group' ? '群' : '私聊'} ${esc(id)}</span></label>`;
-  }).join('');
+  const seen = new Set();
+  const chats = [];
+  for (const id of groups) {
+    const key = `group:${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chats.push({ key, kind: 'group', id });
+  }
+  for (const id of privates) {
+    const key = `private:${id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chats.push({ key, kind: 'private', id });
+  }
+  const groupsList = chats.filter((chat) => chat.kind === 'group');
+  const privatesList = chats.filter((chat) => chat.kind === 'private');
+  const optionHtml = (chat, index) => {
+    const label = chat.kind === 'group' ? `群 ${chat.id}` : `私聊 ${chat.id}`;
+    return `<button type="button" class="meme-chat-option" data-chatkey="${esc(chat.key)}"
+      data-search="${esc(`${label} ${chat.key}`)}" aria-pressed="false" id="meme-chat-${index}">
+      <span class="meme-chat-option-label">${esc(label)}</span><span class="meme-chat-option-mark">＋</span>
+    </button>`;
+  };
+  let index = 0;
+  const groupRows = groupsList.map((chat) => optionHtml(chat, index++)).join('');
+  const privateRows = privatesList.map((chat) => optionHtml(chat, index++)).join('');
   return `
     <h3 id="settings-memes">群梗库</h3>
     <div class="hint">群友解释过一次的梗/黑话/外号，按会话保存。机器人会优先按这里的含义理解，不必每次重新搜索；也可以手动补充、删除。
       这里只记梗的含义/用法，不记隐私和人物评价。</div>
-    <div class="field"><label>添加到哪些会话（可多选）</label>
-      <div id="memes-chat-list">
-        ${chats.length
-          ? `<label class="checkbox-row"><input type="checkbox" id="memes-select-all" /> <span>全选</span></label>${chatRows}`
-          : '<div class="hint">还没有已添加的群聊/私聊；先在「聊天白名单」里加一个。</div>'}
-      </div>
-      <div class="hint">列表来自已添加的群聊/私聊白名单；已保存但不在白名单里的旧条目仍可在下方删除。</div>
+    <div class="field"><label>添加到哪些会话</label>
+      ${chats.length ? `
+        <div class="meme-chat-picker">
+          <div class="meme-chat-toolbar">
+            <input type="search" id="memes-chat-search" placeholder="搜索群号 / QQ / group:…" />
+            <button type="button" class="btn btn-small" id="memes-select-visible">选中筛选结果</button>
+            <button type="button" class="btn btn-small" id="memes-clear-selected">清空</button>
+            <span class="muted" id="memes-selected-count">已选 0 个</span>
+          </div>
+          <div class="meme-chat-options" id="memes-chat-options">
+            ${groupRows ? `<div class="meme-chat-group-title">群聊（${groupsList.length}）</div>${groupRows}` : ''}
+            ${privateRows ? `<div class="meme-chat-group-title">私聊（${privatesList.length}）</div>${privateRows}` : ''}
+          </div>
+          <div class="meme-chat-chips" id="memes-chat-chips"><span class="muted">还没选会话</span></div>
+        </div>` : '<div class="hint">还没有已添加的群聊/私聊；先在「聊天白名单」里加一个。</div>'}
+      <div class="hint">列表来自已添加的群聊/私聊白名单。群多时用搜索框筛选；选中的会话会出现在下面，点 × 可取消。</div>
     </div>
     <div class="field"><label>或手动输入会话 key（白名单为空/临时会话时用）</label>
       <input type="text" id="meme-chatkey-manual" placeholder="group:123456789 或 private:123456" maxlength="80" /></div>
@@ -148,8 +174,8 @@ function renderMemesSection(c) {
       <div class="field"><label>梗 / 黑话 / 外号</label><input type="text" id="meme-term" placeholder="扎啤" maxlength="40" /></div>
       <div class="field"><label>别名（逗号分隔，可选）</label><input type="text" id="meme-aliases" placeholder="扎啤吧, 杂鱼" maxlength="200" /></div>
     </div>
-    <div class="field"><label>含义</label><input type="text" id="meme-meaning" placeholder="杂鱼的谐音，用来阴阳人菜/不行" maxlength="500" /></div>
-    <div class="field"><label>用法 / 例句（可选）</label><input type="text" id="meme-usage" placeholder="你太扎啤了 = 你太菜了" maxlength="300" /></div>
+    <div class="field"><label>含义</label><input type="text" id="meme-meaning" placeholder="杂鱼的谐音，用来阴阳人菜/不行" maxlength="300" /></div>
+    <div class="field"><label>用法 / 例句（可选）</label><input type="text" id="meme-usage" placeholder="你太扎啤了 = 你太菜了" maxlength="240" /></div>
     <div class="settings-inline-actions">
       <button type="button" class="btn btn-small" id="memes-add">添加到选中会话</button>
       <span class="muted" id="memes-result"></span>
@@ -375,13 +401,77 @@ function bindExtensionSettings() {
       await hydrateExtensionStatus();
     });
   }
+  const memeChatOptions = $('#memes-chat-options');
+  const memeChatChips = $('#memes-chat-chips');
+  const memeSelectedCount = $('#memes-selected-count');
+  const selectedChatKeys = () => [...document.querySelectorAll('.meme-chat-option[aria-pressed="true"]')]
+    .map((node) => node.dataset.chatkey)
+    .filter(Boolean);
+  const setChatOption = (button, selected) => {
+    if (!button) return;
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    const mark = button.querySelector('.meme-chat-option-mark');
+    if (mark) mark.textContent = selected ? '✓' : '＋';
+  };
+  const renderMemeChatChips = () => {
+    if (!memeChatChips) return;
+    const selected = [...document.querySelectorAll('.meme-chat-option[aria-pressed="true"]')];
+    if (memeSelectedCount) memeSelectedCount.textContent = `已选 ${selected.length} 个`;
+    memeChatChips.innerHTML = selected.length
+      ? selected.map((node) => `<span class="meme-chat-chip">${esc(node.querySelector('.meme-chat-option-label')?.textContent || node.dataset.chatkey)}
+          <button type="button" class="meme-chat-chip-remove" data-chatkey="${esc(node.dataset.chatkey)}" aria-label="取消选择">×</button></span>`).join('')
+      : '<span class="muted">还没选会话</span>';
+  };
+  const filterMemeChatOptions = () => {
+    if (!memeChatOptions) return;
+    const query = String($('#memes-chat-search')?.value || '').trim().toLowerCase();
+    for (const node of memeChatOptions.querySelectorAll('.meme-chat-option')) {
+      const hit = !query || String(node.dataset.search || '').toLowerCase().includes(query);
+      node.hidden = !hit;
+    }
+    for (const title of memeChatOptions.querySelectorAll('.meme-chat-group-title')) {
+      let node = title.nextElementSibling;
+      let visible = false;
+      while (node && !node.classList.contains('meme-chat-group-title')) {
+        if (node.classList.contains('meme-chat-option') && !node.hidden) { visible = true; break; }
+        node = node.nextElementSibling;
+      }
+      title.hidden = !visible;
+    }
+  };
+  if (memeChatOptions) {
+    memeChatOptions.addEventListener('click', (event) => {
+      const button = event.target.closest('.meme-chat-option');
+      if (!button) return;
+      setChatOption(button, button.getAttribute('aria-pressed') !== 'true');
+      renderMemeChatChips();
+    });
+  }
+  $('#memes-chat-search')?.addEventListener('input', filterMemeChatOptions);
+  $('#memes-select-visible')?.addEventListener('click', () => {
+    for (const node of document.querySelectorAll('.meme-chat-option')) {
+      if (!node.hidden) setChatOption(node, true);
+    }
+    renderMemeChatChips();
+  });
+  $('#memes-clear-selected')?.addEventListener('click', () => {
+    for (const node of document.querySelectorAll('.meme-chat-option')) setChatOption(node, false);
+    renderMemeChatChips();
+  });
+  memeChatChips?.addEventListener('click', (event) => {
+    const button = event.target.closest('.meme-chat-chip-remove');
+    if (!button) return;
+    const option = [...document.querySelectorAll('.meme-chat-option')]
+      .find((node) => node.dataset.chatkey === button.dataset.chatkey);
+    setChatOption(option, false);
+    renderMemeChatChips();
+  });
+
   const memeAdd = $('#memes-add');
   if (memeAdd) {
     memeAdd.addEventListener('click', async () => {
       const result = $('#memes-result');
-      const selected = [...document.querySelectorAll('.meme-chat-check:checked')]
-        .map((node) => node.dataset.chatkey)
-        .filter(Boolean);
+      const selected = selectedChatKeys();
       const manual = String($('#meme-chatkey-manual')?.value || '').trim();
       if (manual && !selected.includes(manual)) selected.push(manual);
       const base = {
@@ -390,7 +480,7 @@ function bindExtensionSettings() {
         usage: String($('#meme-usage')?.value || '').trim(),
         aliases: String($('#meme-aliases')?.value || '').split(/[,，、]/).map((x) => x.trim()).filter(Boolean)
       };
-      if (!selected.length) { if (result) result.textContent = '先勾选要添加到的群聊/私聊'; return; }
+      if (!selected.length) { if (result) result.textContent = '先在上面的会话选择器里选群聊/私聊'; return; }
       if (!base.term || !base.meaning) { if (result) result.textContent = '梗名和含义都不能为空'; return; }
       memeAdd.disabled = true;
       if (result) result.textContent = `正在写入 ${selected.length} 个会话…`;
@@ -421,12 +511,6 @@ function bindExtensionSettings() {
       } finally {
         memeAdd.disabled = false;
       }
-    });
-  }
-  const selectAll = $('#memes-select-all');
-  if (selectAll) {
-    selectAll.addEventListener('change', () => {
-      for (const node of document.querySelectorAll('.meme-chat-check')) node.checked = selectAll.checked;
     });
   }
   const memesBox = $('#memes-list');
