@@ -37,6 +37,7 @@ import { McpManager } from '../mcp/manager.js';
 import { searchRegistry } from '../mcp/registry.js';
 import { searchPresets } from '../mcp/presets.js';
 import { knowledgeEnabled, knowledgeStats, listKnowledgeFiles, writeKnowledgeFile, deleteKnowledgeFile, reindexKnowledge } from '../knowledge/store.js';
+import { listMemes, rememberMeme, deleteMeme, memeStats } from '../memes/store.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from '../llm/llm.js';
 import { synthesizeSpeech } from '../llm/tts.js';
 import { generateImage, imageGenEffectiveHost, imageGenKeyStale, resolveImageGenAuth } from '../llm/image-gen.js';
@@ -2825,6 +2826,31 @@ export function createApp({
   router.add('POST', '/api/knowledge/reindex', async (_req, res) =>
     json(res, 200, { ok: true, ...reindexKnowledge() })
   );
+  router.add('GET', '/api/memes', async (_req, res, params, url) => {
+    const chatKey = String(url?.searchParams?.get('chatKey') || '').trim();
+    return json(res, 200, { ok: true, entries: listMemes(chatKey), ...memeStats() });
+  });
+  router.add('POST', '/api/memes', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const entry = rememberMeme({
+        chatKey: body.chatKey,
+        term: body.term,
+        meaning: body.meaning,
+        usage: body.usage,
+        aliases: body.aliases,
+        createdBy: body.createdBy || 'console'
+      });
+      return json(res, 200, { ok: true, entry, ...memeStats() });
+    } catch (error) {
+      return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+  router.add('DELETE', '/api/memes', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const removed = deleteMeme(body.id);
+    return removed ? json(res, 200, { ok: true, ...memeStats() }) : json(res, 404, { ok: false, error: '梗条目不存在' });
+  });
   router.add('GET', '/api/mcp/presets', async (_req, res, params, url) => {
     const query = String(url?.searchParams?.get('query') || '').trim();
     return json(res, 200, { ok: true, results: searchPresets(query) });

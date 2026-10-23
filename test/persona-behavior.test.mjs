@@ -65,6 +65,8 @@ test('grounded 档替换冲突的风格规则，但保留权限与工具', () =>
   assert.ok(legacy.includes('先接住'));
   assert.ok(legacy.includes('搜到梗后先看摘要'), '搜到梗后要有“先看摘要/再决定用不用”的约束');
   assert.ok(legacy.includes('meme=true'), '拿不准的词要显式开启梗补充，不能只靠查询关键词');
+  assert.ok(legacy.includes('meme_remember'), '群友解释过的梗要能记进本群梗库');
+  assert.ok(legacy.includes('本群梗库'), '提示词要提到本群梗库优先于搜索');
   assert.notEqual(legacy, prompt);
   assert.equal(prompt, buildSystemPrompt({ persona: groundedPersona() }));
 });

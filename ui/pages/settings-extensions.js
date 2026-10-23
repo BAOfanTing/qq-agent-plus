@@ -118,6 +118,27 @@ function renderKnowledgeSection(c) {
     <div class="field"><label>索引状态</label><div class="hint" id="knowledge-status">读取中…</div></div>`;
 }
 
+function renderMemesSection() {
+  return `
+    <h3 id="settings-memes">群梗库</h3>
+    <div class="hint">群友解释过一次的梗/黑话/外号，按会话保存。机器人会优先按这里的含义理解，不必每次重新搜索；也可以手动补充、删除。
+      这里只记梗的含义/用法，不记隐私和人物评价。</div>
+    <div class="field-row">
+      <div class="field"><label>会话（group:群号 或 private:QQ）</label><input type="text" id="meme-chatkey" placeholder="group:123456789" /></div>
+      <div class="field"><label>梗 / 黑话 / 外号</label><input type="text" id="meme-term" placeholder="扎啤" maxlength="40" /></div>
+    </div>
+    <div class="field"><label>含义</label><input type="text" id="meme-meaning" placeholder="杂鱼的谐音，用来阴阳人菜/不行" maxlength="500" /></div>
+    <div class="field-row">
+      <div class="field"><label>用法 / 例句（可选）</label><input type="text" id="meme-usage" placeholder="你太扎啤了 = 你太菜了" maxlength="300" /></div>
+      <div class="field"><label>别名（逗号分隔，可选）</label><input type="text" id="meme-aliases" placeholder="扎啤吧, 杂鱼" maxlength="200" /></div>
+    </div>
+    <div class="settings-inline-actions">
+      <button type="button" class="btn btn-small" id="memes-add">添加 / 更新</button>
+      <span class="muted" id="memes-result"></span>
+    </div>
+    <div class="field"><label>已有梗库</label><div class="hint" id="memes-list">读取中…</div></div>`;
+}
+
 function renderModerationSection(c) {
   const enabled = c.moderation?.enabled !== false;
   const actions = c.moderation?.actions || {};
@@ -336,6 +357,48 @@ function bindExtensionSettings() {
       await hydrateExtensionStatus();
     });
   }
+  const memeAdd = $('#memes-add');
+  if (memeAdd) {
+    memeAdd.addEventListener('click', async () => {
+      const result = $('#memes-result');
+      const payload = {
+        chatKey: String($('#meme-chatkey')?.value || '').trim(),
+        term: String($('#meme-term')?.value || '').trim(),
+        meaning: String($('#meme-meaning')?.value || '').trim(),
+        usage: String($('#meme-usage')?.value || '').trim(),
+        aliases: String($('#meme-aliases')?.value || '').split(/[,，、]/).map((x) => x.trim()).filter(Boolean)
+      };
+      memeAdd.disabled = true;
+      if (result) result.textContent = '正在保存…';
+      try {
+        const data = await api('/api/memes', { method: 'POST', body: JSON.stringify(payload) });
+        if (result) result.textContent = data.ok ? `已保存「${data.entry?.term || payload.term}」` : `失败：${data.error || ''}`;
+        if (data.ok) {
+          for (const id of ['#meme-term', '#meme-meaning', '#meme-usage', '#meme-aliases']) {
+            const node = $(id); if (node) node.value = '';
+          }
+          await hydrateExtensionStatus();
+        }
+      } catch (error) {
+        if (result) result.textContent = `失败：${error.message}`;
+      } finally {
+        memeAdd.disabled = false;
+      }
+    });
+  }
+  const memesBox = $('#memes-list');
+  if (memesBox) {
+    memesBox.addEventListener('click', async (event) => {
+      const button = event.target.closest('.meme-remove');
+      if (!button) return;
+      if (typeof window !== 'undefined' && !window.confirm(`删除「${button.dataset.term || '这条梗'}」？`)) return;
+      button.disabled = true;
+      try {
+        await api('/api/memes', { method: 'DELETE', body: JSON.stringify({ id: button.dataset.id }) });
+      } catch { /* 列表会显示 */ }
+      await hydrateExtensionStatus();
+    });
+  }
 }
 
 async function hydrateExtensionStatus() {
@@ -415,6 +478,21 @@ async function hydrateExtensionStatus() {
       filesBox.textContent = `读取失败：${error.message}`;
     }
   }
+  const memesBox = $('#memes-list');
+  if (memesBox) {
+    try {
+      const data = await api('/api/memes');
+      const entries = Array.isArray(data.entries) ? data.entries : [];
+      memesBox.innerHTML = entries.length
+        ? entries.map((entry) => `<div class="knowledge-file-row"><b>${esc(entry.term)}</b>
+            <span class="muted">${esc(entry.chatKey)}</span>：${esc(entry.meaning)}
+            ${entry.usage ? `<span class="muted">；用法：${esc(entry.usage)}</span>` : ''}
+            <button type="button" class="btn btn-small btn-danger meme-remove" data-id="${esc(entry.id)}" data-term="${esc(entry.term)}">删除</button></div>`).join('')
+        : '还没有梗；群友解释后机器人会自动记，也可以在上面手动添加。';
+    } catch (error) {
+      memesBox.textContent = `读取失败：${error.message}`;
+    }
+  }
 }
 
-export { bindExtensionSettings, hydrateExtensionStatus, reloadMcp, renderKnowledgeSection, renderMcpSection, renderModerationSection };
+export { bindExtensionSettings, hydrateExtensionStatus, reloadMcp, renderKnowledgeSection, renderMcpSection, renderMemesSection, renderModerationSection };

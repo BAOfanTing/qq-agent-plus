@@ -290,7 +290,7 @@ function bindSettingsSaveAndSections() {
         }
       }).catch(() => {});
       startListPoller();   // 刷新间隔可能刚被改过，用新值重启轮询
-      if (state.settingsSection === 'knowledge') void hydrateExtensionStatus();
+      if (['knowledge', 'memes'].includes(state.settingsSection)) void hydrateExtensionStatus();
     } catch (e) {
       const res = $('#cfg-save-result');
       res.textContent = `保存失败：${e.message}`;

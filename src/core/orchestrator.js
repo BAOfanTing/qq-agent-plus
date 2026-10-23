@@ -118,6 +118,7 @@ import { budgetStatus } from './budget.js';
 import { readOwnerUin } from './notify-owner.js';
 import { notePersonaInteraction, personaStatePrompt } from './persona-state.js';
 import { memeDensityPrompt } from '../llm/humanize.js';
+import { memesForPrompt } from '../memes/store.js';
 import { visibleImpressions, memoryVisibilityOf } from './memory-visibility.js';
 import { knowledgeEnabled } from '../knowledge/store.js';
 import { buildReminderNote, reminderNoteCost } from './reminders.js';
@@ -2049,7 +2050,12 @@ export class Orchestrator {
     // 状态行放本轮 user 消息，不拼进 system prompt：system 前缀参与 cacheKey/线程续接判定，
     // 每半小时变一次会让前缀缓存和 lifecycle 线程反复失效。
     const personaStateLine = personaStatePrompt(persona);
-    const humanLines = [personaStateLine, memeDensityPrompt(cfg)].filter(Boolean).join('\n\n');
+    const triggerText = (triggerEntries || []).map((entry) => String(entry?.text || '')).join('\n');
+    const humanLines = [
+      personaStateLine,
+      memeDensityPrompt(cfg),
+      memesForPrompt(chatKey, triggerText)
+    ].filter(Boolean).join('\n\n');
     const systemPrompt = baseSystemPrompt;
     const promptPrefixHash = crypto.createHash('sha256')
       .update(String(cfg.api.provider || ''))

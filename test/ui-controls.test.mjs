@@ -111,3 +111,13 @@ test('搜索设置：显示真实搜索链路，并提供搜索自测入口', ()
   assert.match(read('ui/pages/search-test.js'), /\/api\/web-search\/test/);
   assert.match(read('src/console/app.js'), /'\/api\/web-search\/test'/);
 });
+
+test('群梗库：控制台有添加/列表/删除入口，并接到 API', () => {
+  for (const id of ['settings-memes', 'meme-chatkey', 'meme-term', 'meme-meaning', 'meme-usage', 'meme-aliases', 'memes-add', 'memes-list']) {
+    assert.ok(extensions.includes(`id="${id}"`), `缺少梗库控件 ${id}`);
+  }
+  assert.match(settings, /\['memes', '梗库'\]/);
+  assert.match(settings, /memes: \(\) => renderMemesSection\(c\)/);
+  assert.match(read('src/console/app.js'), /'\/api\/memes'/);
+  assert.match(read('src/memes/store.js'), /export function rememberMeme/);
+});

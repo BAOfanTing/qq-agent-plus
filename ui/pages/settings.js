@@ -36,7 +36,7 @@ import { loadSessions } from './sessions.js';
 import { bindCrossSectionControls, bindSettingsEvents, isSplitThinking } from './settings-bind.js';
 import { renderAsrSection } from './settings-voice.js';
 import {
-  bindExtensionSettings, hydrateExtensionStatus, renderKnowledgeSection, renderMcpSection, renderModerationSection
+  bindExtensionSettings, hydrateExtensionStatus, renderKnowledgeSection, renderMcpSection, renderMemesSection, renderModerationSection
 } from './settings-extensions.js';
 import { refreshAutoUpdateStatus, timeControlTargetOptions } from './status.js';
 import { loadUsageView } from './usage.js';
@@ -60,6 +60,7 @@ const SECTION_SEARCH_TERMS = {
   platform: '平台 能力 权限 工具',
   mcp: 'MCP 工具 server 外部 协议',
   knowledge: '知识库 文档 FAQ 群规 检索',
+  memes: '梗 黑话 外号 群梗库 梗百科',
   moderation: '群管理 禁言 踢人 撤回 管理员',
   onebot: 'OneBot 连接 协议 端 WS WebSocket',
   appearance: '外观 主题 字体 颜色',
@@ -102,7 +103,7 @@ function renderSettingsSidebar() {
     ['对话与人格', [['persona', '人设'], ['chat', '聊天设置'], ['messageTypes', '消息类型'], ['allow', '聊天白名单'], ['memory', '记忆']]],
     ['模型与服务', [['api', '模型 API'], ['search', '搜索服务'], ['asr', '语音转文字'], ['token-saver', 'Token 节省']]],
     ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
-    ['平台', [['platform', '平台能力'], ['onebot', 'OneBot'], ['mcp', 'MCP'], ['knowledge', '知识库'], ['moderation', '群管理']]],
+    ['平台', [['platform', '平台能力'], ['onebot', 'OneBot'], ['mcp', 'MCP'], ['knowledge', '知识库'], ['memes', '梗库'], ['moderation', '群管理']]],
     ['系统', [['appearance', '外观'], ['desktop', '系统']]]
   ];
   sidebar.innerHTML = `
@@ -342,6 +343,7 @@ function renderSettingsSection(c) {
     platform: () => renderPlatformSection(c),
     mcp: () => renderMcpSection(c),
     knowledge: () => renderKnowledgeSection(c),
+    memes: () => renderMemesSection(c),
     moderation: () => renderModerationSection(c),
     appearance: () => renderAppearanceBlock(c),
     desktop: () => renderDesktopSection(c),
@@ -604,15 +606,16 @@ function renderSearchSection(c) {
       <label>实际搜索方式</label>
       <div class="hint">
         <div><b>主搜索：</b>${esc(providerLabel)}</div>
+        <div><b>普通查询：</b>实时信息、新闻、价格、教程、文档、产品参数、事实核查都走主搜索，只有梗查询才走下面的补充链。</div>
         <div><b>梗查询自动补充：</b>${esc(supplementText)}</div>
         <div>${esc(supplementHint)}</div>
         <div>模型拿不准一个词是不是梗/外号时，会显式开启梗补充（meme=true），不依赖查询里出现“梗/抖音”。</div>
       </div>
     </div>
     <div class="field">
-      <label for="cfg-search-test-query">测试搜索（输入梗词，看实际走了哪些源）</label>
+      <label for="cfg-search-test-query">测试搜索（普通查询或梗词都行，看实际走了哪些源）</label>
       <div style="display:flex;gap:8px;align-items:center">
-        <input type="text" id="cfg-search-test-query" placeholder="例如：扎啤 什么梗" style="flex:1" maxlength="120" />
+        <input type="text" id="cfg-search-test-query" placeholder="例如：上海天气 / 扎啤 什么梗" style="flex:1" maxlength="120" />
         <button class="btn btn-small" id="cfg-search-test-btn" type="button">测试</button>
       </div>
       <div class="checkbox-row" style="margin-top:6px"><input type="checkbox" id="cfg-search-test-meme" checked />

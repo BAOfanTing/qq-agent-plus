@@ -22,7 +22,8 @@ export const EXPERIMENTAL_READ_ONLY_TOOLS = new Set([
   'list_group_album',       // 协议端只读查询（相册/照片列表）
   'get_user_info',          // 陌生人资料（只读）
   'translate_text',         // 翻译（只读）
-  'knowledge_search'        // 本地知识库只读检索
+  'knowledge_search',       // 本地知识库只读检索
+  'meme_lookup'             // 本地梗库只读检索
 ]);
 
 // 这些也是“读取/观察”类工具，但当前不做并发预启动：
@@ -56,6 +57,7 @@ export const EXPERIMENTAL_SAME_ROUND_ACTION_TOOLS = new Set([
   'schedule_wake',
   'memory_append',
   'memory_remove',
+  'meme_remember', // 本地梗库写入
   'collect_sticker',
   'sticker_note',
   'report_feedback',

@@ -14,6 +14,7 @@ import { safeFetchBinary } from '../llm/safe-fetch.js';
 import { stickerVisionEnabled } from '../llm/vision-scan.js';
 import { todayKey } from '../core/util.js';   // 上海自然日（"每群每天一次"的去重用同一个口径）
 import { createQuota } from '../core/quota.js';
+import { lookupMemes, rememberMeme } from '../memes/store.js';
 
 // 生图闸门（按张计费，全局；#9 那套双闸在这里只用全局侧 —— 一张图的钱与"哪个群要的"无关，
 // 但额度按会话记账便于排查，且 perChat 不设限）
@@ -2599,6 +2600,64 @@ export function buildToolDefs() {
       }
     },
     {
+      name: 'meme_lookup',
+      description: '查本群梗库：群友之前解释过的梗、黑话、外号。遇到一个词先查这里；查到就按群里的解释理解和使用，不要再问、也不要重复搜。没查到再用 web_search（meme=true）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '要查的词或当前原句' },
+          limit: { type: 'integer', description: '最多返回几条（默认 5，最大 10）' }
+        },
+        required: ['query']
+      },
+      async execute(ctx, args) {
+        try {
+          if (!ctx.chatKey) return err('没有当前会话');
+          const query = safeSlice(String(args.query ?? '').trim(), 300);
+          const entries = lookupMemes(ctx.chatKey, query, Math.min(10, Math.max(1, Number(args.limit) || 5)));
+          return ok({
+            entries,
+            note: entries.length
+              ? '优先用这里的含义；当前消息贴合就自然用一次，不要复述出处。'
+              : '本群梗库没有这个词；拿不准就用 web_search（meme=true）查。'
+          });
+        } catch (error) {
+          return err(`查梗库失败：${String(error?.message ?? error).slice(0, 120)}`, { reportIncident: false });
+        }
+      }
+    },
+    {
+      name: 'meme_remember',
+      description: '把群友解释过的梗/黑话/外号记到本群梗库。只在对方明确解释含义或用法时调用（例如“扎啤就是杂鱼的谐音”“这个 X 是骂人话”）。只记含义、用法、别名；不要记隐私、人物评价、群规或不确定的猜测。',
+      parameters: {
+        type: 'object',
+        properties: {
+          term: { type: 'string', description: '梗/黑话/外号本身，例如“扎啤”' },
+          meaning: { type: 'string', description: '群友解释的含义，尽量用一句人话' },
+          usage: { type: 'string', description: '可选：怎么用/例句，例如“你太扎啤了 = 你太菜了”' },
+          aliases: { type: 'array', items: { type: 'string' }, description: '可选：别名/变体，最多 8 个' }
+        },
+        required: ['term', 'meaning']
+      },
+      async execute(ctx, args) {
+        try {
+          if (!ctx.chatKey) return err('没有当前会话');
+          const sender = (ctx.triggerEntries || []).find((entry) => !entry.self);
+          const entry = rememberMeme({
+            chatKey: ctx.chatKey,
+            term: args.term,
+            meaning: args.meaning,
+            usage: args.usage,
+            aliases: args.aliases,
+            createdBy: sender?.senderName || sender?.senderId || ''
+          });
+          return ok({ entry, note: '已记到本群梗库；下次遇到这个词先按这里的含义理解，不要重复问。' });
+        } catch (error) {
+          return err(`记梗失败：${String(error?.message ?? error).slice(0, 120)}`, { reportIncident: false });
+        }
+      }
+    },
+    {
       name: 'knowledge_search',
       description: '搜索本机知识库（管理员放在 data/knowledge 的 .md/.txt 文档）。适合群规、FAQ、产品手册、固定资料；返回来源文件名和片段。知识库没开或没命中时如实说没找到，不要编造。',
       feature: 'knowledge',
@@ -2633,7 +2692,7 @@ export function buildToolDefs() {
     },
     {
       name: 'web_search',
-      description: '联网搜索（搜索引擎按配置，默认 Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、看不懂或拿不准的词/说法（新梗、缩写、黑话、谐音、圈内叫法、不认识的专有名词）、自己不确定的事实 —— 先搜含义再回，别靠猜。对方单独发一个词、或拿一个词形容你/骂你，而字面意思不搭时，把 meme 设为 true：会强制走梗补充链（搜狗/B站/Bing 站内限定/360），不再等查询里出现“梗/抖音”这些词。搜到梗后不要复述百科定义：对方用了就接住，话题合适才顺手用一次，不贴合就只用来理解对方。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
+      description: '联网搜索（默认 Bing），用于所有外部信息：实时新闻、价格、天气/路线、教程/文档、产品参数、事实核查、网络用语/梗/黑话、不认识的词。普通查询只走主搜索；拿不准一个词是不是梗/外号时把 meme 设为 true，强制补搜狗/B站/Bing 站内限定/360。搜到内容后不要照念百科：先用自己的话答；梗只在贴合时用一次，不贴合就只用来理解。可连续搜 2~3 次，对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
       parameters: {
         type: 'object',
         properties: {
