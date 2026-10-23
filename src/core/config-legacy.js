@@ -710,6 +710,10 @@ export const DEFAULT_CONFIG = {
     // { id, enabled, transport: 'stdio', command, args: [], env: {}, cwd,
     //   timeoutMs: 30000, maxCallsPerMinute: 30, toolMounting: 'direct' | 'meta' }
   },
+  // 群管理动作（禁言/踢人/撤回/设管理员）：只对全局管理员开放。
+  moderation: {
+    enabled: true
+  },
   // 轻量知识库：读取 data/knowledge 下的 .md/.txt，按关键词/中文二元组检索。
   // 默认关闭；不做向量库，只有明确语料时才开。
   knowledge: {

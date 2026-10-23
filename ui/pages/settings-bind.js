@@ -1,7 +1,5 @@
 // 由 ui/app.js 机械拆出（2026-10-01，改进方案 §11「UI 结构治理」第二轮：设置域）。
-// 设置页事件绑定（bindSettingsEvents 及其专用小件）
-// 跨文件引用一律走 import（模块作用域，不往全局词法环境里放东西）；可变状态挂 state，见 AGENTS.md。
-// 搬运只切不改：每个声明的源码与拆分前逐字节一致（脚本内已核对，勿手改缩进）。
+// 设置页事件绑定；跨文件引用走 import，可变状态挂 state（见 AGENTS.md）。
 'use strict';
 
 import { currentThinkingRaw, loadSettings, refreshStatus, renderSettings } from '../app.js';
@@ -28,6 +26,7 @@ import {
 import { saveConfig } from './settings-save.js';
 import { bindImageGenPreset, bindTtsControls } from './settings-voice.js';
 import { bindHumanizePreset, bindProactiveWindowEditor, loadHumanizeState } from './chat.js';
+import { hydrateExtensionStatus, reloadMcp } from './settings-extensions.js';
 import {
   openBlocklistModal, openModelAddModal, openModelDeleteModal, openModelPicker, openPriceDialog,
   openWhitelistPicker, renderTimeRuleEditor, startListPoller, syncThinkingUi
@@ -290,6 +289,7 @@ function bindSettingsSaveAndSections() {
         }
       }).catch(() => {});
       startListPoller();   // 刷新间隔可能刚被改过，用新值重启轮询
+      if (state.settingsSection === 'mcp') void reloadMcp(); else if (state.settingsSection === 'knowledge') void hydrateExtensionStatus();
     } catch (e) {
       const res = $('#cfg-save-result');
       res.textContent = `保存失败：${e.message}`;

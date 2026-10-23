@@ -46,6 +46,7 @@ MCP server 是第三方代码，能读你给它的目录、能访问网络（取
 
 ## 控制台与运维
 
+- 控制台「设置 → 平台 → MCP」可以启用/停用、增删 server、填命令/参数/环境变量、选择 direct/meta、查看运行状态并重载。
 - `GET /api/mcp`：查看每个 server 是否就绪、工具列表、错误；
 - `POST /api/mcp/reload`：配置改了之后重载（会停掉旧进程再起）；
 - 改 `config.json` 里的 `mcp` 段后，调一次 reload 即可，不用重启整个服务。

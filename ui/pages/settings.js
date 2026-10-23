@@ -35,6 +35,9 @@ import { bindAppearanceControls, renderAppearanceBlock } from './settings-appear
 import { loadSessions } from './sessions.js';
 import { bindCrossSectionControls, bindSettingsEvents, isSplitThinking } from './settings-bind.js';
 import { renderAsrSection } from './settings-voice.js';
+import {
+  bindExtensionSettings, hydrateExtensionStatus, renderKnowledgeSection, renderMcpSection, renderModerationSection
+} from './settings-extensions.js';
 import { refreshAutoUpdateStatus, timeControlTargetOptions } from './status.js';
 import { loadUsageView } from './usage.js';
 /** 设置分区搜索词：菜单标签之外，补上该分区里的常用说法。 */
@@ -55,6 +58,9 @@ const SECTION_SEARCH_TERMS = {
   'time-control': '时间 控制 时段 峰谷 活跃',
   experiments: '实验 功能 试点',
   platform: '平台 能力 权限 工具',
+  mcp: 'MCP 工具 server 外部 协议',
+  knowledge: '知识库 文档 FAQ 群规 检索',
+  moderation: '群管理 禁言 踢人 撤回 管理员',
   onebot: 'OneBot 连接 协议 端 WS WebSocket',
   appearance: '外观 主题 字体 颜色',
   desktop: '系统 备份 更新 部署'
@@ -96,7 +102,7 @@ function renderSettingsSidebar() {
     ['对话与人格', [['persona', '人设'], ['chat', '聊天设置'], ['messageTypes', '消息类型'], ['allow', '聊天白名单'], ['memory', '记忆']]],
     ['模型与服务', [['api', '模型 API'], ['search', '搜索服务'], ['asr', '语音转文字'], ['token-saver', 'Token 节省']]],
     ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
-    ['平台', [['platform', '平台能力'], ['onebot', 'OneBot']]],
+    ['平台', [['platform', '平台能力'], ['onebot', 'OneBot'], ['mcp', 'MCP'], ['knowledge', '知识库'], ['moderation', '群管理']]],
     ['系统', [['appearance', '外观'], ['desktop', '系统']]]
   ];
   sidebar.innerHTML = `
@@ -304,6 +310,8 @@ function renderSettingsImpl() {
   bindAppearanceControls();
   bindSettingsEvents(c);
   bindCrossSectionControls();
+  bindExtensionSettings();
+  hydrateExtensionStatus();
   // 「平台能力」页的异步补全：语音音色目录、每项的工具清单、闸门用量、按群覆盖编辑器
   // （不在这一页时各自 no-op）
   hydratePlatformVoiceSelect();
@@ -332,6 +340,9 @@ function renderSettingsSection(c) {
     chat: () => renderChatSection(c),
     messageTypes: () => renderMessageTypesSection(c),
     platform: () => renderPlatformSection(c),
+    mcp: () => renderMcpSection(c),
+    knowledge: () => renderKnowledgeSection(c),
+    moderation: () => renderModerationSection(c),
     appearance: () => renderAppearanceBlock(c),
     desktop: () => renderDesktopSection(c),
     onebot: () => renderOnebotSection(c)

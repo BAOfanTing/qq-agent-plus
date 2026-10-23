@@ -56,6 +56,12 @@ function isClock(value, { end = false } = {}) {
   return end && text === '24:00';
 }
 
+function parseJsonField(raw, fallback, label) {
+  const text = String(raw ?? '').trim();
+  if (!text) return fallback;
+  try { return JSON.parse(text); } catch { throw new Error(`${label} 不是合法 JSON`); }
+}
+
 async function saveConfig({ quiet = false } = {}) {
   const c = state.config;
   // 只在当前区块的元素存在时才读取，避免“每个区块保存时读取其他区块元素”导致的 null 报错。
@@ -71,6 +77,42 @@ async function saveConfig({ quiet = false } = {}) {
   const sec = state.settingsSection || 'api';
 
   const patch = {};
+
+  if (sec === 'mcp') {
+    const servers = $$('#mcp-servers .mcp-server').map((row) => {
+      const read = (sel) => String(row.querySelector(sel)?.value ?? '').trim();
+      const args = parseJsonField(read('.mcp-args'), [], '参数');
+      const env = parseJsonField(read('.mcp-env'), {}, '环境变量');
+      if (!Array.isArray(args)) throw new Error('MCP 参数必须是 JSON 数组');
+      if (!env || typeof env !== 'object' || Array.isArray(env)) throw new Error('MCP 环境变量必须是 JSON 对象');
+      return {
+        id: read('.mcp-id'),
+        enabled: row.querySelector('.mcp-enabled')?.checked !== false,
+        transport: 'stdio',
+        command: read('.mcp-command'),
+        args,
+        env,
+        timeoutMs: clampInt(read('.mcp-timeout'), 1000, 300000, 30000),
+        maxCallsPerMinute: clampInt(read('.mcp-maxcalls'), 1, 600, 30),
+        toolMounting: read('.mcp-mounting') === 'meta' ? 'meta' : 'direct'
+      };
+    }).filter((server) => server.id && server.command);
+    patch.mcp = { __replace__: { enabled: chk('#cfg-mcp-enabled', c.mcp?.enabled === true), servers } };
+  } else if (sec === 'knowledge') {
+    patch.knowledge = {
+      ...(c.knowledge || {}),
+      enabled: chk('#cfg-knowledge-enabled', c.knowledge?.enabled === true),
+      dir: String(val('#cfg-knowledge-dir', c.knowledge?.dir || '')).trim(),
+      maxResults: clampInt(val('#cfg-knowledge-maxresults', c.knowledge?.maxResults ?? 4), 1, 10, 4),
+      chunkChars: clampInt(val('#cfg-knowledge-chunk', c.knowledge?.chunkChars ?? 900), 200, 4000, 900),
+      overlapChars: clampInt(val('#cfg-knowledge-overlap', c.knowledge?.overlapChars ?? 120), 0, 2000, 120)
+    };
+  } else if (sec === 'moderation') {
+    patch.moderation = {
+      ...(c.moderation || {}),
+      enabled: chk('#cfg-moderation-enabled', c.moderation?.enabled !== false)
+    };
+  }
 
   if (sec === 'messageTypes') {
     // 四个开关都在这一页（默认 true，缺值按 true 回落 —— 与 DEFAULT_CONFIG 同口径）

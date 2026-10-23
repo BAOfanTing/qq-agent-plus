@@ -1812,6 +1812,7 @@ export function buildToolDefs() {
     },
     {
       name: 'set_group_ban',
+      feature: 'moderation',
       description: '禁言群成员（仅全局管理员在群里明确要求时可用）。minutes=0 表示解除禁言；最长 30 天。不要主动使用，不要对管理员或自己使用。',
       parameters: {
         type: 'object',
@@ -1840,6 +1841,7 @@ export function buildToolDefs() {
     },
     {
       name: 'kick_group_member',
+      feature: 'moderation',
       description: '把群成员移出群（仅全局管理员在群里明确要求时可用）。不要主动使用，不要对管理员或自己使用。',
       parameters: {
         type: 'object',
@@ -1865,6 +1867,7 @@ export function buildToolDefs() {
     },
     {
       name: 'recall_message',
+      feature: 'moderation',
       description: '撤回一条消息（仅全局管理员在群里明确要求时可用）。messageId 用聊天记录里的 #数字。不要主动撤回别人的话。',
       parameters: {
         type: 'object',
@@ -1886,6 +1889,7 @@ export function buildToolDefs() {
     },
     {
       name: 'set_group_admin',
+      feature: 'moderation',
       description: '设置/取消群管理员（仅全局管理员在群里明确要求时可用）。不要主动使用，不要对管理员或自己使用。',
       parameters: {
         type: 'object',

@@ -2005,6 +2005,7 @@ export class Orchestrator {
       if (d.feature === 'identityPilot' && !identityAvailable) return false;
       if (d.feature === 'friendProposal' && !friendProposalAvailable) return false;
       if (d.feature === 'knowledge' && !knowledgeEnabled(cfg)) return false;
+      if (d.feature === 'moderation' && cfg.moderation?.enabled === false) return false;
       return true;
     });
     // 插件工具：**不放进 buildToolDefs()**（那份是内置工具表，另有"每个工具都要有调度分类"

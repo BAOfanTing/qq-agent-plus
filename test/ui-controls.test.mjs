@@ -15,6 +15,7 @@ const voice = read('ui/pages/settings-voice.js');
 const moments = read('ui/pages/moments.js');
 const platform = read('ui/pages/platform.js');
 const memory = read('ui/pages/memory.js');
+const extensions = read('ui/pages/settings-extensions.js');
 const format = read('ui/core/format.js');
 
 test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控件与保存接线', () => {
@@ -47,6 +48,15 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   assert.match(settings, /function filterSettingsMenu/);
   assert.match(memory, /function relationshipText/, '人物记忆应展示关系档位');
   assert.match(memory, /relationshipText\(m\.relationship\)/);
+  for (const id of ['cfg-mcp-enabled', 'mcp-add-server', 'mcp-reload', 'mcp-status',
+    'cfg-knowledge-enabled', 'cfg-knowledge-dir', 'cfg-knowledge-maxresults',
+    'cfg-knowledge-chunk', 'cfg-knowledge-overlap', 'knowledge-status',
+    'cfg-moderation-enabled']) {
+    assert.ok(extensions.includes(`id="${id}"`), `缺少扩展设置控件 ${id}`);
+  }
+  assert.match(save, /patch\.mcp = \{ __replace__/, 'MCP server 列表要整段替换');
+  assert.match(save, /patch\.knowledge = \{/);
+  assert.match(save, /patch\.moderation = \{/);
   // 默认勾选状态与保存端 fallback 必须同口径：群聊默认开、私聊默认关
   assert.match(chat, /id="cfg-pro-group"[^\n]*groupEnabled !== false/);
   assert.match(chat, /id="cfg-pro-private"[^\n]*privateEnabled === true/);
