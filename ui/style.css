@@ -1651,6 +1651,7 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
     position: static; height: auto; max-height: none;
   }
   #view-settings .settings-runstate { display: none; }
+  #view-settings .settings-menu-group { display: none; }
   #view-settings .settings-menu {
     flex-direction: row; overflow-x: auto; gap: 6px;
   }
@@ -3766,15 +3767,29 @@ dialog { margin: auto; max-height: 88vh; }
 /* 设置侧栏分组标题（2026-10-08）：17 个分区平铺太劝退，按组归位。
    这一层保留分组标题：它是一页之内的二级导航，项多、且不带说明行，标题是它唯一的结构。 */
 .settings-menu-group {
-  margin: 12px 0 5px;
-  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 16px 0 5px;
+  padding: 11px 10px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   font-size: var(--fs-xs);
-  font-weight: 500;
-  letter-spacing: .04em;
-  color: var(--faint);
+  font-weight: 650;
+  letter-spacing: .08em;
+  color: var(--muted);
   text-transform: none;
+  user-select: none;
 }
-.settings-menu-group:first-child { margin-top: 2px; }
+.settings-menu-group::before {
+  content: '';
+  width: 3px;
+  height: 10px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  opacity: .7;
+  flex: none;
+}
+.settings-menu-group:first-child { margin-top: 2px; padding-top: 0; border-top: 0; }
 
 
 /* ══════════════════════════════════════════════════════════════
