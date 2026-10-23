@@ -215,7 +215,7 @@ function renderDailyMomentsSection(c) {
     <div id="daily-moments-status" class="daily-moments-status"><span class="muted">正在读取状态…</span></div>
     <h3 id="settings-digest">群日报</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-digest-enabled" ${c.groupDigest?.enabled === true ? 'checked' : ''} />
-      <label for="cfg-digest-enabled">每天定时把「过去 24 小时群里聊了啥」汇总成一条发到指定群（默认关）</label></div>
+      <label for="cfg-digest-enabled">每天定时汇总过去 24 小时的群聊内容，发送到指定群（默认关）</label></div>
     <div class="field-row">
       <div class="field"><label for="cfg-digest-time">发送时间（北京时间 HH:MM）</label>
         <input type="text" id="cfg-digest-time" value="${esc(c.groupDigest?.time || '09:30')}" placeholder="09:30" /></div>
@@ -229,7 +229,7 @@ function renderDailyMomentsSection(c) {
     </div>
     <h3 id="settings-briefing">管理员早报</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-briefing-enabled" ${c.adminBriefing?.enabled === true ? 'checked' : ''} />
-      <label for="cfg-briefing-enabled">每天把「昨天群里聊了啥」以机器人口吻私聊给管理员（默认关）</label></div>
+      <label for="cfg-briefing-enabled">每天将昨日群聊摘要以机器人身份私聊给管理员（默认关）</label></div>
     <div class="field-row">
       <div class="field"><label for="cfg-briefing-time">发送时间（北京时间 HH:MM）</label>
         <input type="text" id="cfg-briefing-time" value="${esc(c.adminBriefing?.time || '09:30')}" placeholder="09:30" /></div>

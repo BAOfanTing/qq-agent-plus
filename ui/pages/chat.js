@@ -207,13 +207,13 @@ return `
 
     <h3>所有模式 · 主动开话题</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-proactive" ${c.proactive.enabled ? 'checked' : ''} />
-      <label for="cfg-proactive">冷场时按概率主动开话题</label></div>
+      <label for="cfg-proactive">会话安静时按概率发起话题</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-group" ${c.proactive?.groupEnabled !== false ? 'checked' : ''} />
       <label for="cfg-pro-group">群聊（按群白名单）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-private" ${c.proactive?.privateEnabled === true ? 'checked' : ''} />
       <label for="cfg-pro-private">私聊（按私聊白名单）</label></div>
     <div class="field pro-windows-field">
-      <label>发言时段（窗口外不主动开口）</label>
+      <label>主动发言时段（仅在该时段内发起）</label>
       <div id="pro-windows" class="pro-windows">
         ${proWindows.map((window) => proactiveWindowRowHtml(window)).join('')}
       </div>
@@ -226,10 +226,10 @@ return `
       <div class="field"><label>检查间隔下限（分钟）</label><input type="number" id="cfg-pro-min" min="1" value="${esc(Math.round((Number(c.proactive.checkIntervalMinMs) || 1800000) / 60000))}" /></div>
       <div class="field"><label>检查间隔上限（分钟）</label><input type="number" id="cfg-pro-max" min="2" value="${esc(Math.round((Number(c.proactive.checkIntervalMaxMs) || 5400000) / 60000))}" /></div>
       <div class="field"><label>触发概率（%）</label><input type="number" id="cfg-pro-prob" step="1" min="0" max="100" value="${esc(Math.round((Number(c.proactive.probability) || 0) * 100))}" /></div>
-      <div class="field"><label>冷场判定（分钟，至少 5 分钟）</label><input type="number" id="cfg-pro-idle" min="5" max="1440" step="1" value="${esc(Math.round((Number(c.proactive.idleThresholdMs) || 1800000) / 60000))}" /></div>
+      <div class="field"><label>安静判定（分钟，至少 5 分钟）</label><input type="number" id="cfg-pro-idle" min="5" max="1440" step="1" value="${esc(Math.round((Number(c.proactive.idleThresholdMs) || 1800000) / 60000))}" /></div>
     </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-followup" ${c.proactive?.followUpEnabled !== false ? 'checked' : ''} />
-      <label for="cfg-pro-followup">说完话没人接，过十来分钟补一句（"？"/"人呢"）</label></div>
+      <label for="cfg-pro-followup">发言后无人回应时，稍后补一句</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-selfwake" ${c.proactive?.selfWakeEnabled !== false ? 'checked' : ''} />
       <label for="cfg-pro-selfwake">允许模型给自己安排稍后的主动发言</label></div>
     <div class="hint">
@@ -248,11 +248,11 @@ return `
       拍一拍必回会跳过随机概率；关掉后拍一拍按普通群消息处理。
     </div>
 
-    <h3>所有模式 · 像真人（实验性）</h3>
+    <h3>所有模式 · 拟人化表达（实验性）</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-enabled" ${humanize.enabled === true ? 'checked' : ''} />
-      <label for="cfg-humanize-enabled">启用人类化节奏与反 AI 味</label></div>
+      <label for="cfg-humanize-enabled">启用拟人化表达与助手腔过滤</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-delay-enabled" ${replyDelay.enabled !== false ? 'checked' : ''} />
-      <label for="cfg-humanize-delay-enabled">回复前按字数等一会儿再发（私聊会先显示“正在输入”）</label></div>
+      <label for="cfg-humanize-delay-enabled">发送前按字数延迟（私聊会先显示“正在输入”）</label></div>
     <div class="field-row">
       <div class="field"><label for="cfg-humanize-delay-min">最短等待（秒）</label>
         <input type="number" id="cfg-humanize-delay-min" min="0" max="30" step="0.1" value="${esc((delayMinMs / 1000).toFixed(1))}" /></div>
@@ -262,16 +262,16 @@ return `
         <input type="number" id="cfg-humanize-delay-perchar" min="0" max="200" step="1" value="${esc(Number(replyDelay.perCharMs) || 0)}" /></div>
     </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-antaienabled" ${humanize.antiAi?.enabled !== false ? 'checked' : ''} />
-      <label for="cfg-humanize-antaienabled">去掉“作为一个 AI / 希望对你有帮助”这类客服腔</label></div>
+      <label for="cfg-humanize-antaienabled">过滤助手式自指与客服收尾语</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-blocksevere" ${humanize.antiAi?.blockSevere !== false ? 'checked' : ''} />
-      <label for="cfg-humanize-blocksevere">出现明显的 AI 自指/免责时，让模型重写一次再发</label></div>
+      <label for="cfg-humanize-blocksevere">检测到明显的助手自指/免责时，要求重写一次</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-state-enabled" ${humanize.personaState?.enabled !== false ? 'checked' : ''} />
-      <label for="cfg-humanize-state-enabled">让精力/心情/在干嘛影响语气（同一人设跨群共享）</label></div>
+      <label for="cfg-humanize-state-enabled">状态（精力/心情/当前活动）影响语气（同一人设跨群共享）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-relationship-enabled" ${humanize.relationship?.enabled !== false ? 'checked' : ''} />
-      <label for="cfg-humanize-relationship-enabled">记住和每个人的关系（只对已有人物印象的人生效）</label></div>
+      <label for="cfg-humanize-relationship-enabled">记录与每个人的互动关系（仅对已有人物印象的人生效）</label></div>
     <div class="hint">
-      只改变“什么时候发、怎么收尾”，不改角色设定。延迟只作用于本轮第一条，后续气泡仍按发送保护里的间隔；
-      暂停或中止会立刻取消等待。默认关闭，建议先开 0.5–2 秒试一段。
+      只影响发送时机与措辞，不改变角色设定。延迟仅作用于本轮第一条，后续气泡仍按发送保护里的间隔；
+      暂停或中止会立即取消等待。默认关闭，建议从 0.5–2 秒开始观察。
     </div>
 
     <h3>所有模式 · 自主节奏（实验性）</h3>

@@ -414,7 +414,7 @@ function renderApiSection(c) {
       <div class="settings-divider"></div>
       <h3>从渠道自动拉价</h3>
     <div class="field">
-      <label>渠道地址（默认用上面的 Base URL；one-api / new-api 站会读它的 /api/pricing 倍率）</label>
+      <label>渠道地址（默认使用上方 Base URL；one-api / new-api 会读取该地址的 /api/pricing 倍率）</label>
       <div style="display:flex;gap:8px">
         <input type="text" id="probe-url" placeholder="https://api.example.com/provider/v1"
           value="${esc(c.api.baseUrl || '')}" style="flex:1" />

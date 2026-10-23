@@ -188,7 +188,7 @@ function renderAsrSection(c) {
     </div>
     <h3 id="settings-tts">语音回复（TTS）</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-tts-enabled" ${c.tts?.enabled === true ? 'checked' : ''} />
-      <label for="cfg-tts-enabled">允许它发语音（send_voice 工具；默认关）</label></div>
+      <label for="cfg-tts-enabled">允许机器人发语音（send_voice 工具；默认关）</label></div>
     <div class="field"><label for="cfg-tts-service">服务预设</label>
       <select id="cfg-tts-service"><option value="">（加载中…）</option></select>
       <div class="hint" id="tts-preset-hint"></div></div>
@@ -247,12 +247,12 @@ function renderAsrSection(c) {
       <span id="tts-test-result" class="muted"></span></div>
     <h3 id="settings-imagegen">图片生成（按张计费）</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-img-enabled" ${c.imageGen?.enabled === true ? 'checked' : ''} />
-      <label for="cfg-img-enabled">允许它画图（generate_image 工具；默认关）</label></div>
+      <label for="cfg-img-enabled">允许机器人画图（generate_image 工具；默认关）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-img-autosend" ${c.imageGen?.autoSend !== false ? 'checked' : ''} />
       <label for="cfg-img-autosend">生成后直接发到当前会话（关掉则只存入表情库）</label></div>
-    <div class="hint">开启后群友说「画一张」时它会调服务商的生图接口生成图片。默认生成后直接发出来；
+    <div class="hint">开启后群友说「画一张」时，机器人会调用服务商的生图接口生成图片。默认生成后直接发出；
       关掉自动发送后，图片只进表情库，模型需要时再调 send_sticker。这是<strong>按张计费</strong>的，
-      每小时上限是唯一的闸门，模型也不会主动画（只在你让它画时）。</div>
+      每小时上限是唯一的闸门，模型不会主动生成，仅在收到请求时调用。</div>
     <div class="field"><label for="cfg-img-service">服务预设</label>
       <select id="cfg-img-service"><option value="">（加载中…）</option></select>
       <div class="hint" id="img-preset-hint"></div></div>

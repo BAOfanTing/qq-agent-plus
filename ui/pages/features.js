@@ -357,7 +357,7 @@ function openStickerAssetEditor(entry = null) {
       <div class="field"><label>图片文件</label><input type="file" id="asset-sticker-file" accept="image/png,image/jpeg,image/gif,image/webp" /></div>
       <div class="field"><label>图片 URL</label><input type="text" id="asset-sticker-url" placeholder="未选择文件时使用" /></div>`}
       <div class="field"><label>名称</label><input type="text" id="asset-sticker-desc" maxlength="80" value="${esc(entry?.desc || '')}" /></div>
-      <div class="field"><label>AI 备注</label><textarea id="asset-sticker-note">${esc(entry?.localNote || '')}</textarea></div>
+      <div class="field"><label>自动备注</label><textarea id="asset-sticker-note">${esc(entry?.localNote || '')}</textarea></div>
       <div class="field"><label>标签</label><input type="text" id="asset-sticker-tags" value="${esc((entry?.tags || []).join(', '))}" /></div>
       <div class="field"><label>使用场景</label><textarea id="asset-sticker-usage">${esc(entry?.usage || '')}</textarea></div>`,
     foot: '<button class="btn" id="asset-editor-cancel">取消</button><button class="btn btn-primary" id="asset-editor-save">保存</button>'
@@ -1146,7 +1146,7 @@ function renderFriendFeaturePageImpl(c, status) {
       <div class="identity-pilot-people" id="identity-incoming-friend-requests"></div>
     </section>
     <section class="control-section" id="identity-friend-proposal-box">
-      <h3>Agent 主动好友候选</h3>
+      <h3>主动好友候选</h3>
       <div class="identity-pilot-people" id="identity-friend-proposals"></div>
     </section>
     <section class="control-section" id="identity-friend-opportunity-box">
