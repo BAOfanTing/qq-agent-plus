@@ -197,8 +197,10 @@ test('summarizes once, publishes an optional refreshed image, and prevents dupli
   assert.match(firstSystemPrompt, /不要写成“我的一天”/);
   assert.match(firstSystemPrompt, /不要统计、不要数数、不要枚举/);
   assert.match(firstUserPrompt, /【群聊材料】（[^）]*不需要转述或汇总/);
+  assert.match(firstUserPrompt, /"candidates"/, '写说说只给候选瞬间，不再塞整天群日志');
+  assert.doesNotMatch(firstUserPrompt, /"messages"/, '整天消息数组不应再进写说说提示词');
   // 版本字面量：docs/DAILY_MOMENTS.md 指着它，改提示词就得同步升，别只改一处。
-  assert.equal(MOMENT_PROMPT_VERSION, 'persona-moment-v3', '提示词版本要与 docs/DAILY_MOMENTS.md 一致');
+  assert.equal(MOMENT_PROMPT_VERSION, 'persona-moment-v4', '提示词版本要与 docs/DAILY_MOMENTS.md 一致');
 
   const result = await manager.runNow({ publish: true });
   assert.equal(result.record.status, 'published');
@@ -423,7 +425,7 @@ test('本地表情库的 base64 候选：不进 http 校验/抓取，整图原�
       args: {
         decision: 'publish',
         reason: '有图可配',
-        content: '今天群里在挑表情包，认真挑一张比刷十个结论有意思。',
+        content: '翻到一张旧表情，认真挑一张比刷十个结论有意思。',
         imageIds: ['image-1'],
         groupSummaries: [{ chatKey: 'group:1', summary: '聊表情包' }]
       }
@@ -555,6 +557,8 @@ test('纪事体判据：线上那几种写法要中，正常口语不许误判�
   assert.equal(dayRecapReason('一共就聊了两句，别的没了'), '', '轻微的口语计数不算');
   assert.ok(dayRecapReason('一点半散了会，三点又叫回去，五点才走'), '「一点半」是真时间，不能跟口语的「一点」一起滤掉');
   assert.ok(dayRecapReason('两点起床，四点吃饭，六点又睡'), '裸的数字钟点也算（线上那篇正是「九点、十一点半、两点、四点」）');
+  assert.ok(dayRecapReason('今天群里最准时的是天气预报。早上八点，南昌23度，一天没落。晚上还是没人。'), '早中晚推进 + 今天群里口径也要拦');
+  assert.equal(dayRecapReason('今晚风大，早点睡'), '', '单个时间段不是时间线');
   assert.equal(dayRecapReason(''), '');
 });
 

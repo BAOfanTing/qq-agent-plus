@@ -17,7 +17,6 @@ import { state } from '../core/state.js';
 import { saveConfig } from './settings-save.js';
 function renderExperimentalSettingsSectionImpl(c) {
   const enabled = c.identityPilot?.enabled === true;
-  const slang = c.slangPilot || {};
   const incident = c.incidentPilot || {};
   return `
     <section class="experimental-settings">
@@ -42,13 +41,10 @@ function renderExperimentalSettingsSectionImpl(c) {
           </span>
         </div>
         <div class="control-key-row">
-          <span><strong>黑话语料库</strong><small id="slang-pilot-state">${slang.enabled === true ? '已启用' : '已停用'} · ${slang.graduated === true ? '已固化' : '实验中'}</small></span>
+          <span><strong>黑话语料库</strong><small id="slang-pilot-state">已退役（自动发现/研究/审批已下线；旧 slang.json 不再注入）</small></span>
           <span class="settings-actions" style="margin:0">
-            <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-slang-pilot-enabled" ${slang.enabled === true ? 'checked' : ''} /><span>启用</span></label>
-            <button type="button" class="btn btn-small ${slang.graduated === true ? '' : 'btn-primary'}"
-              id="launch-slang-feature" ${slang.graduated === true ? 'disabled' : ''}>
-              ${slang.graduated === true ? '已固化' : '固化上线'}
-            </button>
+            <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-slang-pilot-enabled" disabled /><span>已退役</span></label>
+            <button type="button" class="btn btn-small" id="launch-slang-feature" disabled>已退役</button>
           </span>
         </div>
         <div class="control-key-row">

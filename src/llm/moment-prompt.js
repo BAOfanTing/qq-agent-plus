@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { resolveSelfName } from '../core/util.js';
 
-export const MOMENT_PROMPT_VERSION = 'persona-moment-v3';
+export const MOMENT_PROMPT_VERSION = 'persona-moment-v4';
 
 export function momentPersonaHash(persona = {}, accountNickname = '') {
   return crypto.createHash('sha256').update(JSON.stringify([
@@ -35,7 +35,8 @@ export function buildMomentSystemPrompt(persona = {}, { accountNickname = '' } =
     '不要统计、不要数数、不要枚举：不数自己说了几次、有几个人回你、全天最长或最短的一条是什么——“回我的总共三句”那种写法是纪要，不是感受。',
     '不逐条引用群友的话来串场；确实要用，最多一句，且它得在推进你正在说的那件事。',
     '不用日期或天气当开场（“国庆第三天，南昌 19℃”）。第一句就是你此刻想说的那句话本身。',
-    '素材是当天的原始记录，不是要你复述的清单：先把它们压成“一件事”，压不出来就只留最扎你的那一条，其余全丢。',
+    '素材是当天的原始记录，不是要你复述的清单：先从候选瞬间里挑一件，压成“一件事”，压不出来就只留最扎你的那一条，其余全丢。',
+    '候选只是备选，不是一条要全部覆盖的行程；不要按时间顺序把候选逐个写一遍。',
     '',
     '【像自己发动态】',
     '以自己的感受或观点为重心，不以“今天群里讨论了……”为固定开场。',

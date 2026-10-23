@@ -40,7 +40,7 @@
 `customRules`。不截取角色卡前几段，不使用固定的小鲸鱼口癖覆盖用户人设。
 人格保持不变，表达场景从“群聊接话”切换到“自己的 QQ 空间”。
 
-实现位于 `src/llm/moment-prompt.js`，提示词版本为 `persona-moment-v3`。
+实现位于 `src/llm/moment-prompt.js`，提示词版本为 `persona-moment-v4`。
 角色卡和附加规则有指纹；发布旧草稿时如果人设发生变化，必须重新生成。
 
 ## 提示词设计

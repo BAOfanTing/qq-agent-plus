@@ -150,6 +150,7 @@ function renderMemesSection(c) {
   return `
     <h3 id="settings-memes">群梗库</h3>
     <div class="hint">群友解释过一次的梗/黑话/外号，按会话保存。机器人会优先按这里的含义理解，不必每次重新搜索；也可以手动补充、删除。
+      群友在聊天里说“X 就是……，记一下”时，模型会调用 meme_remember；没记住就在下面手动添加。
       这里只记梗的含义/用法，不记隐私和人物评价。</div>
     <div class="field"><label>添加到哪些会话</label>
       ${chats.length ? `
@@ -538,6 +539,31 @@ function bindExtensionSettings() {
   }
 }
 
+async function hydrateMemeChatNames() {
+  const box = $('#memes-chat-options');
+  if (!box) return;
+  const [groupResult, friendResult] = await Promise.allSettled([
+    api('/api/onebot/groups'),
+    api('/api/onebot/friends')
+  ]);
+  const names = new Map();
+  if (groupResult.status === 'fulfilled' && Array.isArray(groupResult.value?.groups)) {
+    for (const group of groupResult.value.groups) names.set(`group:${group.id}`, group.name);
+  }
+  if (friendResult.status === 'fulfilled' && Array.isArray(friendResult.value?.friends)) {
+    for (const friend of friendResult.value.friends) names.set(`private:${friend.id}`, friend.name);
+  }
+  for (const option of box.querySelectorAll('.meme-chat-option')) {
+    const key = String(option.dataset.chatkey || '');
+    const [kind, id] = key.split(':');
+    const name = String(names.get(key) || '').trim();
+    if (!name || name === id) continue;
+    const label = option.querySelector('.meme-chat-option-label');
+    if (label) label.textContent = `${kind === 'group' ? '群' : '私聊'} ${id} · ${name}`;
+    option.dataset.search = `${option.dataset.search || ''} ${name}`.trim();
+  }
+}
+
 async function hydrateExtensionStatus() {
   const mcpBox = $('#mcp-status');
   if (mcpBox) {
@@ -630,6 +656,7 @@ async function hydrateExtensionStatus() {
       memesBox.textContent = `读取失败：${error.message}`;
     }
   }
+  await hydrateMemeChatNames();
 }
 
 export { bindExtensionSettings, hydrateExtensionStatus, reloadMcp, renderKnowledgeSection, renderMcpSection, renderMemesSection, renderModerationSection };

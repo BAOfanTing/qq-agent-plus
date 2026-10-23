@@ -229,6 +229,35 @@ function auditMessages(messages) {
   });
 }
 
+function buildMomentCandidates(groups, max = 6) {
+  const scored = [];
+  for (const group of groups) {
+    const messages = Array.isArray(group.messages) ? group.messages : [];
+    for (const message of messages) {
+      const text = String(message?.text || '').trim();
+      if (text.length < 4 || text.length > 220) continue;
+      if (/^\[(?:图片|表情包|语音|视频|文件)/.test(text)) continue;
+      if (/https?:\/\//i.test(text)) continue;
+      if (/^(?:收到|好的|哈哈|草|6|？|\?|在吗|早|晚安|谢谢|1|2)$/.test(text)) continue;
+      const score = (message.self ? 3 : 0)
+        + (text.length >= 8 ? 2 : 0)
+        + (/[?？!！…]/.test(text) ? 1 : 0)
+        + (Array.isArray(message.images) && message.images.length ? 1 : 0);
+      scored.push({ text, self: message.self === true, score });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  const picked = [];
+  const seen = new Set();
+  for (const item of scored) {
+    if (seen.has(item.text)) continue;
+    seen.add(item.text);
+    picked.push({ id: `moment-${picked.length + 1}`, text: item.text, self: item.self });
+    if (picked.length >= Math.max(1, Math.min(8, Number(max) || 6))) break;
+  }
+  return picked;
+}
+
 /**
  * 「我的一天」式纪事判断（启发式，只拦最明显的形态）。
  *
@@ -259,6 +288,12 @@ export function dayRecapReason(text) {
   // 三处以上、且有至少两种写法，才算"按时间线讲当天"
   if (clocks.length >= 3 && new Set(clocks).size >= 2) {
     return '出现了三处以上具体时间点';
+  }
+  // 不写具体钟点、但按早中晚一路推进，同样是"我的一天"；线上 9/30 的样本就是这样漏过去的。
+  const periods = t.match(/早上|上午|中午|下午|傍晚|晚上|夜里|凌晨/g) || [];
+  if (periods.length >= 3) return '出现了从早到晚的时间段';
+  if (/(今天群里|群里今天|一天下来|一整天|我的一天|从早到晚)/.test(t)) {
+    return '出现了“今天群里/一天下来”这类日报口径';
   }
   // 统计口径：必须紧挨"次/回"这类计数才算（"一共就这点事""一共三个人搭话"不算）
   if (/(回我的?总共|总共\s*[^。！？\n]{0,6}?(?:次|回)|一共\s*[^。！？\n]{0,6}?(?:次|回)|全天最长|全天最短|一天里我)/.test(t)) {
@@ -1129,6 +1164,7 @@ export class DailyMomentsManager {
       selfNames: [rootConfig.persona?.botName, rootConfig.persona?.selfNickname, this.onebot.selfNickname]
         .filter(Boolean),
       groups,
+      momentCandidates: buildMomentCandidates(groups),
       imageMap,
       imageCandidates: [...imageMap.values()].map((image) => ({
         id: image.id,
@@ -1144,6 +1180,7 @@ export class DailyMomentsManager {
     const personaHash = momentPersonaHash(rootConfig.persona, this.onebot?.selfNickname || '');
     const recentPosts = this.state.records.filter((record) => record.status === 'published')
       .slice(0, 5).map((record) => ({ day: record.dayKey, content: record.content }));
+    const groupsForPrompt = snapshot.groups.map(({ messages, ...group }) => group);
     const userPrompt = [
       `【上海时间】${formatFullTime(this.now())}`,
       `【总结日期】${snapshot.dayKey}`,
@@ -1151,8 +1188,8 @@ export class DailyMomentsManager {
       `【预算】最多研究 ${cfg.maxResearchCalls} 次；最多配图 ${cfg.maxImages} 张。`,
       '【最近已发动态】',
       JSON.stringify(recentPosts),
-      '【群聊材料】（今天的见闻素材：从中挑一件自己在意的事来写，不需要转述或汇总）',
-      JSON.stringify(snapshot.groups),
+      '【群聊材料】（候选瞬间 + 群背景；只挑一个瞬间写，不需要转述或汇总）',
+      JSON.stringify({ candidates: snapshot.momentCandidates, groups: groupsForPrompt }),
       '【可选配图】',
       JSON.stringify(snapshot.imageCandidates)
     ].join('\n\n');
