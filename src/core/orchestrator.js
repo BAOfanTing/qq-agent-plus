@@ -2005,7 +2005,19 @@ export class Orchestrator {
       if (d.feature === 'identityPilot' && !identityAvailable) return false;
       if (d.feature === 'friendProposal' && !friendProposalAvailable) return false;
       if (d.feature === 'knowledge' && !knowledgeEnabled(cfg)) return false;
-      if (d.feature === 'moderation' && cfg.moderation?.enabled === false) return false;
+      if (d.feature === 'moderation') {
+        const mod = cfg.moderation || {};
+        if (mod.enabled === false) return false;
+        const action = {
+          set_group_ban: 'ban',
+          kick_group_member: 'kick',
+          recall_message: 'recall',
+          set_group_admin: 'admin'
+        }[d.name];
+        if (action && mod.actions?.[action] === false) return false;
+        const groups = idList(mod.groups);
+        if (groups.length && !groups.includes(String(chatId))) return false;
+      }
       return true;
     });
     // 插件工具：**不放进 buildToolDefs()**（那份是内置工具表，另有"每个工具都要有调度分类"

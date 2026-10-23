@@ -14,7 +14,7 @@ process.env.QQ_AGENT_DATA_DIR = dir;
 process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
 
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
-const { chunkText, knowledgeEnabled, searchKnowledge } = await import('../src/knowledge/store.js');
+const { chunkText, knowledgeEnabled, searchKnowledge, listKnowledgeFiles, writeKnowledgeFile, deleteKnowledgeFile, reindexKnowledge } = await import('../src/knowledge/store.js');
 const { buildToolDefs } = await import('../src/tools/tools.js');
 
 function enable(over = {}) {
@@ -50,4 +50,16 @@ it('知识库关闭时不返回结果；工具出口能带来源', async () => {
   const result = await tool.execute({ kind: 'group', chatKey: 'group:1', session: {} }, { query: '禁言' });
   assert.ok(!result.isError);
   assert.match(result.content, /群规\.md/);
+});
+
+it('控制台文件管理：写入、列出、删除、重建索引', () => {
+  enable();
+  const written = writeKnowledgeFile('新增.md', '报名请发「我玩」。\n');
+  assert.equal(written.name, '新增.md');
+  assert.ok(listKnowledgeFiles().some((file) => file.name === '新增.md'));
+  assert.ok(searchKnowledge('报名').results.some((item) => item.source === '新增.md'));
+  deleteKnowledgeFile('新增.md');
+  assert.ok(!listKnowledgeFiles().some((file) => file.name === '新增.md'));
+  assert.ok(reindexKnowledge().files >= 2);
+  assert.throws(() => writeKnowledgeFile('../x.md', 'x'), /文件名/);
 });

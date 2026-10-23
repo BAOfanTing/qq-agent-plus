@@ -144,6 +144,65 @@ export function knowledgeStats() {
   return { dir: idx.dir, files: idx.files, chunks: idx.chunks.length, updatedAt: idx.updatedAt };
 }
 
+function safeFileName(name) {
+  const text = String(name || '').trim().replace(/\\/g, '/');
+  if (!text || text.length > 160 || text.startsWith('/')) return '';
+  if (!EXTS.has(path.extname(text).toLowerCase())) return '';
+  const parts = text.split('/');
+  if (parts.some((part) => !part || part === '.' || part === '..' || part.startsWith('.'))) return '';
+  return text;
+}
+
+export function listKnowledgeFiles() {
+  const cfg = getConfig();
+  const dir = knowledgeDir(cfg);
+  if (cfg?.knowledge?.enabled !== true || !fs.existsSync(dir)) return [];
+  return listFiles(dir).slice(0, MAX_FILES).map((file) => {
+    const stat = fs.statSync(file);
+    return {
+      name: path.relative(dir, file).split(path.sep).join('/'),
+      size: stat.size,
+      mtime: stat.mtimeMs
+    };
+  });
+}
+
+export function writeKnowledgeFile(name, content) {
+  const cfg = getConfig();
+  if (cfg?.knowledge?.enabled !== true) throw new Error('知识库未启用');
+  const fileName = safeFileName(name);
+  if (!fileName) throw new Error('文件名只能是不带目录的 .md/.txt');
+  const text = String(content ?? '');
+  if (!text.trim()) throw new Error('内容不能为空');
+  if (Buffer.byteLength(text) > MAX_FILE_BYTES) throw new Error('单个文件不能超过 2MB');
+  const dir = knowledgeDir(cfg);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const full = path.resolve(dir, fileName);
+  if (!full.startsWith(`${path.resolve(dir)}${path.sep}`)) throw new Error('文件名不合法');
+  fs.mkdirSync(path.dirname(full), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(full, text, { encoding: 'utf8', mode: 0o600 });
+  cache = { dir, sig: '', chunks: [], files: 0, updatedAt: 0, checkedAt: 0 };
+  return { name: fileName, size: Buffer.byteLength(text) };
+}
+
+export function deleteKnowledgeFile(name) {
+  const cfg = getConfig();
+  if (cfg?.knowledge?.enabled !== true) throw new Error('知识库未启用');
+  const fileName = safeFileName(name);
+  if (!fileName) throw new Error('文件名不合法');
+  const dir = knowledgeDir(cfg);
+  const full = path.resolve(dir, fileName);
+  if (!full.startsWith(`${path.resolve(dir)}${path.sep}`)) throw new Error('文件名不合法');
+  fs.rmSync(full, { force: true });
+  cache = { dir, sig: '', chunks: [], files: 0, updatedAt: 0, checkedAt: 0 };
+  return { name: fileName };
+}
+
+export function reindexKnowledge() {
+  cache = { dir: knowledgeDir(getConfig()), sig: '', chunks: [], files: 0, updatedAt: 0, checkedAt: 0 };
+  return knowledgeStats();
+}
+
 export function searchKnowledge(query, { limit = 4 } = {}) {
   const cfg = getConfig();
   if (cfg?.knowledge?.enabled !== true) return { results: [], stats: { files: 0, chunks: 0 } };

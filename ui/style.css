@@ -1234,6 +1234,7 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
 }
 .mcp-server:first-child { border-top: 0; }
+.knowledge-file-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; flex-wrap: wrap; }
 
 /* 时段编辑器：复用时间控制的 .tc-window，但只有"开始/结束/删除"三列 */
 .pro-window { grid-template-columns: minmax(0, 1fr) 130px 28px; }

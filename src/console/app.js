@@ -34,7 +34,7 @@ import { GroupGameManager } from '../features/group-game.js';
 import { ReminderStore } from '../core/reminders.js';
 import { PluginRegistry } from '../plugins/registry.js';
 import { McpManager } from '../mcp/manager.js';
-import { knowledgeEnabled, knowledgeStats } from '../knowledge/store.js';
+import { knowledgeEnabled, knowledgeStats, listKnowledgeFiles, writeKnowledgeFile, deleteKnowledgeFile, reindexKnowledge } from '../knowledge/store.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from '../llm/llm.js';
 import { synthesizeSpeech } from '../llm/tts.js';
 import { generateImage, imageGenEffectiveHost, imageGenKeyStale, resolveImageGenAuth } from '../llm/image-gen.js';
@@ -2798,6 +2798,30 @@ export function createApp({
       available: knowledgeEnabled(),
       ...knowledgeStats()
     })
+  );
+  router.add('GET', '/api/knowledge/files', async (_req, res) =>
+    json(res, 200, { ok: true, files: listKnowledgeFiles() })
+  );
+  router.add('POST', '/api/knowledge/files', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const file = writeKnowledgeFile(body.name, body.content);
+      return json(res, 200, { ok: true, file, ...knowledgeStats() });
+    } catch (error) {
+      return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+  router.add('DELETE', '/api/knowledge/files', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const file = deleteKnowledgeFile(body.name);
+      return json(res, 200, { ok: true, file, ...knowledgeStats() });
+    } catch (error) {
+      return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+  router.add('POST', '/api/knowledge/reindex', async (_req, res) =>
+    json(res, 200, { ok: true, ...reindexKnowledge() })
   );
   router.add('GET', '/api/mcp', async (_req, res) =>
     json(res, 200, { ok: true, status: mcpManager.status() })

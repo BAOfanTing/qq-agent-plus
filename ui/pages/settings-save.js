@@ -110,7 +110,14 @@ async function saveConfig({ quiet = false } = {}) {
   } else if (sec === 'moderation') {
     patch.moderation = {
       ...(c.moderation || {}),
-      enabled: chk('#cfg-moderation-enabled', c.moderation?.enabled !== false)
+      enabled: chk('#cfg-moderation-enabled', c.moderation?.enabled !== false),
+      actions: {
+        ban: chk('#cfg-moderation-ban', c.moderation?.actions?.ban !== false),
+        kick: chk('#cfg-moderation-kick', c.moderation?.actions?.kick !== false),
+        recall: chk('#cfg-moderation-recall', c.moderation?.actions?.recall !== false),
+        admin: chk('#cfg-moderation-admin', c.moderation?.actions?.admin !== false)
+      },
+      groups: parseList(val('#cfg-moderation-groups', (c.moderation?.groups || []).join(',')))
     };
   }
 

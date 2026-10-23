@@ -51,7 +51,9 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   for (const id of ['cfg-mcp-enabled', 'mcp-add-server', 'mcp-reload', 'mcp-status',
     'cfg-knowledge-enabled', 'cfg-knowledge-dir', 'cfg-knowledge-maxresults',
     'cfg-knowledge-chunk', 'cfg-knowledge-overlap', 'knowledge-status',
-    'cfg-moderation-enabled']) {
+    'knowledge-file-name', 'knowledge-file-content', 'knowledge-file-save', 'knowledge-reindex', 'knowledge-files',
+    'cfg-moderation-enabled', 'cfg-moderation-ban', 'cfg-moderation-kick',
+    'cfg-moderation-recall', 'cfg-moderation-admin', 'cfg-moderation-groups']) {
     assert.ok(extensions.includes(`id="${id}"`), `缺少扩展设置控件 ${id}`);
   }
   assert.match(save, /patch\.mcp = \{ __replace__/, 'MCP server 列表要整段替换');

@@ -60,18 +60,41 @@ function renderKnowledgeSection(c) {
       <div class="field"><label>切片重叠（字符）</label><input type="number" id="cfg-knowledge-overlap" min="0" max="2000" value="${esc(k.overlapChars ?? 120)}" /></div>
     </div>
     <div class="hint">把群规/FAQ/手册放进这个目录，保存后模型可通过 knowledge_search 检索并带来源回答。不是完整 RAG：没有向量检索、没有 PDF/DOCX 解析。</div>
+    <div class="field"><label>文档</label><div class="hint" id="knowledge-files">读取中…</div></div>
+    <div class="field-row">
+      <div class="field"><label>文件名</label><input type="text" id="knowledge-file-name" placeholder="群规.md" /></div>
+      <div class="field"><label>操作</label>
+        <div class="settings-inline-actions">
+          <button type="button" class="btn btn-small" id="knowledge-file-save">添加 / 覆盖</button>
+          <button type="button" class="btn btn-small" id="knowledge-reindex">重建索引</button>
+          <span class="muted" id="knowledge-file-result"></span>
+        </div>
+      </div>
+    </div>
+    <div class="field"><label>内容（覆盖同名文件；只支持 .md / .txt）</label>
+      <textarea id="knowledge-file-content" rows="5" placeholder="把文档正文粘贴到这里，或直接放进 data/knowledge 目录"></textarea></div>
     <div class="field"><label>索引状态</label><div class="hint" id="knowledge-status">读取中…</div></div>`;
 }
 
 function renderModerationSection(c) {
   const enabled = c.moderation?.enabled !== false;
+  const actions = c.moderation?.actions || {};
+  const groups = Array.isArray(c.moderation?.groups) ? c.moderation.groups.join(',') : '';
   return `
     <h3 id="settings-moderation">群管理</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-moderation-enabled" ${enabled ? 'checked' : ''} />
-      <label for="cfg-moderation-enabled">允许群管理工具（禁言 / 踢人 / 撤回 / 设置管理员）</label></div>
+      <label for="cfg-moderation-enabled">允许群管理工具</label></div>
+    <div class="field-row">
+      <div class="checkbox-row"><input type="checkbox" id="cfg-moderation-ban" ${actions.ban !== false ? 'checked' : ''} /><label for="cfg-moderation-ban">禁言 / 解禁</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="cfg-moderation-kick" ${actions.kick !== false ? 'checked' : ''} /><label for="cfg-moderation-kick">移出群</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="cfg-moderation-recall" ${actions.recall !== false ? 'checked' : ''} /><label for="cfg-moderation-recall">撤回消息</label></div>
+      <div class="checkbox-row"><input type="checkbox" id="cfg-moderation-admin" ${actions.admin !== false ? 'checked' : ''} /><label for="cfg-moderation-admin">设置 / 取消管理员</label></div>
+    </div>
+    <div class="field"><label>只在哪些群生效（逗号分隔群号；留空 = 所有允许的群）</label>
+      <input type="text" id="cfg-moderation-groups" value="${esc(groups)}" placeholder="433397830" /></div>
     <div class="hint">
       只对全局管理员开放，而且必须是本批次最后一条发言；不能对自己或管理员执行。
-      关掉后这四个工具会从模型工具表里摘除，模型看不到也不会调用。
+      关掉总开关或某一项后，对应工具会从模型工具表里摘除，模型看不到也不会调用。
     </div>`;
 }
 
@@ -117,6 +140,53 @@ function bindExtensionSettings() {
       reload.disabled = false;
     });
   }
+  const saveDoc = $('#knowledge-file-save');
+  if (saveDoc) {
+    saveDoc.addEventListener('click', async () => {
+      const result = $('#knowledge-file-result');
+      const name = String($('#knowledge-file-name')?.value || '').trim();
+      const content = String($('#knowledge-file-content')?.value || '');
+      saveDoc.disabled = true;
+      if (result) result.textContent = '正在写入…';
+      try {
+        const data = await api('/api/knowledge/files', {
+          method: 'POST', body: JSON.stringify({ name, content })
+        });
+        if (result) result.textContent = data.ok ? `已写入 ${data.file?.name || name}` : `失败：${data.error || ''}`;
+        if (data.ok) {
+          const box = $('#knowledge-file-content');
+          if (box) box.value = '';
+          await hydrateExtensionStatus();
+        }
+      } catch (error) {
+        if (result) result.textContent = `失败：${error.message}`;
+      } finally {
+        saveDoc.disabled = false;
+      }
+    });
+  }
+  const reindex = $('#knowledge-reindex');
+  if (reindex) {
+    reindex.addEventListener('click', async () => {
+      reindex.disabled = true;
+      try { await api('/api/knowledge/reindex', { method: 'POST', body: JSON.stringify({}) }); }
+      catch { /* 状态接口会显示 */ }
+      await hydrateExtensionStatus();
+      reindex.disabled = false;
+    });
+  }
+  const filesBox = $('#knowledge-files');
+  if (filesBox) {
+    filesBox.addEventListener('click', async (event) => {
+      const button = event.target.closest('.knowledge-file-remove');
+      if (!button) return;
+      button.disabled = true;
+      try {
+        await api('/api/knowledge/files', { method: 'DELETE', body: JSON.stringify({ name: button.dataset.name }) });
+      } catch { /* 状态接口会显示 */ }
+      await hydrateExtensionStatus();
+    });
+  }
 }
 
 async function hydrateExtensionStatus() {
@@ -147,6 +217,19 @@ async function hydrateExtensionStatus() {
         : '未启用';
     } catch (error) {
       kbBox.textContent = `读取失败：${error.message}`;
+    }
+  }
+  const filesBox = $('#knowledge-files');
+  if (filesBox) {
+    try {
+      const data = await api('/api/knowledge/files');
+      const files = Array.isArray(data.files) ? data.files : [];
+      filesBox.innerHTML = files.length
+        ? files.map((file) => `<div class="knowledge-file-row">${esc(file.name)} <span class="muted">${Math.round(file.size / 1024)} KB</span>
+            <button type="button" class="btn btn-small btn-danger knowledge-file-remove" data-name="${esc(file.name)}">删除</button></div>`).join('')
+        : '还没有文档';
+    } catch (error) {
+      filesBox.textContent = `读取失败：${error.message}`;
     }
   }
 }

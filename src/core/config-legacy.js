@@ -712,7 +712,9 @@ export const DEFAULT_CONFIG = {
   },
   // 群管理动作（禁言/踢人/撤回/设管理员）：只对全局管理员开放。
   moderation: {
-    enabled: true
+    enabled: true,
+    actions: { ban: true, kick: true, recall: true, admin: true },
+    groups: []
   },
   // 轻量知识库：读取 data/knowledge 下的 .md/.txt，按关键词/中文二元组检索。
   // 默认关闭；不做向量库，只有明确语料时才开。
