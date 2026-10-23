@@ -606,6 +606,7 @@ function renderSearchSection(c) {
         <div><b>主搜索：</b>${esc(providerLabel)}</div>
         <div><b>梗查询自动补充：</b>${esc(supplementText)}</div>
         <div>${esc(supplementHint)}</div>
+        <div>模型拿不准一个词是不是梗/外号时，会显式开启梗补充（meme=true），不依赖查询里出现“梗/抖音”。</div>
       </div>
     </div>
     <div class="field">
@@ -614,6 +615,8 @@ function renderSearchSection(c) {
         <input type="text" id="cfg-search-test-query" placeholder="例如：扎啤 什么梗" style="flex:1" maxlength="120" />
         <button class="btn btn-small" id="cfg-search-test-btn" type="button">测试</button>
       </div>
+      <div class="checkbox-row" style="margin-top:6px"><input type="checkbox" id="cfg-search-test-meme" checked />
+        <label for="cfg-search-test-meme">按梗查询强制补充（即使查询里没有“梗/抖音”也走 B 站/搜狗/站内限定）</label></div>
       <div class="hint" id="cfg-search-test-result">还没有测试。</div>
     </div>
     <div class="field" id="custom-provider-manage" style="${prov.startsWith('custom:') ? '' : 'display:none'}">

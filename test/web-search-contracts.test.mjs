@@ -231,6 +231,26 @@ test('B 站标题和 Bing 站内解释会合并：不能只给模型一堆没正
   assert.ok(result.sources.includes('bilibili') && result.sources.includes('bing'));
 });
 
+test('meme=true 强制走梗补充：即使 Bing 已覆盖字面词，也会补 B 站/站内解释', async () => {
+  setWebSearch({ provider: 'bing', searchUrl: 'https://cn.bing.com/search', maxResults: 6 });
+  const primary = '<ol><li class="b_algo"><h2><a href="https://baike.baidu.com/item/%E6%89%8E%E5%95%A4">扎啤_百度百科</a></h2><p>扎啤是生啤</p></li></ol>';
+  const bili = { code: 0, data: { result: [
+    { title: '扎啤 是什么梗？【梗学堂】', description: '梗科普', bvid: 'BV1meme' }
+  ] } };
+  globalThis.fetch = async (url) => {
+    const u = decodeURIComponent(String(url)).replace(/\+/g, ' ');
+    if (u.includes('sogou.com')) return { ok: true, text: async () => '<html>验证码</html>' };
+    if (u.includes('/x/web-interface/nav')) return { ok: true, json: async () => ({ code: 0, data: {} }) };
+    if (u.includes('/wbi/search/type')) return { ok: true, json: async () => bili };
+    if (u.includes('site:douyin.com')) return { ok: true, text: async () => '<html></html>' };
+    return { ok: true, text: async () => primary };
+  };
+  const { webSearch } = await import('../src/llm/web-search.js');
+  const result = await webSearch('扎啤', { meme: true });
+  assert.ok(result.sources.includes('bilibili'), 'meme=true 必须触发梗补充');
+  assert.ok(result.results.some((x) => x.url.includes('BV1meme')), '应带回 B 站梗解释');
+});
+
 test('B 站只有活动视频、没有梗解释时，不让它抢先，退给 Bing 站内解释', async () => {
   setWebSearch({ provider: 'bing', searchUrl: 'https://cn.bing.com/search', maxResults: 6 });
   const bingGeneric = '<ol><li class="b_algo"><h2><a href="https://www.douyin.com/">抖音</a></h2><p>抖音</p></li></ol>';

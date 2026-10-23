@@ -104,7 +104,7 @@ test('平台能力：插件宿主高级项有控件、保存时只提交这几�
 });
 
 test('搜索设置：显示真实搜索链路，并提供搜索自测入口', () => {
-  for (const id of ['cfg-searchprovider', 'search-chain-summary', 'cfg-search-test-query', 'cfg-search-test-btn']) {
+  for (const id of ['cfg-searchprovider', 'search-chain-summary', 'cfg-search-test-query', 'cfg-search-test-btn', 'cfg-search-test-meme']) {
     assert.ok(settings.includes(`id="${id}"`), `缺少搜索控件 ${id}`);
   }
   assert.match(settings, /梗查询自动补充/);

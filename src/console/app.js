@@ -3872,13 +3872,14 @@ export function createApp({
       const body = await readBody(req).catch(() => ({}));
       const query = String(body.query ?? '').trim().slice(0, 120);
       if (!query) return json(res, 400, { ok: false, error: '请输入要测试的搜索词' });
-      const result = await webSearch(query);
+      const result = await webSearch(query, { meme: body.meme === true });
       const sources = Array.isArray(result.sources) && result.sources.length
         ? result.sources
         : [String(getConfig().webSearch?.provider || 'bing')];
       return json(res, 200, {
         ok: true,
         query,
+        meme: body.meme === true,
         sources,
         supplemented: sources.some((source) => source !== 'bing'),
         count: result.results.length,

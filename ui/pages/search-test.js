@@ -10,11 +10,12 @@ function bindSearchTest() {
     const query = String(input?.value || '').trim();
     if (!box) return;
     if (!query) { box.textContent = '先输入一个搜索词，例如：扎啤 什么梗'; return; }
+    const meme = $('#cfg-search-test-meme')?.checked !== false;
     box.textContent = '搜索中…';
     try {
       const r = await api('/api/web-search/test', {
         method: 'POST',
-        body: JSON.stringify({ query })
+        body: JSON.stringify({ query, meme })
       });
       if (!r.ok) { box.textContent = `搜索失败：${r.error || '未知错误'}`; return; }
       const sources = (r.sources || []).join(' → ') || '（未报告）';
@@ -25,7 +26,7 @@ function bindSearchTest() {
         return `<li>${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${title}</a>` : title}${snippet}</li>`;
       }).join('');
       box.innerHTML = `<div><b>来源：</b>${esc(sources)}${r.supplemented ? '（触发了梗补充）' : '（只用了主搜索）'}`
-        + ` · ${Number(r.latencyMs) || 0} ms · ${Number(r.count) || 0} 条</div>`
+        + ` · ${r.meme ? '梗模式' : '普通模式'} · ${Number(r.latencyMs) || 0} ms · ${Number(r.count) || 0} 条</div>`
         + (rows ? `<ol>${rows}</ol>` : '<div>没有结果</div>');
     } catch (error) {
       box.textContent = `搜索失败：${error.message}`;

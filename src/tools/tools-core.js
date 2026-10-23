@@ -2633,15 +2633,18 @@ export function buildToolDefs() {
     },
     {
       name: 'web_search',
-      description: '联网搜索（搜索引擎按配置，默认 Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、看不懂或拿不准的词/说法（新梗、缩写、黑话、谐音、圈内叫法、不认识的专有名词）、自己不确定的事实 —— 先搜含义再回，别靠猜。对梗/抖音类查询会自动补中文结果和 B 站梗知识视频，常能拿到抖音话题页、视频标题或解释；站内链接抓不到正文时，标题和摘要也算数。搜到梗后不要复述百科定义：对方用了就接住，话题合适才顺手用一次，不贴合就只用来理解对方。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
+      description: '联网搜索（搜索引擎按配置，默认 Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、看不懂或拿不准的词/说法（新梗、缩写、黑话、谐音、圈内叫法、不认识的专有名词）、自己不确定的事实 —— 先搜含义再回，别靠猜。对方单独发一个词、或拿一个词形容你/骂你，而字面意思不搭时，把 meme 设为 true：会强制走梗补充链（搜狗/B站/Bing 站内限定/360），不再等查询里出现“梗/抖音”这些词。搜到梗后不要复述百科定义：对方用了就接住，话题合适才顺手用一次，不贴合就只用来理解对方。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
       parameters: {
         type: 'object',
-        properties: { query: { type: 'string', description: '搜索词' } },
+        properties: {
+          query: { type: 'string', description: '搜索词' },
+          meme: { type: 'boolean', description: '拿不准一个词是不是网络梗/外号/黑话时设为 true，强制走梗补充链' }
+        },
         required: ['query']
       },
       async execute(ctx, args) {
         try {
-          const result = await webSearch(String(args.query ?? ''));
+          const result = await webSearch(String(args.query ?? ''), { meme: args.meme === true });
           if (!result.results.length) {
             return ok({ query: result.query, results: [], note: '没有搜到结果，试试换关键词或更具体的说法。' });
           }

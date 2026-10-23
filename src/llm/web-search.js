@@ -302,7 +302,7 @@ async function supplementalSearch(query) {
   return null;
 }
 
-async function bingSearchWithSupplement(query) {
+async function bingSearchWithSupplement(query, { forceSupplement = false } = {}) {
   let primary = null;
   let primaryError = null;
   try { primary = await bingSearch(query); } catch (error) { primaryError = error; }
@@ -310,7 +310,7 @@ async function bingSearchWithSupplement(query) {
   const memeQuery = isMemeQuery(query);
   const shortTerm = primary && !resultsCoverQuery(primary.results, query) && isShortCjkTerm(query);
   const douyinOnly = primary && primary.results.every((r) => /^https?:\/\/(www\.)?douyin\.com\/(?:$|search|live)/i.test(String(r.url || '')));
-  const needSupplement = memeQuery || shortTerm || douyinOnly;
+  const needSupplement = forceSupplement || memeQuery || shortTerm || douyinOnly;
   if (!needSupplement) {
     if (primaryError) throw primaryError;
     return primary;
@@ -326,7 +326,7 @@ async function bingSearchWithSupplement(query) {
     : primary;
   // 明确的梗查询/只剩抖音壳子：宁可不给结果，也别把“奶”“喝”“city”这类字面词塞给模型。
   // 只是“短中文词”触发的兜底（如“段头测试”）没有补充结果时，保留 Bing 原结果，避免误伤普通搜索。
-  if (!extra) return (memeQuery || douyinOnly) ? primaryFiltered : primary;
+  if (!extra) return (memeQuery || douyinOnly || forceSupplement) ? primaryFiltered : primary;
 
   const maxResults = Math.max(6, Math.min(10, Number(getConfig().webSearch?.maxResults) || 6));
   const sources = [...(extra.names || [])];
@@ -451,7 +451,7 @@ export async function so360Search(query) {
 }
 
 /** 给工具用的统一入口：搜索 + 紧凑序列化。 */
-export async function webSearch(query) {
+export async function webSearch(query, { meme = false } = {}) {
   assertTimeAllowed();
   const clean = sanitizeQuery(query);
   if (!clean) throw new Error('查询词为空');
@@ -474,7 +474,7 @@ export async function webSearch(query) {
   if (provider === 'custom' || provider.startsWith('custom:')) {
     return customSearch(clean, provider);
   }
-  return bingSearchWithSupplement(clean);
+  return bingSearchWithSupplement(clean, { forceSupplement: meme === true });
 }
 
 /**
