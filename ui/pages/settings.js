@@ -615,7 +615,7 @@ function renderSearchSection(c) {
     <div class="field">
       <label for="cfg-search-test-query">测试搜索（普通查询或梗词都行，看实际走了哪些源）</label>
       <div style="display:flex;gap:8px;align-items:center">
-        <input type="text" id="cfg-search-test-query" placeholder="例如：上海天气 / 扎啤 什么梗" style="flex:1" maxlength="120" />
+        <input type="text" id="cfg-search-test-query" placeholder="例如：上海天气 / 某个梗" style="flex:1" maxlength="120" />
         <button class="btn btn-small" id="cfg-search-test-btn" type="button">测试</button>
       </div>
       <div class="checkbox-row" style="margin-top:6px"><input type="checkbox" id="cfg-search-test-meme" checked />

@@ -155,7 +155,7 @@ function renderMemesSection(c) {
       ${chats.length ? `
         <div class="meme-chat-picker">
           <div class="meme-chat-toolbar">
-            <input type="search" id="memes-chat-search" placeholder="搜索群号 / QQ / group:…" />
+            <input type="search" id="memes-chat-search" aria-label="搜索群聊或私聊" />
             <button type="button" class="btn btn-small" id="memes-select-visible">选中筛选结果</button>
             <button type="button" class="btn btn-small" id="memes-clear-selected">清空</button>
             <span class="muted" id="memes-selected-count">已选 0 个</span>
@@ -169,13 +169,15 @@ function renderMemesSection(c) {
       <div class="hint">列表来自已添加的群聊/私聊白名单。群多时用搜索框筛选；选中的会话会出现在下面，点 × 可取消。</div>
     </div>
     <div class="field"><label>或手动输入会话 key（白名单为空/临时会话时用）</label>
-      <input type="text" id="meme-chatkey-manual" placeholder="group:123456789 或 private:123456" maxlength="80" /></div>
+      <input type="text" id="meme-chatkey-manual" maxlength="80" aria-label="手动输入会话 key" /></div>
     <div class="field-row">
-      <div class="field"><label>梗 / 黑话 / 外号</label><input type="text" id="meme-term" placeholder="扎啤" maxlength="40" /></div>
-      <div class="field"><label>别名（逗号分隔，可选）</label><input type="text" id="meme-aliases" placeholder="扎啤吧, 杂鱼" maxlength="200" /></div>
+      <div class="field"><label>梗 / 黑话 / 外号</label><input type="text" id="meme-term" maxlength="40" /></div>
+      <div class="field"><label>别名（逗号分隔，可选）</label><input type="text" id="meme-aliases" maxlength="200" /></div>
     </div>
-    <div class="field"><label>含义</label><input type="text" id="meme-meaning" placeholder="杂鱼的谐音，用来阴阳人菜/不行" maxlength="300" /></div>
-    <div class="field"><label>用法 / 例句（可选）</label><input type="text" id="meme-usage" placeholder="你太扎啤了 = 你太菜了" maxlength="240" /></div>
+    <div class="field"><label>含义</label><input type="text" id="meme-meaning" maxlength="300" /></div>
+    <div class="field"><label>用法 / 例句（可选）</label><input type="text" id="meme-usage" maxlength="240" />
+      <div class="hint">含义和用法写成人话；别名用逗号分隔。这里只记录群友确认过的词义，不记隐私和人物评价。</div>
+    </div>
     <div class="settings-inline-actions">
       <button type="button" class="btn btn-small" id="memes-add">添加到选中会话</button>
       <span class="muted" id="memes-result"></span>

@@ -235,7 +235,7 @@ async function bingTargetedMemeSearch(query) {
   // 搜狗/360 都会对机房 IP 做风控；被挡时用 Bing 的站内限定再试一次。
   // 先去掉“什么意思/梗/抖音”这类泛词，再用两种问法各查一次：
   //   · 短核心词对“奶绿波”这类新词更准；
-  //   · 加“什么梗”对“扎啤”这类本身有常用义的词更准。
+  //   · 加“什么梗”对本身有常用义的词更准。
   // 结果按“含核心词 / 含梗 / 抖音域名”排序，避免通用词条压过梗解释。
   const core = memeCore(query);
   if (core.length < 2) throw new Error('没有可用的梗核心词');

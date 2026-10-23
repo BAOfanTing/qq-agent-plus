@@ -2628,13 +2628,13 @@ export function buildToolDefs() {
     },
     {
       name: 'meme_remember',
-      description: '把群友解释过的梗/黑话/外号记到本群梗库。只在对方明确解释含义或用法时调用（例如“扎啤就是杂鱼的谐音”“这个 X 是骂人话”）。只记含义、用法、别名；不要记隐私、人物评价、群规或不确定的猜测。',
+      description: '把群友解释过的梗/黑话/外号记到本群梗库。只在对方明确解释含义或用法时调用（例如“某个词就是群里约定的意思”“这个 X 是骂人话”）。只记含义、用法、别名；不要记隐私、人物评价、群规或不确定的猜测。',
       parameters: {
         type: 'object',
         properties: {
-          term: { type: 'string', description: '梗/黑话/外号本身，例如“扎啤”' },
+          term: { type: 'string', description: '梗/黑话/外号本身' },
           meaning: { type: 'string', description: '群友解释的含义，尽量用一句人话' },
-          usage: { type: 'string', description: '可选：怎么用/例句，例如“你太扎啤了 = 你太菜了”' },
+          usage: { type: 'string', description: '可选：怎么用/例句，按群友原意写' },
           aliases: { type: 'array', items: { type: 'string' }, description: '可选：别名/变体，最多 8 个' }
         },
         required: ['term', 'meaning']

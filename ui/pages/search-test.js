@@ -9,7 +9,7 @@ function bindSearchTest() {
     const box = $('#cfg-search-test-result');
     const query = String(input?.value || '').trim();
     if (!box) return;
-    if (!query) { box.textContent = '先输入一个搜索词，例如：扎啤 什么梗'; return; }
+    if (!query) { box.textContent = '先输入一个搜索词，例如：上海天气 / 某个梗'; return; }
     const meme = $('#cfg-search-test-meme')?.checked !== false;
     box.textContent = '搜索中…';
     try {

@@ -157,7 +157,7 @@ test('B 站：视频搜索 JSON → 标题/简介/真实视频地址；code≠0 
     json: async () => ({
       code: 0,
       data: { result: [
-        { title: '【梗知识】<em>扎啤</em>', description: '扎啤是杂鱼的谐音', arcurl: '//www.bilibili.com/video/BV1xx', bvid: 'BV1xx' },
+        { title: '【梗知识】<em>扎啤</em>', description: '扎啤是测试中约定的含义', arcurl: '//www.bilibili.com/video/BV1xx', bvid: 'BV1xx' },
         { title: '只有 bvid', description: '', bvid: 'BV2yy' },
         { title: '', bvid: 'BV3zz' }
       ] }
@@ -174,7 +174,7 @@ test('B 站：视频搜索 JSON → 标题/简介/真实视频地址；code≠0 
     'https://www.bilibili.com/video/BV2yy'
   ]);
   assert.match(r.results[0].title, /【梗知识】\s*扎啤/);
-  assert.match(r.results[0].snippet, /杂鱼/);
+  assert.match(r.results[0].snippet, /测试中约定/);
 
   stub(() => ({ ok: true, json: async () => ({ code: -412, message: '请求被拦截' }) }));
   await assert.rejects(() => bilibiliSearch('x'), /-412/);
@@ -215,7 +215,7 @@ test('B 站标题和 Bing 站内解释会合并：不能只给模型一堆没正
   const bili = { code: 0, data: { result: [
     { title: '扎啤 是什么梗？【梗学堂】', description: '素材来源于网络', bvid: 'BV1meme' }
   ] } };
-  const targeted = '<ol><li class="b_algo"><h2><a href="https://www.douyin.com/video/123">扎啤梗在网络啥意思 - 抖音</a></h2><p>扎啤是杂鱼的谐音，用来阴阳人菜</p></li></ol>';
+  const targeted = '<ol><li class="b_algo"><h2><a href="https://www.douyin.com/video/123">扎啤梗在网络啥意思 - 抖音</a></h2><p>扎啤是测试中约定的含义</p></li></ol>';
   globalThis.fetch = async (url) => {
     const u = decodeURIComponent(String(url)).replace(/\+/g, ' ');
     if (u.includes('sogou.com')) return { ok: true, text: async () => '<html>验证码</html>' };
@@ -227,7 +227,7 @@ test('B 站标题和 Bing 站内解释会合并：不能只给模型一堆没正
   const { webSearch } = await import('../src/llm/web-search.js');
   const result = await webSearch('扎啤 梗 什么意思');
   assert.ok(result.results.some((x) => x.url.includes('bilibili.com/video/BV1meme')), 'B 站标题要合并进结果');
-  assert.ok(result.results.some((x) => /杂鱼的谐音/.test(x.snippet || '')), 'Bing 的解释摘要也要合并');
+  assert.ok(result.results.some((x) => /测试中约定的含义/.test(x.snippet || '')), 'Bing 的解释摘要也要合并');
   assert.ok(result.sources.includes('bilibili') && result.sources.includes('bing'));
 });
 
