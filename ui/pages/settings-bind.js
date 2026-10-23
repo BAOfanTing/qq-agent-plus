@@ -27,7 +27,7 @@ import {
 } from './persona.js';
 import { saveConfig } from './settings-save.js';
 import { bindImageGenPreset, bindTtsControls } from './settings-voice.js';
-import { bindProactiveWindowEditor } from './chat.js';
+import { bindHumanizePreset, bindProactiveWindowEditor } from './chat.js';
 import {
   openBlocklistModal, openModelAddModal, openModelDeleteModal, openModelPicker, openPriceDialog,
   openWhitelistPicker, renderTimeRuleEditor, startListPoller, syncThinkingUi
@@ -239,8 +239,8 @@ function bindSettingsEvents(c) {
   bindSettingsModelsAndKeys(c);
   bindSettingsPersonaAndVision();
   bindProactiveWindowEditor();
+  bindHumanizePreset();
 }
-
 // ── 设置页绑定·第 1/4 段：保存按钮 + 实验/动态/语音三个分区块 ──
 // 由原 bindSettingsEvents 按"两侧无共享局部名"的安全边界切出，语句一字未改。
 function bindSettingsSaveAndSections() {
@@ -264,6 +264,9 @@ function bindSettingsSaveAndSections() {
       res.classList.add('saved-flash');
       // 回填被夹过的字段（服务端存下来的值可能与框里显示的不一样）
       syncClampedInputs();
+      // 回填会补发 input 事件，清"未保存"必须放在它之后。
+      state.settingsDirty = false;
+      const dirty = $('#cfg-dirty-note'); if (dirty) dirty.textContent = '';
       // 保存成功后，人设页那条"还没生效"的提示就没意义了，清掉它
       if (state.settingsSection === 'persona') {
         state.personaEditNote = '';
@@ -271,13 +274,11 @@ function bindSettingsSaveAndSections() {
         if (note) note.textContent = '';
       }
       refreshStatus().then(() => {
-        // 省 Token 的"实际生效值"表按 /api/status 渲染：保存完要等状态回来再重画一次，
-        // 否则切了档位、表格还显示上一档的数字（要刷新页面才对得上）。
+        // 省 Token 的"实际生效值"表按 /api/status 渲染：保存后要等状态回来再重画一次。
         if (state.settingsSection !== 'token-saver') return;
         const section = state.settingsSection;
         renderSettings();
-        // 重画会把上面写好的"已保存 ✓"连同节点一起换掉 —— 这里补写一次，
-        // 否则在省 Token 页点保存看不到任何成功反馈（数字本来就低于上限时尤其明显）。
+        // 重画会换掉"已保存 ✓"节点，这里补写一次。
         if (state.settingsSection !== section) return;
         const again = $('#cfg-save-result');
         if (again) {
@@ -1796,5 +1797,4 @@ function bindSettingsPersonaAndVision() {
   const pickFriendsBtn = $('#pick-friends-btn');
   if (pickFriendsBtn) pickFriendsBtn.addEventListener('click', () => openWhitelistPicker('friends'));
 }
-
 export { bindCrossSectionControls, bindSettingsEvents, captureTimeControlRule, isSplitThinking };

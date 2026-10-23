@@ -61,7 +61,7 @@ export function findAiTells(text) {
  * 去掉固定 AI 味说法。正常聊天基本不受影响；删完只剩空串时返回空串，由调用方决定是否补一句。
  * @returns {{text:string, tells:Array, changed:boolean, severe:boolean}}
  */
-export function humanizeText(text, { enabled = true } = {}) {
+export function humanizeText(text, { enabled = true, soft = true } = {}) {
   const source = String(text ?? '');
   if (!enabled) return { text: source, tells: [], changed: false, severe: false };
   const tells = findAiTells(source);
@@ -69,7 +69,8 @@ export function humanizeText(text, { enabled = true } = {}) {
   if (!tells.length) return { text: source, tells, changed: false, severe: false };
   let out = source;
   for (const rule of SEVERE_RULES) out = out.replace(rule.re, '');
-  for (const [re, replacement] of SOFT_RULES) out = out.replace(re, replacement);
+  // grounded（自然可靠）档保留"首先/其次"这类结构词：那是该档要的可靠表达。
+  if (soft) for (const [re, replacement] of SOFT_RULES) out = out.replace(re, replacement);
   out = out
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/[ \t]+([，。！？!?,.;；：:])/g, '$1')

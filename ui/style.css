@@ -1116,6 +1116,19 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .settings-runstate .rs-title { font-weight: 600; font-size: var(--fs-md); }
 .settings-runstate .rs-row { display: flex; align-items: center; gap: 8px; }
 .settings-runstate .rs-row .dot { width: 8px; height: 8px; }
+.settings-search { margin: 0 0 10px; }
+.settings-search input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-input);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+.settings-search input:focus { border-color: var(--accent); outline: none; }
+#cfg-dirty-note { color: var(--orange); }
 /* 分区菜单：与主导航同一套"选中块滑过去"（滑块实现见 ui/core/nav-pill.js）。
    这里给它定位上下文、内缩 0（菜单项本来就是满宽）、圆角与菜单项对齐。 */
 .settings-menu { position: relative; display: flex; flex-direction: column; gap: 2px; --pill-inset: 0px; }

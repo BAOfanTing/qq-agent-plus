@@ -514,6 +514,7 @@ export class Orchestrator {
     // 详见 store.recoverExpired 的注释（2026-10-09 全面审查）。
     this.liveLeases = new Set();
     this.activeRuns = new Map();       // chatKey -> sessionId
+    this.actionMemory = new Map();     // chatKey -> { at: { kind: ts } }（动作冷却跨轮）
     this.runSeq = new Map();           // chatKey -> 第几次处理（跨重启清零即可）
     // 预判时掷出的随机骰子：{ chatKey -> { roll, at } }。
     // 概率档下"要不要回"是随机的，预判（建等待会话）与实跑（真跑）必须用同一次，
@@ -2203,6 +2204,8 @@ export class Orchestrator {
       stickers: this.stickers,
       sender: this.sender,
       session,
+      // 动作冷却跨轮：session 每次运行都新建，冷却时间不能只存在 session 上。
+      actionMemory: this.actionMemory,
       signal,
       emit: (type, payload) => this.emit(type, payload),
       // 让模型能给自己安排一次稍后的主动发言

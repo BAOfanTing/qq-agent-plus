@@ -812,6 +812,8 @@ async function saveConfig({ quiet = false } = {}) {
     patch.humanize = {
       ...(c.humanize || {}),
       enabled: chk('#cfg-humanize-enabled', c.humanize?.enabled === true),
+      preset: String(val('#cfg-humanize-preset', c.humanize?.preset || 'natural')).trim() || 'natural',
+      respectPersonaCard: chk('#cfg-humanize-respect-card', c.humanize?.respectPersonaCard !== false),
       replyDelay: {
         ...(c.humanize?.replyDelay || {}),
         enabled: chk('#cfg-humanize-delay-enabled', c.humanize?.replyDelay?.enabled !== false),

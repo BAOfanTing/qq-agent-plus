@@ -335,6 +335,8 @@ export const DEFAULT_CONFIG = {
   // 默认关闭：延迟发送会改变用户可感知的节奏，升级后应由管理员显式打开。
   humanize: {
     enabled: false,
+    // 角色卡优先（behaviorProfile='card'）时，平台不再用状态行/助手腔过滤去改卡的语气。
+    respectPersonaCard: true,
     // 回复前的等待：按本轮总字数模拟"读完再打字"的时间，夹在 [minMs,maxMs] 内再叠加字数。
     replyDelay: {
       enabled: true,
@@ -357,6 +359,15 @@ export const DEFAULT_CONFIG = {
     // 记住和每个人的互动次数，格式化成"关系：刚认识/有点熟/熟/很熟"。
     relationship: {
       enabled: true
+    },
+    // 动作策略：同一种动作在会话内有冷却，整轮有次数上限，避免连续贴纸/拍一拍/语音。
+    actions: {
+      enabled: true,
+      maxPerRun: 4,
+      stickerCooldownMs: 60000,
+      pokeCooldownMs: 300000,
+      voiceCooldownMs: 600000,
+      reactCooldownMs: 30000
     }
   },
   // 主动开话题（可选）

@@ -49,6 +49,28 @@ function bindProactiveWindowEditor() {
     if (button) button.closest('.pro-window')?.remove();
   });
 }
+
+/** 风格预设只改界面上的人味参数；保存仍走同一份 saveConfig。 */
+function bindHumanizePreset() {
+  const select = $('#cfg-humanize-preset');
+  if (!select) return;
+  const presets = {
+    natural: { min: '0.5', max: '1.8', perChar: '12' },
+    active: { min: '0.3', max: '1.0', perChar: '8' },
+    quiet: { min: '1.0', max: '3.0', perChar: '20' },
+    companion: { min: '0.8', max: '2.5', perChar: '15' }
+  };
+  select.addEventListener('change', () => {
+    const preset = presets[select.value] || presets.natural;
+    const setValue = (id, value) => { const node = $(id); if (node) node.value = value; };
+    setValue('#cfg-humanize-delay-min', preset.min);
+    setValue('#cfg-humanize-delay-max', preset.max);
+    setValue('#cfg-humanize-delay-perchar', preset.perChar);
+    state.settingsDirty = true;
+    const note = $('#cfg-dirty-note');
+    if (note) note.textContent = '有未保存改动';
+  });
+}
 function renderConversationModePanels(conversation = {}) {
   const activeMode = ['legacy', 'threaded', 'lifecycle'].includes(conversation.mode)
     ? conversation.mode
@@ -251,6 +273,12 @@ return `
     <h3>所有模式 · 拟人化表达（实验性）</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-enabled" ${humanize.enabled === true ? 'checked' : ''} />
       <label for="cfg-humanize-enabled">启用拟人化表达与助手腔过滤</label></div>
+    <div class="field"><label for="cfg-humanize-preset">风格预设</label>
+      <select id="cfg-humanize-preset">
+        ${[['natural', '自然'], ['active', '活跃'], ['quiet', '安静'], ['companion', '陪聊']].map(([value, label]) =>
+          `<option value="${value}" ${(humanize.preset || 'natural') === value ? 'selected' : ''}>${label}</option>`).join('')}
+      </select>
+    </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-delay-enabled" ${replyDelay.enabled !== false ? 'checked' : ''} />
       <label for="cfg-humanize-delay-enabled">发送前按字数延迟（私聊会先显示“正在输入”）</label></div>
     <div class="field-row">
@@ -269,6 +297,8 @@ return `
       <label for="cfg-humanize-state-enabled">状态（精力/心情/当前活动）影响语气（同一人设跨群共享）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-relationship-enabled" ${humanize.relationship?.enabled !== false ? 'checked' : ''} />
       <label for="cfg-humanize-relationship-enabled">记录与每个人的互动关系（仅对已有人物印象的人生效）</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-respect-card" ${humanize.respectPersonaCard !== false ? 'checked' : ''} />
+      <label for="cfg-humanize-respect-card">角色卡优先时不覆盖角色语气（推荐）</label></div>
     <div class="hint">
       只影响发送时机与措辞，不改变角色设定。延迟仅作用于本轮第一条，后续气泡仍按发送保护里的间隔；
       暂停或中止会立即取消等待。默认关闭，建议从 0.5–2 秒开始观察。
@@ -945,4 +975,4 @@ function conversationModeForChat(chatKey, cfg = state.config) {
 }
 
 
-export { appendChatMessageRows, bindProactiveWindowEditor, loadChats, renderChatSection, updateChatMessagesBody };
+export { appendChatMessageRows, bindHumanizePreset, bindProactiveWindowEditor, loadChats, renderChatSection, updateChatMessagesBody };

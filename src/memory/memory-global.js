@@ -5,6 +5,7 @@ import { todayKey, sanitizeUserText, ZONE_OFFSET_MS } from '../core/util.js';
 import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
 import { GlobalPersonMemoryStore, relationshipLabel } from './global-person-memory-store.js';
 import { memoryVisibilityOf, visibleImpressions } from '../core/memory-visibility.js';
+import { resolvePersona } from '../personas.js';
 
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
 const chatDirName = (chatKey) => String(chatKey).replace(/[^a-z0-9_]/gi, '_');
@@ -198,7 +199,9 @@ export class MemoryStore {
     const cfg = getConfig();
     const notes = cfg.memberNotes || {};
     const ownerUin = String(cfg?.admin?.ownerUin || '').trim();
-    const relationshipOn = cfg.humanize?.enabled === true && cfg.humanize?.relationship?.enabled !== false;
+    const relationshipOn = cfg.humanize?.enabled === true && cfg.humanize?.relationship?.enabled !== false
+      && !(cfg.humanize?.respectPersonaCard !== false
+        && resolvePersona(cfg, chatKey)?.behaviorProfile === 'card');
     const raw = userIds ? [...new Set([...userIds].map(String))].map((id) => this.people.get(id)).filter((m) => m.impressions.length) : this.people.members(chatKey).slice(0, 15);
     // #13：按 memory.visibility 策略过滤到「对这个 chatKey 可见」的印象（默认策略下与历史逐字一致）
     const vis = memoryVisibilityOf(getConfig());
@@ -217,7 +220,12 @@ export class MemoryStore {
       // 不知道说的是自己的设置者，容易当成外人来试探它。
       if (ownerUin && String(m.userId) === ownerUin) who += `（QQ ${ownerUin}，就是管理员本人）`;
       if (relationshipOn && m.relationship?.interactions > 0) {
-        who += `（关系：${relationshipLabel(m.relationship.interactions)}）`;
+        const last = Number(m.relationship.lastInteractionAt) || 0;
+        const age = last ? Date.now() - last : Infinity;
+        const recent = last && todayKey(last) === todayKey() ? '，今天聊过'
+          : age < 7 * 86400000 ? '，最近聊过'
+            : age < 30 * 86400000 ? '，有一阵没聊了' : '';
+        who += `（关系：${relationshipLabel(m.relationship.interactions)}${recent}）`;
       }
       const recent = [...m.impressions].sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt)).slice(0, 3).reverse();
       // 带上日期：模型才能判断"这是昨天还是两周前"，别把过期印象当现状用。

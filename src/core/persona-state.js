@@ -99,9 +99,14 @@ function enabled() {
   return h?.enabled === true && h?.personaState?.enabled !== false;
 }
 
+function cardDecidesTone(persona = {}) {
+  const h = getConfig().humanize;
+  return h?.respectPersonaCard !== false && persona?.behaviorProfile === 'card';
+}
+
 /** 取当前状态并格式化；关闭时返回空串（提示词与升级前逐字一致）。 */
 export function personaStatePrompt(persona = {}, now = Date.now()) {
-  if (!enabled()) return '';
+  if (!enabled() || cardDecidesTone(persona)) return '';
   try {
     const all = readAll();
     const key = personaKeyOf(persona);
@@ -118,7 +123,7 @@ export function personaStatePrompt(persona = {}, now = Date.now()) {
 
 /** 有互动时轻微抬心情、掉精力；只对开启了这个功能的实例生效。 */
 export function notePersonaInteraction(persona = {}, { kind = 'incoming', at = Date.now() } = {}) {
-  if (!enabled()) return;
+  if (!enabled() || cardDecidesTone(persona)) return;
   try {
     const all = readAll();
     const key = personaKeyOf(persona);

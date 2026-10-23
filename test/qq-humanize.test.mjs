@@ -46,6 +46,11 @@ it('反 AI 味：识别自指/免责，并去掉客服连接词', () => {
   assert.equal(soft.severe, false);
   assert.doesNotMatch(soft.text, /首先|其次|总之/);
   assert.match(soft.text, /我不太想去/);
+
+  // grounded（自然可靠）档保留结构词，只处理真正的自指/免责
+  const grounded = humanizeText('首先，我不太想去。其次，外面在下雨。', { soft: false });
+  assert.match(grounded.text, /首先/);
+  assert.match(grounded.text, /其次/);
 });
 
 it('反 AI 味：正常口语不误伤', () => {
@@ -138,4 +143,115 @@ it('send_message：严重自指只拦一次，第二次用清洗后的正文发�
   assert.ok(!second.isError);
   assert.equal(sends.length, 1);
   assert.equal(sends[0][0], '今天天气不错。');
+});
+
+it('动作策略：单轮动作次数上限同样生效', async () => {
+  const cfg = baseConfig();
+  cfg.humanize = {
+    ...cfg.humanize,
+    enabled: true,
+    actions: { enabled: true, maxPerRun: 1, pokeCooldownMs: 0 }
+  };
+  setRuntimeConfig(cfg);
+  const makeCtx = () => ({
+    kind: 'group', chatId: '1', chatKey: 'group:1',
+    session: { id: 's5', leaseId: 'l5', sent: [] },
+    actionMemory: new Map(),
+    sender: { poke: async () => ({}) },
+    store: { hasParticipant: () => true, findByMid: () => null },
+    onebot: { selfId: '100' }, emit: () => {}
+  });
+  const tool = buildToolDefs().find((entry) => entry.name === 'send_poke');
+  const ctx = makeCtx();
+  assert.ok(!(await tool.execute(ctx, { targetUserId: '42' })).isError);
+  const second = await tool.execute(ctx, { targetUserId: '42' });
+  assert.equal(second.isError, true);
+  assert.match(second.content, /上限/);
+});
+
+it('grounded 档保留“首先/其次”这类结构词', async () => {
+  const cfg = baseConfig();
+  cfg.humanize = { ...cfg.humanize, enabled: true, antiAi: { enabled: true, blockSevere: true } };
+  setRuntimeConfig(cfg);
+  const sends = [];
+  const ctx = {
+    kind: 'group', chatId: '1', chatKey: 'group:1', behaviorProfile: 'grounded',
+    session: { id: 's6', leaseId: 'l6', sent: [] },
+    sender: { sendTextBatch: async (_key, messages) => { sends.push(messages); return { sent: messages.map((text, i) => ({ text, at: Date.now(), messageId: i + 1 })), failed: [] }; } },
+    onebot: { selfId: '100' }, emit: () => {}
+  };
+  const tool = buildToolDefs().find((entry) => entry.name === 'send_message');
+  const result = await tool.execute(ctx, { messages: '首先，我不太想去。其次，外面在下雨。' });
+  assert.ok(!result.isError);
+  assert.match(sends[0][0], /首先/);
+  assert.match(sends[0][0], /其次/);
+});
+
+it('角色卡优先时不改卡的语气：严重自指也照原样发出', async () => {  const cfg = baseConfig();
+  cfg.humanize = {
+    ...cfg.humanize,
+    enabled: true,
+    respectPersonaCard: true,
+    antiAi: { enabled: true, blockSevere: true }
+  };
+  setRuntimeConfig(cfg);
+  const sends = [];
+  const session = { id: 's2', leaseId: 'l2', sent: [] };
+  const ctx = {
+    kind: 'group',
+    chatId: '1',
+    chatKey: 'group:1',
+    behaviorProfile: 'card',
+    session,
+    sender: {
+      sendTextBatch: async (_key, messages) => {
+        sends.push(messages);
+        return { sent: messages.map((text, i) => ({ text, at: Date.now(), messageId: i + 1 })), failed: [] };
+      }
+    },
+    onebot: { selfId: '100' },
+    emit: () => {}
+  };
+  const tool = buildToolDefs().find((entry) => entry.name === 'send_message');
+  const result = await tool.execute(ctx, { messages: '作为一个AI语言模型，今天天气不错。' });
+  assert.ok(!result.isError);
+  assert.equal(sends.length, 1);
+  assert.match(sends[0][0], /作为一个AI语言模型/, '卡优先时平台不应删改角色卡的措辞');
+});
+
+it('动作策略：同一种动作冷却跨运行生效，第二次会被拦下', async () => {
+  const cfg = baseConfig();
+  cfg.humanize = {
+    ...cfg.humanize,
+    enabled: true,
+    actions: {
+      enabled: true,
+      maxPerRun: 4,
+      pokeCooldownMs: 60000,
+      stickerCooldownMs: 60000,
+      voiceCooldownMs: 60000,
+      reactCooldownMs: 60000
+    }
+  };
+  setRuntimeConfig(cfg);
+  let pokes = 0;
+  const actionMemory = new Map();
+  const makeCtx = (session) => ({
+    kind: 'group',
+    chatId: '1',
+    chatKey: 'group:1',
+    session,
+    actionMemory,
+    sender: { poke: async () => { pokes += 1; return {}; } },
+    store: { hasParticipant: () => true, findByMid: () => null },
+    onebot: { selfId: '100' },
+    emit: () => {}
+  });
+  const tool = buildToolDefs().find((entry) => entry.name === 'send_poke');
+  const first = await tool.execute(makeCtx({ id: 's3', leaseId: 'l3', sent: [] }), { targetUserId: '42' });
+  assert.ok(!first.isError);
+  const second = await tool.execute(makeCtx({ id: 's4', leaseId: 'l4', sent: [] }), { targetUserId: '42' });
+  assert.equal(second.isError, true);
+  assert.match(second.content, /刚刚用过|冷却/);
+  assert.equal(pokes, 1, '冷却要跨运行生效，第二次不能再拍');
 });

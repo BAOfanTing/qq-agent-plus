@@ -37,6 +37,29 @@ import { bindCrossSectionControls, bindSettingsEvents, isSplitThinking } from '.
 import { renderAsrSection } from './settings-voice.js';
 import { refreshAutoUpdateStatus, timeControlTargetOptions } from './status.js';
 import { loadUsageView } from './usage.js';
+/** 设置分区搜索词：菜单标签之外，补上该分区里的常用说法。 */
+const SECTION_SEARCH_TERMS = {
+  persona: '人设 角色卡 语气 口吻 规则 附加规则',
+  chat: '聊天 回复 主动 话题 拟人化 自然 活跃 安静 陪聊 预设 风格 延迟 状态 关系 表情 发送 节奏 数据 保留 冷场',
+  messageTypes: '消息 类型 图片 视频 语音 合并转发',
+  allow: '白名单 群 私聊 屏蔽 黑名单',
+  memory: '记忆 印象 交接 人物',
+  api: '模型 API Key 温度 上下文 预算 提供商',
+  search: '搜索 联网 Key',
+  asr: '语音 转文字 识别 转写',
+  'token-saver': 'Token 节省 上下文 预算',
+  moments: '每日 动态 说说 日报 早报',
+  'qzone-interactions': '动态 互动 点赞 评论 空间',
+  reminders: '提醒 定时',
+  groupGame: '群游戏 游戏 数字炸弹 狼人杀 卧底',
+  'time-control': '时间 控制 时段 峰谷 活跃',
+  experiments: '实验 功能 试点',
+  platform: '平台 能力 权限 工具',
+  onebot: 'OneBot 连接 协议 端 WS WebSocket',
+  appearance: '外观 主题 字体 颜色',
+  desktop: '系统 备份 更新 部署'
+};
+
 /** 把设置解析成实际要应用的主题名。 */
 function resolveTheme(pref) {
   if (THEME_VALUES.includes(pref) && pref !== 'system') return pref;
@@ -82,6 +105,9 @@ function renderSettingsSidebar() {
       <div class="rs-row" ${s?.onebot?.connected ? '' : `title="${esc(onebotIssueText(s?.onebot) || '正在等待首次连接')}"`}><span class="dot ${s?.onebot?.connected ? 'dot-on' : 'dot-off'}"></span><span>${s?.onebot?.connected ? '运行中' : '未就绪'}</span></div>
       <div class="rs-row muted">${state.paused ? '已暂停' : (s?.orchestrator?.model ? `模型：${esc(s.orchestrator.model)}` : '模型：未设置')}</div>
     </div>
+    <div class="settings-search">
+      <input type="search" id="settings-search" placeholder="搜索设置…" aria-label="搜索设置" value="${esc(state.settingsQuery || '')}" />
+    </div>
     <div class="settings-menu">
       ${menu.map(([group, items]) => `
         <div class="settings-menu-group">${esc(group)}</div>
@@ -91,17 +117,57 @@ function renderSettingsSidebar() {
           return `<button class="settings-menu-item ${on ? 'active' : ''}" data-section="${id}"${on ? ' aria-current="page"' : ''}>${label}</button>`;
         }).join('')}
       `).join('')}
-    </div>`;
+    </div>
+    <div class="hint" id="settings-search-empty" hidden>没有匹配的设置</div>`;
   sidebar.querySelectorAll('.settings-menu-item').forEach((el) => {
     el.addEventListener('click', () => {
       state.settingsSection = el.dataset.section;
+      state.settingsDirty = false;
       renderSettingsSidebar();
       renderSettings();
     });
   });
+  const search = $('#settings-search');
+  if (search) {
+    search.addEventListener('input', () => {
+      state.settingsQuery = search.value.trim();
+      filterSettingsMenu();
+    });
+  }
+  filterSettingsMenu();
   syncMenuPill();
   bindMenuPillResync();
   revealActiveMenuItem();
+}
+
+/** 侧栏菜单按关键词过滤；分组标题在没有可见子项时一起隐藏。 */
+function filterSettingsMenu() {
+  const menu = document.querySelector('#settings-sidebar .settings-menu');
+  if (!menu) return;
+  const query = String(state.settingsQuery || '').trim().toLowerCase();
+  let visibleCount = 0;
+  for (const item of menu.querySelectorAll('.settings-menu-item')) {
+    const label = String(item.textContent || '').toLowerCase();
+    const terms = String(SECTION_SEARCH_TERMS[item.dataset.section] || '').toLowerCase();
+    const hit = !query || label.includes(query) || terms.includes(query);
+    item.hidden = !hit;
+    if (hit) visibleCount += 1;
+  }
+  const empty = document.querySelector('#settings-search-empty');
+  if (empty) empty.hidden = !query || visibleCount > 0;
+  for (const group of menu.querySelectorAll('.settings-menu-group')) {
+    let node = group.nextElementSibling;
+    let visible = false;
+    while (node && !node.classList.contains('settings-menu-group')) {
+      if (node.classList.contains('settings-menu-item') && !node.hidden) visible = true;
+      node = node.nextElementSibling;
+    }
+    group.hidden = !visible;
+  }
+  syncMenuPill();
+  const active = menu.querySelector('.settings-menu-item.active');
+  const pill = menu.querySelector('.side-pill');
+  if (pill) pill.hidden = Boolean(query) && Boolean(active?.hidden);
 }
 
 /**
@@ -208,6 +274,20 @@ function markSwitchRows(box) {
   }
 }
 
+/** 任意输入变化 → 保存条显示"有未保存改动"；只绑一次（#settings-form 本身不随 innerHTML 替换）。 */
+function bindDirtyTracking() {
+  const box = $('#settings-form');
+  if (!box || box.dataset.dirtyBound === '1') return;
+  box.dataset.dirtyBound = '1';
+  const mark = () => {
+    state.settingsDirty = true;
+    const note = $('#cfg-dirty-note');
+    if (note) note.textContent = '有未保存改动';
+  };
+  box.addEventListener('input', mark);
+  box.addEventListener('change', mark);
+}
+
 function renderSettingsImpl() {
   const c = state.config;
   const box = $('#settings-form');
@@ -216,6 +296,7 @@ function renderSettingsImpl() {
     ${renderSettingsSection(c)}`;
   cardifySettings(box);
   markSwitchRows(box);
+  bindDirtyTracking();
   // 主题选择器等静态节点上的 data-icon 在这里注入 SVG（幂等）
   applyIcons(box);
   // 分段控件（思考档位、外观页的十来组）：插滑块并定位到当前档
@@ -263,6 +344,7 @@ function renderSettingsSection(c) {
     ${render()}
     <div class="save-bar">
       <button class="btn btn-primary" id="save-cfg-btn">保存设置</button>
+      <span id="cfg-dirty-note" class="muted">${state.settingsDirty ? '有未保存改动' : ''}</span>
       <span id="cfg-save-result" class="muted"></span>
     </div>`;
 }

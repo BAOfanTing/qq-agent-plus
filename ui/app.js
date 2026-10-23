@@ -1117,6 +1117,8 @@ async function loadSettings() {
     return;
   }
   state.config = cfg;
+  // 配置已从服务端重读，页面上任何"未保存"提示都不再成立（切走再回来时尤其明显）。
+  state.settingsDirty = false;
   // 外观以服务端为准再套一次（localStorage 那份只是"打开就生效"的快速通道）。
   // ⚠️ 但**明暗不能跟着服务端回放**：顶栏的主题按钮只写 localStorage（不落服务端配置），
   //    进设置页时若直接 applyAppearance(cfg.ui)，服务端存着的旧 mode 会把它盖回去 ——

@@ -245,6 +245,41 @@ function err(message, metadata = {}) {
 }
 
 /**
+ * 动作策略：同一种动作在会话内冷却 + 整轮次数上限。
+ * gate 只检查、不扣配额；真正发送成功后再调 actionDone —— 失败/校验拒绝不能白占冷却。
+ */
+function actionGate(ctx, kind) {
+  const cfg = getConfig().humanize;
+  if (cfg?.enabled !== true || cfg?.actions?.enabled === false) return { ok: true };
+  const run = ctx.session?.actionPolicy || (ctx.session.actionPolicy = { count: 0 });
+  const max = Math.max(1, Number(cfg.actions?.maxPerRun) || 4);
+  if (run.count >= max) {
+    return { ok: false, reason: `本轮动作次数已达上限（${max} 次），先把话说完` };
+  }
+  const cooldownKey = kind === 'voice' ? 'voiceCooldownMs' : `${kind}CooldownMs`;
+  const cooldown = Math.max(0, Number(cfg.actions?.[cooldownKey]) || 0);
+  const mem = ctx.actionMemory?.get(ctx.chatKey);
+  const last = Number(mem?.at?.[kind]) || 0;
+  if (cooldown > 0 && Date.now() - last < cooldown) {
+    const wait = Math.ceil((cooldown - (Date.now() - last)) / 1000);
+    return { ok: false, reason: `这个动作刚刚用过，${wait} 秒后再试` };
+  }
+  return { ok: true };
+}
+
+function actionDone(ctx, kind) {
+  const cfg = getConfig().humanize;
+  if (cfg?.enabled !== true || cfg?.actions?.enabled === false) return;
+  const run = ctx.session?.actionPolicy || (ctx.session.actionPolicy = { count: 0 });
+  run.count += 1;
+  if (ctx.actionMemory) {
+    const mem = ctx.actionMemory.get(ctx.chatKey) || { at: {} };
+    mem.at[kind] = Date.now();
+    ctx.actionMemory.set(ctx.chatKey, mem);
+  }
+}
+
+/**
  * 发送类工具的失败收口。除了沿用"已捕获过就不再记"的约定，还把"预期内失败"排除出异常面板：
  * 被禁言（GROUP_MUTED）期间每轮都会撞上，记成 warning 只会把控制台刷满 ——
  * 模型当轮拿到原因、决定先不发言就够了。
@@ -464,14 +499,20 @@ export function buildToolDefs() {
           if (!messages.length) return err('消息内容为空');
           const targetError = messageTargetError(ctx, args);
           if (targetError) return err(targetError);
-          const antiAi = getConfig().humanize?.enabled === true
-            && getConfig().humanize?.antiAi?.enabled !== false;
+          const humanizeCfg = getConfig().humanize || {};
+          const respectCard = humanizeCfg.respectPersonaCard !== false
+            && ctx.behaviorProfile === 'card';
+          // 角色卡优先：平台不改卡的语气（连严重自指也不拦截）；
+          // grounded（自然可靠）：保留"首先/其次"这类结构词，只处理真正的自指/免责。
+          const antiAi = humanizeCfg.enabled === true
+            && humanizeCfg.antiAi?.enabled !== false && !respectCard;
+          const soft = !(ctx.behaviorProfile === 'grounded');
           const cleaned = messages.map((text) => (antiAi
-            ? humanizeText(text)
+            ? humanizeText(text, { soft })
             : { text, severe: false, tells: [], changed: false }));
           // 严重的 AI 自指/免责只给一次重写机会：模型改口气后照发，避免一直卡在同一句。
           if (antiAi && !ctx.session.humanizeWarned
-            && getConfig().humanize?.antiAi?.blockSevere !== false
+            && humanizeCfg.antiAi?.blockSevere !== false
             && cleaned.some((item) => item.severe)) {
             ctx.session.humanizeWarned = true;
             return err('这句话太像 AI 助手了（自指/免责/客服收尾）。用你角色的口吻重写后再发，不要解释规则。', { reportIncident: false });
@@ -530,6 +571,8 @@ export function buildToolDefs() {
           if (!sticker.url) return err(`表情 ${sticker.id} 没有可发送的图片地址`);
           const targetError = messageTargetError(ctx, args);
           if (targetError) return err(targetError);
+          const gate = actionGate(ctx, 'sticker');
+          if (!gate.ok) return err(gate.reason, { reportIncident: false });
           // 有本地文件的就是"托管内联"：findForSend 会给 base64，别过 validateImageUrl（它只收 http(s)）。
           // 原来这里写死 source==='manual'，而"收藏即落盘"之后 AI 收藏项也带 localFile + base64
           // —— 会被判"图片地址不合法"永远发不出去（2026-09-27 审查 P0）。
@@ -546,6 +589,7 @@ export function buildToolDefs() {
             replyToMessageId: normalizeMid(args.replyToMessageId) || null,
             atUserId: normalizeMid(args.atUserId) || null
           });
+          actionDone(ctx, 'sticker');
           afterSent(() => {
             ctx.stickers.markUsed(sticker.id, String(ctx.session.triggerText || '').slice(0, 100));
             ctx.session.sent.push({ type: 'sticker', text: `[表情包:${sanitizeUserText(String(sticker.desc || sticker.localNote || sticker.id))}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
@@ -858,6 +902,8 @@ export function buildToolDefs() {
           if (!/^-?\d+$/.test(mid)) return err(`messageId 要是消息 id（收到的是 ${mid}）。${midHint(ctx)}`);
           const emojiId = String(args.emojiId ?? '').trim();
           if (!/^\d+$/.test(emojiId)) return err('emojiId 要是 QQ 系统表情编号（数字），如 14 微笑、128077 👍');
+          const humanGate = actionGate(ctx, 'react');
+          if (!humanGate.ok) return err(humanGate.reason, { reportIncident: false });
           const cfg = getConfig();
           const reactLimit = platformQuotaLimit(cfg, 'reactionsPerHour');
           reactionQuota.configure({ globalMax: reactLimit, perChatMax: Infinity });
@@ -867,6 +913,7 @@ export function buildToolDefs() {
           try {
             // 与 OneBotClient.reactToMessage 同一实现（wire 形状只留一处，2026-10-07 复审 P3）
             await ctx.onebot.reactToMessage(mid, emojiId, args.set !== false, ctx.signal);
+            actionDone(ctx, 'react');
           } catch (error) {
             reactionQuota.refund(ctx.chatKey, reservedAt);
             throw error;
@@ -1274,10 +1321,14 @@ export function buildToolDefs() {
             const unique = flat.filter((c) => (seen.has(c.characterId) ? false : (seen.add(c.characterId), true)));
             return ok({ characters: unique.slice(0, 40), note: unique.length ? '挑一个 characterId，再带 text 调一次就能发。' : '这个群暂时没有可用的 QQ 语音角色。' });
           }
+          // 取角色列表不消耗动作配额；确定音色、真正要发时才检查冷却。
+          const humanGate = actionGate(ctx, 'voice');
+          if (!humanGate.ok) return err(humanGate.reason, { reportIncident: false });
           // 走发送队列（限频 / 禁言预检 / outbox）：与 send_message / send_voice 同款。
           // 2026-10-07 复审 P2：原先直接 onebot.call —— 模型抽风时这条没有任何限频，
           // 失败也只在调用栈里（禁言群还会白刷一条异常）。
           await ctx.sender.aiVoice(ctx.chatKey, { character, text }, { runId: ctx.session?.leaseId, signal: ctx.signal });
+          actionDone(ctx, 'voice');
           afterSent(() => {
             ctx.session.sent.push({ type: 'voice', text: `[QQ语音]${text}`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
             ctx.emit('session-update', ctx.session.id);
@@ -1755,9 +1806,15 @@ export function buildToolDefs() {
               return err('私聊只能拍当前聊天对象，省略 targetUserId 即可');
             }
             target = Number(targetText);
+            const humanGate = actionGate(ctx, 'poke');
+            if (!humanGate.ok) return err(humanGate.reason, { reportIncident: false });
             await ctx.sender.poke(ctx.chatKey, target, { runId: ctx.session.leaseId, signal: ctx.signal });
+            actionDone(ctx, 'poke');
           } else {
+            const humanGate = actionGate(ctx, 'poke');
+            if (!humanGate.ok) return err(humanGate.reason, { reportIncident: false });
             await ctx.sender.poke(ctx.chatKey, null, { runId: ctx.session.leaseId, signal: ctx.signal });
+            actionDone(ctx, 'poke');
           }
           if (ctx.session) ctx.session.visibleReply = true;   // 拍一拍同样是可见回复
           return ok({ poked: true });
@@ -2044,6 +2101,8 @@ export function buildToolDefs() {
         const text = String(args.text ?? '').trim();
         if (!text) return err('text 不能为空');
         if (text.length > 200) return err('语音内容太长了（≤200 字），说短一点');
+        const humanGate = actionGate(ctx, 'voice');
+        if (!humanGate.ok) return err(humanGate.reason, { reportIncident: false });
         let audio = null;
         try {
           audio = await synthesizeSpeech({ cfg: cfg.tts, text, signal: ctx.signal });
@@ -2057,6 +2116,7 @@ export function buildToolDefs() {
             seconds,
             label: text.slice(0, 40)
           }, { runId: ctx.session?.leaseId, signal: ctx.signal });
+          actionDone(ctx, 'voice');
           if (ctx.session) ctx.session.visibleReply = true;   // 语音也是"回过了"，回复兜底据此判断
           return ok({ sent: true, seconds, note: '语音已发出；不需要再回复这条结果。' });
         } catch (error) {

@@ -20,7 +20,8 @@
     "test:scroll": "node test/scroll-test.mjs",
     "test:usage": "node test/usage-e2e.mjs",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "humanize:eval": "node scripts/humanize-eval.mjs"
   },
   "dependencies": {
     "jce": "0.2.3",

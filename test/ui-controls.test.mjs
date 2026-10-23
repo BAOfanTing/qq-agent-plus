@@ -22,10 +22,12 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
     'cfg-store-maxmessages', 'cfg-store-keepsessions', 'cfg-store-ioprofile',
     'cfg-store-iocustom', 'cfg-store-persistms', 'cfg-store-sqlitesync',
     'cfg-proactive', 'cfg-pro-group', 'cfg-pro-private', 'cfg-pro-followup', 'cfg-pro-selfwake',
-    'pro-add-window', 'cfg-humanize-enabled', 'cfg-humanize-delay-enabled',
+    'pro-add-window', 'cfg-humanize-enabled', 'cfg-humanize-preset',
+    'cfg-humanize-delay-enabled',
     'cfg-humanize-delay-min', 'cfg-humanize-delay-max', 'cfg-humanize-delay-perchar',
     'cfg-humanize-antaienabled', 'cfg-humanize-blocksevere',
-    'cfg-humanize-state-enabled', 'cfg-humanize-relationship-enabled']) {
+    'cfg-humanize-state-enabled', 'cfg-humanize-relationship-enabled',
+    'cfg-humanize-respect-card']) {
     assert.ok(chat.includes(`id="${id}"`), `缺少控件 ${id}`);
   }
   assert.match(save, /groupEnabled: chk\('#cfg-pro-group'/,
@@ -39,6 +41,9 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   assert.match(settings, /function cardifySettings/);
   assert.match(settings, /function markSwitchRows/);
   assert.match(settings, /cardifySettings\(box\)/);
+  assert.match(settings, /id="settings-search"/, '设置侧栏应有搜索入口');
+  assert.match(settings, /id="cfg-dirty-note"/, '保存条应显示未保存提示');
+  assert.match(settings, /function filterSettingsMenu/);
   // 默认勾选状态与保存端 fallback 必须同口径：群聊默认开、私聊默认关
   assert.match(chat, /id="cfg-pro-group"[^\n]*groupEnabled !== false/);
   assert.match(chat, /id="cfg-pro-private"[^\n]*privateEnabled === true/);

@@ -58,6 +58,12 @@ it('提示词只输出一句状态，不暴露数值；关闭时返回空串', (
   const cfg = cfgWithHumanize({ enabled: false });
   setRuntimeConfig(cfg);
   assert.equal(personaStatePrompt({ botName: '小鲸鱼' }), '');
+
+  // 角色卡优先：平台不注入状态行，避免和卡定的语气/情绪打架
+  cfgWithHumanize({ respectPersonaCard: true });
+  assert.equal(personaStatePrompt({ botName: '小鲸鱼', behaviorProfile: 'card' }), '');
+  cfgWithHumanize({ respectPersonaCard: false });
+  assert.match(personaStatePrompt({ botName: '小鲸鱼', behaviorProfile: 'card' }), /【你现在的状态】/);
 });
 
 it('互动会抬心情、掉精力，并落盘', () => {
@@ -86,6 +92,7 @@ it('关系记忆：只更新已有印象的人，按互动次数分档', () => {
   const member = memory.getMember('group:1', '42');
   assert.equal(member.relationship.interactions, 6);
   assert.match(memory.formatForPrompt('group:1'), /关系：有点熟/);
+  assert.match(memory.formatForPrompt('group:1'), /今天聊过/);
 
   // 记忆整理只改写印象，不能把关系计数清零
   memory.replaceMemberForConsolidation('group:1', '42', '阿明', ['喜欢猫，说话直接']);
@@ -99,5 +106,15 @@ it('关系记忆关闭时，提示词与升级前一致', () => {
   const memory = new MemoryStore();
   memory.append('group:1', 'memberImpression', '喜欢猫', { userId: '42', target: '阿明' });
   memory.noteInteraction('42');
+  assert.doesNotMatch(memory.formatForPrompt('group:1'), /关系：/);
+});
+
+it('角色卡优先时，关系标签也不覆盖卡定的关系', () => {
+  const cfg = cfgWithHumanize();
+  cfg.personaPerChat = { 'group:1': { behaviorProfile: 'card' } };
+  setRuntimeConfig(cfg);
+  const memory = new MemoryStore();
+  memory.append('group:1', 'memberImpression', '喜欢猫', { userId: '42', target: '阿明' });
+  for (let i = 0; i < 6; i += 1) memory.noteInteraction('42');
   assert.doesNotMatch(memory.formatForPrompt('group:1'), /关系：/);
 });

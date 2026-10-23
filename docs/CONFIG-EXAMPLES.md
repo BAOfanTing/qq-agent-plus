@@ -132,6 +132,8 @@
 {
   "humanize": {
     "enabled": true,
+    "respectPersonaCard": true,
+    "preset": "natural",
     "replyDelay": {
       "enabled": true,
       "minMs": 500,
@@ -141,12 +143,23 @@
     },
     "antiAi": { "enabled": true, "blockSevere": true },
     "personaState": { "enabled": true, "sleepStart": "00:00", "sleepEnd": "07:00" },
-    "relationship": { "enabled": true }
+    "relationship": { "enabled": true },
+    "actions": {
+      "enabled": true,
+      "maxPerRun": 4,
+      "stickerCooldownMs": 60000,
+      "pokeCooldownMs": 300000,
+      "voiceCooldownMs": 600000,
+      "reactCooldownMs": 30000
+    }
   }
 }
 ```
 
-- `enabled`：总开关，默认 `false`。关闭时下面四项都不生效，提示词与发送节奏和升级前逐字一致。
+- `enabled`：总开关，默认 `false`。关闭时下面各项都不生效，提示词与发送节奏和升级前逐字一致。
+- `respectPersonaCard`：默认 `true`。角色卡优先（`behaviorProfile: 'card'`）时不注入状态行、不改卡的措辞、不追加关系标签；`grounded` 档保留"首先/其次"这类结构词。
+- `preset`：控制台风格预设（`natural` / `active` / `quiet` / `companion`），只用于记住上次选择；实际值以下面的具体参数为准。
+- `actions`：动作冷却与单轮上限，避免连续贴纸/拍一拍/语音。`enabled` 默认 `true`（仅在 `humanize.enabled` 时生效）。
 - `replyDelay`：只作用于本轮**第一条**消息，按总字数计算发送前延迟；后续气泡仍按 `send.minGapMs/maxGapMs` 的节奏。
   私聊会先显示"正在输入"；暂停/中止会立即取消等待。`perCharMs` 填 0 = 不按字数增加。
 - `antiAi`：过滤助手式自指（如"作为一个 AI"）与客服收尾语；`blockSevere` 打开时，
