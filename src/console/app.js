@@ -33,6 +33,8 @@ import { AdminBriefingManager } from '../features/admin-briefing.js';
 import { GroupGameManager } from '../features/group-game.js';
 import { ReminderStore } from '../core/reminders.js';
 import { PluginRegistry } from '../plugins/registry.js';
+import { McpManager } from '../mcp/manager.js';
+import { knowledgeEnabled, knowledgeStats } from '../knowledge/store.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from '../llm/llm.js';
 import { synthesizeSpeech } from '../llm/tts.js';
 import { generateImage, imageGenEffectiveHost, imageGenKeyStale, resolveImageGenAuth } from '../llm/image-gen.js';
@@ -623,6 +625,10 @@ export function createApp({
     // 插件声明 send 能力后，发言走机器人自己那条发送队列（禁言/限频/白名单/记账全在里面）
     getSender: () => sender
   });
+  const mcpManager = new McpManager({ log: moduleLog('mcp') });
+  if (getConfig().mcp?.enabled === true) {
+    void mcpManager.start().catch((error) => moduleLog('mcp').warn?.('启动失败:', error?.message ?? error));
+  }
   const orchestrator = new Orchestrator({
     store,
     memory,
@@ -633,6 +639,7 @@ export function createApp({
     reminders,
     getGames: () => groupGame,
     getPlugins: () => pluginRegistry,
+    getMcp: () => mcpManager,
     emit,
     getIdentityPilot: () => identityPilot,
     getIncidentPilot: () => incidentPilot
@@ -2784,6 +2791,25 @@ export function createApp({
     return json(res, status, { ok: false, code: error?.code || '', error: safe });
   };
 
+  router.add('GET', '/api/knowledge', async (_req, res) =>
+    json(res, 200, {
+      ok: true,
+      enabled: getConfig().knowledge?.enabled === true,
+      available: knowledgeEnabled(),
+      ...knowledgeStats()
+    })
+  );
+  router.add('GET', '/api/mcp', async (_req, res) =>
+    json(res, 200, { ok: true, status: mcpManager.status() })
+  );
+  router.add('POST', '/api/mcp/reload', async (_req, res) => {
+    try {
+      const status = await mcpManager.reload();
+      return json(res, 200, { ok: true, status });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
   router.add('GET', '/api/plugins', async (_req, res) =>
     json(res, 200, {
       ...pluginRegistry.list(),
@@ -5175,6 +5201,7 @@ export function createApp({
     groupDigest.stop();
     adminBriefing.stop();
     // 插件子进程要在 onebot 关闭之前停掉：停机后不该再有插件在读消息
+    mcpManager.stop();
     await pluginRegistry.stop();
     await qzoneInteractions.abort();
     autoUpdate.stop();

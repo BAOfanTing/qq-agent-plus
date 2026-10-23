@@ -725,6 +725,28 @@ export class OneBotClient {
       { group_id: Number(groupId), user_id: Number(userId), card: String(card ?? '') },
       TEXT_TIMEOUT_MS, signal);
   }
+
+  async setGroupBan(groupId, userId, durationSeconds, signal) {
+    return this.call('set_group_ban',
+      { group_id: Number(groupId), user_id: Number(userId), duration: Math.max(0, Number(durationSeconds) || 0) },
+      TEXT_TIMEOUT_MS, signal);
+  }
+
+  async kickGroupMember(groupId, userId, rejectAddRequest = false, signal) {
+    return this.call('set_group_kick',
+      { group_id: Number(groupId), user_id: Number(userId), reject_add_request: rejectAddRequest === true },
+      TEXT_TIMEOUT_MS, signal);
+  }
+
+  async deleteMessage(messageId, signal) {
+    return this.call('delete_msg', { message_id: Number(messageId) }, TEXT_TIMEOUT_MS, signal);
+  }
+
+  async setGroupAdmin(groupId, userId, enable, signal) {
+    return this.call('set_group_admin',
+      { group_id: Number(groupId), user_id: Number(userId), enable: enable === true },
+      TEXT_TIMEOUT_MS, signal);
+  }
 }
 
 // ── 入站事件 → 文本（移植自原版 segmentsToText） ─────────────────────────

@@ -79,9 +79,11 @@ async function loadHumanizeState() {
     const s = await api('/api/humanize/state');
     if (!s.enabled) { box.textContent = '拟人化表达未启用'; return; }
     if (!s.injected) {
-      box.textContent = s.cardFirst
-        ? '角色卡优先：状态不注入提示词（语气由角色卡决定）'
-        : '当前档位不注入状态';
+      box.textContent = s.personaStateEnabled === false
+        ? '状态功能已关闭（可在上方重新勾选）'
+        : s.cardFirst
+          ? '角色卡优先：状态不注入提示词（语气由角色卡决定）'
+          : '当前档位不注入状态';
       return;
     }
     const energy = s.energy < 25 ? '低' : s.energy < 50 ? '偏低' : s.energy < 80 ? '正常' : '充足';

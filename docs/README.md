@@ -12,6 +12,9 @@
 | [OPS.md](OPS.md) | `src/ops.js` 运维入口（体检 / 扫描 / 备份 / 部署 / 看门狗 / 健康巡检 / 隧道）的环境变量与示例 |
 | [CONFIG-EXAMPLES.md](CONFIG-EXAMPLES.md) | 常用配置片段：思考模式、兜底模型、视觉、主动发言、表情包、节奏、拟人化表达 |
 | [HUMANIZE.md](HUMANIZE.md) | 拟人化表达的评估方法：客观指标、盲评量表与调参顺序 |
+| [MCP.md](MCP.md) | MCP 客户端：配置 stdio server、工具挂载、安全边界与运维接口 |
+| [MODERATION.md](MODERATION.md) | 群管理动作：管理员门槛、禁言/踢人/撤回/设管理员 |
+| [KNOWLEDGE.md](KNOWLEDGE.md) | 轻量知识库：目录、切片、关键词检索与边界（不是完整 RAG） |
 | [AUTO_UPDATE.md](AUTO_UPDATE.md) | Release 驱动的自动更新：判定规则、两条下载通道（git / API+源码包）、失败策略与状态字段 |
 
 ## 功能说明

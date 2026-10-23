@@ -701,6 +701,24 @@ export const DEFAULT_CONFIG = {
     // 每个插件自己的配置段：{ "<插件id>": { … } }（插件通过 cap.config.get 只能读自己这段）
     settings: {}
   },
+  // MCP（Model Context Protocol）客户端：把外部 MCP Server 的工具接进模型。
+  // 默认关闭；每个 server 的 command 由管理员在配置里显式填写，等同于执行本机命令。
+  mcp: {
+    enabled: false,
+    servers: []
+    // 单个 server 形状：
+    // { id, enabled, transport: 'stdio', command, args: [], env: {}, cwd,
+    //   timeoutMs: 30000, maxCallsPerMinute: 30, toolMounting: 'direct' | 'meta' }
+  },
+  // 轻量知识库：读取 data/knowledge 下的 .md/.txt，按关键词/中文二元组检索。
+  // 默认关闭；不做向量库，只有明确语料时才开。
+  knowledge: {
+    enabled: false,
+    dir: '',
+    maxResults: 4,
+    chunkChars: 900,
+    overlapChars: 120
+  },
   // 存储
   store: {
     // 单群 JSON 最大保留条数。**0 = 不限制**。

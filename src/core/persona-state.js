@@ -114,6 +114,7 @@ export function personaStateSnapshot(persona = {}, now = Date.now()) {
       injected: false,
       cardFirst: Boolean(persona?.behaviorProfile === 'card'),
       respectPersonaCard: h?.respectPersonaCard !== false,
+      personaStateEnabled: h?.personaState?.enabled !== false,
       key: personaKeyOf(persona)
     };
   }
@@ -125,6 +126,7 @@ export function personaStateSnapshot(persona = {}, now = Date.now()) {
     injected: true,
     cardFirst: false,
     respectPersonaCard: h?.respectPersonaCard !== false,
+    personaStateEnabled: true,
     savedAt: Number(all[key]?.savedAt) || state.updatedAt,
     ...state
   };

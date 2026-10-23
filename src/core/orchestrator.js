@@ -117,6 +117,7 @@ import { vendorOfConfig, vendorOfBaseUrl } from '../pricing/model-prices.js';
 import { budgetStatus } from './budget.js';
 import { readOwnerUin } from './notify-owner.js';
 import { notePersonaInteraction, personaStatePrompt } from './persona-state.js';
+import { knowledgeEnabled } from '../knowledge/store.js';
 import { buildReminderNote, reminderNoteCost } from './reminders.js';
 import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, isAtMe, resolveContextTier } from '../llm/prompt.js';
@@ -480,7 +481,8 @@ export class Orchestrator {
     random = Math.random,
     getIdentityPilot = null,
     getIncidentPilot = null,
-    getPlugins = null
+    getPlugins = null,
+    getMcp = null
   }) {
     this.store = store;
     this.memory = memory;
@@ -490,6 +492,7 @@ export class Orchestrator {
     this.onebot = onebot;
     this.reminders = reminders;
     this.getPlugins = typeof getPlugins === 'function' ? getPlugins : null;
+    this.getMcp = typeof getMcp === 'function' ? getMcp : null;
     this.getGames = typeof getGames === 'function' ? getGames : null;
     this.random = random;
     this.getIdentityPilot = typeof getIdentityPilot === 'function' ? getIdentityPilot : (() => null);
@@ -2001,6 +2004,7 @@ export class Orchestrator {
       if (!platformToolAllowed(d.name, cfg.platform, chatKey)) return false;
       if (d.feature === 'identityPilot' && !identityAvailable) return false;
       if (d.feature === 'friendProposal' && !friendProposalAvailable) return false;
+      if (d.feature === 'knowledge' && !knowledgeEnabled(cfg)) return false;
       return true;
     });
     // 插件工具：**不放进 buildToolDefs()**（那份是内置工具表，另有"每个工具都要有调度分类"
@@ -2008,8 +2012,10 @@ export class Orchestrator {
     // 授权由注册表自己收口（总开关 / enabledIds / 进程状态 / manifest 声明，默认拒）——
     // 内置工具的默认是"放行"（platformToolAllowed 对未登记工具返回 true），插件绝不能沿用那个默认。
     const pluginToolDefs = this.getPlugins?.()?.toolDefsFor?.() ?? [];
-    const builtinToolDefs = toolDefs;   // 前缀哈希用它（见下），插件工具只按名字参与
+    const mcpToolDefs = this.getMcp?.()?.toolDefsFor?.() ?? [];
+    const builtinToolDefs = toolDefs;   // 前缀哈希用它（见下），插件/MCP 工具只按名字参与
     if (pluginToolDefs.length) toolDefs.push(...pluginToolDefs);
+    if (mcpToolDefs.length) toolDefs.push(...mcpToolDefs);
     const openAiTools = toOpenAiTools(toolDefs);
     const baseSystemPrompt = buildSystemPrompt({
       // 按群生效的人设（缺省 = 全局）
@@ -2044,6 +2050,8 @@ export class Orchestrator {
       .update(JSON.stringify(toOpenAiTools(builtinToolDefs)))
       .update('\0')
       .update(pluginToolDefs.map((def) => def.name).sort().join(','))
+      .update('\0')
+      .update(mcpToolDefs.map((def) => def.name).sort().join(','))
       .digest('hex');
 
     let priorProviderMessages = [];

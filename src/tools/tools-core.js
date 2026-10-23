@@ -156,6 +156,7 @@ import { displayNameOf } from '../core/display-name.js';
 import { setMemberNote } from '../memory/memory-global.js';
 import { repairUnescapedStringQuotes } from '../core/json-repair.js';
 import { humanizeText } from '../llm/humanize.js';
+import { searchKnowledge } from '../knowledge/store.js';
 import { assertPublicUrlLiteral, validateImageUrl } from '../llm/safe-fetch.js';
 import { webSearch, webFetch } from '../llm/web-search.js';
 import { expandForwardNodes, extractMediaFromSegments } from '../onebot/onebot.js';
@@ -277,6 +278,36 @@ function actionDone(ctx, kind) {
     mem.at[kind] = Date.now();
     ctx.actionMemory.set(ctx.chatKey, mem);
   }
+}
+
+/**
+ * 群管理动作只允许全局管理员在群里明确要求时执行。
+ * 主动唤醒/模型自己发挥时 triggerEntries 里没有管理员，一律拒绝。
+ */
+function adminRequest(ctx) {
+  const owner = String(getConfig().admin?.ownerUin || '').trim();
+  if (!/^\d{5,15}$/.test(owner)) return { ok: false, reason: '未配置全局管理员，群管理动作不可用' };
+  // 只认批次里**最后一条**非机器人发言：管理员几小时前说过一句话，不能给后面的群友指令授权。
+  const entries = (ctx.triggerEntries || []).filter((entry) => !entry?.self);
+  const last = entries[entries.length - 1];
+  if (!last || String(last?.senderId || '') !== owner) {
+    return { ok: false, reason: '群管理动作只能由全局管理员在群里明确要求时执行' };
+  }
+  return { ok: true, owner };
+}
+
+function normalizeTarget(value) {
+  const text = String(value ?? '').trim();
+  if (!/^\d{1,15}$/.test(text)) return '';
+  return text.replace(/^0+(?=\d)/, '');
+}
+
+function moderationTargetError(ctx, target, owner) {
+  const text = normalizeTarget(target);
+  if (!text) return { error: 'targetUserId 必须是数字 QQ 号', target: '' };
+  if (String(ctx.onebot?.selfId || '') === text) return { error: '不能对自己执行群管理动作', target: '' };
+  if (owner && text === owner) return { error: '不能对全局管理员执行群管理动作', target: '' };
+  return { error: '', target: text };
 }
 
 /**
@@ -1780,6 +1811,105 @@ export function buildToolDefs() {
       }
     },
     {
+      name: 'set_group_ban',
+      description: '禁言群成员（仅全局管理员在群里明确要求时可用）。minutes=0 表示解除禁言；最长 30 天。不要主动使用，不要对管理员或自己使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          targetUserId: { type: ['integer', 'string'], description: '要禁言的群成员 QQ 号' },
+          minutes: { type: 'integer', description: '禁言分钟数；0 = 解除禁言；最大 43200（30 天）' }
+        },
+        required: ['targetUserId', 'minutes']
+      },
+      async execute(ctx, args) {
+        try {
+          if (ctx.kind !== 'group') return err('禁言只能在群聊里执行');
+          const admin = adminRequest(ctx);
+          if (!admin.ok) return err(admin.reason, { reportIncident: false });
+          const targetCheck = moderationTargetError(ctx, args.targetUserId, admin.owner);
+          if (targetCheck.error) return err(targetCheck.error, { reportIncident: false });
+          const rawMinutes = Number(args.minutes);
+          if (!Number.isFinite(rawMinutes) || rawMinutes < 0) return err('minutes 必须是 0 或正整数（0 = 解禁）');
+          const minutes = Math.min(43200, Math.floor(rawMinutes));
+          await ctx.onebot.setGroupBan(ctx.chatId, Number(targetCheck.target), minutes * 60, ctx.signal);
+          return ok({ targetUserId: targetCheck.target, minutes, note: minutes ? '已禁言。' : '已解除禁言。' });
+        } catch (error) {
+          return sendErr(error, {}, `禁言失败：${String(error?.message ?? error).slice(0, 120)}`);
+        }
+      }
+    },
+    {
+      name: 'kick_group_member',
+      description: '把群成员移出群（仅全局管理员在群里明确要求时可用）。不要主动使用，不要对管理员或自己使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          targetUserId: { type: ['integer', 'string'], description: '要移出的群成员 QQ 号' },
+          rejectAddRequest: { type: 'boolean', description: '是否同时拒绝对方再次加群（默认 false）' }
+        },
+        required: ['targetUserId']
+      },
+      async execute(ctx, args) {
+        try {
+          if (ctx.kind !== 'group') return err('踢人只能在群聊里执行');
+          const admin = adminRequest(ctx);
+          if (!admin.ok) return err(admin.reason, { reportIncident: false });
+          const targetCheck = moderationTargetError(ctx, args.targetUserId, admin.owner);
+          if (targetCheck.error) return err(targetCheck.error, { reportIncident: false });
+          await ctx.onebot.kickGroupMember(ctx.chatId, Number(targetCheck.target), args.rejectAddRequest === true, ctx.signal);
+          return ok({ targetUserId: targetCheck.target, note: '已移出群。' });
+        } catch (error) {
+          return sendErr(error, {}, `移出群失败：${String(error?.message ?? error).slice(0, 120)}`);
+        }
+      }
+    },
+    {
+      name: 'recall_message',
+      description: '撤回一条消息（仅全局管理员在群里明确要求时可用）。messageId 用聊天记录里的 #数字。不要主动撤回别人的话。',
+      parameters: {
+        type: 'object',
+        properties: { messageId: { type: ['integer', 'string'], description: '要撤回的消息 id' } },
+        required: ['messageId']
+      },
+      async execute(ctx, args) {
+        try {
+          const admin = adminRequest(ctx);
+          if (!admin.ok) return err(admin.reason, { reportIncident: false });
+          const mid = normalizeMid(args.messageId);
+          if (!/^-?\d+$/.test(mid)) return err('messageId 要是消息 id（聊天记录里的 #数字）');
+          await ctx.onebot.deleteMessage(Number(mid), ctx.signal);
+          return ok({ messageId: mid, note: '已撤回。' });
+        } catch (error) {
+          return sendErr(error, {}, `撤回失败：${String(error?.message ?? error).slice(0, 120)}`);
+        }
+      }
+    },
+    {
+      name: 'set_group_admin',
+      description: '设置/取消群管理员（仅全局管理员在群里明确要求时可用）。不要主动使用，不要对管理员或自己使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          targetUserId: { type: ['integer', 'string'], description: '目标群成员 QQ 号' },
+          enable: { type: 'boolean', description: 'true = 设为管理员；false = 取消管理员' }
+        },
+        required: ['targetUserId', 'enable']
+      },
+      async execute(ctx, args) {
+        try {
+          if (ctx.kind !== 'group') return err('群管理员设置只能在群聊里执行');
+          const admin = adminRequest(ctx);
+          if (!admin.ok) return err(admin.reason, { reportIncident: false });
+          const targetCheck = moderationTargetError(ctx, args.targetUserId, admin.owner);
+          if (targetCheck.error) return err(targetCheck.error, { reportIncident: false });
+          await ctx.onebot.setGroupAdmin(ctx.chatId, Number(targetCheck.target), args.enable === true, ctx.signal);
+          return ok({ targetUserId: targetCheck.target, enable: args.enable === true, note: '群管理员设置已更新。' });
+        } catch (error) {
+          return sendErr(error, {}, `设置群管理员失败：${String(error?.message ?? error).slice(0, 120)}`);
+        }
+      }
+    },
+    {
       name: 'send_poke',
       description: '拍一拍（群聊传 targetUserId；私聊默认拍对方）。targetUserId 必须是数字 QQ 号：不知道对方 QQ 号时，先调 get_active_members 或 get_recent_messages 查到再拍，绝对不要传名字、昵称或"未知"。适合用"戳一下"代替一句废话、回应别人的拍一拍，或偶尔逗一下正在聊的人。别频繁。',
       parameters: {
@@ -2451,6 +2581,39 @@ export function buildToolDefs() {
         ctx.session.feedbacks.push({ level, message: String(args.message ?? '').slice(0, 500), at: Date.now() });
         ctx.emit('feedback', { sessionId: ctx.session.id, chatKey: ctx.chatKey, level, message: String(args.message ?? '') });
         return ok({ reported: true });
+      }
+    },
+    {
+      name: 'knowledge_search',
+      description: '搜索本机知识库（管理员放在 data/knowledge 的 .md/.txt 文档）。适合群规、FAQ、产品手册、固定资料；返回来源文件名和片段。知识库没开或没命中时如实说没找到，不要编造。',
+      feature: 'knowledge',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '要查的内容（自然语言或关键词）' },
+          limit: { type: 'integer', description: '最多返回几段（默认 4，最大 10）' }
+        },
+        required: ['query']
+      },
+      async execute(ctx, args) {
+        try {
+          const query = String(args.query ?? '').trim();
+          if (!query) return err('query 不能为空');
+          const found = searchKnowledge(query, { limit: args.limit });
+          if (!found.results.length) {
+            return ok({ results: [], note: found.stats.chunks ? '知识库里没有匹配内容。' : '知识库还没有文档。' });
+          }
+          return ok({
+            results: found.results.map((item) => ({
+              source: sanitizeUserText(item.source),
+              snippet: safeSlice(sanitizeUserText(item.snippet), 800)
+            })),
+            stats: found.stats,
+            note: '回答时带上来源文件名；片段不足以回答就直说。'
+          });
+        } catch (error) {
+          return err(`知识库检索失败：${String(error?.message ?? error).slice(0, 120)}`, { reportIncident: false });
+        }
       }
     },
     {

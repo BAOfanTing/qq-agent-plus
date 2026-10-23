@@ -21,7 +21,8 @@ export const EXPERIMENTAL_READ_ONLY_TOOLS = new Set([
   'group_file_url',         // 取下载直链（只读）
   'list_group_album',       // 协议端只读查询（相册/照片列表）
   'get_user_info',          // 陌生人资料（只读）
-  'translate_text'          // 翻译（只读）
+  'translate_text',         // 翻译（只读）
+  'knowledge_search'        // 本地知识库只读检索
 ]);
 
 // 这些也是“读取/观察”类工具，但当前不做并发预启动：
@@ -63,6 +64,10 @@ export const EXPERIMENTAL_SAME_ROUND_ACTION_TOOLS = new Set([
   'group_game',    // 开局/结束：本地状态 + 对外公告
   'send_voice',    // 对外发送
   'set_group_card', // 对外写：改自己的群名片
+  'set_group_ban',  // 对外写：禁言/解禁
+  'kick_group_member', // 对外写：移出群
+  'recall_message', // 对外写：撤回消息
+  'set_group_admin', // 对外写：设置/取消群管理员
   'react_to_message', // 对外写：给消息贴表情回应
   'send_qq_voice',    // 对外发送：QQ 内置语音角色
   'group_sign',       // 对外写：群签到
