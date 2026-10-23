@@ -18,7 +18,7 @@ fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ server: { p
 process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* 句柄占用就算了 */ } });
 
 const { DEFAULT_CONFIG, updateConfig } = await import('../src/core/config.js');
-const { zhipuSearch, bochaSearch, baiduSearch, deepSeekSearch, bingSearch, so360Search, sogouSearch } = await import('../src/llm/web-search.js');
+const { zhipuSearch, bochaSearch, baiduSearch, deepSeekSearch, bingSearch, so360Search, sogouSearch, bilibiliSearch } = await import('../src/llm/web-search.js');
 
 const setWebSearch = (patch) => {
   const cfg = structuredClone(DEFAULT_CONFIG);
@@ -150,6 +150,107 @@ test('搜狗：取 vrwrap 里的 data-url 真实外链；没有真实地址的�
   await assert.rejects(() => sogouSearch('x'), /没有返回可解析的结果/);
 });
 
+test('B 站：视频搜索 JSON → 标题/简介/真实视频地址；code≠0 与空结果都报错', async () => {
+  setWebSearch({ provider: 'bilibili', maxResults: 3 });
+  const calls = stub(() => ({
+    ok: true,
+    json: async () => ({
+      code: 0,
+      data: { result: [
+        { title: '【梗知识】<em>扎啤</em>', description: '扎啤是杂鱼的谐音', arcurl: '//www.bilibili.com/video/BV1xx', bvid: 'BV1xx' },
+        { title: '只有 bvid', description: '', bvid: 'BV2yy' },
+        { title: '', bvid: 'BV3zz' }
+      ] }
+    })
+  }));
+  const r = await bilibiliSearch('扎啤 梗');
+  const searchCall = calls.find((c) => String(c.url).includes('/wbi/search/type'));
+  assert.ok(searchCall, '必须打到 B 站搜索接口');
+  assert.match(searchCall.url, /search_type=video/);
+  assert.match(searchCall.url, /keyword=%E6%89%8E%E5%95%A4/);
+  assert.equal(searchCall.headers.referer, 'https://www.bilibili.com/');
+  assert.deepEqual(r.results.map((x) => x.url), [
+    'https://www.bilibili.com/video/BV1xx',
+    'https://www.bilibili.com/video/BV2yy'
+  ]);
+  assert.match(r.results[0].title, /【梗知识】\s*扎啤/);
+  assert.match(r.results[0].snippet, /杂鱼/);
+
+  stub(() => ({ ok: true, json: async () => ({ code: -412, message: '请求被拦截' }) }));
+  await assert.rejects(() => bilibiliSearch('x'), /-412/);
+  stub(() => ({ ok: true, json: async () => ({ code: 0, data: { result: [] } }) }));
+  await assert.rejects(() => bilibiliSearch('x'), /没有返回可解析的结果/);
+});
+
+test('B 站 wbi：拿到 nav key 时搜索请求带 wts 与 w_rid 签名', async () => {
+  setWebSearch({ provider: 'bilibili' });
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes('/x/web-interface/nav')) {
+      return {
+        ok: true,
+        json: async () => ({ code: -101, data: { wbi_img: {
+          img_url: 'https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png',
+          sub_url: 'https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png'
+        } } })
+      };
+    }
+    return {
+      ok: true,
+      json: async () => ({ code: 0, data: { result: [{ title: '梗', description: '', bvid: 'BV1' }] } })
+    };
+  };
+  const r = await bilibiliSearch('扎啤 梗');
+  assert.equal(r.results[0].url, 'https://www.bilibili.com/video/BV1');
+  const searchUrl = calls.find((u) => u.includes('/wbi/search/type'));
+  assert.match(searchUrl, /[?&]wts=\d+/);
+  assert.match(searchUrl, /[?&]w_rid=[a-f0-9]{32}/);
+});
+
+test('B 站标题和 Bing 站内解释会合并：不能只给模型一堆没正文的标题', async () => {
+  setWebSearch({ provider: 'bing', searchUrl: 'https://cn.bing.com/search', maxResults: 6 });
+  const bingGeneric = '<ol><li class="b_algo"><h2><a href="https://www.douyin.com/">抖音</a></h2><p>抖音</p></li></ol>';
+  const bili = { code: 0, data: { result: [
+    { title: '扎啤 是什么梗？【梗学堂】', description: '素材来源于网络', bvid: 'BV1meme' }
+  ] } };
+  const targeted = '<ol><li class="b_algo"><h2><a href="https://www.douyin.com/video/123">扎啤梗在网络啥意思 - 抖音</a></h2><p>扎啤是杂鱼的谐音，用来阴阳人菜</p></li></ol>';
+  globalThis.fetch = async (url) => {
+    const u = decodeURIComponent(String(url)).replace(/\+/g, ' ');
+    if (u.includes('sogou.com')) return { ok: true, text: async () => '<html>验证码</html>' };
+    if (u.includes('/x/web-interface/nav')) return { ok: true, json: async () => ({ code: 0, data: {} }) };
+    if (u.includes('/wbi/search/type')) return { ok: true, json: async () => bili };
+    if (u.includes('site:douyin.com')) return { ok: true, text: async () => targeted };
+    return { ok: true, text: async () => bingGeneric };
+  };
+  const { webSearch } = await import('../src/llm/web-search.js');
+  const result = await webSearch('扎啤 梗 什么意思');
+  assert.ok(result.results.some((x) => x.url.includes('bilibili.com/video/BV1meme')), 'B 站标题要合并进结果');
+  assert.ok(result.results.some((x) => /杂鱼的谐音/.test(x.snippet || '')), 'Bing 的解释摘要也要合并');
+  assert.ok(result.sources.includes('bilibili') && result.sources.includes('bing'));
+});
+
+test('B 站只有活动视频、没有梗解释时，不让它抢先，退给 Bing 站内解释', async () => {
+  setWebSearch({ provider: 'bing', searchUrl: 'https://cn.bing.com/search', maxResults: 6 });
+  const bingGeneric = '<ol><li class="b_algo"><h2><a href="https://www.douyin.com/">抖音</a></h2><p>抖音</p></li></ol>';
+  const biliOnlyEvent = { code: 0, data: { result: [
+    { title: '奶绿波 旗袍雅韵专场', description: '', bvid: 'BV1event' }
+  ] } };
+  const targeted = '<ol><li class="b_algo"><h2><a href="https://baike.baidu.com/item/%E5%A5%B6%E7%BB%BF%E6%B3%A2">奶绿波</a></h2><p>春运广告牌误读带火的梗</p></li></ol>';
+  globalThis.fetch = async (url) => {
+    const u = decodeURIComponent(String(url)).replace(/\+/g, ' ');
+    if (u.includes('/x/web-interface/nav')) return { ok: true, json: async () => ({ code: 0, data: {} }) };
+    if (u.includes('/wbi/search/type')) return { ok: true, json: async () => biliOnlyEvent };
+    if (u.includes('site:douyin.com')) return { ok: true, text: async () => targeted };
+    return { ok: true, text: async () => bingGeneric };
+  };
+  const { webSearch } = await import('../src/llm/web-search.js');
+  const result = await webSearch('奶绿波 什么意思');
+  assert.ok(result.results.some((x) => x.url.includes('baike.baidu.com/item/%E5%A5%B6%E7%BB%BF%E6%B3%A2')), '应改用 Bing 站内限定拿解释页');
+  assert.deepEqual(result.sources, ['bing']);
+});
+
 test('360：解析 data-mdurl 真实外链；跳过站内导航；空结果抛错', async () => {
   setWebSearch({ provider: 'so360', maxResults: 3 });
   const html = '<ul>'
@@ -196,7 +297,8 @@ test('Bing 对梗查询结果太差时自动补搜狗，并把抖音结果排在
   const result = await webSearch('奶绿波 什么意思');
   assert.equal(calls.length, 2, 'Bing + 搜狗各一次');
   assert.equal(result.results[0].url, 'https://www.douyin.com/video/7619643383979831013', '抖音结果前置');
-  assert.deepEqual(result.sources, ['sogou', 'bing']);
+  assert.deepEqual(result.sources, ['sogou'], 'Bing 只返回抖音首页壳子时不应算进来源');
+  assert.ok(!result.results.some((x) => x.url === 'https://www.douyin.com/'), '字面/壳子结果要被过滤');
 });
 
 test('搜狗/360 都被风控时，用 Bing 站内限定核心词兜底', async () => {

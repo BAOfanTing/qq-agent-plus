@@ -29,6 +29,7 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
     'cfg-humanize-delay-min', 'cfg-humanize-delay-max', 'cfg-humanize-delay-perchar',
     'cfg-humanize-antaienabled', 'cfg-humanize-blocksevere',
     'cfg-humanize-state-enabled', 'cfg-humanize-relationship-enabled',
+    'cfg-humanize-meme-level',
     'cfg-humanize-respect-card', 'humanize-state-text']) {
     assert.ok(chat.includes(`id="${id}"`), `缺少控件 ${id}`);
   }
@@ -39,6 +40,8 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   assert.match(save, /activeHours: \{[\s\S]*?windows:/,
     '主动发言时段必须写进 patch.proactive.activeHours.windows');
   assert.match(save, /patch\.humanize = \{/, '人类化开关必须接到保存端');
+  assert.match(save, /memeUse: \{[\s\S]*?level:[\s\S]*?cfg-humanize-meme-level/,
+    '梗密度必须写进 patch.humanize.memeUse.level');
   // 卡片化只改外层结构：h3 分组必须真的走到 cardify，单勾选行才会变成右侧开关
   assert.match(settings, /function cardifySettings/);
   assert.match(settings, /function markSwitchRows/);

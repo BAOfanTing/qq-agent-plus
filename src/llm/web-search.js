@@ -1,6 +1,7 @@
 // 联网搜索（移植自原版 bingSearch）：Bing 中文搜索，无需 API key。
 // 搜索请求本身用普通 fetch（搜索 URL 是管理端配置的可信地址，只需清洗查询词）；
 // 对外抓取网页正文一律走 safe-fetch（web_fetch 工具）。
+import crypto from 'node:crypto';
 import { getConfig } from '../core/config.js';
 import { safeFetch } from './safe-fetch.js';
 import { assertTimeAllowed, withTimeWindow } from '../core/time-gate.js';
@@ -10,6 +11,40 @@ import { readJsonBounded, readTextBounded } from '../core/http-body.js';
 // 搜索 API 返回的是结构化短文本，2 MiB 已远超正常结果；Bing 抓的是 HTML 结果页，1 MiB 足够。
 const SEARCH_JSON_MAX_BYTES = 2 * 1024 * 1024;
 const BING_HTML_MAX_BYTES = 1024 * 1024;
+
+// B 站 wbi 签名：不带签名时，搜索几次后会只返回 v_voucher（人机验证），没有 result。
+// 公开的 mixinKey 置换表；key 从 nav 接口的 wbi_img 文件名拼出来，缓存半小时。
+const BILI_MIXIN_TAB = [46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52];
+let biliMixinCache = { mix: '', at: 0 };
+
+const biliEnc = (value) => encodeURIComponent(String(value)).replace(/[!'()*]/g, '');
+
+async function biliMixinKey() {
+  if (biliMixinCache.mix && Date.now() - biliMixinCache.at < 30 * 60 * 1000) return biliMixinCache.mix;
+  const res = await fetch('https://api.bilibili.com/x/web-interface/nav', {
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      referer: 'https://www.bilibili.com/'
+    },
+    signal: AbortSignal.timeout(10000)
+  });
+  if (!res.ok) throw new Error(`B 站 wbi key HTTP ${res.status}`);
+  const data = await readSearchJson(res, 'B 站 wbi key 返回了无法解析的 JSON');
+  const img = String(data?.data?.wbi_img?.img_url || '').split('/').pop().split('.')[0];
+  const sub = String(data?.data?.wbi_img?.sub_url || '').split('/').pop().split('.')[0];
+  if (!img || !sub) throw new Error('B 站 wbi key 缺失');
+  const raw = img + sub;
+  const mix = BILI_MIXIN_TAB.map((n) => raw[n]).join('').slice(0, 32);
+  biliMixinCache = { mix, at: Date.now() };
+  return mix;
+}
+
+function biliSignedQuery(params, mix) {
+  const qs = Object.keys(params).sort().map((k) => `${biliEnc(k)}=${biliEnc(params[k])}`).join('&');
+  if (!mix) return qs;
+  const wRid = crypto.createHash('md5').update(qs + mix).digest('hex');
+  return `${qs}&w_rid=${wRid}`;
+}
 
 // provider 的 JSON 解析：只有 JSON 语法错误才转成「无法解析」；超限、超时、连接中断一律原样抛出 ——
 // 它们对外含义不同，把"读正文时超时"伪装成"返回的 JSON 坏了"会让排障方向完全跑偏
@@ -57,7 +92,7 @@ export async function aggregateSearch(query) {
     .map(String).slice(0, 4);
   const perSource = Math.max(2, Math.min(6, Number(cfg.count) || 4));
   const settled = await Promise.allSettled(sources.map(async (name) => {
-    const fn = { doubao: doubaoSearch, bing: bingSearch, baidu: baiduSearch, zhipu: zhipuSearch, bocha: bochaSearch, metaso: metasoSearch, tavily: tavilySearch, so360: so360Search, sogou: sogouSearch }[name];
+    const fn = { doubao: doubaoSearch, bing: bingSearch, baidu: baiduSearch, zhipu: zhipuSearch, bocha: bochaSearch, metaso: metasoSearch, tavily: tavilySearch, so360: so360Search, sogou: sogouSearch, bilibili: bilibiliSearch }[name];
     if (!fn) throw new Error(`未知搜索源: ${name}`);
     const r = await fn(query);
     return { source: name, results: (r.results || []).slice(0, perSource) };
@@ -174,16 +209,35 @@ function rankMemeResults(results, core) {
     .map((x) => x.item);
 }
 
+function memeCore(query) {
+  return String(query || '')
+    .replace(/(什么意思|什么梗|热梗|新梗|出处|抖音|快手|小红书|梗)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** 梗结果过滤：只留下“命中核心词/含梗解释”的条目，挡掉“奶”“喝”“city”这类字面字典结果。 */
+function filterMemeResults(results, core) {
+  const c = String(core || '').toLowerCase();
+  const tokens = c.split(/\s+/).filter((t) => t.length >= 2);
+  return (Array.isArray(results) ? results : []).filter((item) => {
+    const text = `${item?.title || ''} ${item?.snippet || ''}`.toLowerCase();
+    let score = 0;
+    if (c && text.includes(c)) score += 5;
+    if (/梗|什么梗|梗知识|梗百科|梗指南|梗科普|网络用语|流行语|意思/.test(text)) score += 4;
+    for (const token of tokens) if (text.includes(token)) score += 2;
+    // 多词核心（如“龙虾 OpenClaw”）允许 4 分：两个词都命中但标题没写“梗”也可能是解释文章。
+    return score >= 5 || (tokens.length > 1 && score >= 4);
+  });
+}
+
 async function bingTargetedMemeSearch(query) {
   // 搜狗/360 都会对机房 IP 做风控；被挡时用 Bing 的站内限定再试一次。
   // 先去掉“什么意思/梗/抖音”这类泛词，再用两种问法各查一次：
   //   · 短核心词对“奶绿波”这类新词更准；
   //   · 加“什么梗”对“扎啤”这类本身有常用义的词更准。
   // 结果按“含核心词 / 含梗 / 抖音域名”排序，避免通用词条压过梗解释。
-  const core = String(query || '')
-    .replace(/(什么意思|什么梗|热梗|新梗|出处|抖音|快手|小红书|梗)/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const core = memeCore(query);
   if (core.length < 2) throw new Error('没有可用的梗核心词');
   const queries = [
     `site:douyin.com ${core}`,
@@ -192,21 +246,59 @@ async function bingTargetedMemeSearch(query) {
   ];
   const settled = await Promise.allSettled(queries.map((q) => bingSearch(q)));
   const all = settled.flatMap((s) => (s.status === 'fulfilled' ? s.value.results : []));
-  const results = rankMemeResults(all, core).filter((item, i, arr) => arr.findIndex((x) => x.url === item.url) === i);
+  const results = filterMemeResults(rankMemeResults(all, core), core)
+    .filter((item, i, arr) => arr.findIndex((x) => x.url === item.url) === i);
   if (!results.length) throw new Error('Bing 站内限定没有返回梗相关结果');
   return { name: 'bing', result: { query, results } };
 }
 
+async function bilibiliMemeSearch(query) {
+  const core = memeCore(query);
+  if (core.length < 2) throw new Error('没有可用的梗核心词');
+  const result = await bilibiliSearch(`${core} 梗`);
+  const filtered = filterMemeResults(result.results, core);
+  // 只有“奶绿波旗袍活动/喝大水新闻”这类相关视频、没有“梗/什么意思/梗知识”信号时，
+  // 不让它抢先成功 —— 交给 Bing 站内限定去找百科/知乎/新闻的解释，避免模型只看到活动视频。
+  const hasExplanation = filtered.some((item) => /梗|什么梗|梗知识|梗百科|梗指南|梗科普|网络用语|流行语|什么意思|意思/.test(`${item.title} ${item.snippet}`));
+  if (!filtered.length || !hasExplanation) throw new Error('B 站没有返回梗解释类结果');
+  return { name: 'bilibili', result: { ...result, results: filtered } };
+}
+
 async function supplementalSearch(query) {
-  // 搜狗对服务器出口的友好度比 360 高（360 会返回“访问异常页面”）；
-  // 连续查几个梗时搜狗也会触发风控，所以再加一条 Bing 站内限定做兜底。
-  for (const [name, fn] of [['sogou', sogouSearch], ['bing', bingTargetedMemeSearch], ['so360', so360Search]]) {
-    try {
-      const out = await fn(query);
-      const result = out?.result || out;
-      if (result?.results?.length) return { name, result };
-    } catch { /* 换下一个补充源 */ }
+  const core = memeCore(query);
+  // 1) 搜狗如果返回的是带摘要的解释结果，单独用它就够了。
+  try {
+    const raw = await sogouSearch(query);
+    const results = filterMemeResults(raw.results, core);
+    if (results.length && results.some((item) => String(item.snippet || '').trim().length >= 12)) {
+      return { names: ['sogou'], result: { ...raw, results } };
+    }
+  } catch { /* 搜狗风控，继续 */ }
+
+  // 2) B 站标题负责“确认是哪个梗”，Bing 站内限定负责“给出意思/出处”。
+  //    两边并发，谁成功用谁；都成功就合并排序 —— 只拿 B 站标题时模型会抱怨“没正文”。
+  const settled = await Promise.allSettled([bilibiliMemeSearch(query), bingTargetedMemeSearch(query)]);
+  const names = [];
+  const all = [];
+  for (const [index, out] of settled.entries()) {
+    if (out.status !== 'fulfilled') continue;
+    const result = out.value?.result || out.value;
+    const results = filterMemeResults(result?.results, core);
+    if (!results.length) continue;
+    names.push(out.value?.name || ['bilibili', 'bing'][index]);
+    all.push(...results);
   }
+  if (all.length) {
+    const merged = rankMemeResults(all, core).filter((item, i, arr) => arr.findIndex((x) => x.url === item.url) === i);
+    return { names, result: { query, results: merged } };
+  }
+
+  // 3) 360 最后兜底。
+  try {
+    const raw = await so360Search(query);
+    const results = filterMemeResults(raw.results, core);
+    if (results.length) return { names: ['so360'], result: { ...raw, results } };
+  } catch { /* 360 也会风控 */ }
   return null;
 }
 
@@ -215,9 +307,10 @@ async function bingSearchWithSupplement(query) {
   let primaryError = null;
   try { primary = await bingSearch(query); } catch (error) { primaryError = error; }
 
-  const needSupplement = isMemeQuery(query)
-    || (primary && !resultsCoverQuery(primary.results, query) && isShortCjkTerm(query))
-    || (primary && primary.results.every((r) => /^https?:\/\/(www\.)?douyin\.com\/(?:$|search|live)/i.test(String(r.url || ''))));
+  const memeQuery = isMemeQuery(query);
+  const shortTerm = primary && !resultsCoverQuery(primary.results, query) && isShortCjkTerm(query);
+  const douyinOnly = primary && primary.results.every((r) => /^https?:\/\/(www\.)?douyin\.com\/(?:$|search|live)/i.test(String(r.url || '')));
+  const needSupplement = memeQuery || shortTerm || douyinOnly;
   if (!needSupplement) {
     if (primaryError) throw primaryError;
     return primary;
@@ -225,14 +318,23 @@ async function bingSearchWithSupplement(query) {
 
   const extra = await supplementalSearch(query);
   if (!primary && !extra) throw primaryError;
-  if (!primary) return { ...extra.result, fallbackFrom: 'bing', sources: [extra.name] };
-  if (!extra) return primary;
+  if (!primary) return { ...extra.result, fallbackFrom: 'bing', sources: extra.names?.length ? extra.names : ['bing'] };
+
+  const core = memeCore(query);
+  const primaryFiltered = core
+    ? { ...primary, results: filterMemeResults(primary.results, core) }
+    : primary;
+  // 明确的梗查询/只剩抖音壳子：宁可不给结果，也别把“奶”“喝”“city”这类字面词塞给模型。
+  // 只是“短中文词”触发的兜底（如“段头测试”）没有补充结果时，保留 Bing 原结果，避免误伤普通搜索。
+  if (!extra) return (memeQuery || douyinOnly) ? primaryFiltered : primary;
 
   const maxResults = Math.max(6, Math.min(10, Number(getConfig().webSearch?.maxResults) || 6));
+  const sources = [...(extra.names || [])];
+  if (primaryFiltered.results.length) sources.push('bing');
   return {
     query,
-    results: mergeSearchResults(primary, extra.result, maxResults),
-    sources: [...new Set([extra.name, 'bing'])]
+    results: mergeSearchResults(primaryFiltered, extra.result, maxResults),
+    sources: [...new Set(sources)]
   };
 }
 
@@ -271,6 +373,44 @@ export async function sogouSearch(query) {
     if (results.length >= maxResults) break;
   }
   if (!results.length) throw new Error('搜狗搜索没有返回可解析的结果（可能命中验证页或页面结构变化）');
+  return { query, results };
+}
+
+/** B 站视频搜索（无 Key）：梗知识和梗百科类视频的标题/简介通常比网页搜索更直接。 */
+export async function bilibiliSearch(query) {
+  const cfg = getConfig().webSearch ?? {};
+  const maxResults = Math.max(1, Math.min(10, Number(cfg.maxResults) || 6));
+  const endpoint = new URL(String(cfg.bilibili?.searchUrl || 'https://api.bilibili.com/x/web-interface/wbi/search/type'));
+  endpoint.search = '';
+  // nav 取不到签名 key 时不阻塞：退回无签名请求，拿不到 result 会按空结果报错并走下一源。
+  const mix = await biliMixinKey().catch(() => '');
+  const params = { search_type: 'video', keyword: query, wts: Math.floor(Date.now() / 1000) };
+  const url = `${endpoint.toString()}?${biliSignedQuery(params, mix)}`;
+  const res = await fetch(url, {
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'accept-language': 'zh-CN,zh;q=0.9',
+      referer: 'https://www.bilibili.com/'
+    },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!res.ok) throw new Error(`B 站搜索 HTTP ${res.status}`);
+  const data = await readSearchJson(res, 'B 站搜索返回了无法解析的 JSON');
+  if (Number(data?.code) !== 0) {
+    throw new Error(`B 站搜索错误（code ${data?.code ?? '未知'}）：${String(data?.message || '未知').slice(0, 120)}`);
+  }
+  const arr = Array.isArray(data?.data?.result) ? data.data.result : [];
+  const results = [];
+  for (const item of arr) {
+    const title = decodeHtml(item?.title);
+    let urlStr = String(item?.arcurl || '').trim();
+    if (urlStr.startsWith('//')) urlStr = `https:${urlStr}`;
+    if (!/^https?:\/\//i.test(urlStr) && item?.bvid) urlStr = `https://www.bilibili.com/video/${item.bvid}`;
+    if (!title || !urlStr) continue;
+    results.push({ title, url: urlStr, snippet: decodeHtml(item?.description || '') });
+    if (results.length >= maxResults) break;
+  }
+  if (!results.length) throw new Error('B 站搜索没有返回可解析的结果');
   return { query, results };
 }
 
@@ -329,6 +469,7 @@ export async function webSearch(query) {
   if (provider === 'tavily') return tavilySearch(clean);
   if (provider === 'so360') return so360Search(clean);
   if (provider === 'sogou') return sogouSearch(clean);
+  if (provider === 'bilibili') return bilibiliSearch(clean);
   // 自定义：'custom'（旧单槽位）或 'custom:<id>'（设置页添加的多个之一）
   if (provider === 'custom' || provider.startsWith('custom:')) {
     return customSearch(clean, provider);

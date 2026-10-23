@@ -575,6 +575,7 @@ function renderSearchSection(c) {
         <option value="bing" ${prov === 'bing' ? 'selected' : ''}>Bing 网页解析</option>
         <option value="so360" ${prov === 'so360' ? 'selected' : ''}>360 网页解析（中文/抖音梗）</option>
         <option value="sogou" ${prov === 'sogou' ? 'selected' : ''}>搜狗网页解析（中文/抖音梗）</option>
+        <option value="bilibili" ${prov === 'bilibili' ? 'selected' : ''}>B 站搜索（梗知识/解释视频）</option>
         <option value="deepseek" ${prov === 'deepseek' ? 'selected' : ''}>DeepSeek 原生搜索</option>
         <option value="zhipu" ${prov === 'zhipu' ? 'selected' : ''}>智谱 Web Search</option>
         <option value="bocha" ${prov === 'bocha' ? 'selected' : ''}>博查 AI Search</option>
@@ -646,7 +647,7 @@ function renderSearchSection(c) {
         <button class="btn btn-small" id="cfg-tavily-key-toggle" type="button">显示</button>
       </div></div>
     <div class="field" id="aggregate-search-fields" style="${prov === 'aggregate' ? '' : 'display:none'}">
-      <label>聚合源列表（逗号分隔，按优先级排序；可选 tavily / doubao / bing / so360 / sogou / baidu / zhipu / bocha / metaso，选中的源需已配好 Key，so360/sogou/bing 不需要）</label>
+      <label>聚合源列表（逗号分隔，按优先级排序；可选 tavily / doubao / bing / so360 / sogou / bilibili / baidu / zhipu / bocha / metaso，选中的源需已配好 Key，so360/sogou/bilibili/bing 不需要）</label>
       <input type="text" id="cfg-aggregate-sources" value="${esc((c.webSearch?.aggregate?.sources || ['tavily', 'doubao', 'bing']).join(','))}" placeholder="tavily,doubao,bing" style="flex:1" />
       <label>每源结果条数（2~6）</label>
       <input type="number" id="cfg-aggregate-count" min="2" max="6" value="${esc(c.webSearch?.aggregate?.count || 4)}" style="width:100px" />

@@ -12,7 +12,7 @@ process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
 const { ChatStore } = await import('../src/core/store.js');
 const { SendQueue } = await import('../src/onebot/sender.js');
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
-const { findAiTells, humanizeText } = await import('../src/llm/humanize.js');
+const { findAiTells, humanizeText, memeDensityPrompt, normalizeMemeUseLevel } = await import('../src/llm/humanize.js');
 const { buildToolDefs } = await import('../src/tools/tools.js');
 
 function baseConfig() {
@@ -254,4 +254,15 @@ it('动作策略：同一种动作冷却跨运行生效，第二次会被拦下'
   assert.equal(second.isError, true);
   assert.match(second.content, /刚刚用过|冷却/);
   assert.equal(pokes, 1, '冷却要跨运行生效，第二次不能再拍');
+});
+
+it('梗密度：四档各有明确口径；关闭拟人化时不注入；坏值回落 normal', () => {
+  const at = (level, enabled = true) => memeDensityPrompt({ humanize: { enabled, memeUse: { level } } });
+  assert.match(at('off'), /不要主动用网络梗/);
+  assert.match(at('light'), /不主动抛新梗/);
+  assert.match(at('normal'), /话题贴合时可以主动用一次/);
+  assert.match(at('heavy'), /可以更主动地带梗/);
+  assert.equal(at('heavy', false), '', '拟人化总开关关闭时不注入梗密度');
+  assert.equal(normalizeMemeUseLevel('weird'), 'normal');
+  assert.equal(normalizeMemeUseLevel('HEAVY'), 'heavy');
 });

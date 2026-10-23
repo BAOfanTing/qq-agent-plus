@@ -886,6 +886,13 @@ async function saveConfig({ quiet = false } = {}) {
       relationship: {
         ...(c.humanize?.relationship || {}),
         enabled: chk('#cfg-humanize-relationship-enabled', c.humanize?.relationship?.enabled !== false)
+      },
+      memeUse: {
+        ...(c.humanize?.memeUse || {}),
+        level: (() => {
+          const level = String(val('#cfg-humanize-meme-level', c.humanize?.memeUse?.level || 'normal')).trim().toLowerCase();
+          return ['off', 'light', 'normal', 'heavy'].includes(level) ? level : 'normal';
+        })()
       }
     };
     // 收藏总闸（2026-10-02 用户反馈"乱收藏"）：界面是**一个开关** = collectEnabled 与

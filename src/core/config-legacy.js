@@ -108,7 +108,7 @@ export const DEFAULT_CONFIG = {
     enabled: true,
     searchUrl: 'https://cn.bing.com/search',
     maxResults: 6,
-    // 可选：'bing' | 'deepseek' | 'zhipu' | 'bocha' | 'baidu' | 'metaso' | 'doubao' | 'tavily' | 'so360' | 'sogou' | 'aggregate'
+    // 可选：'bing' | 'deepseek' | 'zhipu' | 'bocha' | 'baidu' | 'metaso' | 'doubao' | 'tavily' | 'so360' | 'sogou' | 'bilibili' | 'aggregate'
     provider: 'bing',
     deepseek: {
       apiKey: '',                     // 留空时回退环境变量 DEEPSEEK_API_KEY
@@ -161,6 +161,10 @@ export const DEFAULT_CONFIG = {
     },
     sogou: {
       searchUrl: 'https://www.sogou.com/web'
+    },
+    // B 站视频搜索（无 Key）：很多新梗会先出现「梗知识/梗百科」类视频，标题和简介比搜索引擎直接。
+    bilibili: {
+      searchUrl: 'https://api.bilibili.com/x/web-interface/wbi/search/type'
     },
     // 聚合搜索（provider='aggregate'）：并发跑多个源，URL 去重、结果带 source 标注，
     // 单源失败不影响整体，全部失败才报错。sources 顺序 = 结果优先级。
@@ -367,6 +371,11 @@ export const DEFAULT_CONFIG = {
     // 记住和每个人的互动次数，格式化成"关系：刚认识/有点熟/熟/很熟"。
     relationship: {
       enabled: true
+    },
+    // 梗密度：off=不主动用梗；light=只接对方用过的梗；normal=贴合时用一次；heavy=闲聊里更主动。
+    // 技术/学习/情绪严肃场景仍由平台规则压住，不受这里影响。
+    memeUse: {
+      level: 'normal'
     },
     // 动作策略：同一种动作在会话内有冷却，整轮有次数上限，避免连续贴纸/拍一拍/语音。
     actions: {

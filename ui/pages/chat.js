@@ -321,6 +321,15 @@ return `
       <label for="cfg-humanize-state-enabled">状态（精力/心情/当前活动）影响语气（同一人设跨群共享）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-relationship-enabled" ${humanize.relationship?.enabled !== false ? 'checked' : ''} />
       <label for="cfg-humanize-relationship-enabled">记录与每个人的互动关系（仅对已有人物印象的人生效）</label></div>
+    <div class="field"><label for="cfg-humanize-meme-level">梗密度（闲聊里的网络梗）</label>
+      <select id="cfg-humanize-meme-level">
+        <option value="off" ${(humanize.memeUse?.level || 'normal') === 'off' ? 'selected' : ''}>关闭：不主动用梗</option>
+        <option value="light" ${(humanize.memeUse?.level || 'normal') === 'light' ? 'selected' : ''}>克制：只接对方用过的梗</option>
+        <option value="normal" ${(humanize.memeUse?.level || 'normal') === 'normal' ? 'selected' : ''}>正常：贴合时用一次</option>
+        <option value="heavy" ${(humanize.memeUse?.level || 'normal') === 'heavy' ? 'selected' : ''}>活跃：闲聊里更主动</option>
+      </select>
+      <div class="hint">只影响闲聊；技术、学习、情绪严肃场景仍不用梗。角色卡优先时也按这个档位收放。</div>
+    </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-respect-card" ${humanize.respectPersonaCard !== false ? 'checked' : ''} />
       <label for="cfg-humanize-respect-card">角色卡优先时不覆盖角色语气（推荐）</label></div>
     <div class="field">

@@ -57,6 +57,33 @@ export function findAiTells(text) {
   return out;
 }
 
+/** 梗密度档位；配置里手改坏了按 normal 处理，不把整段提示词弄丢。 */
+export const MEME_USE_LEVELS = ['off', 'light', 'normal', 'heavy'];
+
+export function normalizeMemeUseLevel(value) {
+  const level = String(value ?? '').trim().toLowerCase();
+  return MEME_USE_LEVELS.includes(level) ? level : 'normal';
+}
+
+/**
+ * 本轮注入 user 消息的梗密度提示（不拼 system，避免改设置就让前缀缓存失效）。
+ * 只在拟人化表达总开关打开时生效；技术/学习/情绪严肃场景的“不用梗”仍由系统提示兜底。
+ */
+export function memeDensityPrompt(cfg) {
+  if (cfg?.humanize?.enabled !== true) return '';
+  const level = normalizeMemeUseLevel(cfg?.humanize?.memeUse?.level);
+  if (level === 'off') {
+    return '【梗密度】关闭：这轮不要主动用网络梗；别人用梗时只按含义理解，不接梗、不复读。';
+  }
+  if (level === 'light') {
+    return '【梗密度】克制：优先接住对方刚用的梗，不主动抛新梗；一轮最多一个，不解释、不复读。';
+  }
+  if (level === 'heavy') {
+    return '【梗密度】活跃：闲聊里可以更主动地带梗，但别硬塞；一轮最多一个；技术、学习、情绪严肃场景仍不用。';
+  }
+  return '【梗密度】正常：对方用梗先接住；话题贴合时可以主动用一次；一轮最多一个，不解释、不复读，不贴合就不用。';
+}
+
 /**
  * 去掉固定 AI 味说法。正常聊天基本不受影响；删完只剩空串时返回空串，由调用方决定是否补一句。
  * @returns {{text:string, tells:Array, changed:boolean, severe:boolean}}
