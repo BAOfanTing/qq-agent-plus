@@ -4,6 +4,8 @@
 import { api } from '../core/api.js';
 import { $, esc } from '../core/dom.js';
 
+let registryResults = [];
+
 function mcpServerRowHtml(server = {}) {
   const id = esc(server.id || '');
   const args = esc(JSON.stringify(Array.isArray(server.args) ? server.args : []));
@@ -38,6 +40,18 @@ function renderMcpSection(c) {
     <div class="checkbox-row"><input type="checkbox" id="cfg-mcp-enabled" ${mcp.enabled === true ? 'checked' : ''} />
       <label for="cfg-mcp-enabled">启用 MCP（外部 MCP Server 的工具会接进模型）</label></div>
     <div class="hint">MCP Server 等价于执行本机命令，只填你信任的 server。保存后点「重新加载」生效；命令与参数只在本页显示，不回传密钥。</div>
+    <div class="field-row">
+      <div class="field"><label>从官方 MCP Registry 搜索</label>
+        <input type="text" id="mcp-registry-query" placeholder="filesystem / github / sqlite" /></div>
+      <div class="field"><label>操作</label>
+        <div class="settings-inline-actions">
+          <button type="button" class="btn btn-small" id="mcp-preset-search">搜索预设</button>
+          <button type="button" class="btn btn-small" id="mcp-registry-search">官方 Registry</button>
+          <span class="muted" id="mcp-registry-result"></span>
+        </div>
+      </div>
+    </div>
+    <div id="mcp-registry-results"></div>
     <div id="mcp-servers">${servers.length ? servers.map((server) => mcpServerRowHtml(server)).join('') : '<div class="hint">还没有 server：点下面「＋ 添加 server」，填命令和参数。</div>'}</div>
     <div class="settings-inline-actions">
       <button type="button" class="btn btn-small" id="mcp-add-server">＋ 添加 server</button>
@@ -61,6 +75,8 @@ function renderKnowledgeSection(c) {
     </div>
     <div class="hint">把群规/FAQ/手册放进这个目录，保存后模型可通过 knowledge_search 检索并带来源回答。不是完整 RAG：没有向量检索、没有 PDF/DOCX 解析。</div>
     <div class="field"><label>文档</label><div class="hint" id="knowledge-files">读取中…</div></div>
+    <div class="field"><label>上传文档（.md / .txt，可多选）</label>
+      <input type="file" id="knowledge-file-upload" accept=".md,.txt,text/plain,text/markdown" multiple /></div>
     <div class="field-row">
       <div class="field"><label>文件名</label><input type="text" id="knowledge-file-name" placeholder="群规.md" /></div>
       <div class="field"><label>操作</label>
@@ -106,6 +122,52 @@ async function reloadMcp() {
 }
 
 function bindExtensionSettings() {
+  const runRegistrySearch = async (endpoint, button) => {
+    const query = String($('#mcp-registry-query')?.value || '').trim();
+    const result = $('#mcp-registry-result');
+    const box = $('#mcp-registry-results');
+    if (!query) { if (result) result.textContent = '先填关键词'; return; }
+    button.disabled = true;
+    if (result) result.textContent = '搜索中…';
+    try {
+      const data = await api(`${endpoint}?query=${encodeURIComponent(query)}`);
+      registryResults = Array.isArray(data.results) ? data.results : [];
+      if (result) result.textContent = registryResults.length ? `${registryResults.length} 个结果` : '没有结果';
+      if (box) {
+        box.innerHTML = registryResults.length
+          ? registryResults.map((item, index) => `<div class="mcp-registry-item">
+              <div><strong>${esc(item.title || item.name)}</strong> <span class="muted">${esc(item.name)} ${esc(item.version || '')}</span></div>
+              <div class="hint">${esc(item.description || '')}</div>
+              <button type="button" class="btn btn-small mcp-registry-import" data-index="${index}" ${item.unsupported ? 'disabled' : ''}>${item.unsupported ? esc(item.reason || '不支持 stdio') : '导入'}</button>
+            </div>`).join('')
+          : '<div class="hint">没有匹配的 stdio server。目录里很多 server 只支持远程 HTTP，当前客户端只支持 stdio。</div>';
+      }
+    } catch (error) {
+      if (result) result.textContent = `失败：${error.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  };
+  const presetSearch = $('#mcp-preset-search');
+  if (presetSearch) presetSearch.addEventListener('click', () => runRegistrySearch('/api/mcp/presets', presetSearch));
+  const registrySearch = $('#mcp-registry-search');
+  if (registrySearch) registrySearch.addEventListener('click', () => runRegistrySearch('/api/mcp/registry', registrySearch));
+  const registryBox = $('#mcp-registry-results');
+  if (registryBox) {
+    registryBox.addEventListener('click', (event) => {
+      const button = event.target.closest('.mcp-registry-import');
+      if (!button) return;
+      const item = registryResults[Number(button.dataset.index)];
+      if (!item?.config) return;
+      const servers = $('#mcp-servers');
+      if (!servers) return;
+      servers.querySelector('.hint')?.remove();
+      servers.insertAdjacentHTML('beforeend', mcpServerRowHtml(item.config));
+      servers.lastElementChild?.scrollIntoView({ block: 'nearest' });
+      button.disabled = true;
+      button.textContent = '已导入，记得保存';
+    });
+  }
   const add = $('#mcp-add-server');
   const box = $('#mcp-servers');
   if (add && box) {
@@ -138,6 +200,32 @@ function bindExtensionSettings() {
       await reloadMcp();
       if (result) result.textContent = '已重载';
       reload.disabled = false;
+    });
+  }
+  const upload = $('#knowledge-file-upload');
+  if (upload) {
+    upload.addEventListener('change', async () => {
+      const result = $('#knowledge-file-result');
+      const files = [...(upload.files || [])];
+      if (!files.length) return;
+      upload.disabled = true;
+      const done = [];
+      for (const file of files) {
+        if (file.size > 2 * 1024 * 1024) { done.push(`${file.name}：超过 2MB`); continue; }
+        try {
+          const content = await file.text();
+          await api('/api/knowledge/files', {
+            method: 'POST', body: JSON.stringify({ name: file.name, content })
+          });
+          done.push(`${file.name}：已上传`);
+        } catch (error) {
+          done.push(`${file.name}：${error.message}`);
+        }
+      }
+      if (result) result.textContent = done.join('；');
+      upload.value = '';
+      upload.disabled = false;
+      await hydrateExtensionStatus();
     });
   }
   const saveDoc = $('#knowledge-file-save');

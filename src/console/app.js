@@ -34,6 +34,8 @@ import { GroupGameManager } from '../features/group-game.js';
 import { ReminderStore } from '../core/reminders.js';
 import { PluginRegistry } from '../plugins/registry.js';
 import { McpManager } from '../mcp/manager.js';
+import { searchRegistry } from '../mcp/registry.js';
+import { searchPresets } from '../mcp/presets.js';
 import { knowledgeEnabled, knowledgeStats, listKnowledgeFiles, writeKnowledgeFile, deleteKnowledgeFile, reindexKnowledge } from '../knowledge/store.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from '../llm/llm.js';
 import { synthesizeSpeech } from '../llm/tts.js';
@@ -2823,6 +2825,19 @@ export function createApp({
   router.add('POST', '/api/knowledge/reindex', async (_req, res) =>
     json(res, 200, { ok: true, ...reindexKnowledge() })
   );
+  router.add('GET', '/api/mcp/presets', async (_req, res, params, url) => {
+    const query = String(url?.searchParams?.get('query') || '').trim();
+    return json(res, 200, { ok: true, results: searchPresets(query) });
+  });
+  router.add('GET', '/api/mcp/registry', async (_req, res, params, url) => {
+    const query = String(url?.searchParams?.get('query') || '').trim();
+    try {
+      const results = await searchRegistry(query);
+      return json(res, 200, { ok: true, results });
+    } catch (error) {
+      return json(res, 502, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
   router.add('GET', '/api/mcp', async (_req, res) =>
     json(res, 200, { ok: true, status: mcpManager.status() })
   );
