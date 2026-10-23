@@ -57,7 +57,7 @@ export async function aggregateSearch(query) {
     .map(String).slice(0, 4);
   const perSource = Math.max(2, Math.min(6, Number(cfg.count) || 4));
   const settled = await Promise.allSettled(sources.map(async (name) => {
-    const fn = { doubao: doubaoSearch, bing: bingSearch, baidu: baiduSearch, zhipu: zhipuSearch, bocha: bochaSearch, metaso: metasoSearch, tavily: tavilySearch }[name];
+    const fn = { doubao: doubaoSearch, bing: bingSearch, baidu: baiduSearch, zhipu: zhipuSearch, bocha: bochaSearch, metaso: metasoSearch, tavily: tavilySearch, so360: so360Search, sogou: sogouSearch }[name];
     if (!fn) throw new Error(`未知搜索源: ${name}`);
     const r = await fn(query);
     return { source: name, results: (r.results || []).slice(0, perSource) };
@@ -117,6 +117,199 @@ export async function bingSearch(query) {
   return { query, results };
 }
 
+// 抖音站内内容基本不进 Bing 的索引；中文新梗在 Bing 上还常被拆成单字（"奶绿波"只剩"奶"）。
+// 360 的网页结果能直接找到抖音视频和解释文章，作为中文/梗查询的补充源，Bing 仍保留。
+// 只在疑似梗查询或极短的纯中文词上补一次，避免每次普通搜索都多打一个站。
+const MEME_QUERY_RE = /梗|热梗|新梗|什么梗|什么意思|出处|抖音|快手|小红书/;
+
+function isMemeQuery(query) {
+  return MEME_QUERY_RE.test(String(query || ''));
+}
+
+function isShortCjkTerm(query) {
+  return /^[\u4e00-\u9fff]{2,12}$/.test(String(query || '').trim());
+}
+
+function resultsCoverQuery(results, query) {
+  const text = results.map((r) => `${r?.title || ''} ${r?.snippet || ''}`).join(' ').toLowerCase();
+  const compact = text.replace(/\s+/g, '');
+  const q = String(query || '').toLowerCase().replace(/\s+/g, '');
+  if (q && compact.includes(q)) return true;
+  const terms = String(query || '').toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+  return terms.length > 0 && terms.every((t) => text.includes(t));
+}
+
+function mergeSearchResults(primary, extra, limit) {
+  const seen = new Set();
+  const results = [];
+  // 梗查询把 360 放前面：Bing 的抖音首页/字面词会挤掉真正有用的视频和解释文章。
+  for (const item of [...(extra?.results || []), ...(primary?.results || [])]) {
+    const key = String(item?.url || '').replace(/[#?].*$/, '');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    results.push(item);
+    if (results.length >= limit) break;
+  }
+  return results;
+}
+
+function rankMemeResults(results, core) {
+  const c = String(core || '').toLowerCase();
+  return results
+    .map((item, index) => {
+      const title = String(item?.title || '').toLowerCase();
+      const snippet = String(item?.snippet || '').toLowerCase();
+      const text = `${title} ${snippet}`;
+      let host = '';
+      try { host = new URL(String(item?.url || '')).hostname; } catch { /* 忽略坏链接 */ }
+      let score = 0;
+      if (c && title.includes(c)) score += 5;
+      if (c && snippet.includes(c)) score += 3;
+      if (/梗/.test(text)) score += 3;
+      if (/(^|\.)douyin\.com$/i.test(host)) score += 2;
+      return { item, index, score };
+    })
+    .filter((x) => x.item?.url)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((x) => x.item);
+}
+
+async function bingTargetedMemeSearch(query) {
+  // 搜狗/360 都会对机房 IP 做风控；被挡时用 Bing 的站内限定再试一次。
+  // 先去掉“什么意思/梗/抖音”这类泛词，再用两种问法各查一次：
+  //   · 短核心词对“奶绿波”这类新词更准；
+  //   · 加“什么梗”对“扎啤”这类本身有常用义的词更准。
+  // 结果按“含核心词 / 含梗 / 抖音域名”排序，避免通用词条压过梗解释。
+  const core = String(query || '')
+    .replace(/(什么意思|什么梗|热梗|新梗|出处|抖音|快手|小红书|梗)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (core.length < 2) throw new Error('没有可用的梗核心词');
+  const queries = [
+    `site:douyin.com ${core}`,
+    `site:douyin.com ${core} 什么梗`,
+    `site:douyin.com "${core}"`
+  ];
+  const settled = await Promise.allSettled(queries.map((q) => bingSearch(q)));
+  const all = settled.flatMap((s) => (s.status === 'fulfilled' ? s.value.results : []));
+  const results = rankMemeResults(all, core).filter((item, i, arr) => arr.findIndex((x) => x.url === item.url) === i);
+  if (!results.length) throw new Error('Bing 站内限定没有返回梗相关结果');
+  return { name: 'bing', result: { query, results } };
+}
+
+async function supplementalSearch(query) {
+  // 搜狗对服务器出口的友好度比 360 高（360 会返回“访问异常页面”）；
+  // 连续查几个梗时搜狗也会触发风控，所以再加一条 Bing 站内限定做兜底。
+  for (const [name, fn] of [['sogou', sogouSearch], ['bing', bingTargetedMemeSearch], ['so360', so360Search]]) {
+    try {
+      const out = await fn(query);
+      const result = out?.result || out;
+      if (result?.results?.length) return { name, result };
+    } catch { /* 换下一个补充源 */ }
+  }
+  return null;
+}
+
+async function bingSearchWithSupplement(query) {
+  let primary = null;
+  let primaryError = null;
+  try { primary = await bingSearch(query); } catch (error) { primaryError = error; }
+
+  const needSupplement = isMemeQuery(query)
+    || (primary && !resultsCoverQuery(primary.results, query) && isShortCjkTerm(query))
+    || (primary && primary.results.every((r) => /^https?:\/\/(www\.)?douyin\.com\/(?:$|search|live)/i.test(String(r.url || ''))));
+  if (!needSupplement) {
+    if (primaryError) throw primaryError;
+    return primary;
+  }
+
+  const extra = await supplementalSearch(query);
+  if (!primary && !extra) throw primaryError;
+  if (!primary) return { ...extra.result, fallbackFrom: 'bing', sources: [extra.name] };
+  if (!extra) return primary;
+
+  const maxResults = Math.max(6, Math.min(10, Number(getConfig().webSearch?.maxResults) || 6));
+  return {
+    query,
+    results: mergeSearchResults(primary, extra.result, maxResults),
+    sources: [...new Set([extra.name, 'bing'])]
+  };
+}
+
+/** 搜狗网页解析：无 Key，中文/抖音梗命中率比 Bing 好；优先取结果块里的 data-url 真实外链。 */
+export async function sogouSearch(query) {
+  const cfg = getConfig().webSearch ?? {};
+  const maxResults = Math.max(1, Math.min(10, Number(cfg.maxResults) || 6));
+  const url = new URL(String(cfg.sogou?.searchUrl || 'https://www.sogou.com/web'));
+  url.searchParams.set('query', query);
+  const res = await fetch(url, {
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'accept-language': 'zh-CN,zh;q=0.9'
+    },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!res.ok) throw new Error(`搜狗搜索 HTTP ${res.status}`);
+  const html = await readTextBounded(res, BING_HTML_MAX_BYTES);
+  const results = [];
+  for (const block of html.split(/<div class="vrwrap/).slice(1)) {
+    const anchor = block.match(/<h3 class="vr-title[^"]*"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!anchor) continue;
+    const title = decodeHtml(anchor[2]);
+    const direct = block.match(/data-url="(https?:\/\/[^"]+)"/i);
+    // 只有 /link?url=… 的跳转、没有 data-url 的结果直接跳过：web_fetch 跟不到真实页面，
+    // 模型只能看到一个搜狗跳转地址，不如不要。
+    const urlStr = direct ? decodeHtml(direct[1]) : '';
+    if (!urlStr || !title) continue;
+    let host = '';
+    try { host = new URL(urlStr).hostname; } catch { continue; }
+    if (/(^|\.)(sogou\.com|so\.com|360\.com|360kan\.com|bing\.com)$/i.test(host)) continue;
+    if (results.some((r) => r.url === urlStr)) continue;
+    const sn = block.match(/id="cacheresult_summary_\d+"[^>]*>([\s\S]*?)<\/div>/i)
+      || block.match(/<div class="fz-mid[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    results.push({ title, url: urlStr, snippet: sn ? decodeHtml(sn[1]) : '' });
+    if (results.length >= maxResults) break;
+  }
+  if (!results.length) throw new Error('搜狗搜索没有返回可解析的结果（可能命中验证页或页面结构变化）');
+  return { query, results };
+}
+
+/** 360 网页解析：无 Key，中文/抖音梗命中率比 Bing 好。只取 data-mdurl 给出的真实外链。 */
+export async function so360Search(query) {
+  const cfg = getConfig().webSearch ?? {};
+  const maxResults = Math.max(1, Math.min(10, Number(cfg.maxResults) || 6));
+  const url = new URL(String(cfg.so360?.searchUrl || 'https://www.so.com/s'));
+  url.searchParams.set('q', query);
+  const res = await fetch(url, {
+    headers: {
+      'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      'accept-language': 'zh-CN,zh;q=0.9'
+    },
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!res.ok) throw new Error(`360 搜索 HTTP ${res.status}`);
+  const html = await readTextBounded(res, BING_HTML_MAX_BYTES);
+  const results = [];
+  for (const block of html.split(/<li class="res-list"/).slice(1)) {
+    const anchor = block.match(/<a[^>]*data-mdurl="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!anchor) continue;
+    const urlStr = decodeHtml(anchor[1]);
+    const title = decodeHtml(anchor[2]);
+    if (!urlStr || !title) continue;
+    let host = '';
+    try { host = new URL(urlStr).hostname; } catch { continue; }
+    // 站内导航/聚合页不是结果；抖音、知乎、百科、公众号等外链保留。
+    if (/(^|\.)(so\.com|360\.com|360kan\.com|bing\.com|hao\.360\.com)$/i.test(host)) continue;
+    if (results.some((r) => r.url === urlStr)) continue;
+    const sn = block.match(/<span[^>]*class="[^"]*res-list-summary[^"]*"[^>]*>([\s\S]*?)<\/span>/i)
+      || block.match(/<p[^>]*class="[^"]*res-desc[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
+    results.push({ title, url: urlStr, snippet: sn ? decodeHtml(sn[1]) : '' });
+    if (results.length >= maxResults) break;
+  }
+  if (!results.length) throw new Error('360 搜索没有返回可解析的结果（可能命中验证页或页面结构变化）');
+  return { query, results };
+}
+
 /** 给工具用的统一入口：搜索 + 紧凑序列化。 */
 export async function webSearch(query) {
   assertTimeAllowed();
@@ -134,11 +327,13 @@ export async function webSearch(query) {
   // Tavily 在设置页是可选项、Key 也有独立入口；漏掉这条分发会让它静默退回 Bing，
   // 用户以为在用自己的 Key，实际没有（2026-10-17 审查 P2）
   if (provider === 'tavily') return tavilySearch(clean);
+  if (provider === 'so360') return so360Search(clean);
+  if (provider === 'sogou') return sogouSearch(clean);
   // 自定义：'custom'（旧单槽位）或 'custom:<id>'（设置页添加的多个之一）
   if (provider === 'custom' || provider.startsWith('custom:')) {
     return customSearch(clean, provider);
   }
-  return bingSearch(clean);
+  return bingSearchWithSupplement(clean);
 }
 
 /**

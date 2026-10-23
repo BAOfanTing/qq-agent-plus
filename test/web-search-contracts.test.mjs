@@ -18,7 +18,7 @@ fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ server: { p
 process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* 句柄占用就算了 */ } });
 
 const { DEFAULT_CONFIG, updateConfig } = await import('../src/core/config.js');
-const { zhipuSearch, bochaSearch, baiduSearch, deepSeekSearch, bingSearch } = await import('../src/llm/web-search.js');
+const { zhipuSearch, bochaSearch, baiduSearch, deepSeekSearch, bingSearch, so360Search, sogouSearch } = await import('../src/llm/web-search.js');
 
 const setWebSearch = (patch) => {
   const cfg = structuredClone(DEFAULT_CONFIG);
@@ -127,6 +127,99 @@ test('Bing：HTML 解析出 b_algo 块；命中验证页（0 块）要抛错而�
 
   stub(() => ({ ok: true, text: async () => '<html><body>请完成验证</body></html>' }));
   await assert.rejects(() => bingSearch('x'), /没有返回可解析的结果/);
+});
+
+test('搜狗：取 vrwrap 里的 data-url 真实外链；没有真实地址的跳转跳过；空结果抛错', async () => {
+  setWebSearch({ provider: 'sogou', maxResults: 3 });
+  const html = '<div class="vrwrap" id="sogou_vr_1"><h3 class="vr-title">'
+    + '<a href="/link?url=x" target="_blank">扎啤 是什么梗 - <em>抖音</em></a></h3>'
+    + '<div class="fz-mid" id="cacheresult_summary_1">扎啤 是最近抖音上的新梗</div>'
+    + '<div class="r-sech" data-url="https://www.douyin.com/shipin/7460674349780060198"></div></div>'
+    + '<div class="vrwrap"><h3 class="vr-title"><a href="/link?url=y">没有真实地址的结果</a></h3></div>'
+    + '<div class="vrwrap"><h3 class="vr-title"><a href="/link?url=z">站内导航</a></h3>'
+    + '<div data-url="https://www.sogou.com/link?url=nav"></div></div>';
+  const calls = stub(() => ({ ok: true, text: async () => html }));
+  const r = await sogouSearch('扎啤 抖音 什么梗');
+  assert.match(calls[0].url, /^https:\/\/www\.sogou\.com\/web\?query=/);
+  assert.equal(r.results.length, 1, '只保留有 data-url 真实外链的结果');
+  assert.equal(r.results[0].url, 'https://www.douyin.com/shipin/7460674349780060198');
+  assert.equal(r.results[0].title, '扎啤 是什么梗 - 抖音');
+  assert.match(r.results[0].snippet, /抖音上的新梗/);
+
+  stub(() => ({ ok: true, text: async () => '<html><body>请输入验证码</body></html>' }));
+  await assert.rejects(() => sogouSearch('x'), /没有返回可解析的结果/);
+});
+
+test('360：解析 data-mdurl 真实外链；跳过站内导航；空结果抛错', async () => {
+  setWebSearch({ provider: 'so360', maxResults: 3 });
+  const html = '<ul>'
+    + '<li class="res-list" data-result-type="richsum"><h3 class="res-title">'
+    + '<a href="https://www.so.com/link?m=x" data-mdurl="https://www.douyin.com/video/123?from=360box" target="_blank">奶绿波 原视频</a></h3>'
+    + '<div><span class="res-list-summary" data-result-summary>奶绿波 是 2026 年春运广告牌误读带火的梗</span></div></li>'
+    + '<li class="res-list"><h3 class="res-title">'
+    + '<a href="https://www.so.com/link?m=y" data-mdurl="https://post.smzdm.com/p/anvw3xv2/" target="_blank">古井贡酒 <em>奶绿波</em></a></h3></li>'
+    + '<li class="res-list"><h3 class="res-title">'
+    + '<a href="https://www.so.com/link?m=z" data-mdurl="https://www.so.com/link?m=nav" target="_blank">站内导航</a></h3></li>'
+    + '</ul>';
+  const calls = stub(() => ({ ok: true, text: async () => html }));
+  const r = await so360Search('奶绿波 什么意思');
+  assert.match(calls[0].url, /^https:\/\/www\.so\.com\/s\?q=/);
+  assert.deepEqual(r.results.map((x) => x.url), [
+    'https://www.douyin.com/video/123?from=360box',
+    'https://post.smzdm.com/p/anvw3xv2/'
+  ], '保留抖音/解释文章，跳过 so.com 站内链接');
+  assert.equal(r.results[0].title, '奶绿波 原视频');
+  assert.match(r.results[0].snippet, /春运广告牌/);
+
+  stub(() => ({ ok: true, text: async () => '<html><body>安全验证</body></html>' }));
+  await assert.rejects(() => so360Search('x'), /没有返回可解析的结果/);
+});
+
+test('Bing 对梗查询结果太差时自动补搜狗，并把抖音结果排在前面', async () => {
+  setWebSearch({ provider: 'bing', searchUrl: 'https://cn.bing.com/search', maxResults: 6 });
+  const bingHtml = '<ol><li class="b_algo"><h2><a href="https://www.douyin.com/">抖音</a></h2><p>抖音 - 记录美好生活</p></li>'
+    + '<li class="b_algo"><h2><a href="https://baike.baidu.com/item/%E5%A5%B6">奶</a></h2><p>奶的字义</p></li></ol>';
+  const sogouHtml = '<div class="vrwrap"><h3 class="vr-title">'
+    + '<a href="/link?url=x" target="_blank">奶绿波 原视频</a></h3>'
+    + '<div class="fz-mid" id="cacheresult_summary_1">奶绿波 是春运广告牌误读带火的梗</div>'
+    + '<div class="r-sech" data-url="https://www.douyin.com/video/7619643383979831013"></div></div>';
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    return {
+      ok: true,
+      text: async () => (u.includes('bing.com') ? bingHtml : sogouHtml)
+    };
+  };
+  const { webSearch } = await import('../src/llm/web-search.js');
+  const result = await webSearch('奶绿波 什么意思');
+  assert.equal(calls.length, 2, 'Bing + 搜狗各一次');
+  assert.equal(result.results[0].url, 'https://www.douyin.com/video/7619643383979831013', '抖音结果前置');
+  assert.deepEqual(result.sources, ['sogou', 'bing']);
+});
+
+test('搜狗/360 都被风控时，用 Bing 站内限定核心词兜底', async () => {
+  setWebSearch({ provider: 'bing', searchUrl: 'https://cn.bing.com/search', maxResults: 6 });
+  const genericBing = '<ol><li class="b_algo"><h2><a href="https://www.douyin.com/">抖音</a></h2><p>抖音</p></li></ol>';
+  const targetedBing = '<ol><li class="b_algo"><h2><a href="https://baike.baidu.com/item/%E5%A5%B6%E7%BB%BF%E6%B3%A2">奶绿波</a></h2><p>春运广告牌误读带火的梗</p></li></ol>';
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes('sogou.com') || u.includes('so.com')) {
+      return { ok: true, text: async () => '<html>请输入验证码</html>' };
+    }
+    return { ok: true, text: async () => (decodeURIComponent(u).includes('site:douyin.com') ? targetedBing : genericBing) };
+  };
+  const { webSearch } = await import('../src/llm/web-search.js');
+  const result = await webSearch('奶绿波 什么意思');
+  assert.ok(calls.some((u) => {
+    const decoded = decodeURIComponent(u).replace(/\+/g, ' ');
+    return decoded.includes('site:douyin.com 奶绿波');
+  }), `应发出站内限定查询：${JSON.stringify(calls)}`);
+  assert.ok(result.results.some((x) => x.url.includes('baike.baidu.com')), '应带回解释页');
+  assert.deepEqual(result.sources, ['bing'], '两个 Bing 查询合并后来源不重复');
 });
 
 test('Tavily：provider=tavily 真的走 Tavily（此前静默退回 Bing）', async () => {

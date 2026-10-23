@@ -103,12 +103,12 @@ export const DEFAULT_CONFIG = {
   // 多提供商模型目录（设置页手动维护）
   providers: [],
   providerKeys: {},      // providerId -> 真实 API Key（providers[] 里不存明文 Key）
-  // 联网搜索（默认 Bing 网页解析，无需 key；可选 DeepSeek/智谱/博查/百度/秘塔）
+  // 联网搜索（默认 Bing 网页解析，无需 key；可选 DeepSeek/智谱/博查/百度/秘塔/360）
   webSearch: {
     enabled: true,
     searchUrl: 'https://cn.bing.com/search',
     maxResults: 6,
-    // 可选：'bing' | 'deepseek' | 'zhipu' | 'bocha' | 'baidu' | 'metaso' | 'doubao' | 'tavily' | 'aggregate'
+    // 可选：'bing' | 'deepseek' | 'zhipu' | 'bocha' | 'baidu' | 'metaso' | 'doubao' | 'tavily' | 'so360' | 'sogou' | 'aggregate'
     provider: 'bing',
     deepseek: {
       apiKey: '',                     // 留空时回退环境变量 DEEPSEEK_API_KEY
@@ -153,6 +153,14 @@ export const DEFAULT_CONFIG = {
       count: 5,
       searchDepth: 'basic',
       timeoutMs: 20000
+    },
+    // 360 / 搜狗网页解析（均无 Key）：中文新词和抖音梗的命中率明显好于 Bing。
+    // Bing 仍是默认主源；疑似梗查询会先用搜狗补一次，再以 360 兜底；也可以把 provider 直接切到其中之一。
+    so360: {
+      searchUrl: 'https://www.so.com/s'
+    },
+    sogou: {
+      searchUrl: 'https://www.sogou.com/web'
     },
     // 聚合搜索（provider='aggregate'）：并发跑多个源，URL 去重、结果带 source 标注，
     // 单源失败不影响整体，全部失败才报错。sources 顺序 = 结果优先级。

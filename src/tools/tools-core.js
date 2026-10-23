@@ -2633,7 +2633,7 @@ export function buildToolDefs() {
     },
     {
       name: 'web_search',
-      description: '联网搜索（搜索引擎按配置，默认 Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、看不懂或拿不准的词/说法（新梗、缩写、黑话、谐音、圈内叫法、不认识的专有名词）、自己不确定的事实 —— 先搜含义再回，别靠猜。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
+      description: '联网搜索（搜索引擎按配置，默认 Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、看不懂或拿不准的词/说法（新梗、缩写、黑话、谐音、圈内叫法、不认识的专有名词）、自己不确定的事实 —— 先搜含义再回，别靠猜。对梗/抖音类查询会自动补一次 360 中文结果，常能拿到抖音话题页和视频标题；站内链接抓不到正文时，标题和摘要也算数。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
       parameters: {
         type: 'object',
         properties: { query: { type: 'string', description: '搜索词' } },
@@ -2662,7 +2662,7 @@ export function buildToolDefs() {
     },
     {
       name: 'web_fetch',
-      description: '只读抓取网页正文（≤2 万字符）。群友发来链接问"写了什么"时直接抓；配合 web_search 阅读搜索结果的详细内容。禁止访问内网/本机地址。',
+      description: '只读抓取网页正文（≤2 万字符）。群友发来链接问"写了什么"时直接抓；配合 web_search 阅读搜索结果的详细内容。抖音/快手等站内页大多是前端渲染，抓不到正文时用搜索结果的标题/话题名/摘要回答，并说明只看到标题，别编内容。禁止访问内网/本机地址。',
       parameters: {
         type: 'object',
         properties: { url: { type: 'string', description: '要抓取的 http(s) URL' } },
