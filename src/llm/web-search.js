@@ -161,17 +161,17 @@ function isMemeQuery(query) {
   return MEME_QUERY_RE.test(String(query || ''));
 }
 
-function isShortCjkTerm(query) {
-  return /^[\u4e00-\u9fff]{2,12}$/.test(String(query || '').trim());
-}
+const NON_MEME_SHORT_TERMS = new Set([
+  '天气', '新闻', '时间', '日期', '价格', '股票', '汇率', '翻译', '作业', '论文', '代码', '报错',
+  '电脑', '手机', '系统', '软件', '视频', '图片', '文件', '地址', '地图', '路线', '航班', '火车',
+  '机票', '酒店', '餐厅', '电影', '游戏', '音乐', '小说', '你好', '在吗', '谢谢', '哈哈', '好的',
+  '收到', '可以', '不行', '什么', '为什么', '怎么', '多少', '今天', '明天', '昨天', '周末',
+  '上班', '下班', '吃饭', '睡觉'
+]);
 
-function resultsCoverQuery(results, query) {
-  const text = results.map((r) => `${r?.title || ''} ${r?.snippet || ''}`).join(' ').toLowerCase();
-  const compact = text.replace(/\s+/g, '');
-  const q = String(query || '').toLowerCase().replace(/\s+/g, '');
-  if (q && compact.includes(q)) return true;
-  const terms = String(query || '').toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
-  return terms.length > 0 && terms.every((t) => text.includes(t));
+function isShortCjkTerm(query) {
+  const text = String(query || '').trim();
+  return /^[\u4e00-\u9fff]{2,6}$/.test(text) && !NON_MEME_SHORT_TERMS.has(text);
 }
 
 function mergeSearchResults(primary, extra, limit) {
@@ -308,7 +308,7 @@ async function bingSearchWithSupplement(query, { forceSupplement = false } = {})
   try { primary = await bingSearch(query); } catch (error) { primaryError = error; }
 
   const memeQuery = isMemeQuery(query);
-  const shortTerm = primary && !resultsCoverQuery(primary.results, query) && isShortCjkTerm(query);
+  const shortTerm = primary && isShortCjkTerm(query);
   const douyinOnly = primary && primary.results.every((r) => /^https?:\/\/(www\.)?douyin\.com\/(?:$|search|live)/i.test(String(r.url || '')));
   const needSupplement = forceSupplement || memeQuery || shortTerm || douyinOnly;
   if (!needSupplement) {

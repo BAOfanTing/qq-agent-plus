@@ -2054,7 +2054,7 @@ export class Orchestrator {
     const humanLines = [
       personaStateLine,
       memeDensityPrompt(cfg),
-      memesForPrompt(chatKey, triggerText)
+      memesForPrompt(chatKey, triggerText, { level: cfg?.humanize?.memeUse?.level })
     ].filter(Boolean).join('\n\n');
     const systemPrompt = baseSystemPrompt;
     const promptPrefixHash = crypto.createHash('sha256')

@@ -113,7 +113,7 @@ test('搜索设置：显示真实搜索链路，并提供搜索自测入口', ()
 });
 
 test('群梗库：控制台有添加/列表/删除入口，并接到 API', () => {
-  for (const id of ['settings-memes', 'memes-chat-list', 'memes-select-all', 'meme-term', 'meme-meaning', 'meme-usage', 'meme-aliases', 'memes-add', 'memes-list']) {
+  for (const id of ['settings-memes', 'memes-chat-list', 'memes-select-all', 'meme-chatkey-manual', 'meme-term', 'meme-meaning', 'meme-usage', 'meme-aliases', 'memes-add', 'memes-list']) {
     assert.ok(extensions.includes(`id="${id}"`), `缺少梗库控件 ${id}`);
   }
   assert.match(settings, /\['memes', '梗库'\]/);

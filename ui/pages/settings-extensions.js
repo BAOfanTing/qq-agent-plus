@@ -142,6 +142,8 @@ function renderMemesSection(c) {
       </div>
       <div class="hint">列表来自已添加的群聊/私聊白名单；已保存但不在白名单里的旧条目仍可在下方删除。</div>
     </div>
+    <div class="field"><label>或手动输入会话 key（白名单为空/临时会话时用）</label>
+      <input type="text" id="meme-chatkey-manual" placeholder="group:123456789 或 private:123456" maxlength="80" /></div>
     <div class="field-row">
       <div class="field"><label>梗 / 黑话 / 外号</label><input type="text" id="meme-term" placeholder="扎啤" maxlength="40" /></div>
       <div class="field"><label>别名（逗号分隔，可选）</label><input type="text" id="meme-aliases" placeholder="扎啤吧, 杂鱼" maxlength="200" /></div>
@@ -380,6 +382,8 @@ function bindExtensionSettings() {
       const selected = [...document.querySelectorAll('.meme-chat-check:checked')]
         .map((node) => node.dataset.chatkey)
         .filter(Boolean);
+      const manual = String($('#meme-chatkey-manual')?.value || '').trim();
+      if (manual && !selected.includes(manual)) selected.push(manual);
       const base = {
         term: String($('#meme-term')?.value || '').trim(),
         meaning: String($('#meme-meaning')?.value || '').trim(),
@@ -409,7 +413,7 @@ function bindExtensionSettings() {
           result.textContent = `已写入 ${saved} 个会话${failed.length ? `；失败：${failed.join('；')}` : ''}`;
         }
         if (saved) {
-          for (const id of ['#meme-term', '#meme-meaning', '#meme-usage', '#meme-aliases']) {
+          for (const id of ['#meme-term', '#meme-meaning', '#meme-usage', '#meme-aliases', '#meme-chatkey-manual']) {
             const node = $(id); if (node) node.value = '';
           }
           await hydrateExtensionStatus();
@@ -434,7 +438,12 @@ function bindExtensionSettings() {
       button.disabled = true;
       try {
         await api('/api/memes', { method: 'DELETE', body: JSON.stringify({ id: button.dataset.id }) });
-      } catch { /* 列表会显示 */ }
+        const result = $('#memes-result');
+        if (result) result.textContent = `已删除「${button.dataset.term || '这条梗'}」`;
+      } catch (error) {
+        const result = $('#memes-result');
+        if (result) result.textContent = `删除失败：${error.message}`;
+      }
       await hydrateExtensionStatus();
     });
   }

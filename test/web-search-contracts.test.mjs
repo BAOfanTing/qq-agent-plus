@@ -246,6 +246,8 @@ test('meme=true 强制走梗补充：即使 Bing 已覆盖字面词，也会补 
     return { ok: true, text: async () => primary };
   };
   const { webSearch } = await import('../src/llm/web-search.js');
+  const bare = await webSearch('扎啤');
+  assert.ok(bare.sources.includes('bilibili'), '裸词短词也会自动补梗，不必等模型加 meme=true');
   const result = await webSearch('扎啤', { meme: true });
   assert.ok(result.sources.includes('bilibili'), 'meme=true 必须触发梗补充');
   assert.ok(result.results.some((x) => x.url.includes('BV1meme')), '应带回 B 站梗解释');

@@ -2842,7 +2842,8 @@ export function createApp({
         aliases: body.aliases,
         createdBy: body.createdBy || 'console'
       });
-      return json(res, 200, { ok: true, entry, ...memeStats() });
+      const stats = memeStats();
+      return json(res, 200, { ok: true, entry, count: stats.entries, chats: stats.chats });
     } catch (error) {
       return json(res, 400, { ok: false, error: String(error?.message ?? error) });
     }

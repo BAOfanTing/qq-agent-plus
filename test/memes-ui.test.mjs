@@ -12,6 +12,7 @@ test('梗库会话复选框：来自已添加的群/私聊白名单，可全选'
   assert.match(html, /群 456/);
   assert.match(html, /私聊 789/);
   assert.match(html, /id="memes-select-all"/);
+  assert.match(html, /id="meme-chatkey-manual"/, '白名单为空时仍能手动输入会话 key');
   assert.match(html, /data-chatkey="group:123"/);
   assert.match(html, /data-chatkey="private:789"/);
 });
