@@ -6,9 +6,16 @@
 // 声明表在 protocol.js 的 CAP_REQUIREMENT）——没声明就调，直接拒 + 记一次越权。
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { CAP_METHODS } from './protocol.js';
 import { sanitizeUserText } from '../core/util.js';
-import { safeFetch } from '../llm/safe-fetch.js';
+import { safeFetchRequest, safeFetchBinary, isHostAllowed } from '../llm/safe-fetch.js';
+import { readPluginSecrets, writePluginSecrets, secretFieldKeys } from './secrets.js';
+import { ffmpegToPcm, runProvider } from '../tools/audio-transcribe.js';
+import { asrAvailable } from '../core/config.js';
+import { visionEnabled } from '../llm/vision-scan.js';
+import { chatCompletion } from '../llm/llm.js';
+import { checkApproval, consumeQuota } from './grants.js';
 
 const MAX_KEY = 64;
 const MAX_VALUE_BYTES = 32 * 1024;
@@ -19,8 +26,54 @@ const MAX_HTTP_CHARS = 40000;          // 与 web_fetch 的 2 万字符同档：
 const MAX_INCIDENT_LOGS_PER_MIN = 5;   // 插件崩溃循环时不能把管理员异常面板刷满
 const MAX_SEND_CHARS = 800;            // 单条发言上限（比模型的回复短：插件不该长篇大论）
 const MAX_SENDS_PER_MIN = 6;           // 每个插件每分钟最多说几句 —— 防"刷屏"这种最直观的作恶
+const MAX_HTTP_HEADERS = 16;
+const MAX_HEADER_CHARS = 2048;
+const MAX_MEDIA_BYTES = 80 * 1024 * 1024;   // 单次下载上限（B 站 480P/720P 够用）
+const MAX_MEDIA_FILES = 12;                 // 每个插件保留的媒体文件数（抽帧+缓存+成品都要住这里）
+const MEDIA_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const fail = (code, message) => Object.assign(new Error(message), { code });
+
+/**
+ * 跑一个固定的媒体工具（ffmpeg/ffprobe）。参数由宿主拼，**不经过 shell**；
+ * 超时强杀、输出截断到 8KB —— 够报错，不足以把宿主日志灌满。
+ */
+function runTool(command, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    } catch (error) {
+      reject(fail('E_MEDIA_TOOL', `无法启动 ${command}：${error?.message ?? error}`));
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error); else resolve(value);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* 已退出 */ }
+      finish(fail('E_TIMEOUT', `${command} 超时（${Math.round(timeoutMs / 1000)} 秒）`));
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => { if (stdout.length < 8192) stdout += String(chunk); });
+    child.stderr.on('data', (chunk) => { if (stderr.length < 8192) stderr += String(chunk); });
+    child.on('error', (error) => {
+      const missing = String(error?.code || '') === 'ENOENT';
+      finish(fail('E_MEDIA_TOOL', missing
+        ? `本机没有 ${command}：播放/合流需要 ffmpeg（Linux 用 apt install ffmpeg）`
+        : `${command} 启动失败：${error?.message ?? error}`));
+    });
+    child.on('close', (code) => {
+      if (code === 0) finish(null, { stdout, stderr });
+      else finish(fail('E_MEDIA_TOOL', `${command} 退出码 ${code}：${stderr.split('\n').slice(-3).join(' ').slice(0, 400)}`));
+    });
+  });
+}
 
 /** 插件自己的状态目录（**不放插件目录里**：卸载/重装插件不该顺手把数据删掉）。 */
 export function pluginDataDir(dataDir, pluginId) {
@@ -35,7 +88,7 @@ export function pluginDataDir(dataDir, pluginId) {
  */
 export function createCapabilities({
   pluginId, dataDir, getSettings = () => ({}), log = () => {}, now = () => Date.now(),
-  getSender = () => null
+  getSender = () => null, manifest = null
 } = {}) {
   // 注入点先落到本地常量：`node src/ops.js scan --strict`（CI 门禁）只认 const/let 声明与
   // KNOWN_IGNORE 里的名字，**直接调用解构参数的默认值会被判成"未定义调用"**
@@ -43,13 +96,22 @@ export function createCapabilities({
   const settingsOf = getSettings;
   const nowFn = now;
   const senderOf = getSender;
+  const pluginManifest = manifest;
   const dir = pluginDataDir(dataDir, pluginId);
   const storageFile = path.join(dir, 'storage.json');
+  const mediaDir = path.join(dir, 'media');
   let storage = null;
   const writeTimes = [];
   const incidentLogs = [];
-  const stats = { storageWrites: 0, storageBytes: 0, logLines: 0, incidentLogs: 0, httpRequests: 0, sends: 0 };
+  const stats = { storageWrites: 0, storageBytes: 0, logLines: 0, incidentLogs: 0, httpRequests: 0, sends: 0, mediaDownloads: 0, approvals: 0 };
   const sendTimes = [];
+  // manifest 决定白名单：凭据字段、可授权动作、配额、http 域名。没声明的一律不认（fail-closed）。
+  const secretKeys = secretFieldKeys(pluginManifest?.settings);
+  const approvalActions = new Set((pluginManifest?.approvals || []).map((item) => item.action));
+  const quotas = pluginManifest?.quotas && typeof pluginManifest.quotas === 'object' ? pluginManifest.quotas : {};
+  const httpDomains = Array.isArray(pluginManifest?.httpDomains) ? pluginManifest.httpDomains : [];
+  // 响应上限按 manifest 声明放宽（默认 40KB，最高 512KB）：B 站搜索这类接口 40KB 会截断
+  const httpCap = Math.max(40000, Math.min(512 * 1024, Math.floor(Number(pluginManifest?.httpMaxBytes) || 40000)));
 
   const loadStorage = () => {
     if (storage) return storage;
@@ -154,22 +216,253 @@ export function createCapabilities({
       return { ok: true, chatKey: target, chars: body.length };
     },
 
-    [CAP_METHODS.httpRequest]: async ({ url, maxChars } = {}) => {
+    [CAP_METHODS.httpRequest]: async ({ url, maxChars, method, headers, body, decompress, withSetCookies } = {}) => {
       const target = String(url ?? '').trim();
       if (!target) throw fail('E_ARGS', 'url 不能为空');
-      const limit = Math.min(Number(maxChars) > 0 ? Math.floor(Number(maxChars)) : MAX_HTTP_CHARS, MAX_HTTP_CHARS);
+      let parsed;
+      try { parsed = new URL(target); } catch { throw fail('E_ARGS', 'url 不是合法地址'); }
+      if (!/^https?:$/.test(parsed.protocol)) throw fail('E_ARGS', '只允许 http/https');
+      if (!isHostAllowed(parsed.hostname, httpDomains)) {
+        throw fail('E_DOMAIN', `域名 ${parsed.hostname} 不在插件的 httpDomains 白名单里`);
+      }
+      const verb = String(method || 'GET').toUpperCase();
+      if (!['GET', 'POST'].includes(verb)) throw fail('E_ARGS', 'method 只允许 GET / POST');
+      const cleanHeaders = {};
+      if (headers !== undefined && headers !== null) {
+        if (typeof headers !== 'object' || Array.isArray(headers)) throw fail('E_ARGS', 'headers 必须是对象');
+        const entries = Object.entries(headers);
+        if (entries.length > MAX_HTTP_HEADERS) throw fail('E_ARGS', `headers 最多 ${MAX_HTTP_HEADERS} 项`);
+        for (const [key, value] of entries) {
+          if (key.length > 64 || /[\r\n]/.test(key) || /[\r\n]/.test(String(value))) throw fail('E_ARGS', 'headers 含非法字符');
+          if (String(value).length > MAX_HEADER_CHARS) throw fail('E_ARGS', '请求头过长');
+          cleanHeaders[key] = String(value);
+        }
+      }
+      if (body !== undefined && body !== null) {
+        if (verb !== 'POST') throw fail('E_ARGS', '只有 POST 可以带请求体');
+        if (typeof body !== 'string') throw fail('E_ARGS', 'body 必须是字符串');
+      }
+      // 上限跟 manifest 的 httpMaxBytes 走（B 站搜索/每周必看这类接口 40KB 就会截断）
+      const limit = Math.min(Number(maxChars) > 0 ? Math.floor(Number(maxChars)) : MAX_HTTP_CHARS, httpCap);
       stats.httpRequests += 1;
       // 复用宿主的 safe-fetch：内网/字面量拦截、重定向逐跳复检、体积与超时上限都在里面。
       // ⚠️ 这是"方便 + 可审计"，不是安全边界：插件进程自己有网络（Node 权限模型不管网络），
       //    要真禁网得靠命名空间/容器，v1 做不到（docs/PLUGINS.md 写明了）。
-      const result = await safeFetch(target);
-      return {
+      const result = await safeFetchRequest(target, {
+        method: verb, headers: cleanHeaders, body: verb === 'POST' ? body : null,
+        maxBytes: httpCap, decompress: decompress === true,
+        // Set-Cookie 透出是显式开关（扫码登录 poll 的成功凭据在响应头里）：
+        // 默认关。开着时也只把 cookie 名与值交给**声明了 secrets 能力**的插件，
+        // 且写一条日志（哪个插件在什么时候收了凭据）。
+        withSetCookies: withSetCookies === true && (pluginManifest?.capabilities || []).includes('secrets'),
+        // 白名单跟着每一跳重定向走：只查初始 URL 的话，白名单域一个 302 就能带去任意站
+        allowedDomains: httpDomains.length ? httpDomains : null
+      });
+      if (verb !== 'GET') {
+        // 写请求一律留痕：出问题时能回答"是哪个插件、在什么时候、对谁发的"
+        log(`[plugin:${pluginId}] ${verb} ${parsed.host}${parsed.pathname} → HTTP ${result?.statusCode ?? 0}`);
+      }
+      const out = {
         status: result?.statusCode ?? 0,
         truncated: Boolean(result?.truncated),
         body: String(result?.body ?? '').slice(0, limit)
       };
+      if (Array.isArray(result?.setCookies) && result.setCookies.length) {
+        out.setCookies = result.setCookies.map(String).slice(0, 20);
+        log(`[plugin:${pluginId}] 收到 Set-Cookie 响应头（${result.setCookies.length} 条，凭据类，只交给声明 secrets 的插件）`);
+      }
+      return out;
+    },
+
+    // ── apiVersion 2 ──────────────────────────────────────────────────────
+    [CAP_METHODS.secretsGet]: () => {
+      const secrets = readPluginSecrets(dataDir, pluginId);
+      const out = {};
+      for (const key of secretKeys) {
+        if (typeof secrets[key] === 'string' && secrets[key]) out[key] = secrets[key];
+      }
+      return { values: out, configured: Object.keys(out) };
+    },
+    [CAP_METHODS.secretsSet]: ({ values } = {}) => {
+      if (!values || typeof values !== 'object' || Array.isArray(values)) throw fail('E_ARGS', 'values 必须是对象');
+      writePluginSecrets(dataDir, pluginId, values, secretKeys);
+      log(`[plugin:${pluginId}] 更新了凭据字段：${Object.keys(values).filter((key) => secretKeys.includes(key)).join(', ')}`);
+      return { ok: true };
+    },
+    [CAP_METHODS.approvalCheck]: ({ action, consume = true } = {}) => {
+      const key = String(action ?? '');
+      if (!approvalActions.has(key)) throw fail('E_NOT_DECLARED', `动作 ${key || '(空)'} 没有在 manifest.approvals 里声明`);
+      const result = checkApproval(dataDir, pluginId, key, { consume: consume !== false, now: nowFn() });
+      stats.approvals += 1;
+      log(`[plugin:${pluginId}] 授权检查 ${key}：${result.approved ? '通过' : `拒绝（${result.reason}）`}`);
+      return result;
+    },
+    [CAP_METHODS.quotaConsume]: ({ action, amount = 1 } = {}) => {
+      const key = String(action ?? '');
+      if (!Object.prototype.hasOwnProperty.call(quotas, key)) {
+        throw fail('E_NOT_DECLARED', `动作 ${key || '(空)'} 没有在 manifest.quotas 里配置上限`);
+      }
+      return consumeQuota(dataDir, pluginId, key, quotas[key], { amount, now: nowFn() });
+    },
+    [CAP_METHODS.mediaDownload]: async ({ url, name, maxBytes, headers } = {}) => {
+      const target = String(url ?? '').trim();
+      if (!target) throw fail('E_ARGS', 'url 不能为空');
+      let parsed;
+      try { parsed = new URL(target); } catch { throw fail('E_ARGS', 'url 不是合法地址'); }
+      if (!/^https?:$/.test(parsed.protocol)) throw fail('E_ARGS', '只允许 http/https');
+      if (!isHostAllowed(parsed.hostname, httpDomains)) {
+        throw fail('E_DOMAIN', `域名 ${parsed.hostname} 不在插件的 httpDomains 白名单里`);
+      }
+      const fileName = String(name ?? '').trim();
+      if (!MEDIA_NAME_RE.test(fileName)) throw fail('E_ARGS', 'name 只能包含字母/数字/点/下划线/连字符（≤64 位）');
+      const cap = Math.max(1, Math.min(MAX_MEDIA_BYTES, Math.floor(Number(maxBytes) || MAX_MEDIA_BYTES)));
+      const cleanHeaders = {};
+      if (headers && typeof headers === 'object' && !Array.isArray(headers)) {
+        for (const [key, value] of Object.entries(headers).slice(0, MAX_HTTP_HEADERS)) {
+          if (key.length > 64 || /[\r\n]/.test(key) || /[\r\n]/.test(String(value))) throw fail('E_ARGS', 'headers 含非法字符');
+          if (String(value).length > MAX_HEADER_CHARS) throw fail('E_ARGS', '请求头过长');
+          cleanHeaders[key] = String(value);
+        }
+      }
+      const fetched = await safeFetchBinary(target, cap, undefined, { allowPrivate: false, headers: cleanHeaders, allowedDomains: httpDomains.length ? httpDomains : null });
+      fs.mkdirSync(mediaDir, { recursive: true });
+      const file = path.join(mediaDir, fileName);
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, fetched.buffer);
+      fs.renameSync(tmp, file);
+      pruneMedia();
+      stats.mediaDownloads += 1;
+      return { file: fileName, bytes: fetched.buffer.length, contentType: fetched.contentType || '' };
+    },
+    [CAP_METHODS.mediaProbe]: async ({ file } = {}) => {
+      const target = mediaFile(file);
+      const result = await runTool('ffprobe', [
+        '-v', 'error', '-show_entries', 'format=duration,size,format_name', '-of', 'json', target
+      ], 15000);
+      let info = {};
+      try { info = JSON.parse(result.stdout || '{}')?.format || {}; } catch { /* 下面统一报错 */ }
+      return {
+        duration: Number(info.duration) || 0,
+        bytes: Number(info.size) || 0,
+        format: String(info.format_name || '')
+      };
+    },
+    [CAP_METHODS.mediaMerge]: async ({ video, audio, name } = {}) => {
+      const videoPath = mediaFile(video);
+      const audioPath = mediaFile(audio);
+      const fileName = String(name ?? '').trim();
+      if (!MEDIA_NAME_RE.test(fileName)) throw fail('E_ARGS', 'name 只能包含字母/数字/点/下划线/连字符（≤64 位）');
+      const outPath = path.join(mediaDir, fileName);
+      // 参数固定、不过 shell：插件没法借文件名注入命令
+      await runTool('ffmpeg', [
+        '-y', '-i', videoPath, '-i', audioPath, '-c', 'copy', '-movflags', '+faststart', outPath
+      ], 120000);
+      pruneMedia();
+      return { file: fileName, bytes: fs.statSync(outPath).size };
+    },
+    // 抽帧：宿主 ffmpeg 固定参数（-ss 定位 + 单帧 jpg），插件不碰命令行。
+    // 一次 1-6 帧：read 管线第二段用；抽完的帧同样住在 media 目录、受文件数上限约束。
+    [CAP_METHODS.mediaFrames]: async ({ file, times, prefix } = {}) => {
+      const source = mediaFile(file);
+      const list = Array.isArray(times) ? times : [];
+      if (!list.length || list.length > 6) throw fail('E_ARGS', 'times 要传 1-6 个时间点（毫秒）');
+      const safePrefix = String(prefix || 'f').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16) || 'f';
+      const frames = [];
+      for (const [index, raw] of list.entries()) {
+        const atMs = Math.max(0, Math.min(24 * 3600_000, Math.floor(Number(raw) || 0)));
+        const name = `${safePrefix}_${index}.jpg`;
+        try {
+          await runTool('ffmpeg', [
+            '-y', '-ss', (atMs / 1000).toFixed(3), '-i', source,
+            '-frames:v', '1', '-q:v', '3', path.join(mediaDir, name)
+          ], 60_000);
+        } catch (error) {
+          // 单帧失败（时间点越界等）不拖垮整批：继续抽后面的，最后如实报数量
+          log(`[plugin:${pluginId}] 抽帧失败 ${name}@${atMs}ms：${error?.message ?? error}`);
+          continue;
+        }
+        if (fs.existsSync(path.join(mediaDir, name))) frames.push({ file: name, atMs });
+      }
+      if (!frames.length) throw fail('E_MEDIA_TOOL', '一张帧都没抽到（时间点可能超出视频时长）');
+      return { frames };
+    },
+
+    // 帧描述：宿主的视觉模型把画面转成文字（主模型不需要视觉能力，DSH 同款思路）
+    [CAP_METHODS.mediaDescribe]: async ({ file, prompt } = {}) => {
+      const source = mediaFile(file);
+      if (!/\.(jpe?g|png)$/i.test(source)) throw fail('E_ARGS', 'describe 只支持 jpg/png 帧');
+      if (fs.statSync(source).size > 8 * 1024 * 1024) throw fail('E_TOO_BIG', '帧图超过 8MB');
+      if (!visionEnabled()) {
+        throw fail('E_NO_VISION', '宿主没有可用的视觉模型（模型不支持或已关闭图片输入）：帧会照常抽出但无法转成文字');
+      }
+      const mime = /\.png$/i.test(source) ? 'png' : 'jpeg';
+      const dataUrl = `data:image/${mime};base64,${fs.readFileSync(source).toString('base64')}`;
+      const response = await chatCompletion({
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: String(prompt || '').slice(0, 500) || '描述这一帧画面：能读出的文字/数字/界面/图表/人物动作，说具体内容，别猜画面外的事。' },
+            { type: 'image_url', image_url: { url: dataUrl } }
+          ]
+        }],
+        maxTokens: 500,
+        purpose: 'media-describe'
+      });
+      const text = String(response?.choices?.[0]?.message?.content ?? '').trim();
+      if (!text) throw fail('E_VISION', '视觉模型没有返回描述');
+      return { description: text.slice(0, 2000) };
+    },
+
+    // 音频转写：复用宿主已配置的 ASR（语音消息同一条链路：ffmpeg → 16k PCM → 供应商）
+    [CAP_METHODS.asrTranscribe]: async ({ file } = {}) => {
+      const source = mediaFile(file);
+      if (!asrAvailable()) {
+        throw fail('E_NO_ASR', '宿主没有配置语音识别（控制台 → 设置 → 语音识别）：无字幕视频转写需要它');
+      }
+      const pcm = await ffmpegToPcm(source, { timeoutMs: 15 * 60_000 });
+      // 30 分钟封顶：再长就要求先出字幕，别让一次转写跑半小时
+      if (pcm.length > 30 * 60 * 32000) {
+        throw fail('E_TOO_BIG', '音频超过 30 分钟，转写太慢：这个视频请直接看字幕或换一个');
+      }
+      const text = await runProvider(undefined, pcm);
+      return { text: String(text || '').slice(0, 20000), seconds: Math.round(pcm.length / 32000) };
+    },
+
+    [CAP_METHODS.sendFile]: async ({ chatKey, file, name } = {}) => {
+      const target = String(chatKey ?? '').trim();
+      if (!/^group:\d+$/.test(target)) throw fail('E_ARGS', 'send.file 目前只支持群聊（group:<群号>）');
+      const source = mediaFile(file);
+      const size = fs.statSync(source).size;
+      if (size > MAX_MEDIA_BYTES) throw fail('E_TOO_BIG', `文件超过 ${MAX_MEDIA_BYTES / 1024 / 1024}MB，不能发送`);
+      const sender = senderOf();
+      if (!sender?.groupFile) throw fail('E_NO_SENDER', '宿主没有可用的发送队列（插件暂时发不了文件）');
+      const displayName = String(name || path.basename(source)).replace(/[\\/:*?"<>|]/g, '_').slice(0, 100);
+      await sender.groupFile(target, { file: source, name: displayName }, {});
+      log(`[plugin:${pluginId}] 以机器人身份在 ${target} 发了一个文件：${displayName}（${Math.round(size / 1024)}KB）`);
+      return { ok: true, chatKey: target, bytes: size };
     }
   };
+
+  function pruneMedia() {
+    try {
+      const files = fs.readdirSync(mediaDir)
+        .map((name) => ({ name, at: fs.statSync(path.join(mediaDir, name)).mtimeMs }))
+        .sort((a, b) => b.at - a.at);
+      for (const stale of files.slice(MAX_MEDIA_FILES)) {
+        fs.rmSync(path.join(mediaDir, stale.name), { force: true });
+      }
+    } catch { /* 清理失败不影响本次下载 */ }
+  }
+
+  /** 把插件给的文件名解析到自己的 media 目录内（拒绝目录穿越与绝对路径）。 */
+  function mediaFile(name) {
+    const raw = String(name ?? '').trim();
+    if (!MEDIA_NAME_RE.test(raw)) throw fail('E_ARGS', 'file 必须是 download/merge 返回的文件名');
+    const file = path.resolve(mediaDir, raw);
+    if (file !== path.resolve(mediaDir, path.basename(file))) throw fail('E_ARGS', 'file 越界');
+    if (!fs.existsSync(file)) throw fail('E_NO_FILE', `找不到文件 ${raw}`);
+    return file;
+  }
 
   return {
     methods,

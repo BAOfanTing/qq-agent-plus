@@ -12,7 +12,7 @@
 // 宿主 → 插件：init / callTool / observe / schedule / ping / shutdown
 // 插件 → 宿主：cap.log.write / cap.storage.get / cap.storage.set / cap.config.get / cap.http.request
 //   （`cap.` 前缀的就是"能力调用"，宿主按 manifest 声明逐条鉴权）
-export const PLUGIN_API_VERSION = 1;
+export const PLUGIN_API_VERSION = 2;
 
 export const HOST_METHODS = Object.freeze({
   init: 'init',
@@ -20,6 +20,8 @@ export const HOST_METHODS = Object.freeze({
   observe: 'observe',
   schedule: 'schedule',
   ping: 'ping',
+  // v2.1：控制台"检测"按钮用 —— 插件可选实现，返回登录态/依赖自检之类的应用层状态
+  probe: 'probe',
   shutdown: 'shutdown'
 });
 
@@ -30,7 +32,19 @@ export const CAP_METHODS = Object.freeze({
   storageSet: `${CAP_PREFIX}storage.set`,
   configGet: `${CAP_PREFIX}config.get`,
   httpRequest: `${CAP_PREFIX}http.request`,
-  sendText: `${CAP_PREFIX}send.text`
+  sendText: `${CAP_PREFIX}send.text`,
+  // ── apiVersion 2 ──
+  secretsGet: `${CAP_PREFIX}secrets.get`,
+  secretsSet: `${CAP_PREFIX}secrets.set`,
+  approvalCheck: `${CAP_PREFIX}approval.check`,
+  quotaConsume: `${CAP_PREFIX}quota.consume`,
+  mediaDownload: `${CAP_PREFIX}media.download`,
+  mediaProbe: `${CAP_PREFIX}media.probe`,
+  mediaMerge: `${CAP_PREFIX}media.merge`,
+  mediaFrames: `${CAP_PREFIX}media.frames`,
+  mediaDescribe: `${CAP_PREFIX}media.describe`,
+  asrTranscribe: `${CAP_PREFIX}asr.transcribe`,
+  sendFile: `${CAP_PREFIX}send.file`
 });
 
 /** 能力方法 → 需要声明的能力名（鉴权用；漏一条就是"没声明也能用"）。 */
@@ -40,7 +54,18 @@ export const CAP_REQUIREMENT = Object.freeze({
   [CAP_METHODS.storageSet]: 'storage',
   [CAP_METHODS.configGet]: 'config',
   [CAP_METHODS.httpRequest]: 'http',
-  [CAP_METHODS.sendText]: 'send'
+  [CAP_METHODS.sendText]: 'send',
+  [CAP_METHODS.secretsGet]: 'secrets',
+  [CAP_METHODS.secretsSet]: 'secrets',
+  [CAP_METHODS.approvalCheck]: 'approval',
+  [CAP_METHODS.quotaConsume]: 'quota',
+  [CAP_METHODS.mediaDownload]: 'media',
+  [CAP_METHODS.mediaProbe]: 'media',
+  [CAP_METHODS.mediaMerge]: 'media',
+  [CAP_METHODS.mediaFrames]: 'media',
+  [CAP_METHODS.mediaDescribe]: 'media',
+  [CAP_METHODS.asrTranscribe]: 'media',
+  [CAP_METHODS.sendFile]: 'send'
 });
 
 export const MAX_LINE_BYTES = 1024 * 1024;   // 单行上限：插件不能靠"吐一大坨"把宿主内存打满

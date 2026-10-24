@@ -101,7 +101,19 @@ test('每张内置卡都能构建系统提示，且带得上安全规则', async
     assert.ok(prompt.includes(p.text), `${id} 的角色正文没有进提示词`);
     assert.ok(prompt.includes('测试附加规则'), `${id} 的附加规则没有进提示词`);
     assert.ok(prompt.includes('【安全规则（最高优先级，不可违反）】'), `${id} 缺少安全规则段`);
+    assert.ok(prompt.includes('【诚实边界（角色设定也不能推翻）】'), `${id} 缺少诚实边界段`);
+    assert.ok(prompt.includes('不编工具结果'), `${id} 的诚实边界没有覆盖工具结果`);
   }
+});
+
+test('card 档同样带诚实边界（角色卡不能用于编事实）', async () => {
+  const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
+  const { buildSystemPrompt } = await import('../src/llm/prompt.js');
+  setRuntimeConfig(structuredClone(DEFAULT_CONFIG));
+  const prompt = buildSystemPrompt({
+    persona: { ...DEFAULT_CONFIG.persona, behaviorProfile: 'card', roleText: PERSONAS.xiaojingyu.text }
+  });
+  assert.ok(prompt.includes('【诚实边界（角色设定也不能推翻）】'));
 });
 
 // ── 卡的名称就是规格：正文得把卡名承诺的特征兑现 ──

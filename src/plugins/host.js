@@ -80,7 +80,7 @@ export class PluginHost {
     this.unconfined = false;
     this.netIsolated = false;
     this.caps = capabilities ?? createCapabilities({
-      pluginId: this.id, dataDir, getSettings, log, now,
+      pluginId: this.id, dataDir, getSettings, log, now, manifest,
       getSender      // send 能力用：插件发言必须走机器人自己那条队列（守卫全在里面）
     });
 
@@ -243,11 +243,20 @@ export class PluginHost {
     return true;
   }
 
+/** 应用层自检（可选）：控制台"检测登录"一类按钮经这里问插件。没实现的插件报 E_NO_METHOD。 */
+  probe() {
+    this.#allowCall('probe');
+    return this.#request(HOST_METHODS.probe, {}, Math.min(15000, this.timeouts.callTimeoutMs));
+  }
+
   /** 让插件执行一个工具调用。超时/进程不可用/超频都会抛带 code 的错误。 */
-  async callTool(name, args, { timeoutMs } = {}) {
+  async callTool(name, args, { timeoutMs, context = null } = {}) {
     this.#allowCall('callTool');
-    return this.#request(HOST_METHODS.callTool, { name: String(name ?? ''), args: args ?? {} },
-      timeoutMs ?? this.timeouts.callTimeoutMs);
+    return this.#request(HOST_METHODS.callTool, {
+      name: String(name ?? ''),
+      args: args ?? {},
+      context: context && typeof context === 'object' ? context : {}
+    }, timeoutMs ?? this.timeouts.callTimeoutMs);
   }
 
   /**

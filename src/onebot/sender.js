@@ -6,6 +6,7 @@
 import { getConfig, DEFAULT_CONFIG } from '../core/config.js';
 import { sleep, sleepAbortable, randInt, createSendChain, formatClockTime, todayKey } from '../core/util.js';
 import { mdToPlain, splitForQQ } from '../llm/md-to-plain.js';
+import { shapeBubbles } from '../llm/bubble-shape.js';
 import { assertCanSend } from '../core/access.js';
 import { createLogger } from '../core/logger.js';
 
@@ -209,11 +210,19 @@ export class SendQueue {
     this.hourTimes.set(chatKey, hour);
   }
 
-  #gap(text, isLast) {
+  #gap(text, isLast, voice) {
     const cfg = getConfig().send;
     const min = Math.max(200, Number(cfg.minGapMs) || 1000);
     const max = Math.max(min, Number(cfg.maxGapMs) || 3000);
     if (isLast) return 0;
+    // 角色卡自己的节奏优先：猫娘/损友不该等跟技术宅一样久。只在开了人类化时生效。
+    const pause = voice?.pauseMs;
+    if (getConfig().humanize?.enabled === true && Array.isArray(pause) && pause.length === 2) {
+      const vmin = Math.max(0, Math.min(30000, Number(pause[0]) || 0));
+      const vmax = Math.max(vmin, Math.min(30000, Number(pause[1]) || vmin));
+      // 200ms 是绝对下限（与下面普通路径同款）：voice-profiles 写 [0,0] 不能造成零间隔连发刷屏
+      return Math.max(200, randInt(vmin, vmax));
+    }
     // byLengthMs 的 0 是合法值（"不按字数附加延迟"，控制台那个框 min="0"）——
     // 用 `|| 20` 会把它吞掉，界面上填了 0、实际每条仍按 20ms/字延迟（2026-10-08 审查）。
     const perChar = Number(cfg.byLengthMs);
@@ -328,9 +337,20 @@ export class SendQueue {
     if (kind !== 'group' && kind !== 'private') throw new Error(`非法会话 key：${chatKey}`);
     const list = Array.isArray(messages) ? messages : [messages];
     if (!list.length) throw new Error('消息列表为空');
+    const humanizeCfg = getConfig().humanize;
+    // 气泡整形只作用于"人格回复"（send_message 路径传 persona:true）。
+    // 日报/群游戏结算/管理员简报/插件代发这类系统文本有自己的格式，按卡的每条字数硬拆只会拆坏。
+    // 整形在 Markdown 转换之前做：代码围栏、URL、行内代码还在原文里，拆分器能整段保护它们。
+    const shaped = humanizeCfg?.enabled === true && humanizeCfg?.shape?.enabled !== false
+      && options.persona === true
+      ? shapeBubbles(list, {
+        maxBubbles: options.voice?.maxBubbles ?? humanizeCfg?.shape?.maxBubbles,
+        maxChars: options.voice?.maxChars ?? humanizeCfg?.shape?.maxChars
+      })
+      : list;
     const hardSplitAt = Number(getConfig().send?.hardSplitAt) || 0;
     const parts = [];
-    for (const m of list) {
+    for (const m of shaped) {
       const plain = mdToPlain(String(m ?? ''), { preserveCode: options.preserveCode === true });
       if (!plain) continue;
       // 最后防线：任何上游畸形路径漏下来的 "[object Object]" 到这儿直接拦掉，
@@ -348,7 +368,7 @@ export class SendQueue {
       const isLast = i === parts.length - 1;
       // 首条：开了人类化才用它（可为 0），否则回退到原来的 #gap —— 关闭时发送节奏与升级前一致。
       const lead = i === 0 ? this.#leadDelay(parts) : null;
-      const gap = lead === null ? this.#gap(text, isLast) : lead;
+      const gap = lead === null ? this.#gap(text, isLast, options.voice) : lead;
       promises.push(chain(async () => {
         assertCanSend(chatKey, options.signal, { gameScoped: options.gameScoped === true });
         if (options.runId && this.store.hasUncertainEffects(options.runId)) throw new Error('Previous send delivery is uncertain');

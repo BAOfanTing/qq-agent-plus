@@ -6128,6 +6128,52 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
 /* 分节标题要比 README 自己的标题（h3.md-h = --fs-lg）高一级，否则"它能做什么"（分节）
    与 README 里同名的 h4 看起来一样重，读者分不清哪层是宿主写的、哪层是作者写的 */
 .pd-block-title { margin: 0 0 12px; font-size: var(--fs-xl); font-weight: 600; letter-spacing: .01em; }
+/* 插件设置：由 manifest.settings 驱动，宿主统一渲染 —— 与详情的正文同一套字号/间距，不另起一套表单风格 */
+.pd-settings-group + .pd-settings-group { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.pd-settings-group-title { font-size: var(--fs-md); font-weight: 600; margin-bottom: 6px; }
+.pd-field { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; font-size: var(--fs-sm); color: var(--text); }
+.pd-field > span { display: flex; align-items: center; gap: 8px; font-weight: 550; }
+.pd-field input[type="text"], .pd-field input[type="password"], .pd-field input[type="number"], .pd-field select {
+  width: 100%; max-width: 460px; padding: 7px 10px; border: 1px solid var(--border);
+  border-radius: var(--r-input); background: var(--surface); color: var(--text); font: inherit;
+}
+.pd-field small { color: var(--muted); font-size: var(--fs-xs); line-height: 1.6; }
+.pd-field-check { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pd-field-check small { flex-basis: 100%; }
+.pd-secret-on { font-style: normal; font-size: var(--fs-xs); color: var(--success); }
+/* 常驻登录徽标：绿=实测有效，灰=未登录（打开面板即见，不用点检测） */
+.pd-login-badge { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 10px; padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--muted); }
+.pd-login-badge.is-on { color: var(--success); border-color: var(--success); }
+/* 控制台内扫码登录：面板居中、码块与状态分开 */
+.pd-qr-panel { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r-lg); display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.pd-qr-title { font-size: var(--fs-sm); font-weight: 600; }
+.pd-qr-img { display: block; border: 1px solid var(--border); border-radius: var(--r-sm); background: #fff; }
+.pd-qr-status { font-size: var(--fs-xs); color: var(--muted); }
+.plugin-warn.good { color: var(--success); border-color: var(--success); }
+/* 清除单个凭据：跟在“已配置”后面的小动作，不该长成一个大按钮（误点代价是重填 Cookie） */
+.pd-secret-clear { margin-left: auto; padding: 2px 9px; border: 1px solid var(--border); border-radius: var(--r-pill); background: none; color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+.pd-secret-clear:hover { color: var(--danger); border-color: var(--danger); }
+.pd-approval-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; padding: 12px 0; border-top: 1px dashed var(--border); }
+.pd-approval-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.pd-approval-main strong { font-size: var(--fs-sm); }
+.pd-approval-main span { color: var(--muted); font-size: var(--fs-xs); }
+.pd-approval-state { font-size: var(--fs-xs); color: var(--muted); text-align: right; align-self: center; }
+.pd-approval-state.is-on { color: var(--success); }
+.pd-approval-actions { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pd-approval-row.is-pending { border-left: 2px solid var(--warning, #e6a700); }
+.pd-switch { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text); cursor: pointer; }
+.pd-write-row { display: flex; gap: 10px; align-items: baseline; padding: 5px 0; font-size: var(--fs-xs); flex-wrap: wrap; }
+.pd-write-at { color: var(--muted); flex: 0 0 auto; }
+.pd-write-action { color: var(--text); flex: 0 0 auto; }
+.pd-write-outcome { flex: 0 0 auto; padding: 0 7px; border-radius: var(--r-pill); border: 1px solid var(--border); color: var(--muted); }
+.pd-write-outcome.is-ok { color: var(--success); border-color: var(--success); }
+.pd-write-outcome.is-failed, .pd-write-outcome.is-unknown { color: var(--danger); border-color: var(--danger); }
+.pd-write-outcome.is-pending { color: var(--warning, #e6a700); border-color: var(--warning, #e6a700); }
+.pd-write-note { color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.pd-settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+.pd-settings-status { font-size: var(--fs-xs); color: var(--muted); }
+.pd-settings-status.is-success { color: var(--success); }
+.pd-settings-status.is-error { color: var(--danger); }
 /* README：真标题层级 + 真列表 + 真链接（渲染在 ui/core/format.js）。
    标题整体降两档（`#` → h3）：详情页已经用 hero 的名字当了 h1 的位置，
    README 自己的一级标题再顶一个大字号，页面就有两个"最粗的标题"了。 */

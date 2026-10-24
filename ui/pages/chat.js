@@ -51,6 +51,23 @@ function bindProactiveWindowEditor() {
 }
 
 /** 风格预设只改界面上的人味参数；保存仍走同一份 saveConfig。 */
+/** 推荐配置：拟人化全家桶一键就位（总开关/低档延迟/反AI/气泡整形）。改的是界面值，保存仍走 saveConfig。 */
+function bindHumanizeRecommend() {
+  const button = $('#humanize-recommend');
+  if (!button) return;
+  button.addEventListener('click', () => {
+    const master = $('#cfg-humanize-enabled');
+    if (master) master.checked = true;
+    const set = (id, value) => { const node = $(id); if (node) node.value = value; };
+    set('#cfg-humanize-delay-min', '0.5');
+    set('#cfg-humanize-delay-max', '1.8');
+    set('#cfg-humanize-delay-perchar', '12');
+    state.settingsDirty = true;
+    const note = $('#cfg-dirty-note');
+    if (note) note.textContent = '已套用推荐配置（记得保存）';
+  });
+}
+
 function bindHumanizePreset() {
   const select = $('#cfg-humanize-preset');
   if (!select) return;
@@ -296,7 +313,8 @@ return `
 
     <h3>所有模式 · 拟人化表达（实验性）</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-humanize-enabled" ${humanize.enabled === true ? 'checked' : ''} />
-      <label for="cfg-humanize-enabled">启用拟人化表达与助手腔过滤</label></div>
+      <label for="cfg-humanize-enabled">启用拟人化表达与助手腔过滤</label>
+      <button type="button" class="btn btn-small" id="humanize-recommend" style="margin-left:10px">推荐配置</button></div>
     <div class="field"><label for="cfg-humanize-preset">风格预设</label>
       <select id="cfg-humanize-preset">
         ${[['natural', '自然'], ['active', '活跃'], ['quiet', '安静'], ['companion', '陪聊']].map(([value, label]) =>
@@ -1012,4 +1030,4 @@ function conversationModeForChat(chatKey, cfg = state.config) {
 }
 
 
-export { appendChatMessageRows, bindHumanizePreset, bindProactiveWindowEditor, loadChats, loadHumanizeState, renderChatSection, updateChatMessagesBody };
+export { appendChatMessageRows, bindHumanizePreset, bindHumanizeRecommend, bindProactiveWindowEditor, loadChats, loadHumanizeState, renderChatSection, updateChatMessagesBody };

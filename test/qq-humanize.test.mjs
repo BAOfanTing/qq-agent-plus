@@ -266,3 +266,87 @@ it('梗密度：四档各有明确口径；关闭拟人化时不注入；坏值�
   assert.equal(normalizeMemeUseLevel('weird'), 'normal');
   assert.equal(normalizeMemeUseLevel('HEAVY'), 'heavy');
 });
+
+it('气泡整形：按角色声音参数把一段长回复拆成多条', async () => {
+  const cfg = baseConfig();
+  cfg.humanize = {
+    ...cfg.humanize,
+    enabled: true,
+    replyDelay: { enabled: true, minMs: 0, maxMs: 0, perCharMs: 0, capMs: 0 }
+  };
+  setRuntimeConfig(cfg);
+  const store = new ChatStore(0, { dataDir: dir });
+  const sent = [];
+  const sender = new SendQueue({
+    store,
+    onebot: {
+      selfId: '100',
+      getGroupMemberInfo: async () => ({ shut_up_timestamp: 0 }),
+      sendText: async (_kind, _id, text) => { sent.push(text); return { message_id: sent.length }; }
+    }
+  });
+  await sender.sendTextBatch('group:1', ['今天天气不错，我们出去走走吧。'], {
+    persona: true,
+    voice: { maxChars: 12, maxBubbles: 3, pauseMs: [0, 0] }
+  });
+  assert.ok(sent.length >= 2, `应拆成多条，实际 ${JSON.stringify(sent)}`);
+  assert.equal(sent.join(''), '今天天气不错，我们出去走走吧。');
+  store.close();
+});
+
+it('气泡整形：代码块和链接不被拆坏', async () => {
+  const cfg = baseConfig();
+  cfg.humanize = {
+    ...cfg.humanize,
+    enabled: true,
+    replyDelay: { enabled: true, minMs: 0, maxMs: 0, perCharMs: 0, capMs: 0 }
+  };
+  setRuntimeConfig(cfg);
+  const store = new ChatStore(0, { dataDir: dir });
+  const sent = [];
+  const sender = new SendQueue({
+    store,
+    onebot: {
+      selfId: '100',
+      getGroupMemberInfo: async () => ({ shut_up_timestamp: 0 }),
+      sendText: async (_kind, _id, text) => { sent.push(text); return { message_id: sent.length }; }
+    }
+  });
+  await sender.sendTextBatch('group:1', [
+    '看这个：```js\nconst url = "https://example.com/a/b";\nconsole.log(url);\n```\n链接是 https://example.com/x 自己试。'
+  ], { persona: true, voice: { maxChars: 20, maxBubbles: 3, pauseMs: [0, 0] }, preserveCode: true });
+  const all = sent.join('\n');
+  assert.match(all, /https:\/\/example\.com\/a\/b/);
+  assert.match(all, /https:\/\/example\.com\/x/);
+  assert.ok(sent.every((text) => !text.includes('```')), '围栏应被去掉');
+  store.close();
+});
+
+
+it('气泡整形只作用于人格回复：系统文本（日报/游戏/插件代发）不拆条', async () => {
+  const cfg = baseConfig();
+  cfg.humanize = {
+    ...cfg.humanize,
+    enabled: true,
+    replyDelay: { enabled: true, minMs: 0, maxMs: 0, perCharMs: 0, capMs: 0 }
+  };
+  setRuntimeConfig(cfg);
+  const store = new ChatStore(0, { dataDir: dir });
+  const sent = [];
+  const sender = new SendQueue({
+    store,
+    onebot: {
+      selfId: '100',
+      getGroupMemberInfo: async () => ({ shut_up_timestamp: 0 }),
+      sendText: async (_kind, _id, text) => { sent.push(text); return { message_id: sent.length }; }
+    }
+  });
+  // 不带 persona 的调用方（group-digest / group-game / 插件 send.text 都是这样调的）：
+  // 长报告必须原样一条发出，按卡的每条字数硬拆只会把报表拆烂
+  const first = `今日日报\n第一段。\n第二段。\n第三段。`;
+  const second = '总结：一切正常。';
+  await sender.sendTextBatch('group:1', [first, second], {});
+  assert.equal(sent.length, 2, '系统文本不按气泡上限拆条');
+  assert.equal(sent[0], first);
+  store.close();
+});

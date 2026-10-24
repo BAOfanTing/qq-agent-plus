@@ -13,6 +13,7 @@ import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
 import { StringDecoder } from 'node:string_decoder';
+import zlib from 'node:zlib';
 import { getConfig } from '../core/config.js';
 
 const dnsLookup = dns.promises.lookup;
@@ -200,9 +201,13 @@ export function readBounded(res, maxBytes, asText) {
 }
 
 // 使用已校验的 IP 发起请求（保留 Host/SNI），从根上消除 DNS rebinding。
-function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, headers } = {}) {  return new Promise((resolve, reject) => {
+function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, headers, method = 'GET', body = null, wantSetCookies = false } = {}) {  return new Promise((resolve, reject) => {
     const mod = url.protocol === 'https:' ? https : http;
     const port = url.port || (url.protocol === 'https:' ? 443 : 80);
+    const verb = String(method || 'GET').toUpperCase();
+    const payload = body === null || body === undefined || verb === 'GET' || verb === 'HEAD'
+      ? null
+      : Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8');
     // 调用方只传静态 Accept 这类头（GitHub API 的 raw 内容）；不允许带换行，避免头注入
     const extraHeaders = {};
     for (const [key, value] of Object.entries(headers && typeof headers === 'object' ? headers : {})) {
@@ -216,12 +221,13 @@ function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, head
       hostname: ip,
       port,
       path: url.pathname + url.search,
-      method: 'GET',
+      method: verb,
       headers: {
         host: url.host,
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) qq-agent/1.0',
         accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,image/avif,image/webp,image/*;q=0.8',
         'accept-language': 'zh-CN,zh;q=0.9',
+        ...(payload ? { 'content-length': payload.length } : {}),
         ...extraHeaders
       },
       servername: url.protocol === 'https:' ? url.hostname : undefined,
@@ -237,16 +243,44 @@ function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, head
         return;
       }
       readBounded(res, maxBytes, !asBinary)
-        .then(({ body, truncated }) => resolve({ statusCode, body, truncated, contentType: String(res.headers['content-type'] || '') }))
+.then(({ body, truncated }) => resolve({
+          statusCode, body, truncated,
+          contentType: String(res.headers['content-type'] || ''),
+          contentEncoding: String(res.headers['content-encoding'] || ''),
+          // 默认不带（到处返回 Set-Cookie 是泄漏面）；显式要的调用方（扫码登录 poll）才拿得到
+          ...(wantSetCookies ? { setCookies: res.headers['set-cookie'] || [] } : {})
+        }))
         .catch(reject);
     });
     req.on('timeout', () => req.destroy(new Error(`请求超时：${url.hostname}`)));
     req.on('error', reject);
+    if (payload) req.write(payload);
     req.end();
   });
 }
 
 const MAX_REDIRECTS = 5;
+
+/**
+ * 域名白名单判定：主机名精确命中，或命中列表里的某个父域（`api.example.com` 被 `example.com` 放行）。
+ * 插件的 httpDomains 在**初始 URL 和每一跳重定向**上都要过这道判定 ——
+ * 只查初始 URL 的话，白名单域一个 302 就能把请求（连同 Cookie）带到任意公网站。
+ */
+export function isHostAllowed(hostname, domains) {
+  if (!Array.isArray(domains) || !domains.length) return true;
+  const host = String(hostname || '').toLowerCase().replace(/\.$/, '');
+  return domains.some((raw) => {
+    const domain = String(raw || '').toLowerCase().replace(/\.$/, '');
+    if (!domain) return false;
+    return host === domain || host.endsWith(`.${domain}`);
+  });
+}
+
+function assertAllowedHost(url, domains, label = '地址') {
+  if (!isHostAllowed(url.hostname, domains)) {
+    throw new Error(`${label} ${url.hostname} 不在允许的域名白名单里（跟随重定向时每一跳都会检查）`);
+  }
+}
 
 /**
  * 抓取网页文本（默认 ≤50000 字符），SSRF 全防护（不做内网例外）。
@@ -274,17 +308,79 @@ export async function safeFetch(urlString, { maxBytes = 50000, signal, headers }
   throw new Error('重定向次数过多，已停止');
 }
 
-/** 下载二进制（图片，≤maxBytes 字节），返回 { buffer, contentType }。 */
-export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, signal) {
-  const allowPrivate = getConfig().security?.allowPrivateImageHosts === true;
+/**
+ * 带方法与请求体的安全抓取（插件 v2 用）。GET 之外的请求**不跟随重定向**：
+ * 3xx 之后再带一次凭据（Cookie/Token）去别的地址，等于把凭据交给第一个会发 302 的服务器；
+ * B 站的接口本来也不靠重定向，遇到就如实报错。
+ *
+ * 方法白名单只开 GET/POST：插件生态里没有 PUT/DELETE 的真实需求，
+ * 每多一个动词就多一类"误删远端数据"的失败模式。
+ */
+export async function safeFetchRequest(urlString, {
+  method = 'GET', headers = null, body = null, maxBytes = 50000, signal, decompress = false,
+  allowedDomains = null, allowPrivate = false, withSetCookies = false
+} = {}) {
+  const verb = String(method || 'GET').toUpperCase();
+  if (!['GET', 'POST'].includes(verb)) throw new Error(`不支持的请求方法：${verb}（只允许 GET / POST）`);
+  const payload = body === null || body === undefined ? null : Buffer.from(String(body), 'utf8');
+  if (payload && payload.length > 64 * 1024) throw new Error('请求体超过 64KB 上限');
+  const cap = Math.max(1, Math.floor(Number(maxBytes) || 50000));
   let { url, ip } = await validateFetchUrl(urlString, { allowPrivate });
+  assertAllowedHost(url, allowedDomains, '请求');
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    signal?.throwIfAborted();
-    const result = await requestOnce(url, ip, { asBinary: true, maxBytes: maxBytes + 1, signal });
+    const result = await requestOnce(url, ip, {
+      asBinary: decompress, maxBytes: cap, signal, headers, method: verb, body: payload,
+      wantSetCookies: withSetCookies
+    });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
+      if (verb !== 'GET') throw new Error(`请求被重定向（HTTP ${result.statusCode}）：已停止，避免把凭据带到另一个地址`);
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
       ({ url, ip } = await validateFetchUrl(next, { allowPrivate }));
+      assertAllowedHost(url, allowedDomains, '重定向');
+      continue;
+    }
+    let text = result.body;
+    if (decompress && Buffer.isBuffer(text)) {
+      // 有些接口（B 站弹幕 XML）不看 accept-encoding，照样回 deflate/gzip。
+      // 解压上限按 5 倍封顶：压缩炸弹不能靠一个 40KB 响应把宿主内存打满。
+      const encoded = String(result.contentEncoding || '').toLowerCase();
+      if (encoded.includes('gzip')) text = zlib.gunzipSync(text, { maxOutputLength: cap * 5 });
+      else if (encoded.includes('br')) text = zlib.brotliDecompressSync(text, { maxOutputLength: cap * 5 });
+      else if (encoded.includes('deflate')) {
+        try { text = zlib.inflateSync(text, { maxOutputLength: cap * 5 }); } catch { text = zlib.inflateRawSync(text, { maxOutputLength: cap * 5 }); }
+      }
+      text = Buffer.isBuffer(text) ? text.toString('utf8') : String(text);
+    }
+    return {
+      url: url.toString(),
+      statusCode: result.statusCode,
+      truncated: Boolean(result.truncated),
+      contentType: String(result.contentType || ''),
+      body: text || '',
+      // 扫码登录 poll 用：B 站成功时 Cookie 在 Set-Cookie 里（跨域回跳 URL 的查询串会被对方
+      // 网关拦截/替换，不能依赖）。仅当调用方显式要时才有这个字段。
+      ...(withSetCookies && Array.isArray(result.setCookies) ? { setCookies: result.setCookies } : {})
+    };
+  }
+  throw new Error('重定向次数过多，已停止');
+}
+
+/** 下载二进制（图片，≤maxBytes 字节），返回 { buffer, contentType }。 */
+export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, signal, { allowPrivate = undefined, headers = null, allowedDomains = null } = {}) {
+  // 插件媒体走这里时显式传 allowPrivate:false：图片那条隐私例外只属于管理员配的自建图床，
+  // 不该被第三方插件继承（否则"允许内网图片"= 插件可以摸内网）。
+  const allow = allowPrivate === undefined ? getConfig().security?.allowPrivateImageHosts === true : allowPrivate === true;
+  let { url, ip } = await validateFetchUrl(urlString, { allowPrivate: allow });
+  assertAllowedHost(url, allowedDomains, '下载');
+  for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    signal?.throwIfAborted();
+    const result = await requestOnce(url, ip, { asBinary: true, maxBytes: maxBytes + 1, signal, headers });
+    if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
+      if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
+      const next = new URL(result.redirect, url).toString();
+      ({ url, ip } = await validateFetchUrl(next, { allowPrivate: allow }));
+      assertAllowedHost(url, allowedDomains, '重定向');
       continue;
     }
     if (result.statusCode !== 200) throw new Error(`HTTP ${result.statusCode}`);

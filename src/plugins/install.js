@@ -732,6 +732,8 @@ export function normalizePluginIndexEntry(item, { apiVersion = PLUGIN_API_VERSIO
     readme: String(item.readme ?? '').slice(0, 4000),            // 详情页正文（纯文本，界面转义后按段落显示）
     readmeUrl: httpUrl(item.readmeUrl),
     changelogUrl: httpUrl(item.changelogUrl),
+    // 更新日志正文（可选）：详情页直接渲染；没有就只显示链接
+    changelog: String(item.changelog ?? '').slice(0, 4000),
     category: String(item.category ?? '').slice(0, 40),
     size: Number.isFinite(Number(item.size)) && Number(item.size) > 0 ? Math.floor(Number(item.size)) : 0,
     // 下面两个由索引侧的定时任务写回（我们不猜、也不让作者手填）：下载量与最后更新时间
@@ -758,9 +760,9 @@ export function normalizePluginIndexEntry(item, { apiVersion = PLUGIN_API_VERSIO
     // 被撤回的条目**留着**（界面要能显示"它被撤回了、为什么"），但一律标成装不了
     entry.compatible = false;
     entry.reason = `已被撤回：${entry.revoked}`;
-  } else if (declaredApi !== null && (!Number.isInteger(declaredApi) || declaredApi !== apiVersion)) {
+  } else if (declaredApi !== null && (!Number.isInteger(declaredApi) || declaredApi < 1 || declaredApi > apiVersion)) {
     entry.compatible = false;
-    entry.reason = `插件要求 apiVersion ${Number.isInteger(declaredApi) ? declaredApi : JSON.stringify(item.apiVersion)}，本机只支持 ${apiVersion}`;
+    entry.reason = `插件要求 apiVersion ${Number.isInteger(declaredApi) ? declaredApi : JSON.stringify(item.apiVersion)}，本机支持 1-${apiVersion}`;
   } else if (minVersion) {
     // 归一化前导 v（作者最自然的写法之一）：**不能因为形状不标准就跳过门控** ——
     // 那等于"拼错一个字符就把闸门拆了"。归一化后还不是版本号 → 明确标成装不了（fail-closed）。

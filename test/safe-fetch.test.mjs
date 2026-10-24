@@ -81,3 +81,44 @@ test('readBounded：正好等于上限（自然读尽）不标 truncated；超�
   assert.equal(over.destroyCalled, true, '超限必须中断连接');
   assert.deepEqual(await p2, { body: '0123456789', truncated: true });
 });
+
+test('域名白名单：初始 URL 与每一跳重定向都复检（isHostAllowed + 实际 302）', async () => {
+  const { safeFetchRequest, safeFetchBinary, isHostAllowed } = await import('../src/llm/safe-fetch.js');
+
+  // 纯函数口径：子域放行、同后缀不同域拒绝、大小写与结尾点归一
+  assert.equal(isHostAllowed('api.bilibili.com', ['bilibili.com']), true);
+  assert.equal(isHostAllowed('evilbilibili.com', ['bilibili.com']), false, '同后缀不同域不能放行');
+  assert.equal(isHostAllowed('BILIBILI.COM.', ['bilibili.com']), true);
+  assert.equal(isHostAllowed('x.com', []), true, '空名单 = 不启用域名限制');
+
+  // 真实 302：127.0.0.1 在名单里，localhost 不在 —— 重定向到 localhost 必须被拦
+  let bHits = 0;
+  const serverB = http.createServer((_req, res) => { bHits += 1; res.writeHead(200); res.end('LEAK'); });
+  const serverA = http.createServer((_req, res) => {
+    res.writeHead(302, { location: `http://localhost:${serverB.address().port}/x` });
+    res.end();
+  });
+  // 不指定 host：默认绑 ::（双栈），127.0.0.1 与 localhost(→::1) 都能到达 ——
+  // 本机 localhost 优先解析成 ::1，只绑 127.0.0.1 的对照组会连接被拒
+  await new Promise((resolve) => serverA.listen(0, resolve));
+  await new Promise((resolve) => serverB.listen(0, resolve));
+  const aUrl = `http://127.0.0.1:${serverA.address().port}/start`;
+  await assert.rejects(
+    safeFetchRequest(aUrl, { allowPrivate: true, allowedDomains: ['127.0.0.1'] }),
+    /白名单/
+  );
+  await assert.rejects(
+    safeFetchBinary(aUrl, 1000, undefined, { allowPrivate: true, allowedDomains: ['127.0.0.1'] }),
+    /白名单/
+  );
+  assert.equal(bHits, 0, '被拦的重定向不能碰到达端');
+  // 名单覆盖两台主机时放行（对照组：证明拒绝确实来自白名单而不是别的守卫）
+  const allowed = await safeFetchRequest(aUrl, { allowPrivate: true, allowedDomains: ['127.0.0.1', 'localhost'] });
+  assert.equal(allowed.statusCode, 200);
+  assert.equal(allowed.body, 'LEAK');
+  serverA.close();
+  serverB.close();
+  // Node 19+ 的默认 agent 开 keep-alive：不掐掉存量连接的话，测试进程会因服务器句柄未释放而挂住
+  serverA.closeAllConnections?.();
+  serverB.closeAllConnections?.();
+});

@@ -362,6 +362,12 @@ export const DEFAULT_CONFIG = {
       enabled: true,
       blockSevere: true
     },
+    // 气泡整形：模型只给一段时按句子拆成 1-3 条；已分好的数组不重排。
+    shape: {
+      enabled: true,
+      maxBubbles: 3,
+      maxChars: 60
+    },
     // 精力/心情/作息影响语气（同一人设跨群共享；只写一句提示词，不调模型）。
     personaState: {
       enabled: true,
@@ -479,6 +485,10 @@ export const DEFAULT_CONFIG = {
   // 每日群聊记忆总结与 QQ 空间动态
   dailyMoments: {
     enabled: false,
+    // self=只写人设自己的观点/兴趣；group=从群聊候选瞬间取材；mixed=人设为主、群聊作灵感
+    source: 'self',
+    // false=定时只生成草稿，等管理员在控制台点发布；true=定时直接发空间
+    autoPublish: false,
     hour: 23,                    // 上海时间
     minute: 30,
     scheduleWindows: null,       // null 保留固定时刻；数组为 {start, end, count}

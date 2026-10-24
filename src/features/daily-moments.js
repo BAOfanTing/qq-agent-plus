@@ -88,6 +88,8 @@ function normalizedConfig(cfg = getConfig().dailyMoments || {}) {
     : 4;
   return {
     enabled: cfg.enabled === true,
+    source: ['self', 'group', 'mixed'].includes(String(cfg.source || '')) ? String(cfg.source) : 'self',
+    autoPublish: cfg.autoPublish === true,
     hour: Math.min(23, Math.max(0, Number(cfg.hour) || 0)),
     minute: Math.min(59, Math.max(0, Number(cfg.minute) || 0)),
     scheduleWindows: normalizeMomentWindows(cfg.scheduleWindows),
@@ -269,6 +271,60 @@ function buildMomentCandidates(groups, max = 6) {
  * 判断错一次的代价只是让模型重写一次（调用方把重写上限设为一次、第二次照收），
  * 不会因为风格判断把当天的发布卡死。
  */
+/**
+ * 诚实边界硬闸（self 模式）：正文断言了“我”的现实行动/现场，而 self 素材里根本没有
+ * 这些事实 —— 提示词管不住的，这里拦一次让模型改成观点/感受（只重写一次，第二次照收，
+ * 与纪事体同口径：风格判断不能把当天的发布卡死）。
+ * 观点（“我觉得/我想去”）不算；带明确过去时间的动作（今天/刚/上周 去/吃/买/见）才算。
+ */
+/** 当前人设的兴趣库（roles/interests.json，self 模式的素材引擎）。读不到给空，不挡发布。 */
+function loadPersonaInterests() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(new URL('../../roles/interests.json', import.meta.url), 'utf8'));
+    const perCard = raw && typeof raw === 'object' ? raw : {};
+    const templateId = String(getConfig().persona?.templateId || '').trim();
+    const hit = templateId && perCard[templateId] ? perCard[templateId] : null;
+    return hit ? { topics: hit.topics || [], stances: hit.stances || [] } : { topics: [], stances: [] };
+  } catch {
+    return { topics: [], stances: [] };
+  }
+}
+
+/**
+ * self 查重：与最近已发动态的相似度（字符 4-gram Jaccard）。过近 = 换汤不换药，
+ * 拒一次让模型换角度重写；没有历史或历史很短时直接放行。
+ */
+export function similarityReason(text, previous = []) {
+  const t = String(text || '').replace(/\s+/g, '');
+  if (t.length < 12 || !Array.isArray(previous) || !previous.length) return '';
+  const grams = (str) => {
+    const set = new Set();
+    for (let i = 0; i <= str.length - 4; i += 1) set.add(str.slice(i, i + 4));
+    return set;
+  };
+  const mine = grams(t);
+  for (const prev of previous) {
+    const text = String(prev || '').replace(/\s+/g, '');
+    if (text.length < 12) continue;
+    const theirs = grams(text);
+    if (!theirs.size) continue;
+    let hit = 0;
+    for (const g of mine) if (theirs.has(g)) hit += 1;
+    if (hit / Math.max(1, Math.min(mine.size, theirs.size)) > 0.45) {
+      return '与最近发过的动态太像（大段同样的表达）';
+    }
+  }
+  return '';
+}
+
+export function fabricationReason(text) {
+  const t = String(text || '');
+  if (!t.trim()) return '';
+  const action = /(今天|刚|刚刚|上午|下午|晚上|昨天|上周|周末)[^。！？\n]{0,12}?(去|到)了|我(今天|刚|刚刚)[^。！？\n]{0,10}?(吃了|买了|看了|见了|遇到|拿到|做了)|我刚(吃完|到家|下班|跑完)/;
+  if (action.test(t)) return '断言了现实行动（去了/吃了/买了这类“我做过”的现场）';
+  return '';
+}
+
 export function dayRecapReason(text) {
   const t = String(text || '');
   if (!t.trim()) return '';
@@ -339,6 +395,24 @@ function sanitizeDecision(raw, snapshot, cfg, { allowRecap = false } = {}) {
   if (!cfg.allowImages && source.imageIds.length) fail('配图已关闭，请使用空 imageIds');
   const imageIds = [...new Set(source.imageIds)];
   const content = decision === 'publish' ? redactPublicContent(source.content, snapshot) : '';
+  if (decision === 'publish' && snapshot.source === 'self') {
+    const fabricated = fabricationReason(content);
+    if (fabricated) {
+      const error = momentError('MOMENT_DECISION_INVALID',
+        `正文${fabricated}，但今天没有任何现实素材。改成观点、感受或打算（“想吃”“想去”），不要写成已经发生的事。`, 422);
+      error.fabricationRejected = true;
+      throw error;
+    }
+  }
+  if (decision === 'publish' && snapshot.source === 'self') {
+    const dup = similarityReason(content, (snapshot.recentPublished || []));
+    if (dup) {
+      const error = momentError('MOMENT_DECISION_INVALID',
+        `正文${dup}。换个角度重写：换一个话题或换一种说法，不要沿用上次的大段表达。`, 422);
+      error.duplicateRejected = true;
+      throw error;
+    }
+  }
   if (decision === 'publish' && !allowRecap) {
     const recap = dayRecapReason(content);
     if (recap) {
@@ -539,7 +613,10 @@ export class DailyMomentsManager {
     if (cfg.enabled) {
       const dayKey = this.deferredDay || scheduledDayAt(this.now(), cfg, startup);
       this.deferredDay = '';
-      const blocked = dayKey && this.#blockingRecord({ dayKey, source: 'scheduled' });
+      const draft = dayKey && !cfg.autoPublish
+        ? this.state.records.find((record) => record.dayKey === dayKey && record.status === 'preview')
+        : null;
+      const blocked = dayKey && (this.#blockingRecord({ dayKey, source: 'scheduled' }) || draft);
       if (dayKey && (blocked || dayKey === this.fixedSkipDay)) {
         this.#scheduleCheck({
           dayKey, status: blocked ? 'blocked' : 'missed',
@@ -553,7 +630,7 @@ export class DailyMomentsManager {
         });
       } else if (dayKey) {
         try {
-          await this.run({ dayKey, publish: true, source: startup ? 'startup-catchup' : 'scheduled' });
+          await this.run({ dayKey, publish: cfg.autoPublish === true, source: startup ? 'startup-catchup' : 'scheduled' });
         } catch (error) {
           // MOMENT_BUSY（腾讯侧忙）与 TIME_CONTROL_INACTIVE 同样要"保持到期"：
           // 丢了 deferredDay 就等于跳过今天（窗口模式本来就把它判 pending，
@@ -624,7 +701,7 @@ export class DailyMomentsManager {
           const result = await this.run({
             // 用槽位自己的 dayKey：跨午夜的槽在 0 点后执行时，todayKey 已是新的一天，
             // 查重/记录会挂错日期（2026-10-10 审查 C4）
-            dayKey: slot.dayKey, publish: true,
+            dayKey: slot.dayKey, publish: cfg.autoPublish === true,
             source: startup ? 'startup-catchup' : 'scheduled', scheduleSlot: { ...slot }
           });
           slot.status = result.record.status;
@@ -733,7 +810,8 @@ export class DailyMomentsManager {
       releaseGroupGuards = watchTimeWindow((error) => this.controller?.abort(error), timeScopes);
       this.controller.signal.throwIfAborted();
       record.groupCount = snapshot.groups.length;
-      if (!snapshot.groups.length) {
+      record.contentSource = snapshot.source;
+      if (!snapshot.groups.length && snapshot.source !== 'self') {
         Object.assign(record, {
           status: 'skipped',
           decision: 'skip',
@@ -924,6 +1002,32 @@ export class DailyMomentsManager {
     }
   }
 
+  /** 编辑预览草稿的正文（发布前的人工修正）。只允许 preview+publish 决策的草稿。 */
+  async editDraft(id, { content } = {}) {
+    return this.#exclusive('edit-draft', async () => {
+      const record = this.state.records.find((item) => item.id === id);
+      if (!record) throw momentError('MOMENT_NOT_FOUND', '草稿不存在', 404);
+      if (record.status !== 'preview' || record.decision !== 'publish') {
+        throw momentError('MOMENT_NOT_DRAFT', '只有待发布的草稿可以编辑', 409);
+      }
+      const text = String(content ?? '').trim();
+      if (!text) throw momentError('MOMENT_DECISION_INVALID', '正文不能为空', 422);
+      if (text.length > 2000) throw momentError('MOMENT_DECISION_INVALID', '正文太长（上限 2000 字）', 422);
+      record.content = text;
+      record.editedAt = this.now();
+      record.editedBy = 'manual';
+      // 编辑后的正文同样要过诚实边界（人也会顺手编；闸门不区分谁写的）
+      if (record.contentSource === 'self') {
+        const fabricated = fabricationReason(text);
+        if (fabricated) {
+          throw momentError('MOMENT_DECISION_INVALID', `编辑后的正文${fabricated}，self 模式不发现实行动断言`, 422);
+        }
+      }
+      this.#saveRecord(record);
+      return { ok: true, record };
+    });
+  }
+
   async publishDraft(id, {
     force = false,
     confirmDuplicateRisk = false
@@ -1043,6 +1147,23 @@ export class DailyMomentsManager {
     const start = dayStartFromKey(dayKey);
     const end = start + DAY_MS;
     const rootConfig = getConfig();
+    if (cfg.source === 'self') {
+      return {
+        dayKey,
+        start,
+        end,
+        source: 'self',
+        selfNames: [rootConfig.persona?.botName, rootConfig.persona?.selfNickname, this.onebot.selfNickname]
+          .filter(Boolean),
+        groups: [],
+        momentCandidates: [],
+        imageMap: new Map(),
+        imageCandidates: [],
+        // 查重数据源：最近 5 条已发正文（self 模式不收集群聊，但已发历史要防自我重复）
+        recentPublished: this.state.records.filter((record) => record.status === 'published')
+          .slice(0, 5).map((record) => record.content)
+      };
+    }
     // 白名单/黑名单口径只留 chatAllowed 一处：这里原来手抄了一份 allow 的判断、**漏了 deny.groups**
     // （deny 没有界面控件，只能手改 config.json）** —— 被管理员屏蔽的群，当天消息照样进模型提示词。
     // #assertPublishAllowed 用的也是 chatAllowed，但它在模型跑完之后才抛，等于只挡了发布没挡外发。
@@ -1161,8 +1282,11 @@ export class DailyMomentsManager {
       dayKey,
       start,
       end,
+      source: cfg.source,
       selfNames: [rootConfig.persona?.botName, rootConfig.persona?.selfNickname, this.onebot.selfNickname]
         .filter(Boolean),
+      recentPublished: this.state.records.filter((record) => record.status === 'published')
+        .slice(0, 5).map((record) => record.content),
       groups,
       momentCandidates: buildMomentCandidates(groups),
       imageMap,
@@ -1181,15 +1305,40 @@ export class DailyMomentsManager {
     const recentPosts = this.state.records.filter((record) => record.status === 'published')
       .slice(0, 5).map((record) => ({ day: record.dayKey, content: record.content }));
     const groupsForPrompt = snapshot.groups.map(({ messages, ...group }) => group);
+    const source = snapshot.source === 'self' ? 'self' : (snapshot.source === 'mixed' ? 'mixed' : 'group');
+    // self 的素材引擎：人设兴趣库（roles/interests.json）＋ 可选研究由头（配置里开了搜索就允许搜一个真实话题再写观点）
+    const interests = loadPersonaInterests();
+    const materialLines = source === 'self'
+      ? [
+        '【自己的动态】（不引用群聊；从你的兴趣、观点或此刻在想的事里挑一件。可以表达感受、观察、疑问或吐槽，不虚构现实行动和现场。）',
+        `【你的兴趣与立场（参考，不是任务）】${JSON.stringify(interests)}`,
+        rootConfig.webSearch?.enabled !== false ? '可以先用一次搜索找一个今天真实发生的话题当由头（搜到的事实照实写，别编）。' : '没有外部素材也没关系，一条想法就够。'
+      ]
+      : source === 'mixed'
+        ? [
+          '【自己的动态】以人设为主：写你自己的兴趣、观点或此刻在想的事。',
+          `【你的兴趣与立场（参考）】${JSON.stringify(interests)}`,
+          '【群聊材料】最多点缀一句（比如"群里今天聊到X，我倒觉得…"），禁止转述或汇总群聊。',
+          JSON.stringify({ candidates: snapshot.momentCandidates.slice(0, 3), groups: groupsForPrompt })
+        ]
+        : [
+          '【群聊材料】（候选瞬间 + 群背景；只挑一个瞬间写，不需要转述或汇总）',
+          JSON.stringify({ candidates: snapshot.momentCandidates, groups: groupsForPrompt })
+        ];
+    const summaryLines = source === 'self'
+      ? ['【内部群摘要】本次没有收集群聊，提交时 groupSummaries 必须为空数组 []。']
+      : ['【内部群摘要】提交时按 chatKey 原样填回 groupSummaries；只是留档，不要写进正文。',
+        JSON.stringify(snapshot.groups.map((group) => ({ chatKey: group.chatKey, groupName: group.groupName })))];
     const userPrompt = [
       `【上海时间】${formatFullTime(this.now())}`,
       `【总结日期】${snapshot.dayKey}`,
+      `【内容来源】${source === 'self' ? '人设自己的动态' : source === 'mixed' ? '人设为主，群聊见闻可选' : '群聊见闻'}`,
       `【可忽略的灵感】${style}。这不是规定的文风；与人设或素材不合适就不用。`,
       `【预算】最多研究 ${cfg.maxResearchCalls} 次；最多配图 ${cfg.maxImages} 张。`,
       '【最近已发动态】',
       JSON.stringify(recentPosts),
-      '【群聊材料】（候选瞬间 + 群背景；只挑一个瞬间写，不需要转述或汇总）',
-      JSON.stringify({ candidates: snapshot.momentCandidates, groups: groupsForPrompt }),
+      ...materialLines,
+      ...summaryLines,
       '【可选配图】',
       JSON.stringify(snapshot.imageCandidates)
     ].join('\n\n');

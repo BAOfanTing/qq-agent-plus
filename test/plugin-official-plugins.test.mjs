@@ -19,7 +19,7 @@ const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-official-plugins-'));
 process.env.QQ_AGENT_DATA_DIR = dataDir;
 process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* 句柄占用就算了 */ } });
 
-const { parsePluginManifest } = await import('../src/plugins/manifest.js');
+const { parsePluginManifest, SUPPORTED_API_VERSIONS } = await import('../src/plugins/manifest.js');
 const { PluginHost } = await import('../src/plugins/host.js');
 
 // 通用护栏（manifest 合法 / 不自己发请求 / 请求都走 cap.http.request）对**全部官方插件**跑，
@@ -54,7 +54,7 @@ test('官方插件：manifest 合法，id 与目录名一致，联网的都声�
   for (const id of IDS) {
     const manifest = manifestOf(id);
     assert.equal(manifest.id, id, 'id 必须与目录名一致');
-    assert.equal(manifest.apiVersion, 1, 'apiVersion 必须是宿主支持的 1');
+    assert.ok(SUPPORTED_API_VERSIONS.includes(manifest.apiVersion), `apiVersion 必须是宿主支持的 ${SUPPORTED_API_VERSIONS.join('/')}`);
     assert.ok(manifest.tools.length >= 1, `${id} 至少要声明一个工具（否则装上也没用）`);
     // 这五个都要联网；漏声明 http 的运行期表现是"越权被拒"，装的时候就要发现
     assert.ok(manifest.capabilities.includes('http'), `${id} 要联网就必须声明 http 能力`);

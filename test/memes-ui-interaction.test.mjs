@@ -4,7 +4,7 @@ import { Window } from 'happy-dom';
 
 const window = new Window();
 globalThis.window = window;
-globalThis.document = window.document;
+const document = globalThis.document = window.document;
 globalThis.HTMLElement = window.HTMLElement;
 
 const { bindExtensionSettings, hydrateExtensionStatus, renderMemesSection } = await import('../ui/pages/settings-extensions.js');

@@ -147,9 +147,22 @@ function renderDailyMomentsSection(c) {
     end: `${String((hour + 1) % 24).padStart(2, '0')}:${minute}`, count: 1
   }];
   return `
-    <h3 id="settings-moments">每日动态</h3>
+    <h3 id="settings-moments">QQ 空间动态</h3>
     <div class="checkbox-row"><input type="checkbox" id="cfg-moments-enabled" ${moments.enabled === true ? 'checked' : ''} />
-      <label for="cfg-moments-enabled">启用每日群聊总结与说说决策</label></div>
+      <label for="cfg-moments-enabled">启用 QQ 空间动态</label></div>
+    <div class="field"><label for="cfg-moments-source">内容来源</label>
+      <select id="cfg-moments-source">
+        <option value="self" ${String(moments.source || 'self') === 'self' ? 'selected' : ''}>人设自己的动态（不收集群聊）</option>
+        <option value="group" ${moments.source === 'group' ? 'selected' : ''}>群聊见闻（从群里挑一个瞬间）</option>
+        <option value="mixed" ${moments.source === 'mixed' ? 'selected' : ''}>混合（人设为主，群聊作灵感）</option>
+      </select></div>
+    <div class="field"><label for="cfg-moments-autopublish">发布方式</label>
+      <select id="cfg-moments-autopublish">
+        <option value="draft" ${moments.autoPublish !== true ? 'selected' : ''}>只生成草稿，等我确认</option>
+        <option value="auto" ${moments.autoPublish === true ? 'selected' : ''}>自动发布到 QQ 空间</option>
+      </select>
+      <div class="hint">默认只生成草稿；自动发布会走现有发布闸门，失败不会重试。</div>
+    </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-moments-catchup" ${moments.startupCatchup !== false ? 'checked' : ''} />
       <label for="cfg-moments-catchup" id="cfg-moments-catchup-label">${randomMode ? '重启后在未结束的范围内补跑' : '服务错过固定时刻后补跑'}</label></div>
     <div class="field"><label for="cfg-moments-schedule-mode">定时方式（上海时间）</label>
@@ -550,6 +563,15 @@ function renderMomentSchedule(status) {
     </details>` : ''}`;
 }
 
+/** 编辑结果提示：写进任务状态区（本页没有全局 setStatus；模块图守卫禁止跨文件全局引用）。 */
+function setEditNote(text) {
+  const node = document.getElementById('moment-edit-note')
+    || (() => { const el = document.createElement('div'); el.id = 'moment-edit-note'; el.className = 'hint'; return el; })();
+  node.textContent = text;
+  const box = document.querySelector('.daily-moments-status, [id^="daily-moments"]');
+  if (box && !node.isConnected) box.prepend(node);
+}
+
 async function loadDailyMomentsStatus() {
   const box = $('#daily-moments-status');
   if (!box) return;
@@ -580,7 +602,9 @@ async function loadDailyMomentsStatus() {
       </div>
       ${renderMomentSchedule(status)}
       ${blockingRecord && blockingRecord.id !== latest?.id ? `<div class="hint">有一条「${esc(momentStatusLabel(blockingRecord))}」的记录（${esc(blockingRecord.dayKey || '-')}）正在挡住所有时段的发布；下面的人工确认/核对按钮针对这条记录。</div>` : ''}
-      ${latest?.content ? `<div class="field"><label>正文</label><div class="daily-moments-content">${esc(latest.content)}</div></div>` : ''}
+      ${latest?.content ? `<div class="field"><label>正文${publishable ? ' <button type="button" class="btn btn-small" id="moment-edit-btn">编辑</button>' : ''}</label>
+        <div class="daily-moments-content" data-moment-view>${esc(latest.content)}</div>
+        ${publishable ? `<textarea id="moment-edit-area" rows="5" maxlength="2000" style="display:none;width:100%">${esc(latest.content)}</textarea>` : ''}</div>` : ''}
       ${latest?.reason ? `<div class="field"><label>决定理由</label><div>${esc(latest.reason)}</div></div>` : ''}
       ${latest?.error ? `<div class="moment-error" role="alert">${esc(latest.error)}</div>` : ''}
       ${latest?.tid ? `<div class="field"><label>说说 ID</label><code>${esc(latest.tid)}</code></div>` : ''}
@@ -648,6 +672,30 @@ async function loadDailyMomentsStatus() {
       }
     };
     $('#moment-publish-draft')?.addEventListener('click', () => recordAction('publish'));
+    // 编辑草稿：切换到 textarea，保存走 /edit；成功后刷新状态面板
+    $('#moment-edit-btn')?.addEventListener('click', () => {
+      const area = $('#moment-edit-area');
+      const view = box.querySelector('[data-moment-view]');
+      if (!area || !view) return;
+      const editing = area.style.display !== 'none';
+      area.style.display = editing ? 'none' : 'block';
+      view.style.display = editing ? 'block' : 'none';
+      $('#moment-edit-btn').textContent = editing ? '编辑' : '取消编辑';
+      if (!editing) area.focus();
+    });
+    $('#moment-edit-area')?.addEventListener('change', async (event) => {
+      const content = String(event.target.value || '').trim();
+      if (!content || content === latest?.content) return;
+      try {
+        await api('/api/daily-moments/records/' + encodeURIComponent(latest.id) + '/edit', {
+          method: 'POST', body: JSON.stringify({ content })
+        });
+        setEditNote('草稿已修改（记得发布前再看一眼）');
+        await loadDailyMomentsStatus();
+      } catch (error) {
+        setEditNote(`保存失败：${error?.message || error}`);
+      }
+    });
     $('#moment-reconcile')?.addEventListener('click', () => recordAction('reconcile', unresolvedRecord?.id));
     // 自动核对（reconcile）在空间里找不到那条说说时，记录会一直停在待核对并挡住所有
     // 时段的发布；这两个按钮是人工终局：确认未发出（解除阻断）或确认已发出（保持阻断）。

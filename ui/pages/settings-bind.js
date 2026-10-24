@@ -25,7 +25,7 @@ import {
 } from './persona.js';
 import { saveConfig } from './settings-save.js';
 import { bindImageGenPreset, bindTtsControls } from './settings-voice.js';
-import { bindHumanizePreset, bindProactiveWindowEditor, loadHumanizeState } from './chat.js';
+import { bindHumanizePreset, bindHumanizeRecommend, bindProactiveWindowEditor, loadHumanizeState } from './chat.js';
 import { bindSearchTest } from './search-test.js';
 import { hydrateExtensionStatus } from './settings-extensions.js';
 import {
@@ -238,7 +238,7 @@ function bindSettingsEvents(c) {
   bindSettingsModelsAndKeys(c);
   bindSettingsPersonaAndVision();
   bindProactiveWindowEditor();
-  bindHumanizePreset(); if (state.settingsSection === 'chat') loadHumanizeState();
+  bindHumanizePreset(); bindHumanizeRecommend(); if (state.settingsSection === 'chat') loadHumanizeState();
 }
 
 // ── 设置页绑定·第 1/4 段：保存按钮 + 实验/动态/语音三个分区块 ──

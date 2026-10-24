@@ -30,43 +30,84 @@ export function normalizeBehaviorProfile(value) {
 // 用相对模块 URL 读取，不依赖启动工作目录；部署时必须带上 roles/（完整同步会包含）。
 const readRole = (file) => readFileSync(new URL(`../roles/${file}`, import.meta.url), 'utf8').trim();
 
+// 每张卡的声音参数（气泡长度/条数/间隔）：让"卡里写的短句"和实际发出去的长度一致。
+// 文件缺失或某项写坏都回落默认值 —— 声音参数只是发送节奏，不该让整张卡加载失败。
+const DEFAULT_VOICE = { maxChars: 60, maxBubbles: 3, pauseMs: [600, 1800] };
+const VOICE_PROFILES = (() => {
+  try {
+    const raw = JSON.parse(readFileSync(new URL('../roles/voice-profiles.json', import.meta.url), 'utf8'));
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch {
+    return {};
+  }
+})();
+
+function normalizeVoice(profile) {
+  if (!profile || typeof profile !== 'object') return { ...DEFAULT_VOICE, pauseMs: [...DEFAULT_VOICE.pauseMs] };
+  const maxChars = Number(profile.maxChars);
+  const maxBubbles = Number(profile.maxBubbles);
+  const pause = Array.isArray(profile.pauseMs) ? profile.pauseMs.map(Number).filter(Number.isFinite) : [];
+  const pauseMs = pause.length >= 2
+    ? [Math.max(0, Math.min(pause[0], pause[1])), Math.min(30000, Math.max(pause[0], pause[1]))]
+    : [...DEFAULT_VOICE.pauseMs];
+  return {
+    maxChars: Number.isFinite(maxChars) ? Math.max(10, Math.min(2000, Math.round(maxChars))) : DEFAULT_VOICE.maxChars,
+    maxBubbles: Number.isFinite(maxBubbles) ? Math.max(1, Math.min(8, Math.round(maxBubbles))) : DEFAULT_VOICE.maxBubbles,
+    pauseMs
+  };
+}
+
 export const PERSONAS = {
   xiaojingyu: {
     name: '小鲸鱼（默认）',
     behaviorProfile: 'legacy',
-    text: readRole('xiaojingyu.md')
+    text: readRole('xiaojingyu.md'),
+    voice: normalizeVoice(VOICE_PROFILES.xiaojingyu)
   },
   duzui_sunyou: {
     name: '损友（毒舌吐槽）',
     behaviorProfile: 'legacy',
-    text: readRole('duzui-sunyou.md')
+    text: readRole('duzui-sunyou.md'),
+    voice: normalizeVoice(VOICE_PROFILES.duzui_sunyou)
   },
   wenrou_peiliao: {
     name: '温柔陪聊（知心）',
     behaviorProfile: 'grounded',
-    text: readRole('wenrou-peiliao.md')
+    text: readRole('wenrou-peiliao.md'),
+    voice: normalizeVoice(VOICE_PROFILES.wenrou_peiliao)
   },
   jishu_zhai: {
     name: '技术宅（自建服务）',
     behaviorProfile: 'grounded',
-    text: readRole('jishu-zhai.md')
+    text: readRole('jishu-zhai.md'),
+    voice: normalizeVoice(VOICE_PROFILES.jishu_zhai)
   },
   maoniang: {
     name: '猫娘（二次元）',
     behaviorProfile: 'legacy',
-    text: readRole('maoniang.md')
+    text: readRole('maoniang.md'),
+    voice: normalizeVoice(VOICE_PROFILES.maoniang)
   },
   lezi_ren: {
     name: '乐子人（抽象梗王）',
     behaviorProfile: 'legacy',
-    text: readRole('lezi-ren.md')
+    text: readRole('lezi-ren.md'),
+    voice: normalizeVoice(VOICE_PROFILES.lezi_ren)
   },
   xuexi_dazi: {
     name: '学习搭子（资料整理）',
     behaviorProfile: 'grounded',
-    text: readRole('xuexi-dazi.md')
+    text: readRole('xuexi-dazi.md'),
+    voice: normalizeVoice(VOICE_PROFILES.xuexi_dazi)
   }
 };
+
+/** 当前生效的人设对应的声音参数；自定义卡（没有 templateId）返回 null，走平台默认。 */
+export function voiceForPersona(persona) {
+  const id = String(persona?.templateId || '').trim();
+  if (!id) return null;
+  return builtinPersonaTemplate(id)?.voice || null;
+}
 
 /** 内置卡 id 列表（控制台与校验用）。 */
 export const PERSONA_TEMPLATE_IDS = Object.keys(PERSONAS);

@@ -121,3 +121,10 @@ test('群梗库：控制台有添加/列表/删除入口，并接到 API', () =>
   assert.match(read('src/console/app.js'), /'\/api\/memes'/);
   assert.match(read('src/memes/store.js'), /export function rememberMeme/);
 });
+
+test('QQ空间：内容来源与草稿/自动发布接到保存端', () => {
+  assert.match(save, /source: \['self', 'group', 'mixed'\]/);
+  assert.match(save, /autoPublish:/);
+  assert.match(moments, /id="cfg-moments-source"/);
+  assert.match(moments, /id="cfg-moments-autopublish"/);
+});

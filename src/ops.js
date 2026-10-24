@@ -1004,6 +1004,13 @@ async function auditServer(args) {
       const onebot = data.onebot || {};
       const orchestrator = data.orchestrator || {};
       noteLine(`OneBot: connected=${onebot.connected} error=${JSON.stringify(onebot.error ?? null)} self=${onebot.self?.userId ?? '-'}`);
+      // 连接还在、心跳/事件停了 = 半开连接或上游卡死。只看 connected 会把这种情况当正常。
+      const lastBeat = Number(onebot.lastHeartbeatAt) || Number(onebot.lastEventAt) || 0;
+      if (onebot.connected && lastBeat && Date.now() - lastBeat > 10 * 60_000) {
+        badWarn(`OneBot 已 ${Math.round((Date.now() - lastBeat) / 60_000)} 分钟没有心跳/事件（连接仍在，可能已半开）`);
+      } else {
+        noteLine(`OneBot 入站: 最后事件 ${lastBeat ? new Date(lastBeat).toLocaleString() : '尚未收到'}，最后心跳 ${onebot.lastHeartbeatAt ? new Date(onebot.lastHeartbeatAt).toLocaleString() : '尚未收到'}`);
+      }
       noteLine(`编排器: paused=${orchestrator.paused} mode=${orchestrator.mode} 运行中=${orchestrator.running} 并发上限=${orchestrator.maxConcurrentRuns}`);
       noteLine(`今日用量: ${data.usage?.totalTokens} tokens / ${data.usage?.runs} 次运行`);
       const incidents = data.incidentPilot?.counts || {};

@@ -204,7 +204,7 @@ test('packPluginDir：坏插件逐条拒，且不在输出目录留下任何东�
     },
     {
       name: 'manifest 过不了校验（apiVersion 不认识）',
-      build: (dir) => makePlugin(dir, { manifest: { apiVersion: 2 } }),
+      build: (dir) => makePlugin(dir, { manifest: { apiVersion: 99 } }),
       code: 'E_MANIFEST',
       match: /apiVersion/
     },

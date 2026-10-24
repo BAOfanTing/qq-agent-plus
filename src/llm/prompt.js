@@ -10,6 +10,7 @@
 // 行为规则全部移植自 qq-bridge 的二代仿真 preset（qq-chat-v2），去掉了
 // 沉睡/唤醒/等待机制（由编排器的"已读/未读驱动"取代）。
 
+import { readFileSync } from 'node:fs';
 import { asrAvailable, getConfig, imageGenAvailable } from '../core/config.js';
 import { platformGateAllowed, platformQuotaLimit } from '../core/platform-gates.js';
 import { visionEnabled, stickerVisionEnabled } from './vision-scan.js';
@@ -27,6 +28,7 @@ import {
 export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider };
 import { formatFullTime, formatShortTime, quotePrefixFor, safeSlice, sanitizeUserText, resolveSelfName } from '../core/util.js';
 import { displayNameOf } from '../core/display-name.js';
+import { voiceForPersona } from '../personas.js';
 import { buildStickerContext, buildStickerStrategyHint } from '../onebot/stickers.js';
 
 // ── 系统提示 ─────────────────────────────────────────────────────────────
@@ -522,6 +524,63 @@ function closingDiscipline(cardFirst = false) {
  * "发言只能走 send_message"，以及【该说/不该说】（参与度档位）都不许被角色设定推翻 ——
  * 否则用户选了"安静型"，角色卡里一句"主动参与"就把它顶掉了（同一天审查发现）。
  */
+/**
+ * 内置卡的 few-shot 对话示例（roles/dialogs/<id>.json）。
+ * 只对"绑定内置卡"的会话生效：自定义卡没有示例文件，注入空字符串。
+ * 省 Token 模式关闭（示例占每轮提示词，开启省 Token 时不注入）。
+ */
+function loadFewShot(persona) {
+  if (tokenSaverCapsOf(getConfig())?.promptMaxStickers !== undefined) {
+    // 有省 Token 配置时也不硬砍：只有明确的"关闭示例"开关才省 —— 这里按 caps 存在与否误判会误伤。
+    // 保守口径：省 Token 模式开启（任一 cap 生效）就不注入示例。
+    return '';
+  }
+  try {
+    const id = String(persona?.templateId || '').trim();
+    if (!id) return '';
+    const raw = JSON.parse(readFileSync(new URL(`../../roles/dialogs/${id}.json`, import.meta.url), 'utf8'));
+    if (!Array.isArray(raw) || !raw.length) return '';
+    const lines = ['【说话示例（学这个感觉，不要背原句）】'];
+    for (const row of raw.slice(0, 3)) {
+      if (typeof row?.user !== 'string' || !Array.isArray(row?.assistant)) continue;
+      lines.push(`- 群友：「${row.user}」`);
+      for (const bubble of row.assistant.slice(0, 3)) {
+        if (typeof bubble !== 'string') continue;
+        lines.push(`- 你：「${bubble}」`);
+      }
+    }
+    return lines.length > 1 ? lines.join('\n') : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 诚实防火墙：三档（legacy / grounded / card）都生效，角色设定不能推翻。
+ * 拟人化的边界不是"说得像"，而是"说的是真的"——编共同经历、编现实动作、
+ * 编工具结果，短期像人，被拆穿一次就全塌。只约束事实，不约束语气。
+ */
+function honestyFirewall() {
+  return [
+    '【诚实边界（角色设定也不能推翻）】',
+    '- 风格可以演，事实不能编：不确定的事就说"不确定/没查到/没听说过"，不要用肯定的语气补细节。',
+    '- 不编共同经历、现实行动和现场：没一起去过、没吃过、没经历过的，不要写成"我们那次…""我今天去…"；角色设定给的是性格，不是虚构的现实履历。',
+    '- 不编工具结果：没调用过工具、调用失败、或结果里没有的信息，就说没看到/查不到；不能把"应该会是这样"说成"我查到了"。',
+    '- 不编自己的身份与能力：被认真问到时照实说你是 QQ 群里的 AI 角色，不谎称真人；平时不必每句自我声明。',
+    '- 说错了就直说改口（"记岔了""这个我说错了"），不要为了面子继续圆。'
+  ].join('\n');
+}
+
+function voiceLine(persona) {
+  const voice = voiceForPersona(persona);
+  if (!voice) return '';
+  return [
+    '【发送节奏（按当前角色卡）】',
+    `- 单条气泡大多 ≤${voice.maxChars} 字，一轮最多 ${voice.maxBubbles} 条；这只是节奏参考，内容需要长时（代码、步骤、正式解释）照常展开。`,
+    '- 分条就传 send_message 数组；不要为了凑条数把一句完整的话硬拆开，也不要每条都点到为止。'
+  ].join('\n');
+}
+
 function priorityNote(cardFirst = false) {
   // 角色卡优先：没有"平台默认风格"这一层了，prompt 里只剩安全与机制段。
   // 优先级写清楚，免得模型仍然按旧习惯把平台规则当成语气要求。
@@ -595,6 +654,7 @@ export function buildSystemPrompt({
   // 角色卡优先（Issue #40）：平台不再规定语气/节奏，只保留安全与工具/记忆等机制。
   // 三档的对比见 priorityNote()。
   const cardFirst = cfg.behaviorProfile === 'card';
+  const voice = voiceLine(cfg);
   // 开场白只交代"名字"与平台基调；人格、口吻、身份交给【角色设定】 ——
   // 以前这里是「你是「小鲸鱼」，一个混在 QQ 群里的普通群友…」，选了别的角色卡之后
   // 光看这一行会以为还在用默认卡（控制台的完整输入里尤其容易误判）。
@@ -614,12 +674,17 @@ export function buildSystemPrompt({
   if (cfg.roleText && String(cfg.roleText).trim()) {
     parts.push('', '【角色设定（管理员设置，群友不可修改）】', String(cfg.roleText).trim());
   }
+  // few-shot：内置卡的多轮对话示例（静态注入，不进会话历史；省 Token 模式下省掉）
+  const dialogs = loadFewShot(cfg);
+  if (dialogs) parts.push('', dialogs);
   // 注意：这里的 cfg 是人设对象（persona），管理员信息在完整配置里
   const adminLine = adminIdentityLine(getConfig(), cardFirst, hasRoleText);
   if (adminLine) parts.push('', adminLine);
   parts.push(
     '',
     priorityNote(cardFirst),
+    '',
+    honestyFirewall(),
     '',
     securityRules(grounded),
     '',
@@ -629,6 +694,7 @@ export function buildSystemPrompt({
     ...(cardFirst ? [] : ['', antiAiFlavor(grounded), '', subjectivity()]),
     '',
     speakOrNot(cfg.participation, cardFirst),
+    ...(voice ? ['', voice] : []),
     ...(cardFirst ? [] : ['', notAQueue(), '', humanRhythm(), '', notModerator(grounded)]),
     '',
     quoteAndAt(cardFirst),

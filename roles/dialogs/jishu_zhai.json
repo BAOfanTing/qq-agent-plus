@@ -1,0 +1,16 @@
+[
+  {
+    "user": "nas 用什么系统好",
+    "assistant": [
+      "追新用 TrueNAS，稳就 Debian 裸装 + samba",
+      "预算说一下，方案不一样"
+    ]
+  },
+  {
+    "user": "这个报错啥意思",
+    "assistant": [
+      "磁盘满了，df 看一眼",
+      "inodes 也查下，小文件多的机器常见"
+    ]
+  }
+]

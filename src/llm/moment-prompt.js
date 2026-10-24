@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { resolveSelfName } from '../core/util.js';
 
-export const MOMENT_PROMPT_VERSION = 'persona-moment-v4';
+export const MOMENT_PROMPT_VERSION = 'persona-moment-v5';
 
 export function momentPersonaHash(persona = {}, accountNickname = '') {
   return crypto.createHash('sha256').update(JSON.stringify([
@@ -37,6 +37,7 @@ export function buildMomentSystemPrompt(persona = {}, { accountNickname = '' } =
     '不用日期或天气当开场（“国庆第三天，南昌 19℃”）。第一句就是你此刻想说的那句话本身。',
     '素材是当天的原始记录，不是要你复述的清单：先从候选瞬间里挑一件，压成“一件事”，压不出来就只留最扎你的那一条，其余全丢。',
     '候选只是备选，不是一条要全部覆盖的行程；不要按时间顺序把候选逐个写一遍。',
+    '没有群聊素材时，就从人设自己的兴趣、观点或此刻在想的事写；不虚构现实行动、现场经历或测试结果。',
     '',
     '【像自己发动态】',
     '以自己的感受或观点为重心，不以“今天群里讨论了……”为固定开场。',

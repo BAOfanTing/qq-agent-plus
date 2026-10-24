@@ -262,6 +262,10 @@ async function saveConfig({ quiet = false } = {}) {
     patch.dailyMoments = {
       ...(c.dailyMoments || {}),
       enabled: chk('#cfg-moments-enabled', c.dailyMoments?.enabled === true),
+      source: ['self', 'group', 'mixed'].includes(String(val('#cfg-moments-source', c.dailyMoments?.source || 'self')))
+        ? String(val('#cfg-moments-source', c.dailyMoments?.source || 'self'))
+        : 'self',
+      autoPublish: String(val('#cfg-moments-autopublish', c.dailyMoments?.autoPublish === true ? 'auto' : 'draft')) === 'auto',
       startupCatchup: chk('#cfg-moments-catchup', c.dailyMoments?.startupCatchup !== false),
       hour: clampInt(val('#cfg-moments-hour', c.dailyMoments?.hour), 0, 23, 23),
       minute: clampInt(val('#cfg-moments-minute', c.dailyMoments?.minute), 0, 59, 30),

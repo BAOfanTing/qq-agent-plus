@@ -18,12 +18,36 @@ import { isolationSummary, probeIsolation } from './isolation.js';
 import { sanitizeUserText } from '../core/util.js';
 import { sanitizeDeep } from '../tools/tools-core.js';
 import { canonicalVersion } from './version.js';
+import { readOwnerUin } from '../core/notify-owner.js';
+import {
+  checkApproval, refundApproval, consumeQuota, refundQuota,
+  requestPendingApproval, listPendingApprovals, approvePendingApproval,
+  rejectPendingApproval, recordPluginWrite
+} from './grants.js';
 
 export const PLUGIN_TOOL_TIMEOUT_MS = 20000;
+/** 写操作的最小间隔（同插件两次写请求之间）：一个坏插件/一轮模型连点不能刷屏写。 */
+export const PLUGIN_WRITE_FLOOR_MS = 60_000;
 /** 插件工具回给模型的结果上限（字符）：别让一个坏插件或一次大响应把上下文撑爆。 */
 export const MAX_PLUGIN_RESULT_CHARS = 40000;
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+
+// engines.minVersion 的加载期校验要拿宿主版本比：只比主干三段，预发布标签不参与
+const HOST_VERSION = (() => {
+  try {
+    return String(JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version || '');
+  } catch { return ''; }
+})();
+function semverAtLeast(version, minimum) {
+  const parts = (value) => String(value).split(/[-+]/)[0].split('.').map((n) => Number(n) || 0);
+  const left = parts(version); const right = parts(minimum);
+  for (let i = 0; i < 3; i += 1) {
+    if ((left[i] ?? 0) < (right[i] ?? 0)) return false;
+    if ((left[i] ?? 0) > (right[i] ?? 0)) return true;
+  }
+  return true;
+}
 
 /**
  * schema 深洗：**连键名一起过洗**（sanitizeDeep 只过洗 value）。
@@ -92,6 +116,7 @@ export class PluginRegistry {
     this.discovered = [];        // [{ id, dir, manifest, error }]
     this.opChain = Promise.resolve(); // 起停/重载/安装的串行队列（见 #serialize）
     this.scheduleState = new Map();   // "<id>:<任务名>" -> 上次触发时间（内存态：重启后重新计时）
+    this.lastWriteAt = new Map();     // pluginId -> 上次写操作时间（60s 间隔下限，内存态即可）
     this.lastUsedAt = new Map();      // id -> 最近一次被用到的时间（懒启动的"空闲"判据）
     this.starting = new Map();        // id -> 在途的按需启动 promise（并发调用共享同一个）
     this.scheduleTimer = null;
@@ -147,6 +172,8 @@ export class PluginRegistry {
       idleMs: Math.max(0, Number(plugins.idleMinutes) || 0) * 60000,
       limits: this.#sanitizeLimits(plugins.limits),
       revoked: Array.isArray(plugins.revoked) ? plugins.revoked.filter((v) => typeof v === 'string') : [],
+      // 写动作开关（plugins.switches.<插件>.<动作>，默认关）—— 传给 #writeSwitchOn 与 toolDefsFor
+      switches: plugins.switches && typeof plugins.switches === 'object' ? plugins.switches : {},
       settings: plugins.settings && typeof plugins.settings === 'object' ? plugins.settings : {}
     };
   }
@@ -228,6 +255,12 @@ export class PluginRegistry {
     const started = [];
     for (const item of this.discovered) {
       if (!item.manifest) continue;
+      // engines.minVersion：安装时查一次不够，宿主升级/降级/换机后每次加载都要重新判
+      const minVersion = item.manifest.engines?.minVersion || '';
+      if (minVersion && HOST_VERSION && !semverAtLeast(HOST_VERSION, minVersion)) {
+        this.log(`插件 ${item.id} 要求宿主 ≥ ${minVersion}，本机是 ${HOST_VERSION}，不予加载`);
+        continue;
+      }
       if (!this.#shouldRun(item.id, cfg, item.manifest.version)) {
         const revoked = this.#revokedBy(cfg, item.id, item.manifest.version);
         if (revoked) this.log(`插件 ${item.id} 在撤回名单里（${revoked}），不予加载`);
@@ -456,6 +489,14 @@ export class PluginRegistry {
    * 否则模型永远不会调它、进程也就永远不会起（"懒启动"会变成"永不启动"）。
    * 真正调用时由 execute 里的 #ensureRunning 按需把进程起来。
    */
+  /** 写动作开关：plugins.switches.<插件>.<动作> 默认 false（显式 true 才算开）。 */
+  #writeSwitchOn(cfg, pluginId, action) {
+    const switches = cfg.switches && typeof cfg.switches === 'object' ? cfg.switches : {};
+    const byPlugin = switches[pluginId];
+    if (!byPlugin || typeof byPlugin !== 'object') return false;
+    return byPlugin[action] === true;
+  }
+
   toolDefsFor() {
     const cfg = this.#config();
     if (!cfg.enabled) return [];
@@ -465,7 +506,12 @@ export class PluginRegistry {
       // 连续崩溃被停用（failed）之后不再把工具交给模型：否则模型每调一次宿主就再 spawn 一次
       //（含 --check 与最多 5s 的 init 握手），"不再空转"这句承诺就落空了。要恢复得显式重载。
       if (host.state === 'failed') continue;
-      for (const tool of host.manifest.tools) available.push({ host, tool });
+      for (const tool of host.manifest.tools) {
+        // 写操作工具的最外一道门：动作开关默认关 —— 关着时**工具根本不注册**，
+        // 模型看不见就不会浪费轮次去试一个必被拒的调用。
+        if (tool.action && this.#writeSwitchOn(cfg, id, tool.action) !== true) continue;
+        available.push({ host, tool });
+      }
     }
     if (!available.length) return [];
     if (cfg.toolMounting === 'direct') return available.map(({ host, tool }) => this.#toolDef(host, tool));
@@ -502,7 +548,7 @@ export class PluginRegistry {
       },
       pluginId: '',
       meta: true,
-      execute: async (_ctx, args) => {
+      execute: async (ctx, args) => {
         const wanted = String(args?.tool ?? '').trim();
         const hit = available.find(({ host, tool }) => qualifiedToolName(host.id, tool.name) === wanted);
         if (!hit) {
@@ -518,7 +564,7 @@ export class PluginRegistry {
             isError: true
           };
         }
-        return this.#callPlugin(hit.host, hit.tool, args?.args ?? {});
+        return this.#callPlugin(hit.host, hit.tool, args?.args ?? {}, ctx);
       }
     };
   }
@@ -533,7 +579,187 @@ export class PluginRegistry {
       parameters: sanitizeSchemaDeep(tool.parameters),
       pluginId: host.id,
       // 箭头函数：`this` 必须还是注册表实例（写成普通函数时 this 会变成那个工具定义对象）
-      execute: async (_ctx, args) => this.#callPlugin(host, tool, args)
+      execute: async (ctx, args) => this.#callPlugin(host, tool, args, ctx)
+    };
+  }
+
+
+  /**
+   * 写操作三层门（宿主侧，插件不可绕过）：开关 → 60s 间隔 → 对象级批准（未批则登记待批并
+   * 通知管理员）→ 当天配额。返回 {proceed:true, …receipts} 放行，或 {proceed:false, result} 拒绝。
+   */
+  #gateWrite(host, tool, args) {
+    const cfgNow = this.#config();
+    const action = tool.action;
+    // 目标取第一个非空的声明参数（actionTarget 可为数组：interact 的目标在 bvid 或 mid 上）
+    const targetKeys = Array.isArray(tool.actionTarget) ? tool.actionTarget : [tool.actionTarget];
+    const target = targetKeys.map((key) => String(args?.[key] ?? '').trim())
+      .find((value) => value.length > 0)?.slice(0, 120) || '';
+    const preview = tool.actionPreview ? String(args?.[tool.actionPreview] ?? '').slice(0, 300) : '';
+    const declared = (host.manifest.approvals || []).find((item) => item.action === action);
+    const denied = (reason, outcome = 'denied', note = '') => {
+      recordPluginWrite(this.dataDir, host.id, { action, target, outcome, note: note || reason });
+      return {
+        proceed: false,
+        result: {
+          content: JSON.stringify({
+            error: sanitizeUserText(reason),
+            needsApproval: outcome === 'pending',
+            action,
+            target: sanitizeUserText(target)
+          }),
+          isError: true
+        }
+      };
+    };
+    if (this.#writeSwitchOn(cfgNow, host.id, action) !== true) {
+      return denied('这个写操作的开关没有打开：请在 控制台 → 插件 → 该插件的设置里先打开对应动作的开关');
+    }
+    const last = Number(this.lastWriteAt.get(host.id)) || 0;
+    if (Date.now() - last < PLUGIN_WRITE_FLOOR_MS) {
+      return denied(`同一插件的写操作至少间隔 ${Math.round(PLUGIN_WRITE_FLOOR_MS / 1000)} 秒，请稍后再试`, 'denied', 'rate-floor');
+    }
+    const approval = checkApproval(this.dataDir, host.id, action, { consume: true, target });
+    if (!approval.approved) {
+      // 一次批准只对一个目标：没有针对这个目标的通行证 → 生成待批请求并通知管理员
+      const pending = requestPendingApproval(this.dataDir, {
+        pluginId: host.id,
+        pluginName: host.manifest.name,
+        action,
+        label: declared?.label || action,
+        target,
+        preview
+      });
+      recordPluginWrite(this.dataDir, host.id, { action, target, outcome: 'pending', note: pending.id });
+      void this.#notifyOwnerApproval(pending);
+      return denied(
+        `需要管理员批准：${declared?.label || action}${target ? ` → ${target}` : ''}。`
+          + `已通知管理员（待批编号 ${pending.id}），批准后让用户再试一次即可`,
+        'pending',
+        pending.id
+      );
+    }
+    const quota = consumeQuota(this.dataDir, host.id, action, Number(host.manifest.quotas?.[action]) || 0);
+    if (!quota.ok) {
+      // 配额不够时把刚扣掉的批准退回去：不能让一次被配额挡住的调用白烧管理员批的一次权限
+      if (approval.receipt) refundApproval(this.dataDir, host.id, approval.receipt);
+      return denied(quota.reason, 'denied', 'quota');
+    }
+    this.lastWriteAt.set(host.id, Date.now());
+    return { proceed: true, action, target, approvalReceipt: approval.receipt, quotaReceipt: quota.receipt };
+  }
+
+  /** 写操作收尾：成功记审计；确定未执行（ok:false 或抛错）退还批准与配额；回读核验结果入审计。 */
+  #settleWrite(host, tool, gate, payload) {
+    if (!gate || gate.proceed !== true) return;
+    const action = gate.action;
+    const target = gate.target;
+    if (payload?.ok === false) {
+      if (gate.approvalReceipt) refundApproval(this.dataDir, host.id, gate.approvalReceipt);
+      if (gate.quotaReceipt) refundQuota(this.dataDir, host.id, gate.quotaReceipt);
+      recordPluginWrite(this.dataDir, host.id, {
+        action, target, outcome: 'failed', note: String(payload?.note || payload?.error || 'ok:false')
+      });
+      return;
+    }
+    // 幂等跳过（插件发现"已经做过"什么都没写）：批准与配额都退回去 ——
+    // 没发生的写入不该烧管理员批的次数。
+    if (payload?.skipped) {
+      if (gate.approvalReceipt) refundApproval(this.dataDir, host.id, gate.approvalReceipt);
+      if (gate.quotaReceipt) refundQuota(this.dataDir, host.id, gate.quotaReceipt);
+      recordPluginWrite(this.dataDir, host.id, {
+        action, target, outcome: 'ok', note: `幂等跳过：${String(payload.skipped).slice(0, 60)}`
+      });
+      return;
+    }
+    recordPluginWrite(this.dataDir, host.id, {
+      action,
+      target,
+      outcome: payload?.verified === false ? 'unknown' : 'ok',
+      note: payload?.verified === true ? '回读核验通过' : (payload?.verified === false ? '写后回读未确认' : '')
+    });
+  }
+
+  /** 待批请求 → 管理员私聊（fire-and-forget：通知失败不影响待批列表与控制台批准）。 */
+  async #notifyOwnerApproval(pending) {
+    const owner = readOwnerUin(this.getConfig());
+    if (!/^\d{5,15}$/.test(owner || '')) return;
+    const sender = this.getSender?.();
+    if (!sender?.sendTextBatch) return;
+    const minutes = Math.max(1, Math.round((Number(pending.expiresAt) - Date.now()) / 60000));
+    const text = [
+      `插件「${pending.pluginName}」请求执行写操作：${pending.label || pending.action}`,
+      pending.target ? `目标：${pending.target}` : '',
+      pending.preview ? `内容预览：${pending.preview.slice(0, 200)}` : '',
+      `回复「同意」批准一次（${minutes} 分钟内有效），回复「拒绝」取消；多条待批时这里批的是最新一条，其余在控制台处理。`
+    ].filter(Boolean).join('\n');
+    try {
+      await sender.sendTextBatch(`private:${owner}`, [text], {});
+    } catch { /* 通知失败不阻断：控制台待批列表还在 */ }
+  }
+
+  /**
+   * 控制台直调插件的登录类工具（扫码登录）：与模型调用同一条 callPlugin 路，
+   * 但不带 chatKey（登录不发群消息），结果原样返回给网页（不经模型上下文）。
+   */
+  async callConsoleTool(id, toolName, args = {}) {
+    const host = this.hosts.get(id);
+    if (!host?.manifest) throw Object.assign(new Error('插件没有在运行列表里（先启用它）'), { code: 'E_NOT_FOUND' });
+    const tool = host.manifest.tools.find((t) => t.name === toolName);
+    if (!tool) throw Object.assign(new Error(`插件 ${id} 没有工具 ${toolName}`), { code: 'E_NOT_FOUND' });
+    const ready = host.state === 'running' ? host : await this.#ensureRunning(id);
+    if (!ready || ready.state !== 'running') {
+      throw Object.assign(new Error(`插件未在运行（${ready?.lastError || '按需启动失败'}）`), { code: 'E_DOWN' });
+    }
+    const result = await ready.callTool(toolName, args ?? {}, { timeoutMs: Number(tool.timeoutMs) || 30000, context: {} });
+    return result && typeof result === 'object' ? result : {};
+  }
+
+  /**
+   * 应用层自检（控制台"检测登录"等）：懒启动的插件会顺手把进程带起来。
+   * @returns {{ok:boolean, info?:object, error?:string}}
+   */
+  async probePlugin(id) {
+    const host = this.hosts.get(id);
+    if (!host?.manifest) return { ok: false, error: '插件没有在运行列表里（先启用它）' };
+    const ready = host.state === 'running' ? host : await this.#ensureRunning(id);
+    if (!ready || ready.state !== 'running') return { ok: false, error: `插件未在运行（${ready?.lastError || '按需启动失败'}）` };
+    try {
+      const info = await ready.probe();
+      return { ok: true, info: info && typeof info === 'object' ? info : {} };
+    } catch (error) {
+      // 没实现 probe 的插件（v1 / 不需要自检）如实说，不算错误
+      if (error?.code === 'E_TIMEOUT' || /probe|method/i.test(String(error?.message || ''))) {
+        return { ok: false, error: '这个插件没有实现自检（probe）' };
+      }
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  }
+
+  /**
+   * 管理员在私聊里回「同意/拒绝」批准插件的写操作。
+   * @returns {{handled:boolean, reply?:string}} handled=true 表示这条消息被吃掉（不进模型）
+   */
+  handleOwnerApprovalText(text, fromUserId) {
+    const owner = readOwnerUin(this.getConfig());
+    if (!owner || String(fromUserId || '') !== owner) return { handled: false };
+    const t = String(text || '').trim();
+    if (!/^(同意|批准|拒绝)[\s,.，。!！]*$/.test(t)) return { handled: false };
+    const pending = listPendingApprovals(this.dataDir);
+    if (!pending.length) return { handled: true, reply: '现在没有待批准的插件操作。' };
+    const newest = pending[pending.length - 1];
+    if (t.startsWith('拒绝')) {
+      const rejected = rejectPendingApproval(this.dataDir, newest.id);
+      return {
+        handled: true,
+        reply: `已拒绝：${rejected.label || rejected.action}${rejected.target ? ` → ${rejected.target}` : ''}`
+      };
+    }
+    const approved = approvePendingApproval(this.dataDir, newest.id);
+    return {
+      handled: true,
+      reply: `已批准：${approved.pending.label || approved.pending.action}${approved.pending.target ? ` → ${approved.pending.target}` : ''}`
+        + `，一次有效，${new Date(approved.grant.expiresAt).toLocaleTimeString()} 前使用。让刚才那位再试一次即可。`
     };
   }
 
@@ -541,7 +767,7 @@ export class PluginRegistry {
    * 调用一个插件工具（direct 挂载与 meta 工具共用这一条路）：授权兜底 → 懒启动 → 出口过洗与截断。
    * 出口**必须截断**：协议单行上限 1MB，一个透传大响应的插件能一次塞进上下文几十万 token。
    */
-  async #callPlugin(host, tool, args) {
+  async #callPlugin(host, tool, args, ctx = null) {
     // 兜底再判一次授权：工具表每轮重建，但"停用"与"撤回"随时可能发生在一轮之内
     const cfgNow = this.#config();
     if (!cfgNow.enabled || !this.#shouldRun(host.id, cfgNow, host.manifest.version)) {
@@ -552,12 +778,29 @@ export class PluginRegistry {
     if (!ready || ready.state !== 'running') {
       return { content: JSON.stringify({ error: `插件 ${host.id} 未在运行（${ready?.lastError || '按需启动失败'}）` }), isError: true };
     }
+    // 写操作三层门（开关在工具表生成时已挡掉"关"的情况，这里再判一次是纵深）：
+    // 60s 间隔 → 对象级批准（未批则登记待批并通知管理员）→ 当天配额。全部宿主侧强制。
+    let gate = null;
+    if (tool.action) {
+      gate = this.#gateWrite(host, tool, args ?? {});
+      if (gate && gate.proceed !== true) return gate.result;
+    }
     try {
       // 每次真正调用都刷新"最近使用"：只在冷启动时记的话，一个持续在用的插件会在
       // "冷启动 + idle 分钟"那一刻被当成空闲停掉（日志还写着"空闲 N 分钟"，其实不是）
       this.lastUsedAt.set(host.id, Date.now());
-      const result = await ready.callTool(tool.name, args ?? {}, { timeoutMs: PLUGIN_TOOL_TIMEOUT_MS });
+      // 只给会话 key（group:<id> / private:<id>）：插件要"把结果发回当前会话"（例如 B 站视频）
+      // 必须知道目标，但群名/成员/消息都不该交给第三方代码。
+      const context = ctx?.chatKey ? { chatKey: String(ctx.chatKey) } : {};
+      // approved：写操作已过宿主三层门，插件不必（也不应）再走自己的 cap.approval.check
+      if (gate?.proceed === true) context.approved = { action: gate.action, target: gate.target };
+      // 工具级超时优先（manifest.timeoutMs，v2）：媒体类工具默认 20s 必超时，作者按需声明更长的
+      const result = await ready.callTool(tool.name, args ?? {}, {
+        timeoutMs: Number(tool.timeoutMs) > 0 ? Number(tool.timeoutMs) : PLUGIN_TOOL_TIMEOUT_MS,
+        context
+      });
       const payload = result && typeof result === 'object' ? result : { value: result ?? null };
+      if (gate?.proceed === true) this.#settleWrite(host, tool, gate, payload);
       const text = JSON.stringify(sanitizeDeep({ ok: true, ...payload }));
       return {
         content: text.length > MAX_PLUGIN_RESULT_CHARS
@@ -565,6 +808,9 @@ export class PluginRegistry {
           : text
       };
     } catch (error) {
+      // 抛错 = 插件没执行到写动作（协议/参数/进程层失败）：批准与配额退回去，
+      // 否则一次网络抖动就白烧管理员批的一次权限。
+      if (gate?.proceed === true) this.#settleWrite(host, tool, gate, { ok: false, note: String(error?.message ?? error) });
       const code = error?.code || 'E_PLUGIN';
       const message = String(error?.message ?? error);
       return {
@@ -618,6 +864,19 @@ export class PluginRegistry {
               version: item.manifest.version,
               description: item.manifest.description,
               capabilities: item.manifest.capabilities,
+              apiVersion: item.manifest.apiVersion,
+              // engines 不满足：插件不会加载（控制台要能说出"为什么"），而不是看起来一切正常
+              enginesIncompatible: (() => {
+                const min = item.manifest.engines?.minVersion || '';
+                return min && HOST_VERSION && !semverAtLeast(HOST_VERSION, min)
+                  ? `要求宿主 ≥ ${min}，本机是 ${HOST_VERSION}`
+                  : '';
+              })(),
+              // v2：设置 schema / 需授权动作 / 每日配额 / http 域名白名单（控制台据此渲染统一面板）
+              settings: item.manifest.settings || null,
+              approvals: item.manifest.approvals || [],
+              quotas: item.manifest.quotas || {},
+              httpDomains: item.manifest.httpDomains || [],
               tools: item.manifest.tools.map((t) => t.name),
               schedule: item.manifest.schedule.map((s) => ({
                 name: s.name,

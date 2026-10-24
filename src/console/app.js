@@ -73,6 +73,12 @@ import { uiBuildStamp } from './ui-build.js';
 import { installPlugin, uninstallPlugin, fetchPluginIndexes, sha256Of, MAX_PLUGIN_ARCHIVE_BYTES, rollbackPlugin, createIndexRevokedCache, indexResultForDisplay } from '../plugins/install.js';
 import { DEFAULT_MIRROR_PREFIXES, fetchBinaryWithMirrors } from '../plugins/mirrors.js';
 import { createIndexTextFetcher } from '../plugins/index-fetch.js';
+import { readOwnerUin } from '../core/notify-owner.js';
+import { pluginSecretStatus, writePluginSecrets, secretFieldKeys, clearPluginSecrets } from '../plugins/secrets.js';
+import {
+  grantsStatus, listPendingApprovals, approvePendingApproval,
+  rejectPendingApproval, listPluginWrites
+} from '../plugins/grants.js';
 // 平台能力门控的元数据（键→标签/工具/默认取向/配额默认）：控制台不手抄第二份，防漂移
 import {
   PLATFORM_DEFAULT_OFF, PLATFORM_GATE_LABELS, PLATFORM_QUOTA_DEFAULTS, PLATFORM_TOOL_GATES,
@@ -604,6 +610,14 @@ export function createApp({
   let identityPilotError = '';
   // 定时提醒：落盘持久化（重启不丢），到点由编排器走主动唤醒让模型说出来
   const reminders = new ReminderStore();
+  // 周期提醒的启动对账：错过多次只补最近一次（12h 窗内留作晚触发，超窗跳到下一期）
+  {
+    const touched = reminders.reconcileRecurring();
+    if (touched.length) {
+      log(`[reminder] 周期提醒启动对账：${touched.length} 条超窗未补，已跳到下一期`
+        + `（${touched.slice(0, 3).map((t) => `${t.id}@${new Date(t.skippedFrom).toLocaleString('zh-CN')}`).join('、')}）`);
+    }
+  }
   // 索引结果的 10 分钟缓存（声明放在注册表之前：注册表要读它的「被撤回」清单）
   let pluginIndexCache = { key: '', at: 0, result: { plugins: [], skipped: [], sources: [] } };
 
@@ -628,6 +642,30 @@ export function createApp({
     // 插件声明 send 能力后，发言走机器人自己那条发送队列（禁言/限频/白名单/记账全在里面）
     getSender: () => sender
   });
+  // OneBot 入站新鲜度告警：连接还在但 10 分钟没有任何事件/心跳（半开连接/上游卡死）——
+  // 只在主进程里看着，一次发作只通知一次，恢复后复位。
+  {
+    let staleNotified = false;
+    const freshnessTimer = setInterval(async () => {
+      try {
+        const last = Number(onebot.lastEventAt) || 0;
+        if (!onebot.connected || !last) { staleNotified = false; return; }
+        const staleMs = Date.now() - last;
+        if (staleMs > 10 * 60_000 && !staleNotified) {
+          staleNotified = true;
+          const owner = readOwnerUin(getConfig());
+          const text = `OneBot 连接显示在线，但已经 ${Math.round(staleMs / 60_000)} 分钟没有任何事件或心跳（可能是半开连接）。去服务器跑一次 src/ops.js health-check --confirm 看看。`;
+          log(`[onebot-freshness] ${text}`);
+          if (/^\d{5,15}$/.test(owner || '')) {
+            await sender.sendTextBatch(`private:${owner}`, [text], {}).catch(() => {});
+          }
+        } else if (staleMs < 60_000) {
+          staleNotified = false;
+        }
+      } catch { /* 告警自身失败不影响主流程 */ }
+    }, 60_000);
+    freshnessTimer.unref?.();
+  }
   const mcpManager = new McpManager({ log: moduleLog('mcp') });
   if (getConfig().mcp?.enabled === true) {
     void mcpManager.start().catch((error) => moduleLog('mcp').warn?.('启动失败:', error?.message ?? error));
@@ -1549,7 +1587,18 @@ export function createApp({
     if (event.post_type === 'message' || event.post_type === 'message_sent') {
       // Echoes are deduplicated by message ID; shared-protocol observe mode also records old-instance replies.
       if (event.message_type === 'group' && event.group_id != null) return ingestMessage('group', String(event.group_id), event, arrivedInactive);
-      if (event.message_type === 'private' && event.user_id != null) return ingestMessage('private', String(event.user_id), event, arrivedInactive);
+      if (event.message_type === 'private' && event.user_id != null) {
+        // 管理员私聊回「同意/拒绝」＝ 批准插件的写操作：这类消息不该再进模型
+        //（模型只会把它当普通聊天内容，批了也白批）。
+        const approval = pluginRegistry?.handleOwnerApprovalText?.(String(event.raw_message || ''), String(event.user_id));
+        if (approval?.handled) {
+          if (approval.reply) {
+            void sender.sendTextBatch(`private:${event.user_id}`, [approval.reply], {}).catch(() => {});
+          }
+          return;
+        }
+        return ingestMessage('private', String(event.user_id), event, arrivedInactive);
+      }
       return;
     }
     if (event.post_type === 'notice' && event.notice_type === 'notify' && event.sub_type === 'poke') {
@@ -2886,6 +2935,227 @@ export function createApp({
       idleMinutes: Math.max(0, Number(getConfig().plugins?.idleMinutes) || 0)
     }));
 
+  // ── 插件 v2：统一设置面板 / 凭据 / 授权与配额 ─────────────────────────────
+  // 插件作者不写 HTML：设置项由 manifest.settings 描述，这里只做"按 schema 读写"。
+  const pluginEntryOf = (id) => pluginRegistry.list().plugins.find((row) => row.id === id && row.installed) || null;
+  const pluginIdValid = (id) => /^[a-z0-9][a-z0-9-]{1,31}$/.test(id);
+
+  router.add('GET', '/api/plugins/settings', async (req, res) => {
+    const id = String(new URL(req.url || '/', 'http://x').searchParams.get('id') || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    const entry = pluginEntryOf(id);
+    if (!entry) return json(res, 404, { ok: false, error: '这个插件没有安装' });
+    const schema = entry.manifest?.settings || { groups: [] };
+    const stored = getConfig().plugins?.settings?.[id] || {};
+    const secretKeys = secretFieldKeys(schema);
+    const values = {};
+    for (const group of schema.groups || []) {
+      for (const field of group.fields || []) {
+        if (field.type === 'secret') continue;
+        values[field.key] = stored[field.key] === undefined ? (field.default ?? '') : stored[field.key];
+      }
+    }
+    return json(res, 200, {
+      ok: true,
+      id,
+      schema,
+      values,
+      secrets: pluginSecretStatus(DATA_DIR, id, secretKeys),
+      approvals: entry.manifest?.approvals || [],
+      quotas: entry.manifest?.quotas || {},
+      grants: grantsStatus(DATA_DIR, id, {
+        approvals: entry.manifest?.approvals || [],
+        quotas: entry.manifest?.quotas || {}
+      }),
+      // 写动作开关（默认关）＋ 该插件的待批请求 ＋ 写审计（"日志"页签的数据源）
+      switches: getConfig().plugins?.switches?.[id] || {},
+      pending: listPendingApprovals(DATA_DIR).filter((item) => item.pluginId === id),
+      writes: listPluginWrites(DATA_DIR, id, 30),
+      // 登录徽标（可选）：插件实现了 probe 就带一份实测登录态，面板打开即见
+      loginInfo: await pluginRegistry.probePlugin(id).then((r) => (r.ok ? r.info : null)).catch(() => null)
+    });
+  });
+
+  router.add('POST', '/api/plugins/settings', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    const entry = pluginEntryOf(id);
+    if (!entry) return json(res, 404, { ok: false, error: '这个插件没有安装' });
+    const schema = entry.manifest?.settings || { groups: [] };
+    const fields = new Map();
+    for (const group of schema.groups || []) for (const field of group.fields || []) fields.set(field.key, field);
+    const input = body.values && typeof body.values === 'object' && !Array.isArray(body.values) ? body.values : {};
+    const unknown = Object.keys(input).filter((key) => !fields.has(key));
+    if (unknown.length) return json(res, 400, { ok: false, error: `不认识的设置项：${unknown.join(', ')}` });
+    const plainPatch = {};
+    const secretPatch = {};
+    for (const [key, raw] of Object.entries(input)) {
+      const field = fields.get(key);
+      if (field.type === 'secret') {
+        if (raw === null || raw === undefined) continue;
+        secretPatch[key] = String(raw);
+        continue;
+      }
+      if (field.type === 'boolean') {
+        if (typeof raw !== 'boolean') return json(res, 400, { ok: false, error: `${field.label} 必须是 true/false` });
+        plainPatch[key] = raw;
+      } else if (field.type === 'number') {
+        const value = Number(raw);
+        if (!Number.isFinite(value)) return json(res, 400, { ok: false, error: `${field.label} 必须是数字` });
+        if (field.min !== undefined && value < field.min) return json(res, 400, { ok: false, error: `${field.label} 不能小于 ${field.min}` });
+        if (field.max !== undefined && value > field.max) return json(res, 400, { ok: false, error: `${field.label} 不能大于 ${field.max}` });
+        plainPatch[key] = value;
+      } else if (field.type === 'select') {
+        const value = String(raw);
+        if (!(field.options || []).some((option) => option.value === value)) {
+          return json(res, 400, { ok: false, error: `${field.label} 的取值不在选项里` });
+        }
+        plainPatch[key] = value;
+      } else {
+        const value = String(raw ?? '');
+        if (value.length > 4000) return json(res, 400, { ok: false, error: `${field.label} 太长（上限 4000 字）` });
+        plainPatch[key] = value;
+      }
+    }
+    try {
+      if (Object.keys(plainPatch).length) {
+        updateConfig({ plugins: { settings: { [id]: plainPatch } } });
+      }
+      if (Object.keys(secretPatch).length) {
+        writePluginSecrets(DATA_DIR, id, secretPatch, secretFieldKeys(schema));
+      }
+    } catch (error) {
+      return pluginError(res, error, 400);
+    }
+    // 保存后立刻重载插件：普通设置是进程 init 快照，不重载要等懒启动空闲回收才生效
+    //（最长 15 分钟）。重载失败不让保存报错 —— 配置已经写进去了，重载可以在控制台手动再来。
+    let reloaded = true;
+    try { await pluginRegistry.reload(id); } catch { reloaded = false; }
+    auditWrite('plugins.settings', `plugins:${id}`, {
+      req,
+      fields: Object.keys(plainPatch),
+      secrets: Object.keys(secretPatch),
+      reloaded
+    });
+    return json(res, 200, {
+      ok: true,
+      reloaded,
+      values: plainPatch,
+      secrets: pluginSecretStatus(DATA_DIR, id, secretFieldKeys(schema))
+    });
+  });
+
+  // 对象级批准：批准/拒绝的是**一条待批请求**（绑定动作+目标），不再是"类别通行证"。
+  router.add('POST', '/api/plugins/approval', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    const entry = pluginEntryOf(id);
+    if (!entry) return json(res, 404, { ok: false, error: '这个插件没有安装' });
+    const pendingId = String(body.pendingId || '').trim();
+    if (!pendingId) return json(res, 400, { ok: false, error: '缺少待批请求编号（pendingId）' });
+    try {
+      if (body.decision === 'reject') {
+        const rejected = rejectPendingApproval(DATA_DIR, pendingId);
+        auditWrite('plugins.approval.reject', `plugins:${id}:${rejected.action}`, { req, target: rejected.target });
+        return json(res, 200, {
+          ok: true,
+          rejected: { action: rejected.action, target: rejected.target },
+          pending: listPendingApprovals(DATA_DIR).filter((item) => item.pluginId === id)
+        });
+      }
+      const uses = Math.max(1, Math.min(100, Math.floor(Number(body.uses) || 1)));
+      const ttlMinutes = Math.max(1, Math.min(24 * 60, Math.floor(Number(body.ttlMinutes) || 10)));
+      const { grant, pending: hit } = approvePendingApproval(DATA_DIR, pendingId, {
+        uses, ttlMs: ttlMinutes * 60_000
+      });
+      auditWrite('plugins.approval', `plugins:${id}:${hit.action}`, { req, target: hit.target, uses, ttlMinutes });
+      return json(res, 200, {
+        ok: true,
+        grant,
+        pending: listPendingApprovals(DATA_DIR).filter((item) => item.pluginId === id),
+        grants: grantsStatus(DATA_DIR, id, entry.manifest || {})
+      });
+    } catch (error) {
+      return pluginError(res, error, 400);
+    }
+  });
+
+  // 应用层自检（"检测登录"按钮）：懒启动的插件会顺手把进程带起来
+  router.add('POST', '/api/plugins/probe', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    try {
+      const result = await pluginRegistry.probePlugin(id);
+      return json(res, 200, result);
+    } catch (error) {
+      return pluginError(res, error, 500);
+    }
+  });
+
+  // 控制台直调插件的**登录类**工具（扫码登录/查结果）：不是给任意工具开的通用后门。
+  // 白名单只放 login 的四个 action，且 channel 必须是 console —— 登录不是第三方插件的业务工具，
+  // 是宿主替管理员跑的账号操作，所以这里不等同于"模型调用路径"。
+  const CONSOLE_PLUGIN_TOOLS = new Set(['login']);
+  router.add('POST', '/api/plugins/call', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    const tool = String(body.tool || '').trim();
+    if (!CONSOLE_PLUGIN_TOOLS.has(tool)) return json(res, 403, { ok: false, error: '控制台只允许调用登录类工具' });
+    const args = body.args && typeof body.args === 'object' && !Array.isArray(body.args) ? body.args : {};
+    if (tool === 'login') {
+      const allowedActions = new Set(['start', 'poll', 'status', 'logout']);
+      if (!allowedActions.has(String(args.action || ''))) {
+        return json(res, 400, { ok: false, error: 'action 只能是 start/poll/status/logout' });
+      }
+      if (args.channel && args.channel !== 'console') {
+        return json(res, 400, { ok: false, error: '控制台只允许 channel=console' });
+      }
+    }
+    try {
+      const result = await pluginRegistry.callConsoleTool(id, tool, args);
+      return json(res, 200, result);
+    } catch (error) {
+      return pluginError(res, error, 400);
+    }
+  });
+
+  // 写动作开关：默认关；开着工具才会注册给模型
+  router.add('POST', '/api/plugins/write-switch', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    const entry = pluginEntryOf(id);
+    if (!entry) return json(res, 404, { ok: false, error: '这个插件没有安装' });
+    const action = String(body.action || '').trim();
+    if (!(entry.manifest?.approvals || []).some((item) => item.action === action)) {
+      return json(res, 400, { ok: false, error: '这个动作没有在插件 manifest 里声明' });
+    }
+    // 深合并不删键，也不解包"新子树里"的 __replace__（父键不存在时整段照抄）——
+    // 所以这里在 switches 这一层整体替换：手工拼好全量映射再 __replace__。
+    const current = getConfig().plugins?.switches || {};
+    const byPlugin = { ...(current[id] || {}) };
+    if (body.enabled === true) byPlugin[action] = true;
+    else delete byPlugin[action];
+    const next = { ...current, [id]: byPlugin };
+    updateConfig({ plugins: { switches: { __replace__: next } } });
+    await pluginRegistry.reconfigure().catch(() => {});
+    auditWrite('plugins.write-switch', `plugins:${id}:${action}`, { req, enabled: body.enabled === true });
+    return json(res, 200, { ok: true, switches: byPlugin });
+  });
+
+  router.add('POST', '/api/plugins/secrets/clear', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    clearPluginSecrets(DATA_DIR, id);
+    auditWrite('plugins.secrets.clear', `plugins:${id}`, { req });
+    return json(res, 200, { ok: true });
+  });
+
   router.add('GET', '/api/plugins/index', async (_req, res) => {
     try {
       const index = await loadPluginIndex();
@@ -4024,6 +4294,8 @@ export function createApp({
         connected: onebot.connected,
         everConnected: onebot.everConnected,
         error: onebot.lastConnectError,
+        lastEventAt: Number(onebot.lastEventAt) || 0,
+        lastHeartbeatAt: Number(onebot.lastHeartbeatAt) || 0,
         self: onebot.selfInfo ? { userId: onebot.selfId, nickname: onebot.selfNickname } : null
       },
       orchestrator: orchestrator.statusSummary(),
@@ -4923,6 +5195,17 @@ export function createApp({
       return json(res, 409, { error: String(error?.message ?? error) });
     }
   });
+  router.add('POST', /^\/api\/daily-moments\/records\/([\w-]+)\/edit$/, async (req, res, params) => {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const result = await dailyMoments.editDraft(params[1], { content: body.content });
+      auditWrite('moments.edit', `moments:${params[1]}`, { req, length: String(body.content || '').length });
+      return json(res, 200, { ok: true, content: result.record.content });
+    } catch (error) {
+      return json(res, error.httpStatus || 500, { error: String(error?.message ?? error), code: error.code || '' });
+    }
+  });
+
   router.add('POST', /^\/api\/daily-moments\/records\/([\w-]+)\/(publish|reconcile|resolve)$/, async (req, res, params) => {
     const body = await readBody(req);
     if (params[2] === 'publish' && body.confirm !== true) {

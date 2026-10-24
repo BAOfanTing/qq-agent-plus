@@ -153,7 +153,7 @@ test('C2/C3/C4 锚点：账号不一致走退避；MOMENT_BUSY 保住 deferredDa
     /#recordFailure\('QQ 登录账号与 qzone-interactions 状态文件不一致，本轮跳过'\)/);
   assert.match(src('src/features/daily-moments.js'),
     /error\?\.code === 'TIME_CONTROL_INACTIVE' \|\| error\?\.code === 'MOMENT_BUSY'\) this\.deferredDay = dayKey;/);
-  assert.match(src('src/features/daily-moments.js'), /dayKey: slot\.dayKey, publish: true/);
+  assert.match(src('src/features/daily-moments.js'), /dayKey: slot\.dayKey, publish: cfg\.autoPublish === true/);
 });
 
 test('C5/D1 锚点：狼人杀毒药解析最长前缀优先；好友列表失败沿用旧库', () => {

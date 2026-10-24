@@ -166,7 +166,7 @@ $DATA_DIR/plugins/weather/
 }
 ```
 
-校验是 **fail-closed** 的：`id` 必须与目录名一致、`apiVersion` 必须等于本机支持值、`capabilities`
+校验是 **fail-closed** 的：`id` 必须与目录名一致、`apiVersion` 必须是本机支持的版本（1 或 2）、`capabilities`
 只认白名单、`entry` 必须落在插件目录内（防目录穿越）、`tools[].name` 只许小写字母数字下划线、
 `everyMs` 有上下限（1 分钟 ~ 7 天）。任一项不合法 → 拒载并在日志/控制台给出原因，不会静默跳过。
 
@@ -194,6 +194,85 @@ $DATA_DIR/plugins/weather/
 | `cap.config.get` | `config` |
 | `cap.http.request` | `http` |
 | `cap.send.text` | `send` |
+| `cap.secrets.get` / `cap.secrets.set` | `secrets`（只能读写 manifest 里声明为 `secret` 的字段） |
+| `cap.approval.check` | `approval`（动作必须写在 manifest.approvals 里） |
+| `cap.quota.consume` | `quota`（动作必须写在 manifest.quotas 里） |
+| `cap.media.download` / `cap.media.probe` / `cap.media.merge` | `media` |
+| `cap.send.file` | `send`（目前只支持群聊） |
+
+## apiVersion 2：设置面板、凭据、授权、配额与媒体
+
+v2 没有改协议方法名，只**加能力**与 manifest 字段。声明 `apiVersion: 2` 才能用下面这些；
+v1 插件原样可用，加载时 `apiVersion` 字段在 1 与 2 之间都算兼容。
+
+### 设置 schema（宿主统一渲染，作者不写 HTML）
+
+```json
+"settings": {
+  "groups": [{
+    "key": "account",
+    "title": "账号",
+    "description": "可选",
+    "fields": [
+      { "key": "sessdata", "label": "SESSDATA", "type": "secret", "help": "浏览器 Cookie" },
+      { "key": "quality", "label": "清晰度", "type": "select", "default": "32",
+        "options": [{ "value": "32", "label": "480P" }, { "value": "64", "label": "720P" }] },
+      { "key": "sendVideo", "label": "允许发视频", "type": "boolean", "default": false },
+      { "key": "maxFileMb", "label": "文件上限", "type": "number", "default": 60, "min": 5, "max": 80 }
+    ]
+  }]
+}
+```
+
+支持 `text` / `number` / `boolean` / `select` / `secret`。上限：8 组、32 个字段。
+普通字段写进 `plugins.settings.<id>`（插件用 `cap.config.get` 读）；`secret` 字段用宿主密钥
+（AES-256-GCM）加密落在 `data/plugin-secrets/<id>.json`，控制台只显示"已配置/未配置"，
+永远不会把明文回给页面。密钥文件在 `data/plugin-secrets/.key`（0600），**丢了已存凭据就解不开**，
+所以控制台与备份都要带上它。
+
+### 高风险动作：approval + quota
+
+```json
+"approvals": [{ "action": "interact", "label": "点赞/投币", "defaultUses": 1 }],
+"quotas": { "interact": 30 }
+```
+
+- 管理员在插件详情里点"批准一次 / 批准 10 次"，生成一张有时限（默认 10 分钟，最少 1 分钟）与次数的通行证；
+- 插件每次写操作前调 `cap.approval.check { action, consume: true }`，没批准/过期/次数用完都返回 `approved:false`；
+- 配额由宿主按"插件 + 动作 + 当天"计数，跨天归零；没在 `quotas` 里声明的动作调用 `cap.quota.consume` 直接报错；
+- `approvals` 必须同时声明 `approval` 能力，`quotas` 必须声明 `quota` 能力，`secret` 字段必须声明 `secrets` 能力。
+
+### HTTP 与媒体边界
+
+- `httpDomains`（v2）：声明后，`cap.http.request` 与 `cap.media.download` 只允许这些主机及其子域；
+  v1 不加白名单时沿用"公网但禁内网"的默认守卫。
+- `cap.http.request` 的 v2 参数：`method` 只允许 GET / POST；POST 可带 `headers` 与 `body`（≤64KB）。
+  **带方法/凭据的请求不会跟随重定向** —— 否则一次 302 就能把 Cookie 带到别的地址。
+- `cap.media.download` 只写插件自己的 `plugin-data/<id>/media/`，单文件上限 80MB，只保留最近 5 个；
+  `cap.media.merge` 由宿主调用 ffmpeg（固定参数、不经 shell）；`cap.send.file` 只能发这个目录里的文件，
+  且只支持群聊。插件自己跑不了命令，也拿不到别的目录。
+
+### 写操作信任模型（v2.1）
+
+写操作（点赞/评论/发弹幕这类会改变外部账号数据的动作）在宿主侧过**三层门**，插件绕不过：
+
+1. **动作开关（默认关）**：manifest 工具声明 `"action": "interact"`（对应 approvals 清单里的动作），
+   控制台打开 `plugins.switches.<插件>.<动作>` 才注册这个工具 —— 关着时模型根本看不见；
+2. **对象级批准**：调用时宿主按 `actionTarget`（参数名，可数组）取目标，生成**绑定该目标**的待批请求
+   （`actionPreview` 指向的参数会进批准预览），管理员在控制台待批列表或私聊回「同意/拒绝」批准；
+   一次批准默认 10 分钟内单次有效；同插件两次写至少间隔 60 秒；
+3. **当天配额**（manifest.quotas）＋**失败退还**：插件抛错或返回 `ok:false` 时，已扣的批准与配额自动退回。
+
+插件契约：写工具执行前先查当前状态（已做过就跳过返回 `skipped`），执行后**回读核验**并把 `verified` 带回；
+宿主把每次写操作记进审计（控制台插件详情「最近写操作」）。插件不需要（也不应该）再调 cap.approval.check。
+
+其它 v2.1：manifest `engines.minVersion`（安装与**每次加载**都校验）、工具级 `timeoutMs`（1s-300s）、
+`httpMaxBytes`（响应上限 40KB-512KB）、可选 `probe` 协议方法（控制台「检测登录」按钮）。
+
+### 官方例子
+
+`examples/plugins/bilibili` 是完整的 v2 例子：读接口、DASH 下载合流、写操作（授权 + 配额）。
+它的用法与限制见 [BILIBILI.md](BILIBILI.md)。
 
 形状最小到能照抄：
 
@@ -221,9 +300,10 @@ process.stdin.on('data', (chunk) => {
 
 ## 写一个插件（作者向）
 
-**先看活例子**：`examples/plugins/` 下有七个官方插件 —— `weather`（天气，走不需要 Key 的
+**先看活例子**：`examples/plugins/` 下有八个官方插件 —— `weather`（天气，走不需要 Key 的
 Open-Meteo；也是 issue #37 那个原始诉求）、`gh-activity`（GitHub 仓库动态）、`translate`（翻译）、
-`exchange-rate`（汇率）、`hot-topics`（热榜）、`rss`（订阅源）、`ip-info`（IP 归属地）。
+`exchange-rate`（汇率）、`hot-topics`（热榜）、`rss`（订阅源）、`ip-info`（IP 归属地）、
+`bilibili`（B 站：读/观看/互动，apiVersion 2 的完整例子）。
 七个都能在控制台一键装，都是**零依赖、不 import 宿主内部模块、不自己发请求**的写法，
 一个文件一百多行，照着改最快；每个的 README 里有"拷目录 / 打包分发"两条路。
 
@@ -362,6 +442,7 @@ CI 里可选），`--json` 给机器读。
 插件与宿主之间只有一份契约：`apiVersion`。政策写死如下，避免"升个级插件全废"这类生态事故：
 
 - **`apiVersion` 只增不改**：同一版本号内的协议方法、能力名字与语义不改（改语义等于换版本）。
+  本机当前支持 1 与 2；v1 插件不需要任何改动。
 - **破坏性变更必须升 `apiVersion`**，并且宿主在**加载时**就拒绝不认识的版本（不是跑起来才崩）。
   本机支持的版本见 `docs/PLUGINS.md` 与本仓 `src/plugins/manifest.js` 的 `PLUGIN_API_VERSION`。
 - **能力只增不删**：新能力加名字（宿主按声明注入）；废弃的能力先标记、跨至少两个 minor 版本再移除，

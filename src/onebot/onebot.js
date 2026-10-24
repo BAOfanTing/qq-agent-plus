@@ -63,6 +63,10 @@ export class OneBotClient {
     this.pingUnsupported = false;   // 本进程内"这个对端不吃 ping"的记忆（换协议端/升级后重启即忘）
     this.pongsSeen = 0;             // 当前连接的 pong 计数（只有一条连接是"当前"，用实例字段即可）
     this.lastPingAt = 0;
+    // 入站新鲜度：协议端可能"连接还在、事件停了"（半开连接、上游卡死、账号被踢）。
+    // 只看 connected 会把这种情况当成正常；巡检与控制台拿这两个时间判断"是不是早就不动了"。
+    this.lastEventAt = 0;
+    this.lastHeartbeatAt = 0;
     this.socket = null;
     this.connected = false;
     this.everConnected = false;
@@ -207,6 +211,11 @@ export class OneBotClient {
         return;
       }
       try { this.onEvent(frame); } catch (error) { console.error('[onebot] 事件处理出错:', error); }
+      // 只改时间戳，不拦截事件：新鲜度是"观测"，不是门禁。
+      this.lastEventAt = Date.now();
+      if (frame.post_type === 'meta_event' && frame.meta_event_type === 'heartbeat') {
+        this.lastHeartbeatAt = this.lastEventAt;
+      }
     });
     socket.on('close', (code, reasonBuffer) => {
       if (!isCurrent(socket)) return; // 旧连接的迟到 close：新连接已在处理

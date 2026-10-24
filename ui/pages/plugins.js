@@ -20,6 +20,11 @@ import { iconSvg } from '../core/icons.js';
 // README 是作者写的 markdown：与 Release 说明共用同一条"先整体转义、再换少量样式"的通路
 //（见 ui/core/format.js 的 formatMinimalMarkdown）—— 不自己再写一份渲染器。
 import { formatMinimalMarkdown } from '../core/format.js';
+import {
+  hasPluginSettings, hydratePluginSettings, savePluginSettings,
+  toggleWriteSwitch, decidePendingApproval, clearPluginSecretField, probePlugin,
+  startQrLogin, pollQrOnce, setSettingsStatus, stopQrPoll
+} from './plugin-settings.js';
 
 const CAP_LABELS = {
   tools: '给模型加工具',
@@ -29,7 +34,11 @@ const CAP_LABELS = {
   log: '写日志',
   storage: '存自己的状态',
   config: '读自己的配置',
-  send: '代机器人发言'
+  send: '代机器人发言',
+  secrets: '保存凭据（加密）',
+  approval: '高风险动作需批准',
+  media: '下载与转码媒体',
+  quota: '受每日配额限制'
 };
 
 // 「发布插件」里那三条路的地址：**一处定义**（页面与用例引用同一份，改仓库名不会两边对不上）。
@@ -43,7 +52,8 @@ const PUBLISH = {
 // 权限的图标：与常量表同一套键，缺了就用中性图标兜底（新增能力时不至于渲染成空白）
 const CAP_ICONS = {
   tools: 'sliders', observe: 'chat', schedule: 'clock', http: 'globe',
-  log: 'file', storage: 'database', config: 'gear', send: 'zap'
+  log: 'file', storage: 'database', config: 'gear', send: 'zap',
+  secrets: 'idcard', approval: 'shield', media: 'play', quota: 'gauge'
 };
 
 // 权限的"人话解释"：市场页面靠这一栏让使用者判断"要不要信它"。CAP_LABELS 是短词（卡面/台账用），
@@ -56,7 +66,11 @@ const CAP_DETAILS = {
   log: '写日志：它能往控制台日志里写一行（带插件前缀，会脱敏）',
   storage: '存自己的状态：状态由宿主落盘到 plugin-data/<id>/，卸载不删；插件进程自己写不了文件',
   config: '读自己的配置：只能读 plugins.settings 里属于它自己那一段（密钥填那里，别写进代码）',
-  send: '代机器人发言：它能以机器人的身份在群里说话（走发送队列：禁言预检、限频、白名单都在）'
+  send: '代机器人发言：它能以机器人的身份在群里说话（走发送队列：禁言预检、限频、白名单都在）',
+  secrets: '保存凭据（加密）：Cookie/Token 用宿主密钥加密落盘；控制台只显示已配置/未配置，不回显明文',
+  approval: '高风险动作需批准：点赞/评论这类写操作要先由管理员在插件详情里批准，过期或次数用完自动失效',
+  media: '下载与转码媒体：下载与 ffmpeg 合流都由宿主执行（插件进程不能自己跑命令），有体积上限',
+  quota: '受每日配额限制：宿主按插件+动作+当天计数，超过上限直接拒绝'
 };
 
 const STATE_LABELS = {
@@ -738,6 +752,14 @@ function renderPluginDetail(item, installed, skipped) {
     : esc(item.description || '（这个插件没写说明）')}</div>
             ${screenshots.length ? `<div class="pd-shots">${screenshots.map((url) => `<img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" />`).join('')}</div>` : ''}
           </div>
+          ${hasPluginSettings(own) ? `<div class="pd-block plugin-settings-block" data-pd-settings="${esc(item.id)}">
+            <h4 class="pd-block-title">插件设置</h4>
+            <div class="pd-settings-body"><span class="plugin-note">正在读取设置…</span></div>
+          </div>` : ''}
+          ${String(item.changelog || '').trim() ? `<div class="pd-block">
+            <h4 class="pd-block-title">更新日志</h4>
+            <div class="pd-readme">${formatMinimalMarkdown(String(item.changelog).trim(), { rich: true })}</div>
+          </div>` : ''}
           <div class="pd-block">
             <h4 class="pd-block-title">它要哪些权限</h4>
             ${permissionListHtml(item.capabilities)}
@@ -1001,6 +1023,8 @@ function renderIndex(index, installed) {
     paintIndexNotes(null);
     box.className = '';                       // 详情不是网格（否则内容宽度会被网格列裁窄）
     box.innerHTML = renderPluginDetail(detail, installed, skipped);
+    // 设置面板的数据挂在装机记录里（schema 是 manifest 的一部分）：详情先渲染骨架，再异步填表单。
+    void hydratePluginSettings(detail.id);
     return;
   }
   if (facetsBox) facetsBox.style.display = '';
@@ -1383,6 +1407,69 @@ function bindPluginsSection() {
     const closer = event.target?.closest?.('[data-plugin-close]');
     const tagChip = event.target?.closest?.('[data-plugin-tag]');
     if (!button) {
+      const writeSwitch = event.target?.closest?.('[data-pd-write-switch]');
+      if (writeSwitch) {
+        event.preventDefault();
+        const block = writeSwitch.closest?.('[data-pd-settings]');
+        // checkbox 的 checked 在点击后已翻转：以翻转后的值为准
+        await toggleWriteSwitch(
+          block?.getAttribute?.('data-pd-settings') || '',
+          writeSwitch.getAttribute('data-pd-write-switch') || '',
+          writeSwitch.checked === true
+        );
+        return;
+      }
+      const pendingBtn = event.target?.closest?.('[data-pd-approve-pending]');
+      if (pendingBtn) {
+        event.preventDefault();
+        const block = pendingBtn.closest?.('[data-pd-settings]');
+        await decidePendingApproval(
+          block?.getAttribute?.('data-pd-settings') || '',
+          pendingBtn.getAttribute('data-pd-approve-pending') || '',
+          pendingBtn.getAttribute('data-pd-decision') === 'reject' ? 'reject' : 'approve'
+        );
+        return;
+      }
+      const qrLogin = event.target?.closest?.('[data-pd-qr-login]');
+      if (qrLogin) {
+        event.preventDefault();
+        await startQrLogin(qrLogin.getAttribute('data-pd-qr-login') || '');
+        return;
+      }
+      const qrPoll = event.target?.closest?.('[data-pd-qr-poll]');
+      if (qrPoll) {
+        event.preventDefault();
+        await pollQrOnce(qrPoll.getAttribute('data-pd-qr-poll') || '');
+        return;
+      }
+      const qrStop = event.target?.closest?.('[data-pd-qr-stop]');
+      if (qrStop) {
+        event.preventDefault();
+        stopQrPoll();
+        const block = qrStop.closest?.('[data-pd-settings]');
+        const id = block?.getAttribute?.('data-pd-settings') || '';
+        if (id) setSettingsStatus(id, '已取消等待扫码', '');
+        return;
+      }
+      const probeBtn = event.target?.closest?.('[data-pd-probe]');
+      if (probeBtn) {
+        event.preventDefault();
+        await probePlugin(probeBtn.dataset.pdProbe || '');
+        return;
+      }
+      const secretClear = event.target?.closest?.('[data-pd-secret-clear]');
+      if (secretClear) {
+        event.preventDefault();
+        const block = secretClear.closest?.('[data-pd-settings]');
+        await clearPluginSecretField(block?.getAttribute?.('data-pd-settings') || '', secretClear.getAttribute('data-pd-secret-clear') || '');
+        return;
+      }
+      const saveSettings = event.target?.closest?.('[data-pd-settings-save]');
+      if (saveSettings) {
+        event.preventDefault();
+        await savePluginSettings(saveSettings.dataset.pdSettingsSave || '');
+        return;
+      }
       if (opener?.dataset?.pluginOpen && $('#plugins-page')) {
         openPluginDetail(opener.dataset.pluginOpen);
         return;

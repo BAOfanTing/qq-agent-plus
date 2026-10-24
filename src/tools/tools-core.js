@@ -558,9 +558,12 @@ export function buildToolDefs() {
           if (!outgoing.length) return err('消息内容为空', { reportIncident: false });
           const result = await ctx.sender.sendTextBatch(ctx.chatKey, outgoing, {
             runId: ctx.session.leaseId, signal: ctx.signal,
+            // 人格回复才做气泡整形/角色节奏（send_message 是模型"说话"的唯一通路）
+            persona: true,
             // grounded 与 card（角色卡优先）都不做"空格/换行重排"：卡自己决定句式，
             // 平台只保证代码块与缩进不被拆坏（card 档不套平台语气，但技术内容仍是内容）。
             preserveCode: ctx.behaviorProfile === 'grounded' || ctx.behaviorProfile === 'card',
+            voice: ctx.voice || null,
             replyToMessageId: normalizeMid(args.replyToMessageId) || null,
             atUserId: normalizeMid(args.atUserId) || null
           });
@@ -2117,7 +2120,7 @@ export function buildToolDefs() {
     },
     {
       name: 'remind',
-      description: '给当前会话设一个定时提醒（到点你会被唤醒，用你的口吻把这件事说出来）；也可查询/取消。minutes 或 HH:MM 二选一，HH:MM 按北京时间、已过则算明天。这是给别人设的提醒（重启后依然有效），与给自己排开口时机的 schedule_wake 不同。'
+      description: '给当前会话设一个定时提醒（到点你会被唤醒，用你的口吻把这件事说出来）；也可查询/取消。minutes 或 HH:MM 二选一，HH:MM 按北京时间、已过则算明天。这是给别人设的提醒（重启后依然有效），与给自己排开口时机的 schedule_wake 不同。要重复提醒（每天几点、工作日几点）就传 repeat（"daily" / "weekly:mon" / 5 字段 cron），到点自动续；只想要一次就别传。'
         + '是「A 让你提醒 B」时（如"12 点提醒他吃饭"），把 to 填成被提醒的人、from 填成提要求的人 —— 到点你才能说清是谁请你提醒谁，别让被提醒的人以为是自己设的。from 要能在最近这轮消息里对上人（填他的群名片/备注名或 QQ 号；对不上就不会记录）。',
       parameters: {
         type: 'object',
@@ -2159,7 +2162,18 @@ export function buildToolDefs() {
           return ok({ canceled: true, text: hit.text, at: fmt(hit.at) });
         }
         let at = null;
-        if (args.at !== undefined && String(args.at).trim() !== '') {
+        const repeatText = String(args.repeat ?? '').trim();
+        if (repeatText) {
+          // 周期提醒：at/minutes 只定首次触发点；周期本身由 repeat 决定（到点后自动续）
+          if (args.at !== undefined && String(args.at).trim() !== '') {
+            at = nextAtFromHHMM(String(args.at));
+            if (at === null) return err('at 需要是 HH:MM（24 小时制，如 09:30）');
+          } else {
+            const m = Number(args.minutes);
+            if (!Number.isFinite(m) || m < 1 || m > 30 * 24 * 60) return err('minutes 需要是 1~43200 之间的数字（最多 30 天）');
+            at = Date.now() + Math.round(m) * 60000;
+          }
+        } else if (args.at !== undefined && String(args.at).trim() !== '') {
           at = nextAtFromHHMM(String(args.at));
           if (at === null) return err('at 需要是 HH:MM（24 小时制，如 09:30）');
         } else {
@@ -2189,7 +2203,9 @@ export function buildToolDefs() {
             chatKey: ctx.chatKey, at,
             text: String(args.text ?? ''),
             createdBy,
-            targetName: String(args.to ?? '')
+            targetName: String(args.to ?? ''),
+            repeat: repeatText || null,
+            quiet: getConfig().reminders?.quiet || null
           });
           return ok({
             created: true, id, at: fmt(at),

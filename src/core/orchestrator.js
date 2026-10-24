@@ -128,7 +128,7 @@ import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetrya
 import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
 import { normalizeMid } from '../tools/tools-core.js';
 import { visionEnabled } from '../llm/vision-scan.js';
-import { resolvePersona } from '../personas.js';
+import { resolvePersona, voiceForPersona } from '../personas.js';
 import { currentProviders } from './providers.js';
 import { buildSlangContextForChat } from '../console/asset-observer.js';
 import { parseInlineToolCalls } from '../tools/inline-tools.js';
@@ -278,6 +278,10 @@ export function proactiveCandidates({
   chatKeys = [], cfg = {}, metaOf = () => ({}), now = Date.now(),
   canWake = () => true, isRunning = () => false
 } = {}) {
+  // 注入点先落本地 const（ops scan --strict 只认 const/let；同 capabilities.js 约定）
+  const metaOfFn = metaOf;
+  const canWakeFn = canWake;
+  const isRunningFn = isRunning;
   const idleMs = Math.max(300000, Number(cfg.proactive?.idleThresholdMs) || 1800000);
   const allowGroups = idList(cfg.allow?.groups);
   const scopes = proactiveScopes(cfg);
@@ -292,9 +296,9 @@ export function proactiveCandidates({
     } else {
       continue;
     }
-    if (!canWake(chatKey)) continue;
-    if (isRunning(chatKey)) continue;
-    const meta = metaOf(chatKey) || {};
+    if (!canWakeFn(chatKey)) continue;
+    if (isRunningFn(chatKey)) continue;
+    const meta = metaOfFn(chatKey) || {};
     if (meta.unread > 0) continue;
     if (now - (Number(meta.lastTs) || 0) < idleMs) continue;
     out.push(chatKey);
@@ -2227,6 +2231,7 @@ export class Orchestrator {
       selfNickname,
       botName: persona.botName,
       behaviorProfile: persona.behaviorProfile || 'legacy',
+      voice: voiceForPersona(persona),
       onebot: this.onebot,
       store: this.store,
       memory: this.memory,

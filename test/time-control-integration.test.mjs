@@ -146,6 +146,9 @@ test('daily summary excludes inactive source conversations even when globally ac
   const { cfg, app, calls } = fixture(t);
   cfg.timeControl.schedule = { mode: 'always', windows: [] };
   cfg.timeControl.overrides['group:1'] = { mode: 'custom', windows: [] };
+  // 这条验的是"群聊来源在非活跃时段被排除后，当天直接跳过、不调模型"；
+  // 默认来源已改成 self（Self 本来就不收集群聊），所以要显式指定 group。
+  cfg.dailyMoments.source = 'group';
   setRuntimeConfig(cfg);
   const result = await app.dailyMoments.runNow({ publish: false });
   assert.equal(result.record.groupCount, 0);

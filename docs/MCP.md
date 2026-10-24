@@ -60,3 +60,16 @@ MCP server 是第三方代码，能读你给它的目录、能访问网络（取
 - **RAG**：从文档里检索答案；MCP 的 filesystem server 只能读文件，不等于 RAG。
 
 MCP 不会让人设更像真人，它扩展的是“能做什么”。
+
+
+## Resources（只读，2026-10）
+
+把机器人的一部分数据以 MCP 资源暴露给外部客户端（只读）：
+
+- `qq-agent://memory/people` —— 全局人物记忆（印象摘要，伪造段头已弱化）
+- `qq-agent://memes` —— 群梗库（词条→含义）
+- `qq-agent://reminders` —— 待触发的定时/周期提醒
+
+启动：`node src/mcp/resource-server.js`（stdio JSON-RPC；环境变量 QQ_AGENT_DATA_DIR 与主进程一致）。
+外部 MCP 客户端里把这个命令配成 server 即可。范围刻意收窄：**没有**会话记录、配置与凭据，
+也没有任何写路径。

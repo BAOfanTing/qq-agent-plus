@@ -56,7 +56,7 @@ test('summarizes once, publishes an optional refreshed image, and prevents dupli
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
   cfg.dailyMoments = {
-    ...cfg.dailyMoments,
+    ...cfg.dailyMoments, source: 'group', autoPublish: true,
     enabled: true,
     minMessagesPerGroup: 1,
     allowImages: true,
@@ -200,7 +200,7 @@ test('summarizes once, publishes an optional refreshed image, and prevents dupli
   assert.match(firstUserPrompt, /"candidates"/, '写说说只给候选瞬间，不再塞整天群日志');
   assert.doesNotMatch(firstUserPrompt, /"messages"/, '整天消息数组不应再进写说说提示词');
   // 版本字面量：docs/DAILY_MOMENTS.md 指着它，改提示词就得同步升，别只改一处。
-  assert.equal(MOMENT_PROMPT_VERSION, 'persona-moment-v4', '提示词版本要与 docs/DAILY_MOMENTS.md 一致');
+  assert.equal(MOMENT_PROMPT_VERSION, 'persona-moment-v5', '提示词版本要与 docs/DAILY_MOMENTS.md 一致');
 
   const result = await manager.runNow({ publish: true });
   assert.equal(result.record.status, 'published');
@@ -235,7 +235,7 @@ test('群聊材料与抓回的网页正文都过 sanitizeUserText（伪造段头
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
   cfg.dailyMoments = {
-    ...cfg.dailyMoments,
+    ...cfg.dailyMoments, source: 'group', autoPublish: true,
     enabled: true,
     minMessagesPerGroup: 1,
     allowImages: false,
@@ -315,7 +315,7 @@ test('交接文本（topic/summary/facts/nextStep）同样过 sanitizeUserText',
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
-  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: true, minMessagesPerGroup: 1, allowImages: false, maxImages: 0 };
+  cfg.dailyMoments = { ...cfg.dailyMoments, source: 'group', autoPublish: true, enabled: true, minMessagesPerGroup: 1, allowImages: false, maxImages: 0 };
   setRuntimeConfig(cfg);
 
   const seenMaterials = [];
@@ -383,7 +383,7 @@ test('deny.groups 里的群不进快照：既不调模型也不外发（2026-10-
     ...DEFAULT_CONFIG,
     allow: { groups: ['1'] },          // 白名单里仍然有它
     deny: { groups: ['1'] },           // 但管理员手改把屏蔽名单也加上了
-    dailyMoments: { ...DEFAULT_CONFIG.dailyMoments, enabled: true, chats: ['group:1'] }
+    dailyMoments: { ...DEFAULT_CONFIG.dailyMoments, source: 'group', enabled: true, chats: ['group:1'] }
   });
   const { DailyMomentsManager } = await import('../src/features/daily-moments.js');
   const manager = new DailyMomentsManager({
@@ -405,7 +405,7 @@ test('本地表情库的 base64 候选：不进 http 校验/抓取，整图原�
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
-  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: true, minMessagesPerGroup: 1, allowImages: true, maxImages: 1 };
+  cfg.dailyMoments = { ...cfg.dailyMoments, source: 'group', autoPublish: true, enabled: true, minMessagesPerGroup: 1, allowImages: true, maxImages: 1 };
   setRuntimeConfig(cfg);
 
   const message = {
@@ -476,7 +476,7 @@ test('纪事体正文被退回重写一次、第二次照收；干净正文不�
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
-  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: true, minMessagesPerGroup: 1, allowImages: false, maxImages: 0, maxRounds: 4 };
+  cfg.dailyMoments = { ...cfg.dailyMoments, source: 'group', autoPublish: true, enabled: true, minMessagesPerGroup: 1, allowImages: false, maxImages: 0, maxRounds: 4 };
   setRuntimeConfig(cfg);
 
   const message = { id: 1, mid: '9001', ts: Date.now(), self: false, senderName: '群友', senderId: '22222', text: '今天聊了不少', media: [] };
@@ -566,7 +566,7 @@ test('纪事体重写有单独一轮预算：提交正好落在最后一轮也�
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
-  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: true, minMessagesPerGroup: 1, allowImages: false, maxImages: 0, maxRounds: 2 };
+  cfg.dailyMoments = { ...cfg.dailyMoments, source: 'group', autoPublish: true, enabled: true, minMessagesPerGroup: 1, allowImages: false, maxImages: 0, maxRounds: 2 };
   setRuntimeConfig(cfg);
 
   const message = { id: 1, mid: '9002', ts: Date.now(), self: false, senderName: '群友', senderId: '22222', text: '今天聊了不少', media: [] };
@@ -609,7 +609,7 @@ test('每日动态的群记忆遵守 memory.visibility', async () => {
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
-  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: true, minMessagesPerGroup: 1, allowImages: false };
+  cfg.dailyMoments = { ...cfg.dailyMoments, source: 'group', autoPublish: true, enabled: true, minMessagesPerGroup: 1, allowImages: false };
   cfg.memory = { ...cfg.memory, visibility: { mode: 'perChat', hidePrivateInGroup: true } };
   setRuntimeConfig(cfg);
   let userPrompt = '';
@@ -660,4 +660,47 @@ test('每日动态的群记忆遵守 memory.visibility', async () => {
   await manager.runNow({ publish: false });
   assert.equal(userPrompt.includes('私聊里的秘密'), false, '私聊来源的印象不能进公开说说');
   assert.equal(userPrompt.includes('群里的公开印象'), true, '本群来源的印象照常可用');
+});
+
+test('QQ空间 self 来源：不收集群聊，groupSummaries 为空，默认只生成草稿', async () => {
+  const now = Date.parse('2026-10-23T14:00:00Z');
+  const cfg = structuredClone(DEFAULT_CONFIG);
+  cfg.runtime.mode = 'active';
+  cfg.allow.groups = ['1'];
+  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: true, source: 'self', autoPublish: false };
+  setRuntimeConfig(cfg);
+  assert.equal(cfg.dailyMoments.autoPublish, false);
+  assert.equal(cfg.dailyMoments.source, 'self');
+
+  let prompt = '';
+  const manager = new DailyMomentsManager({
+    store: { listChats: () => ['group:1'], recent: () => [] },
+    memory: { members: () => [], getHandoff: () => null },
+    stickers: { sync: async () => ({ entries: [] }), findForSend: async () => null },
+    onebot: { selfId: '1', selfNickname: '小鲸鱼', getMsg: async () => ({ message: [] }), call: async () => ({}) },
+    resolveChatName: async () => '测试群',
+    complete: async ({ messages }) => {
+      prompt = String(messages?.[1]?.content || '');
+      return {
+        model: 't',
+        message: { content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'submit_daily_moment', arguments: JSON.stringify({
+          decision: 'skip', reason: '没有想说的', content: '', imageIds: [], groupSummaries: []
+        }) } }] },
+        usage: {}
+      };
+    },
+    search: async () => ({ results: [] }),
+    validateImage: async (url) => url,
+    fetchBinary: async () => ({ buffer: Buffer.alloc(0), contentType: 'image/png' }),
+    now: () => now,
+    random: () => 0,
+    stateFile: path.join(root, 'dm-self-source.json'),
+    log: () => {}
+  });
+  const result = await manager.runNow({ publish: false });
+  assert.equal(result.record.status, 'preview');
+  assert.equal(result.record.contentSource, 'self');
+  assert.match(prompt, /【内容来源】人设自己的动态/);
+  assert.doesNotMatch(prompt, /"messages"|【群聊材料】/, 'self 模式不能把群消息塞进提示词');
+  assert.deepEqual(result.record.groupSummaries, []);
 });

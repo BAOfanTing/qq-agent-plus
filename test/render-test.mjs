@@ -499,6 +499,7 @@ try {
   const momentsHtml = ctx.renderDailyMomentsSection(cfg);
   const momentControls = [
     'cfg-moments-enabled', 'cfg-moments-catchup',
+    'cfg-moments-source', 'cfg-moments-autopublish',
     'cfg-moments-hour', 'cfg-moments-minute', 'cfg-moments-visibility',
     'cfg-moments-min-messages', 'cfg-moments-max-groups',
     'cfg-moments-max-messages', 'cfg-moments-images',
