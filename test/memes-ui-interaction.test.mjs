@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { Window } from 'happy-dom';
+
+// 缺 happy-dom 时自动跳过（D6 约定：更新器环境是 npm ci --omit=dev，devDependencies 不装）
+let Window = null;
+try {
+  ({ Window } = await import('happy-dom'));
+} catch (e) {
+  if (e?.code !== 'ERR_MODULE_NOT_FOUND') throw e;
+}
+const SKIP = Window ? false : 'happy-dom 未安装（devDependencies；--omit=dev 环境按约定跳过）';
+const it = (name, fn) => (SKIP ? test.skip(name, { skip: SKIP }, fn) : test(name, fn));
 
 const window = new Window();
 globalThis.window = window;
@@ -21,7 +30,7 @@ function mount() {
   };
 }
 
-test('会话选择器：点选/取消、搜索筛选、筛选结果全选、清空', () => {
+it('会话选择器：点选/取消、搜索筛选、筛选结果全选、清空', () => {
   const ui = mount();
   const check = (id) => ui.option(id).querySelector('input');
   check('group:123').click();
@@ -44,14 +53,14 @@ test('会话选择器：点选/取消、搜索筛选、筛选结果全选、清�
   assert.equal(ui.count(), '已选 0 个', '点标签上的 × 能取消');
 });
 
-test('没有群/私聊时不渲染选择器，但保留手动输入入口', () => {
+it('没有群/私聊时不渲染选择器，但保留手动输入入口', () => {
   document.body.innerHTML = renderMemesSection({ allow: { groups: [], private: [] } });
   bindExtensionSettings();
   assert.equal(document.querySelector('.meme-chat-option'), null);
   assert.ok(document.querySelector('#meme-chatkey-manual'));
 });
 
-test('已有梗库列表加载：GET /api/memes 的 entries 数组会渲染到列表', async () => {
+it('已有梗库列表加载：GET /api/memes 的 entries 数组会渲染到列表', async () => {
   document.body.innerHTML = renderMemesSection({ allow: { groups: ['123'], private: [] } });
   bindExtensionSettings();
   const originalFetch = globalThis.fetch;
