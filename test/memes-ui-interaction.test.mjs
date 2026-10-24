@@ -11,10 +11,13 @@ try {
 const SKIP = Window ? false : 'happy-dom 未安装（devDependencies；--omit=dev 环境按约定跳过）';
 const it = (name, fn) => (SKIP ? test.skip(name, { skip: SKIP }, fn) : test(name, fn));
 
-const window = new Window();
-globalThis.window = window;
-const document = globalThis.document = window.document;
-globalThis.HTMLElement = window.HTMLElement;
+// happy-dom 缺席时 Window 是 null —— 全局桩只有在真的装了依赖时才搭
+const window = Window ? new Window() : null;
+if (window) {
+  globalThis.window = window;
+  globalThis.document = window.document;
+  globalThis.HTMLElement = window.HTMLElement;
+}
 
 const { bindExtensionSettings, hydrateExtensionStatus, renderMemesSection } = await import('../ui/pages/settings-extensions.js');
 
