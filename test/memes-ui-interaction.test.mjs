@@ -21,15 +21,18 @@ if (window) {
 
 const { bindExtensionSettings, hydrateExtensionStatus, renderMemesSection } = await import('../ui/pages/settings-extensions.js');
 
+// 本文件内统一走 doc 别名：eslint 无法追踪 globalThis.document 的条件挂载
+const doc = () => globalThis.document;
+
 function mount() {
-  document.body.innerHTML = renderMemesSection({
+  doc().body.innerHTML = renderMemesSection({
     allow: { groups: ['123', '456'], private: ['789'] }
   });
   bindExtensionSettings();
   return {
-    option: (id) => document.querySelector(`.meme-chat-option[data-chatkey="${id}"]`),
-    count: () => document.querySelector('#memes-selected-count')?.textContent || '',
-    chips: () => [...document.querySelectorAll('.meme-chat-chip')].length
+    option: (id) => doc().querySelector(`.meme-chat-option[data-chatkey="${id}"]`),
+    count: () => doc().querySelector('#memes-selected-count')?.textContent || '',
+    chips: () => [...doc().querySelectorAll('.meme-chat-chip')].length
   };
 }
 
@@ -41,30 +44,30 @@ it('会话选择器：点选/取消、搜索筛选、筛选结果全选、清空
   assert.equal(ui.count(), '已选 2 个');
   assert.equal(ui.chips(), 2);
 
-  const search = document.querySelector('#memes-chat-search');
+  const search = doc().querySelector('#memes-chat-search');
   search.value = '456';
   search.dispatchEvent(new window.Event('input', { bubbles: true }));
   assert.equal(ui.option('group:123').hidden, true, '搜索后不匹配的会话隐藏');
   assert.equal(ui.option('group:456').hidden, false);
 
-  document.querySelector('#memes-clear-selected').click();
+  doc().querySelector('#memes-clear-selected').click();
   assert.equal(ui.count(), '已选 0 个');
-  document.querySelector('#memes-select-visible').click();
+  doc().querySelector('#memes-select-visible').click();
   assert.equal(ui.count(), '已选 1 个', '只选中当前筛选结果');
 
-  document.querySelector('.meme-chat-chip-remove').click();
+  doc().querySelector('.meme-chat-chip-remove').click();
   assert.equal(ui.count(), '已选 0 个', '点标签上的 × 能取消');
 });
 
 it('没有群/私聊时不渲染选择器，但保留手动输入入口', () => {
-  document.body.innerHTML = renderMemesSection({ allow: { groups: [], private: [] } });
+  doc().body.innerHTML = renderMemesSection({ allow: { groups: [], private: [] } });
   bindExtensionSettings();
-  assert.equal(document.querySelector('.meme-chat-option'), null);
-  assert.ok(document.querySelector('#meme-chatkey-manual'));
+  assert.equal(doc().querySelector('.meme-chat-option'), null);
+  assert.ok(doc().querySelector('#meme-chatkey-manual'));
 });
 
 it('已有梗库列表加载：GET /api/memes 的 entries 数组会渲染到列表', async () => {
-  document.body.innerHTML = renderMemesSection({ allow: { groups: ['123'], private: [] } });
+  doc().body.innerHTML = renderMemesSection({ allow: { groups: ['123'], private: [] } });
   bindExtensionSettings();
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => ({
@@ -74,7 +77,7 @@ it('已有梗库列表加载：GET /api/memes 的 entries 数组会渲染到列�
   });
   try {
     await hydrateExtensionStatus();
-    const html = document.querySelector('#memes-list')?.innerHTML || '';
+    const html = doc().querySelector('#memes-list')?.innerHTML || '';
     assert.match(html, /测试梗/);
     assert.match(html, /测试含义/);
     assert.match(html, /data-id="m1"/);
