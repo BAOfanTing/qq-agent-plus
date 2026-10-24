@@ -322,4 +322,6 @@ check('控制页不是错误提示', !controlHtml.includes('服务状态读取�
 
 await app.stop();
 console.log('\n' + (fail ? 'FAILED ' + fail : 'ALL PASSED ' + pass));
-process.exit(fail ? 1 : 0);
+// 不用 process.exit：app.stop() 之后还有句柄在异步关闭。Windows 上强制退出会撞
+// libuv 的 UV_HANDLE_CLOSING 断言——用例全过却以 127 结束（test-suite 重定向 TMP 后必现）。
+process.exitCode = fail ? 1 : 0;

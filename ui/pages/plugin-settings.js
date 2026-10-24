@@ -366,10 +366,13 @@ async function probePlugin(id) {
       return;
     }
     const info = result.info || {};
+    const ownerNote = info.owner?.configured
+      ? (info.owner.matches ? `｜主人绑定一致（UID ${info.owner.configured}）` : `｜⚠ 当前账号不是绑定的主人 UID ${info.owner.configured}，写操作会被拒绝`)
+      : '';
     const line = info.login === true
-      ? `登录有效（${info.uname || '已登录'}）`
-      : (info.apiOk === false ? 'B 站接口不可达' : String(info.note || '未登录'));
-    setSettingsStatus(id, `检测结果：${line}`, info.login === true ? 'success' : '');
+      ? `登录有效（${info.uname || '已登录'}${info.mid ? `，UID ${info.mid}` : ''}）${ownerNote}`
+      : (info.apiOk === false ? 'B 站接口不可达' : `${String(info.note || '未登录')}${ownerNote}`);
+    setSettingsStatus(id, `检测结果：${line}`, info.login === true && info.owner?.matches !== false ? 'success' : (info.owner?.matches === false ? 'error' : ''));
   } catch (error) {
     setSettingsStatus(id, `检测失败：${String(error?.message || error)}`, 'error');
   }

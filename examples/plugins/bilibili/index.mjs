@@ -128,6 +128,45 @@ async function requireLogin({ write = true } = {}) {
   return auth;
 }
 
+/** 用 nav 读平台实际登录身份（不信任 Cookie 里的 DedeUserID，它可能过期或与当前账号不一致）。 */
+async function navIdentity() {
+  const nav = await httpJson(`${API}/x/web-interface/nav`, { auth: true, allowCodes: [-101] });
+  return {
+    isLogin: nav?.data?.isLogin === true,
+    mid: String(nav?.data?.mid || ''),
+    uname: String(nav?.data?.uname || '')
+  };
+}
+
+/**
+ * 写操作专用：登录态 + 主人账号核对。
+ * 设置里填了 ownerMid（B 站 UID）后，平台实际登录的 mid 必须与它一致 —— 换账号/凭据失效时
+ * 直接拒绝写入，而不是拿别人的账号点赞投币（humanism 插件同款做法）。
+ */
+async function requireWriteAuth() {
+  const auth = await requireLogin();
+  const expected = String(setting('ownerMid', '') || '').trim();
+  if (!expected) return auth;
+  if (!/^\d+$/.test(expected)) throw new Error('插件设置里的主人 UID（ownerMid）必须是纯数字');
+  const who = await navIdentity();
+  if (!who.isLogin) throw new Error('写操作前核对失败：当前登录态无效，请重新登录后再试');
+  if (who.mid !== expected) {
+    throw new Error(`当前登录的是 UID ${who.mid}（${who.uname || '未知账号'}），不是绑定的主人 UID ${expected}：`
+      + '写操作已拒绝。要换账号请在控制台重新登录，或修改插件设置里的主人 UID');
+  }
+  auth.navMid = who.mid;
+  auth.navUname = who.uname;
+  return auth;
+}
+
+/** Cookie 里的 DedeUserID 可能缺失：收藏夹这类接口要 UID 时用 nav 的实际 mid 兜底。 */
+async function accountMidOf(auth) {
+  if (auth.mid) return auth.mid;
+  const who = await navIdentity();
+  if (!who.isLogin || !who.mid) throw new Error('拿不到当前账号 UID：请在插件设置里补 DedeUserID，或重新登录');
+  return who.mid;
+}
+
 // ── HTTP ────────────────────────────────────────────────────────────────
 function biliError(code, message) {
   const hints = {
@@ -367,6 +406,20 @@ const tools = {
       level: Number(u.level) || 0,
       url: userLink(id)
     };
+    // 直播状态：这是独立域名（api.live.bilibili.com），失败不影响资料本身
+    try {
+      const live = await httpJson(`https://api.live.bilibili.com/room/v1/Room/getRoomInfoOld?mid=${id}`, { allowCodes: [-400, -404] });
+      if (live?.data?.roomid) {
+        result.live = {
+          live: Number(live.data.liveStatus) === 1,
+          title: String(live.data.title || ''),
+          url: String(live.data.url || ''),
+          online: Number(live.data.online) || 0
+        };
+      }
+    } catch (error) {
+      result.liveError = String(error?.message || error);
+    }
     if (withVideos) {
       try {
         const url = await wbiUrl('/x/space/wbi/arc/search', { mid: id, pn: 1, ps: 6, order: 'pubdate' });
@@ -409,7 +462,7 @@ const tools = {
   async account({ what, mediaId, page, cursor } = {}) {
     // 只读接口有 SESSDATA 就够；doctor 要在 mid 检查之前（它就是用来排查配置缺项的）
     const auth = await requireLogin({ write: false });
-    if (what === 'doctor') {
+    if (what === 'doctor' || what === 'whoami') {
       return probeStatus();
     }
     if (!auth.mid && what !== 'favorites') throw new Error('需要 DedeUserID：请在插件设置里补上（B 站 UID）');
@@ -449,7 +502,7 @@ const tools = {
         results: (data?.data?.medias || []).map((item) => ({ bvid: item.bvid, title: item.title, author: item.upper?.name || '', url: item.bvid ? bvLink(item.bvid) : '' }))
       };
     }
-    throw new Error('what 只能是 history / favorites / followings');
+    throw new Error('what 只能是 whoami / doctor / history / favorites / followings');
   },
 
   // ── 扫码登录（聊天内完成，Cookie 进加密凭据、立即生效） ──
@@ -839,8 +892,10 @@ const tools = {
    * 失败直接 throw —— 宿主会把已扣的批准与配额退回去。
    */
   async interact({ action, bvid, mid, undo, count } = {}) {
-    const auth = await requireLogin();
-    if (!['like', 'coin', 'favorite', 'follow'].includes(action)) throw new Error('action 只能是 like / coin / favorite / follow');
+    const auth = await requireWriteAuth();
+    if (!['like', 'coin', 'favorite', 'follow', 'triple'].includes(action)) {
+      throw new Error('action 只能是 like / coin / favorite / follow / triple');
+    }
 
     if (action === 'follow') {
       const target = String(mid || '').trim();
@@ -857,6 +912,50 @@ const tools = {
     }
 
     const info = await viewOf(bvid);
+    if (action === 'triple') {
+      if (undo) throw new Error('triple 不支持撤销：请分别用 like / coin / favorite 的 undo');
+      const accountMid = await accountMidOf(auth);
+      // 先确认收藏夹存在，再动点赞/投币：否则收藏失败时前两步已经写出去，很难解释
+      const folders = await httpJson(`${API}/x/v3/fav/folder/created/list-all?up_mid=${accountMid}`, { auth: true });
+      const folder = (folders?.data?.list || [])[0];
+      if (!folder) throw new Error('你的账号还没有收藏夹，先在 B 站网页建一个再一键三连');
+      const inFolder = async () => {
+        const list = await httpJson(`${API}/x/v3/fav/resource/list?media_id=${folder.id}&pn=1&ps=20&keyword=${encodeURIComponent(info.bvid)}&platform=web`, { auth: true });
+        return (list?.data?.medias || []).some((item) => item.bvid === info.bvid);
+      };
+      const steps = {};
+
+      const liked = await likedState(info.bvid);
+      if (liked) steps.like = { skipped: 'already-liked', verified: true };
+      else {
+        await httpJson(`${API}/x/web-interface/archive/like`, {
+          method: 'POST', auth: true, form: { bvid: info.bvid, like: 1, csrf: auth.bili_jct }
+        });
+        steps.like = { verified: await likedState(info.bvid) };
+      }
+
+      const given = await coinState(info.bvid);
+      if (given >= 1) steps.coin = { skipped: `already-${given}-coins`, verified: true };
+      else {
+        await httpJson(`${API}/x/web-interface/coin/add`, {
+          method: 'POST', auth: true, form: { bvid: info.bvid, multiply: 1, select_like: 0, csrf: auth.bili_jct }
+        });
+        steps.coin = { count: 1, verified: (await coinState(info.bvid)) >= 1 };
+      }
+
+      if (await inFolder()) steps.favorite = { skipped: 'already-favorited', folder: folder.title, verified: true };
+      else {
+        await httpJson(`${API}/x/v3/fav/resource/deal`, {
+          method: 'POST', auth: true,
+          form: { rid: info.aid, type: 2, add_media_ids: String(folder.id), del_media_ids: '', csrf: auth.bili_jct }
+        });
+        steps.favorite = { folder: folder.title, verified: await inFolder() };
+      }
+
+      const verified = Object.values(steps).every((step) => step.verified);
+      return { ok: true, action, target: info.bvid, steps, verified, ...(verified ? {} : { partial: true }) };
+    }
+
     if (action === 'like') {
       const liked = await likedState(info.bvid);
       if (!undo && liked) return { ok: true, action, target: info.bvid, skipped: 'already-liked', verified: true };
@@ -884,8 +983,8 @@ const tools = {
     }
 
     // favorite：收藏到默认收藏夹（第一个），写后回读确认
-    if (!auth.mid) throw new Error('收藏需要 DedeUserID：请在插件设置里补上');
-    const folders = await httpJson(`${API}/x/v3/fav/folder/created/list-all?up_mid=${auth.mid}`, { auth: true });
+    const accountMid = await accountMidOf(auth);
+    const folders = await httpJson(`${API}/x/v3/fav/folder/created/list-all?up_mid=${accountMid}`, { auth: true });
     const folder = (folders?.data?.list || [])[0];
     if (!folder) throw new Error('你的账号还没有收藏夹，先在 B 站网页建一个');
     const inFolder = async () => {
@@ -907,7 +1006,7 @@ const tools = {
   },
 
   async comment({ bvid, text } = {}) {
-    const auth = await requireLogin();
+    const auth = await requireWriteAuth();
     const body = String(text || '').trim();
     if (!body) throw new Error('评论内容不能为空');
     if (body.length > 500) throw new Error('评论最多 500 字');
@@ -945,7 +1044,7 @@ const tools = {
   },
 
   async danmaku_send({ bvid, text, progressMs } = {}) {
-    const auth = await requireLogin();
+    const auth = await requireWriteAuth();
     const want = String(text || '').trim();
     if (!want) throw new Error('弹幕内容不能为空');
     if (want.length > 100) throw new Error('弹幕最多 100 字');
@@ -977,18 +1076,27 @@ async function probeStatus() {
   let apiOk = true;
   let login = false;
   let uname = '';
+  let mid = '';
   if (c.sessdata) {
     try {
       const nav = await httpJson(`${API}/x/web-interface/nav`, { auth: true, allowCodes: [-101] });
       login = nav?.data?.isLogin === true;
       uname = login ? String(nav.data.uname || '').slice(0, 24) : '';
+      mid = login ? String(nav.data.mid || '') : '';
     } catch { apiOk = false; }
   }
+  const boundOwner = String(setting('ownerMid', '') || '').trim();
   return {
     ok: true,
     login,
     writable: Boolean(c.sessdata && c.bili_jct),
+    mid,
     uname,
+    owner: {
+      configured: boundOwner,
+      // null = 没绑定主人 UID（不限制）；true/false = 当前登录账号与绑定是否一致
+      matches: boundOwner ? (Boolean(mid) && mid === boundOwner) : null
+    },
     apiOk,
     note: login
       ? (c.bili_jct ? '登录有效' : '登录有效，但缺 bili_jct：读操作可用，写操作不可用')
