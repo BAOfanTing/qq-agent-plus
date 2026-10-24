@@ -2972,7 +2972,7 @@ export function createApp({
       pending: listPendingApprovals(DATA_DIR).filter((item) => item.pluginId === id),
       writes: listPluginWrites(DATA_DIR, id, 30),
       // 登录徽标（可选）：插件实现了 probe 就带一份实测登录态，面板打开即见
-      loginInfo: await pluginRegistry.probePlugin(id).then((r) => (r.ok ? r.info : null)).catch(() => null)
+      loginInfo: await pluginRegistry.probePlugin(id).then((r) => (r.ok ? { ...r.info, measuredAt: Date.now() } : null)).catch(() => null)
     });
   });
 
@@ -3079,6 +3079,16 @@ export function createApp({
       });
     } catch (error) {
       return pluginError(res, error, 400);
+    }
+  });
+
+  // 全局待批计数（侧栏红点）：所有插件未批写操作请求的总数
+  router.add('GET', '/api/plugins/pending-count', async (_req, res) => {
+    try {
+      const list = listPendingApprovals(DATA_DIR);
+      return json(res, 200, { ok: true, count: list.length });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: String(error?.message ?? error) });
     }
   });
 
@@ -4933,7 +4943,9 @@ export function createApp({
       id: it.id, chatKey: it.chatKey, text: it.text, status: it.status || 'pending',
       at: it.at, createdAt: it.createdAt, finishedAt: it.finishedAt || null,
       // 归属（谁提的/提醒谁）：控制台列表要显示"谁请你提醒谁"（2026-10-10 反馈）
-      from: String(it.createdBy || ''), to: String(it.targetName || '')
+      from: String(it.createdBy || ''), to: String(it.targetName || ''),
+      // 周期信息（v2.1）：kind 与下一次触发点（re-arm 后的 at 就是下一期）
+      repeat: it.repeat?.kind || null
     });
     const pending = reminders.items
       .filter((it) => it.status === 'pending')

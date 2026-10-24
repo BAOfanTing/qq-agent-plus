@@ -57,6 +57,7 @@ function renderMcpSection(c) {
       </div>
       <div class="checkbox-row mcp-master"><input type="checkbox" id="cfg-mcp-enabled" ${mcp.enabled === true ? 'checked' : ''} />
         <label for="cfg-mcp-enabled">启用 MCP</label></div>
+      <div class="hint" id="mcp-resources-note">只读资源服务：<code>node src/mcp/resource-server.js</code>（stdio，与主进程同数据目录）。外部 MCP 客户端接上后可读三类资源：全局人物记忆、群梗库、待触发提醒——没有写路径，也没有会话记录与凭据。</div>
     </div>
     <div class="mcp-toolbar">
       <input type="search" id="mcp-registry-query" placeholder="搜索预设或官方 Registry…" />

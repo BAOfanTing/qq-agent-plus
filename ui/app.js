@@ -44,7 +44,7 @@ import {
   renderIdentityFeaturePageImpl, renderIncidentFeaturePageImpl
 } from './pages/features.js';
 import { loadMemoryView, renderMemoryList } from './pages/memory.js';
-import { loadPluginsPage } from './pages/plugins.js';
+import { loadPluginsPage, refreshPendingBadge } from './pages/plugins.js';
 import { renderExperimentalSettingsSectionImpl } from './pages/moments.js';
 import { loadSessionDetail, loadSessions } from './pages/sessions.js';
 import {
@@ -283,6 +283,7 @@ function switchTab(name) {
   if (name === 'incidents') loadIncidentFeaturePage();
   if (name === 'assets') loadAssetObservatory();
   if (name === 'plugins') loadPluginsPage({ force: true });
+  void refreshPendingBadge();
   if (name === 'usage') loadUsageView({ force: true });
   if (name === 'settings') {
     // 进设置页时忘掉"这个分区已经露过脸"：用户可能手动把菜单滚走了，当前项得再带进视野一次
@@ -1438,12 +1439,12 @@ async function init() {
       connectSSE();
       refreshStatus();
       startListPoller();   // 配置已就绪，把 4s 兜底轮询校准到 ui.refreshMs
-      setInterval(refreshStatus, refreshIntervalMs(15000));
+      setInterval(() => { refreshStatus(); void refreshPendingBadge(); }, refreshIntervalMs(15000));
       return;
     }
   } catch { /* 按默认流程走 */ }
   refreshStatus();
-  setInterval(refreshStatus, refreshIntervalMs(15000));
+  setInterval(() => { refreshStatus(); void refreshPendingBadge(); }, refreshIntervalMs(15000));
   connectSSE();
   // 首次 startListPoller() 在配置加载前执行，会落到 4000ms 兜底值，导致会话列表每 4 秒重建一次（界面闪烁）；
   // 配置就绪后重新校准一次轮询间隔

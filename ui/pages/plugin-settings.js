@@ -35,7 +35,7 @@ function settingsFormHtml(data) {
   const login = data.loginInfo || null;
   const loginBadge = login
     ? `<div class="pd-login-badge${login.login ? ' is-on' : ''}">当前登录：${login.login
-      ? `${esc(String(login.uname || '已登录'))}（${new Date().toLocaleTimeString()} 实测有效）`
+      ? `${esc(String(login.uname || '已登录'))}（${new Date(Number(login.measuredAt) || Date.now()).toLocaleTimeString()} 实测有效）`
       : esc(String(login.note || '未登录'))}</div>`
     : '';
   // 解密失败必须当错误喊出来：显示成"未配置"会诱导用户重填，而真正的问题是密钥文件坏了
@@ -88,20 +88,34 @@ function settingsFormHtml(data) {
           <div class="pd-approval-state">${esc(new Date(Number(item.expiresAt)).toLocaleTimeString())} 前有效</div>
           <div class="pd-approval-actions">
             <button type="button" class="btn btn-small btn-primary" data-pd-approve-pending="${esc(item.id)}" data-pd-decision="approve">批准一次</button>
+            <button type="button" class="btn btn-small" data-pd-approve-pending="${esc(item.id)}" data-pd-decision="approve" data-pd-uses="5">批准 5 次</button>
             <button type="button" class="btn btn-small" data-pd-approve-pending="${esc(item.id)}" data-pd-decision="reject">拒绝</button>
           </div>
         </div>`).join('')}
     </div>` : '';
   // 写审计：这个插件最近干过什么（宿主侧记录，不是插件自报）
-  const writes = Array.isArray(data.writes) ? data.writes.slice(0, 10) : [];
+  const allWrites = Array.isArray(data.writes) ? data.writes : [];
+  const writes = allWrites.slice(0, 10);
+  const hiddenWrites = allWrites.length - writes.length;
+  // 宿主侧的内部报错话术 → 人话 + 去哪里修
+  const noteHint = (item) => {
+    const n = String(item.note || '');
+    if (/follow 需要 mid/.test(n)) return '关注需要目标 UID：确认参数里带了 UP 主的数字 UID';
+    if (/CSRF|csrf/.test(n)) return '登录态失效或不完整：重新扫码登录';
+    if (/需要登录/.test(n)) return '未登录：去上面扫码登录';
+    if (/至少间隔/.test(n)) return '两次写操作间隔不足 60 秒：稍后再试';
+    if (/配额/.test(n)) return '今天这个动作的次数用完了：明天自动恢复';
+    if (/没有打开|开关/.test(n)) return '动作开关没开：在「写操作」里打开对应动作';
+    return n.slice(0, 80);
+  };
   const writesHtml = writes.length ? `
     <div class="pd-settings-group">
-      <div class="pd-settings-group-title">最近写操作</div>
+      <div class="pd-settings-group-title">最近写操作${hiddenWrites > 0 ? `（共 ${allWrites.length} 条，显示最近 10 条）` : ''}</div>
       ${writes.map((item) => `<div class="pd-write-row">
         <span class="pd-write-at">${esc(new Date(Number(item.at)).toLocaleString())}</span>
         <span class="pd-write-action">${esc(item.action)}${item.target ? ` → ${esc(item.target)}` : ''}</span>
         <span class="pd-write-outcome is-${esc(item.outcome)}">${esc({ ok: '成功', failed: '失败(已退额度)', denied: '被拒', pending: '待批', unknown: '结果未确认' }[item.outcome] || item.outcome)}</span>
-        ${item.note ? `<span class="pd-write-note">${esc(item.note.slice(0, 80))}</span>` : ''}
+        ${item.note ? `<span class="pd-write-note">${esc(noteHint(item))}</span>` : ''}
       </div>`).join('')}
     </div>` : '';
   if (!groupsHtml && !approvalHtml && !pendingHtml && !writesHtml) {
@@ -173,17 +187,19 @@ async function toggleWriteSwitch(id, action, enabled) {
       body: JSON.stringify({ id, action, enabled })
     });
     await hydratePluginSettings(id);
-    setSettingsStatus(id, enabled ? `已允许「${action}」，模型现在能看到这个工具（执行仍需逐次批准）` : `已关闭「${action}」`, 'success');
+    setSettingsStatus(id, enabled
+      ? `已允许「${action}」：模型的下一次对话起能看到这个工具（执行仍需逐次批准）`
+      : `已关闭「${action}」：模型的下一次对话起不再看到这个工具`, 'success');
   } catch (error) {
     setSettingsStatus(id, `开关失败：${String(error?.message || error)}`, 'error');
   }
 }
 
-async function decidePendingApproval(id, pendingId, decision) {
+async function decidePendingApproval(id, pendingId, decision, uses = 1) {
   try {
     await api('/api/plugins/approval', {
       method: 'POST',
-      body: JSON.stringify({ id, pendingId, decision })
+      body: JSON.stringify({ id, pendingId, decision, uses })
     });
     await hydratePluginSettings(id);
     setSettingsStatus(id, decision === 'reject' ? '已拒绝该请求' : '已批准一次，让用户再试即可', 'success');

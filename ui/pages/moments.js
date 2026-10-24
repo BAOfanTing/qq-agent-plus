@@ -356,11 +356,14 @@ async function loadRemindersView() {
     const attr = from && to ? `${from} 请你提醒 ${to}`
       : from ? `${from} 请你提醒`
       : to ? `有人请你提醒 ${to}` : '';
+    const repeatLabel = { daily: '每天', weekly: '每周', cron: 'cron' }[it.repeat] || '';
+    const repeatTag = repeatLabel ? `<span class="reminder-repeat">${esc(repeatLabel)}${it.status === 'pending' ? ' · 下一期见上' : ''}</span>` : '';
     return `<div class="reminder-row" data-id="${esc(it.id)}" data-chatkey="${esc(it.chatKey)}">`
       + `<span class="reminder-when">${esc(time)}</span>`
       + `<span class="reminder-chat">${esc(formatChatTitle(it.chatKey, chatNameOf(it.chatKey)))}</span>`
       + (attr ? `<span class="reminder-attr" title="${esc(attr)}">${esc(attr)}</span>` : '')
       + `<span class="reminder-text">${esc(it.text)}</span>`
+      + repeatTag
       + (done ? `<span class="muted">${esc(statusLabel)}</span>` : '<button type="button" class="btn btn-small reminder-cancel-btn">取消</button>')
       + '</div>';
   }).join('');
@@ -594,6 +597,11 @@ async function loadDailyMomentsStatus() {
     // 15s 状态轮询每次都把这块 innerHTML 整个重建：`<details>` 的展开态不在 HTML 里，
     // 重建即折叠 —— 正在读"内部群摘要"的人每 15 秒被收起一次。记住并恢复（2026-10-12 审查）。
     const summariesOpen = Boolean(box.querySelector('.moment-summaries')?.open);
+    // 编辑态防冲：textarea 打开时轮询重画会冲掉未保存的输入 —— 记住内容与焦点，重建后恢复
+    const editArea = box.querySelector('#moment-edit-area');
+    const editingNow = editArea && editArea.style.display !== 'none';
+    const editDraft = editingNow ? editArea.value : '';
+    const editFocused = editingNow && document.activeElement === editArea;
     box.innerHTML = `
       <div class="field-row">
         <div class="field"><label>任务状态</label><div>${status.running ? '运行中' : (status.enabled ? '等待中' : '已关闭')}</div></div>
@@ -603,8 +611,8 @@ async function loadDailyMomentsStatus() {
       ${renderMomentSchedule(status)}
       ${blockingRecord && blockingRecord.id !== latest?.id ? `<div class="hint">有一条「${esc(momentStatusLabel(blockingRecord))}」的记录（${esc(blockingRecord.dayKey || '-')}）正在挡住所有时段的发布；下面的人工确认/核对按钮针对这条记录。</div>` : ''}
       ${latest?.content ? `<div class="field"><label>正文${publishable ? ' <button type="button" class="btn btn-small" id="moment-edit-btn">编辑</button>' : ''}</label>
-        <div class="daily-moments-content" data-moment-view>${esc(latest.content)}</div>
-        ${publishable ? `<textarea id="moment-edit-area" rows="5" maxlength="2000" style="display:none;width:100%">${esc(latest.content)}</textarea>` : ''}</div>` : ''}
+        <div class="daily-moments-content" data-moment-view style="display:${editingNow ? 'none' : 'block'}">${esc(latest.content)}</div>
+        ${publishable ? `<textarea id="moment-edit-area" rows="5" maxlength="2000" style="display:${editingNow ? 'block' : 'none'};width:100%">${esc(editingNow ? editDraft : (latest.content || ''))}</textarea>` : ''}</div>` : ''}
       ${latest?.reason ? `<div class="field"><label>决定理由</label><div>${esc(latest.reason)}</div></div>` : ''}
       ${latest?.error ? `<div class="moment-error" role="alert">${esc(latest.error)}</div>` : ''}
       ${latest?.tid ? `<div class="field"><label>说说 ID</label><code>${esc(latest.tid)}</code></div>` : ''}
@@ -619,13 +627,12 @@ async function loadDailyMomentsStatus() {
         ${latest.groupSummaries.map((group) => `<div class="field"><label>${esc(group.groupName || group.chatKey)}</label><div>${esc(group.summary)}</div></div>`).join('')}
       </details>` : ''}
       ${records.length ? `<div class="table-wrap"><table class="usage-table">
-        <thead><tr><th>日期</th><th>来源</th><th>状态</th><th>群数</th><th>配图</th><th>时间</th><th></th></tr></thead>
+        <thead><tr><th>日期</th><th>摘要</th><th>来源</th><th>状态</th><th>时间</th><th></th></tr></thead>
         <tbody>${records.slice(0, 7).map((record) => `<tr>
           <td>${esc(record.dayKey || '-')}</td>
+          <td class="moment-summary-cell">${record.content ? esc(String(record.content).replace(/\s+/g, ' ').slice(0, 32)) + (String(record.content).length > 32 ? '…' : '') : '<span class="pd-write-note">（无正文）</span>'}</td>
           <td>${record.publicationSource !== 'manual' && ['scheduled', 'startup-catchup'].includes(record.source) ? '定时' : '手动'}</td>
           <td>${esc(momentStatusLabel(record))}</td>
-          <td>${Number(record.groupCount) || 0}</td>
-          <td>${Number(record.imageCount) || 0}</td>
           <td>${record.endedAt || record.startedAt ? esc(fmtTime(record.endedAt || record.startedAt)) : '-'}</td>
           <td><button type="button" class="btn btn-small" data-moment-select="${esc(record.id)}">查看</button></td>
         </tr>`).join('')}</tbody>
@@ -633,6 +640,12 @@ async function loadDailyMomentsStatus() {
     if (summariesOpen) {
       const details = box.querySelector('.moment-summaries');
       if (details) details.open = true;
+    }
+    if (editingNow) {
+      const btn = box.querySelector('#moment-edit-btn');
+      if (btn) btn.textContent = '取消编辑';
+      const area = box.querySelector('#moment-edit-area');
+      if (area && editFocused) area.focus();
     }
     $$('[data-moment-select]', box).forEach((button) => button.addEventListener('click', () => {
       state.currentMomentId = button.dataset.momentSelect;

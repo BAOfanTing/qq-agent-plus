@@ -6395,3 +6395,9 @@ html[data-glass] .plugin-related-item {
   .plugin-grid.is-list .plugin-card:hover { background: var(--bg-2); border-color: transparent; border-bottom-color: var(--border); }
   .plugin-related-item:hover { background: var(--bg-3); border-color: var(--accent-border); }
 }
+
+/* 侧栏「插件」上的全局待批红点：跨插件汇总的未批写操作请求数 */
+.pending-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 8px; border-radius: var(--r-pill); background: var(--danger, #e5484d); color: #fff; font-size: var(--fs-xs); font-style: normal; font-weight: 600; }
+
+/* 周期提醒标签：列表里一眼看出哪些是持续任务 */
+.reminder-repeat { padding: 1px 8px; border: 1px solid var(--border); border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--muted); }

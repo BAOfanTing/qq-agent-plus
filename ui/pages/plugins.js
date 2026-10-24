@@ -26,6 +26,18 @@ import {
   startQrLogin, pollQrOnce, setSettingsStatus, stopQrPoll
 } from './plugin-settings.js';
 
+/** 全局待批红点：侧栏「插件」按钮上的未批请求计数（跨插件汇总，审批是全局状态）。 */
+export async function refreshPendingBadge() {
+  try {
+    const data = await api('/api/plugins/pending-count');
+    const n = Number(data?.count) || 0;
+    document.querySelectorAll('[data-pending-badge]').forEach((node) => {
+      node.textContent = n > 99 ? '99+' : String(n);
+      node.style.display = n > 0 ? '' : 'none';
+    });
+  } catch { /* 计数失败不影响页面 */ }
+}
+
 const CAP_LABELS = {
   tools: '给模型加工具',
   observe: '看群消息',
@@ -1426,7 +1438,8 @@ function bindPluginsSection() {
         await decidePendingApproval(
           block?.getAttribute?.('data-pd-settings') || '',
           pendingBtn.getAttribute('data-pd-approve-pending') || '',
-          pendingBtn.getAttribute('data-pd-decision') === 'reject' ? 'reject' : 'approve'
+          pendingBtn.getAttribute('data-pd-decision') === 'reject' ? 'reject' : 'approve',
+          Number(pendingBtn.getAttribute('data-pd-uses')) || 1
         );
         return;
       }
