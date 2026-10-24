@@ -136,3 +136,47 @@ test('store：错过多次只补最近一次（超窗跳到未来，窗内保留
   assert.equal(late.at, lateAt, '窗内的保留原 at（晚触发 = 补最近一次）');
   assert.equal(late.status, 'pending');
 });
+
+test('工具契约：remind 的 schema 必须声明 repeat（否则模型传对象进不来）', async () => {
+  const { buildToolDefs } = await import('../src/tools/tools-core.js');
+  const remind = buildToolDefs().find((d) => d.name === 'remind');
+  assert.ok(remind, '要有 remind 工具');
+  const repeat = remind.parameters?.properties?.repeat;
+  assert.ok(repeat, 'parameters.properties.repeat 不能缺（2026-10-24 审查：描述承诺可传，schema 里没有）');
+  assert.equal(repeat.type, 'object');
+  for (const field of ['kind', 'hour', 'minute', 'weekday', 'cron', 'tz', 'jitterMs']) {
+    assert.ok(repeat.properties?.[field], `repeat.${field} 要在 schema 里声明`);
+  }
+  assert.deepEqual(repeat.required, ['kind']);
+  assert.match(remind.parameters.properties.minutes.description, /repeat/, 'minutes 的说明要讲清和 repeat 的关系');
+});
+
+test('工具路径：对象形式的 repeat 能建出带时刻的周期提醒，且不强制 minutes', async () => {
+  const { buildToolDefs } = await import('../src/tools/tools-core.js');
+  const remind = buildToolDefs().find((d) => d.name === 'remind');
+  const store = new ReminderStore(path.join(dir, 'reminders-tool.json'));
+  const ctx = { reminders: store, chatKey: 'group:1', triggerEntries: [] };
+
+  const result = await remind.execute(ctx, {
+    action: 'add', text: '站会', repeat: { kind: 'daily', hour: 21, tz: 'Asia/Shanghai' }
+  });
+  assert.equal(result.isError, undefined, `对象 repeat 应成功：${result.content}`);
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.created, true);
+  const item = store.items.find((x) => x.id === payload.id);
+  assert.deepEqual(item.repeat, { kind: 'daily', hour: 21, minute: 0, tz: 'Asia/Shanghai' },
+    '只给 hour 时 minute 按 0（"每天 21 点"不该被要求补分钟）');
+  assert.ok(item.at > Date.now(), '首次触发点要算在未来');
+
+  // 字符串旧写法继续兼容（默认 09:00）
+  const legacy = await remind.execute(ctx, { action: 'add', text: '周报', repeat: 'weekly:5' });
+  assert.equal(legacy.isError, undefined, `字符串 repeat 应继续可用：${legacy.content}`);
+  const legacyId = JSON.parse(legacy.content).id;
+  assert.equal(store.items.find((x) => x.id === legacyId).repeat.kind, 'weekly');
+
+  // 非法 repeat 返回可读错误，不抛
+  const bad = await remind.execute(ctx, { action: 'add', text: 'x', repeat: { kind: 'daily', hour: 25 } });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content, /hour|repeat/i);
+});
+

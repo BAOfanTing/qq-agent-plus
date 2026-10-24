@@ -24,7 +24,9 @@ const MAX_WRITES_PER_MIN = 120;
 const MAX_LOG_CHARS = 2000;
 const MAX_HTTP_CHARS = 40000;          // 与 web_fetch 的 2 万字符同档：插件也不该把整站塞进上下文
 const MAX_INCIDENT_LOGS_PER_MIN = 5;   // 插件崩溃循环时不能把管理员异常面板刷满
-const MAX_SEND_CHARS = 800;            // 单条发言上限（比模型的回复短：插件不该长篇大论）
+// 单条发言上限。1500 是为了容纳扫码登录的半块字符二维码（约 1000–1400 字符）：
+// 二维码被静默截断 = 扫不出来，所以超限一律报错、绝不 slice（2026-10-24 审查 P1）。
+const MAX_SEND_CHARS = 1500;
 const MAX_SENDS_PER_MIN = 6;           // 每个插件每分钟最多说几句 —— 防"刷屏"这种最直观的作恶
 const MAX_HTTP_HEADERS = 16;
 const MAX_HEADER_CHARS = 2048;
@@ -198,7 +200,11 @@ export function createCapabilities({
      */
     [CAP_METHODS.sendText]: async ({ chatKey, text } = {}) => {
       const target = String(chatKey ?? '').trim();
-      const body = sanitizeUserText(String(text ?? '').trim()).slice(0, MAX_SEND_CHARS);
+      const raw = sanitizeUserText(String(text ?? '').trim());
+      if (raw.length > MAX_SEND_CHARS) {
+        throw fail('E_ARGS', `text 超过单条上限 ${MAX_SEND_CHARS} 字（实际 ${raw.length}）`);
+      }
+      const body = raw;
       // 收紧到"数字 id"：原先的 \S+ 放行 `group:123:0` 这类形状 —— 下游 `chatKey.split(':')` 只取
       // 前两段（消息真发到群 123），但禁言预检拿的是整串（必失败 → 当成"未禁言"），每会话限频的桶键
       // 也是整串（每次换后缀就是一个新预算桶）→ 一道禁言、一道限频双双被绕。
@@ -384,6 +390,8 @@ export function createCapabilities({
         if (fs.existsSync(path.join(mediaDir, name))) frames.push({ file: name, atMs });
       }
       if (!frames.length) throw fail('E_MEDIA_TOOL', '一张帧都没抽到（时间点可能超出视频时长）');
+      // 抽帧同样住在 media 目录：不剪枝的话，换 prefix 反复抽帧可以无限写盘（2026-10-24 审查 P2）
+      pruneMedia();
       return { frames };
     },
 

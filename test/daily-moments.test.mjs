@@ -704,3 +704,38 @@ test('QQ空间 self 来源：不收集群聊，groupSummaries 为空，默认只
   assert.doesNotMatch(prompt, /"messages"|【群聊材料】/, 'self 模式不能把群消息塞进提示词');
   assert.deepEqual(result.record.groupSummaries, []);
 });
+
+// 2026-10-24 审查 P1：editDraft 先改内存再校验 —— 被拒的正文会留在 record 里，
+// 之后直接点发布就发出去了；发布路径也从不复核事实边界。这里盯住"校验失败不污染"与"发布前复核"。
+test('草稿编辑：事实边界校验失败时不改内存；发布前再校验一次', async () => {
+  const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
+  const cfg = structuredClone(DEFAULT_CONFIG);
+  cfg.runtime.mode = 'active';
+  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: true, source: 'self' };
+  setRuntimeConfig(cfg);
+  const { DailyMomentsManager } = await import('../src/features/daily-moments.js');
+  const manager = new DailyMomentsManager({
+    store: { listChats: () => [], recent: () => [] },
+    memory: { members: () => [], getHandoff: () => null },
+    stickers: { sync: async () => ({ entries: [] }), findForSend: async () => null },
+    onebot: { getMsg: async () => ({ message: [] }), call: async () => ({}) },
+    complete: async () => ({ model: 'm', message: { content: 'x' } }),
+    now: () => Date.now(),
+    random: () => 0,
+    log: () => {}
+  });
+  manager.state.records = [{
+    id: 'r-edit', status: 'preview', decision: 'publish', content: '原来的正文',
+    contentSource: 'self', groupSummaries: [], imageRefs: []
+  }];
+  await assert.rejects(
+    () => manager.editDraft('r-edit', { content: '今天我去了火锅店，很香' }),
+    /现实行动/
+  );
+  assert.equal(manager.state.records[0].content, '原来的正文', '校验失败不能改内存');
+  assert.equal(manager.state.records[0].editedAt, undefined, '校验失败不能留编辑标记');
+
+  // 绕过编辑入口（例如手改记录）塞进违规正文：发布前必须再拦一次
+  manager.state.records[0].content = '今天我去了火锅店，很香';
+  await assert.rejects(() => manager.publishDraft('r-edit'), /现实行动/);
+});

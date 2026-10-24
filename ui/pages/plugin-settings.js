@@ -136,11 +136,39 @@ async function hydratePluginSettings(id) {
   const body = block?.querySelector('.pd-settings-body');
   if (!body) return;
   try {
+    // 非保存类的刷新（切写开关、批待批、扫码成功）也会重建整块表单：
+    // 先把用户正在填、还没保存的值记下来，重建后放回去 —— 否则输了一半的 Cookie 会突然消失。
+    const draft = snapshotFields(body);
     const data = await api(`/api/plugins/settings?id=${encodeURIComponent(id)}`);
     if (!body.isConnected) return;
     body.innerHTML = settingsFormHtml(data);
+    restoreFields(body, draft);
   } catch (error) {
     body.innerHTML = `<div class="plugin-warn bad">设置读取失败：${esc(String(error?.message || error))}</div>`;
+  }
+}
+
+function snapshotFields(body) {
+  const out = new Map();
+  for (const el of body.querySelectorAll('[data-pd-field]')) {
+    out.set(el.getAttribute('data-pd-field'), {
+      type: el.getAttribute('data-pd-type'),
+      value: el.value,
+      checked: Boolean(el.checked)
+    });
+  }
+  return out;
+}
+
+/** 重建表单后恢复未保存的草稿值。secret 输入框不恢复（避免把明文重新塞回页面）。 */
+function restoreFields(body, draft) {
+  if (!draft?.size) return;
+  for (const el of body.querySelectorAll('[data-pd-field]')) {
+    const saved = draft.get(el.getAttribute('data-pd-field'));
+    if (!saved) continue;
+    if (saved.type === 'boolean') el.checked = saved.checked;
+    else if (saved.type === 'select') el.value = saved.value;
+    else if (saved.type !== 'secret' && el.type !== 'password') el.value = saved.value;
   }
 }
 
@@ -210,8 +238,12 @@ async function decidePendingApproval(id, pendingId, decision, uses = 1) {
 
 // ── 控制台内扫码登录：网页发码 → <img> 显示 → 自动轮询 → 成功刷新面板 ──
 let qrPollTimer = null;
+// 每次启动/取消都换一代：在途请求返回时如果代号变了就不再续期 ——
+// 否则点「取消」后，上一个还没回来的请求会继续安排下一轮（2026-10-24 审查 P2）。
+let qrPollGen = 0;
 
 function stopQrPoll() {
+  qrPollGen += 1;
   if (qrPollTimer) { clearTimeout(qrPollTimer); qrPollTimer = null; }
 }
 
@@ -254,12 +286,15 @@ async function startQrLogin(id) {
         <button type="button" class="btn btn-small" data-pd-qr-poll="${esc(id)}">查扫码结果</button>
         <button type="button" class="btn btn-small" data-pd-qr-stop>取消</button>
       </div>`);
+    const gen = qrPollGen;
     const poll = async () => {
+      if (gen !== qrPollGen) return;
       try {
         const r = await api('/api/plugins/call', {
           method: 'POST',
           body: JSON.stringify({ id, tool: 'login', args: { action: 'poll' } })
         });
+        if (gen !== qrPollGen) return;
         const statusNode = blockStatusNode();
         if (r?.ok && r?.state === 'done') {
           stopQrPoll();
@@ -269,12 +304,19 @@ async function startQrLogin(id) {
           setQrPanel(id, QR_DONE_HTML(r.account));
           return;
         }
+        if (r?.ok && r?.state === 'unverified') {
+          stopQrPoll();
+          await hydratePluginSettings(id);
+          setQrPanel(id, `<div class="plugin-warn">${esc(String(r.note || '凭据已保存，但登录校验未通过'))}</div>`);
+          return;
+        }
         if (statusNode) {
           statusNode.textContent = r?.ok && r?.state === 'scanned' ? '已扫码：请在手机上点确认'
             : (r?.ok ? '等待扫码中…' : `轮询失败：${esc(String(r?.error || ''))}`);
         }
-        if (r?.ok) qrPollTimer = setTimeout(poll, 3000);
-        else { stopQrPoll(); setQrPanel(id, `<div class="plugin-warn bad">${esc(String(r?.error || '轮询失败'))}</div>`); }
+        if (r?.ok) {
+          if (gen === qrPollGen) qrPollTimer = setTimeout(poll, 3000);
+        } else { stopQrPoll(); setQrPanel(id, `<div class="plugin-warn bad">${esc(String(r?.error || '轮询失败'))}</div>`); }
       } catch (error) {
         stopQrPoll();
         setQrPanel(id, `<div class="plugin-warn bad">${esc(String(error?.message || error))}</div>`);
@@ -298,6 +340,10 @@ async function pollQrOnce(id) {
       stopQrPoll();
       await hydratePluginSettings(id);
       setQrPanel(id, QR_DONE_HTML(r.account));
+    } else if (r?.ok && r?.state === 'unverified') {
+      stopQrPoll();
+      await hydratePluginSettings(id);
+      setQrPanel(id, `<div class="plugin-warn">${esc(String(r.note || '凭据已保存，但登录校验未通过'))}</div>`);
     } else if (r?.ok) {
       const statusNode = blockStatusNode();
       if (statusNode) statusNode.textContent = r.state === 'scanned' ? '已扫码：请在手机上点确认' : '等待扫码中…';

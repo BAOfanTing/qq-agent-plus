@@ -1590,12 +1590,16 @@ export function createApp({
       if (event.message_type === 'private' && event.user_id != null) {
         // 管理员私聊回「同意/拒绝」＝ 批准插件的写操作：这类消息不该再进模型
         //（模型只会把它当普通聊天内容，批了也白批）。
-        const approval = pluginRegistry?.handleOwnerApprovalText?.(String(event.raw_message || ''), String(event.user_id));
-        if (approval?.handled) {
-          if (approval.reply) {
-            void sender.sendTextBatch(`private:${event.user_id}`, [approval.reply], {}).catch(() => {});
+        // 只认**真实收到的消息**：message_sent 是机器人自己发出的回显，user_id 恰好是接收方
+        //（管理员），机器人发一句"同意"就会被当成 owner 批准（2026-10-24 审查 P2）。
+        if (event.post_type === 'message') {
+          const approval = pluginRegistry?.handleOwnerApprovalText?.(String(event.raw_message || ''), String(event.user_id));
+          if (approval?.handled) {
+            if (approval.reply) {
+              void sender.sendTextBatch(`private:${event.user_id}`, [approval.reply], {}).catch(() => {});
+            }
+            return;
           }
-          return;
         }
         return ingestMessage('private', String(event.user_id), event, arrivedInactive);
       }
@@ -3055,6 +3059,11 @@ export function createApp({
     if (!entry) return json(res, 404, { ok: false, error: '这个插件没有安装' });
     const pendingId = String(body.pendingId || '').trim();
     if (!pendingId) return json(res, 400, { ok: false, error: '缺少待批请求编号（pendingId）' });
+    // 待批编号必须属于 URL 里的插件：否则可以借 A 插件的请求批准 B 插件的动作，
+    // 审计还会记在 A 名下（2026-10-24 审查 P2）。
+    const pendingHit = listPendingApprovals(DATA_DIR).find((item) => item.id === pendingId);
+    if (!pendingHit) return json(res, 404, { ok: false, error: '这条待批请求不存在或已过期' });
+    if (pendingHit.pluginId !== id) return json(res, 400, { ok: false, error: '这条待批请求属于另一个插件' });
     try {
       if (body.decision === 'reject') {
         const rejected = rejectPendingApproval(DATA_DIR, pendingId);

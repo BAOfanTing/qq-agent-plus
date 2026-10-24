@@ -247,8 +247,11 @@ v1 插件原样可用，加载时 `apiVersion` 字段在 1 与 2 之间都算兼
 - `httpDomains`（v2）：声明后，`cap.http.request` 与 `cap.media.download` 只允许这些主机及其子域；
   v1 不加白名单时沿用"公网但禁内网"的默认守卫。
 - `cap.http.request` 的 v2 参数：`method` 只允许 GET / POST；POST 可带 `headers` 与 `body`（≤64KB）。
-  **带方法/凭据的请求不会跟随重定向** —— 否则一次 302 就能把 Cookie 带到别的地址。
-- `cap.media.download` 只写插件自己的 `plugin-data/<id>/media/`，单文件上限 80MB，只保留最近 5 个；
+  **非 GET 请求不跟随重定向**；GET 带 Cookie/Authorization 时同源重定向保留、跨源（含换端口或
+  https→http）自动剥掉凭据 —— 否则一次 302 就能把登录态交给白名单里的另一台主机。
+- `cap.send.text` 单条上限 1500 字符，**超限报错、不静默截断**（半块字符二维码约 1000–1400 字符）。
+- `cap.media.download` 只写插件自己的 `plugin-data/<id>/media/`，单文件上限 80MB；下载、合流与抽帧
+  共用同一个目录，只保留最近 12 个文件（防止换 prefix 反复抽帧把磁盘写满）；
   `cap.media.merge` 由宿主调用 ffmpeg（固定参数、不经 shell）；`cap.send.file` 只能发这个目录里的文件，
   且只支持群聊。插件自己跑不了命令，也拿不到别的目录。
 
@@ -259,9 +262,14 @@ v1 插件原样可用，加载时 `apiVersion` 字段在 1 与 2 之间都算兼
 1. **动作开关（默认关）**：manifest 工具声明 `"action": "interact"`（对应 approvals 清单里的动作），
    控制台打开 `plugins.switches.<插件>.<动作>` 才注册这个工具 —— 关着时模型根本看不见；
 2. **对象级批准**：调用时宿主按 `actionTarget`（参数名，可数组）取目标，生成**绑定该目标**的待批请求
-   （`actionPreview` 指向的参数会进批准预览），管理员在控制台待批列表或私聊回「同意/拒绝」批准；
+   （`actionPreview` 指向的参数会进批准预览，并**绑定内容摘要**：评论/弹幕换了正文必须重新批准）。
+   目标必须合法且唯一：声明了 `actionTarget` 却没给、给了非法字符、或一次给了多个不同目标都会被拒，
+   不会退化成"任意目标都能用"的通行证。管理员在控制台待批列表或私聊回「同意/拒绝」批准；
+   多条待批时私聊要回「同意 <待批编号>」；
    一次批准默认 10 分钟内单次有效；同插件两次写至少间隔 60 秒；
-3. **当天配额**（manifest.quotas）＋**失败退还**：插件抛错或返回 `ok:false` 时，已扣的批准与配额自动退回。
+3. **当天配额**（manifest.quotas）＋**失败退还**：插件明确返回 `ok:false`、幂等跳过或执行前抛错时，
+   已扣的批准与配额自动退回；**超时/插件进程退出/结果未知时不退**，记 `unknown` 并让模型不要重试
+   （请求可能已经到达对方，重试就是重复评论/弹幕）。
 
 插件契约：写工具执行前先查当前状态（已做过就跳过返回 `skipped`），执行后**回读核验**并把 `verified` 带回；
 宿主把每次写操作记进审计（控制台插件详情「最近写操作」）。插件不需要（也不应该）再调 cap.approval.check。
@@ -400,7 +408,10 @@ downloadUrl, sha256, tags }`）加进一份索引 JSON（形状见"怎么装"）
    —— **自测必须先过**（用宿主自己的安装器真装一遍）；
    想先在自己机器上装一遍看效果：`node src/ops.js plugins install <包>.tar.gz`；
 2. 把包提交进索引仓库的 `plugins/packages/`（**不用新建 Release**：该仓库的 CI 会把缺的包同步到
-   固定的滚动 Release `packages` 上）；
+   固定的滚动 Release `packages` 上）。提交后确认 `git status` 里**同时**有 `plugins/index.json`
+   和 `plugins/packages/<id>-<version>.tar.gz` —— 只提交索引会让索引仓库的 `verify index` 立刻红
+   （`仓库里没有 …tar.gz`），而本仓库的锚点用例只看“源码 vs 锚点”，看不见索引仓库缺了包
+   （2026-10-24 实际发生）；
 3. 在索引仓库的 `plugins/index.json` 加一条（`downloadUrl` 指向
    `…/releases/download/packages/<文件名>`；`sha256` 用第 1 步打印的值），
    跑 `node scripts/verify-index.mjs --no-remote`（结构 + 仓库内产物 + sha256；新包还没上 Release，

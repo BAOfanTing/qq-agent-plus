@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import { getConfig, imageGenAvailable, imageGenMaxPerHour } from '../core/config.js';
 import { imageType } from '../core/image-type.js';
-import { nextAtFromHHMM } from '../core/reminders.js';
+import { nextAtFromHHMM, normalizeRepeat, nextOccurrenceAt } from '../core/reminders.js';
 import { synthesizeSpeech, ttsConfigured } from '../llm/tts.js';
 import { generateImage, MAX_PROMPT_CHARS } from '../llm/image-gen.js';
 import { resolveApiKey } from '../llm/llm.js';
@@ -2120,17 +2120,31 @@ export function buildToolDefs() {
     },
     {
       name: 'remind',
-      description: '给当前会话设一个定时提醒（到点你会被唤醒，用你的口吻把这件事说出来）；也可查询/取消。minutes 或 HH:MM 二选一，HH:MM 按北京时间、已过则算明天。这是给别人设的提醒（重启后依然有效），与给自己排开口时机的 schedule_wake 不同。要重复提醒（每天几点、工作日几点）就传 repeat（"daily" / "weekly:mon" / 5 字段 cron），到点自动续；只想要一次就别传。'
+      description: '给当前会话设一个定时提醒（到点你会被唤醒，用你的口吻把这件事说出来）；也可查询/取消。minutes 或 HH:MM 二选一，HH:MM 按北京时间、已过则算明天。这是给别人设的提醒（重启后依然有效），与给自己排开口时机的 schedule_wake 不同。要重复提醒（每天几点、每周几几点）就传 repeat 对象，到点自动续；只想要一次就别传。'
         + '是「A 让你提醒 B」时（如"12 点提醒他吃饭"），把 to 填成被提醒的人、from 填成提要求的人 —— 到点你才能说清是谁请你提醒谁，别让被提醒的人以为是自己设的。from 要能在最近这轮消息里对上人（填他的群名片/备注名或 QQ 号；对不上就不会记录）。',
       parameters: {
         type: 'object',
         properties: {
           action: { type: 'string', enum: ['add', 'list', 'cancel'], description: 'add=新增；list=查看本会话待触发；cancel=取消（不传 id 取消最近一条）' },
-          minutes: { type: 'number', description: 'add 用：多少分钟后（1~43200）' },
+          minutes: { type: 'number', description: 'add 用：多少分钟后（1~43200）。与 at 二选一；传了 repeat 且两者都没传时，首次触发按 repeat 规则算' },
           at: { type: 'string', description: 'add 用：绝对时间 HH:MM（北京时间，已过则算明天）' },
           text: { type: 'string', description: 'add 用：提醒内容（必填，≤200 字）' },
           to: { type: 'string', description: 'add 用：提醒谁（群名片/备注/名字；可选）' },
           from: { type: 'string', description: 'add 用：谁请你提醒的（填本轮消息里那位群友的称呼或 QQ 号；对不上人就不会记录）' },
+          repeat: {
+            type: 'object',
+            description: 'add 用：周期提醒。传对象，例如每天 21:00 = {"kind":"daily","hour":21,"minute":0}；每周五 18:30 = {"kind":"weekly","weekday":5,"hour":18,"minute":30}；cron = {"kind":"cron","cron":"30 18 * * 5"}。可选 tz（IANA，如 Asia/Shanghai）与 jitterMs（0~3600000，随机错开）。不传=一次性',
+            properties: {
+              kind: { type: 'string', enum: ['daily', 'weekly', 'cron'] },
+              hour: { type: 'integer', minimum: 0, maximum: 23 },
+              minute: { type: 'integer', minimum: 0, maximum: 59 },
+              weekday: { type: 'integer', minimum: 0, maximum: 6, description: '0=周日 … 6=周六（kind=weekly 时必填）' },
+              cron: { type: 'string', description: 'kind=cron 时必填：5 字段（分 时 日 月 周），日/月只认 *' },
+              tz: { type: 'string', description: 'IANA 时区，如 Asia/Shanghai；默认项目时区' },
+              jitterMs: { type: 'integer', minimum: 0, maximum: 3600000, description: '随机抖动上限（毫秒）' }
+            },
+            required: ['kind']
+          },
           id: { type: 'string', description: 'cancel 用：提醒 id（list 里可见）' }
         },
         required: ['action']
@@ -2162,16 +2176,26 @@ export function buildToolDefs() {
           return ok({ canceled: true, text: hit.text, at: fmt(hit.at) });
         }
         let at = null;
-        const repeatText = String(args.repeat ?? '').trim();
-        if (repeatText) {
-          // 周期提醒：at/minutes 只定首次触发点；周期本身由 repeat 决定（到点后自动续）
+        // repeat 可能是对象（schema 声明的形式）或字符串（"daily"/"weekly:mon"/cron）。
+        // 旧写法 String(object) 会得到 "[object Object]"，带时刻的周期提醒根本建不出来。
+        const repeatArg = typeof args.repeat === 'string' ? args.repeat.trim() : args.repeat;
+        const hasRepeat = repeatArg !== undefined && repeatArg !== null
+          && !(typeof repeatArg === 'string' && repeatArg === '');
+        const quietCfg = getConfig().reminders?.quiet || null;
+        if (hasRepeat) {
+          // 周期提醒：at/minutes 只定首次触发点；都不传时按 repeat 规则算第一次
           if (args.at !== undefined && String(args.at).trim() !== '') {
             at = nextAtFromHHMM(String(args.at));
             if (at === null) return err('at 需要是 HH:MM（24 小时制，如 09:30）');
-          } else {
+          } else if (args.minutes !== undefined && String(args.minutes).trim() !== '') {
             const m = Number(args.minutes);
             if (!Number.isFinite(m) || m < 1 || m > 30 * 24 * 60) return err('minutes 需要是 1~43200 之间的数字（最多 30 天）');
             at = Date.now() + Math.round(m) * 60000;
+          } else {
+            let normalized = null;
+            try { normalized = normalizeRepeat(repeatArg); } catch (error) { return err(String(error?.message ?? error)); }
+            at = normalized ? nextOccurrenceAt({ repeat: normalized }, Date.now(), { quiet: quietCfg }) : null;
+            if (!at) return err('repeat 不合法，算不出首次触发时间');
           }
         } else if (args.at !== undefined && String(args.at).trim() !== '') {
           at = nextAtFromHHMM(String(args.at));
@@ -2204,8 +2228,8 @@ export function buildToolDefs() {
             text: String(args.text ?? ''),
             createdBy,
             targetName: String(args.to ?? ''),
-            repeat: repeatText || null,
-            quiet: getConfig().reminders?.quiet || null
+            repeat: hasRepeat ? repeatArg : null,
+            quiet: quietCfg
           });
           return ok({
             created: true, id, at: fmt(at),

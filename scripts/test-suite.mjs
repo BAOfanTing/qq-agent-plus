@@ -150,4 +150,7 @@ for (const [cmd, args] of commands) {
 if (aborted) await new Promise((resolve) => setTimeout(resolve, 1000));
 cleanup();
 if (aborted) process.exit(aborted === 'SIGINT' ? 130 : 143);
-process.exit(exitCode);
+// 不用 process.exit：最后一个子进程的 stdio 句柄可能还在异步关闭，
+// Windows 上强制退出会撞 libuv 断言（`UV_HANDLE_CLOSING`，表现为用例全过但退出码 127）。
+// 设置 exitCode 让事件循环自然结束即可。
+process.exitCode = exitCode;

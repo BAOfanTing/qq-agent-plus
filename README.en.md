@@ -42,7 +42,9 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   who-is-the-spy, werewolf — turns, vote counting and verdicts live in code, identities and night
   actions travel by private message only and never enter the model context; experimental, off by
   default, werewolf additionally needs to be whitelisted in the console). "Remind me at X"
-  becomes a **persistent reminder** (survives restarts) delivered in its own voice when the time comes.
+  becomes a **persistent reminder** (survives restarts); it supports daily / weekly / 5-field cron
+  schedules with an IANA timezone, a quiet-hours window and jitter, and only the most recent
+  missed occurrence is caught up. It is delivered in its own voice when the time comes.
 - **Proactive talk** — three independently switchable links (cold-topic opener / follow-up
   nudge when nobody answers / model-scheduled wake-up), multiple active windows, interval
   guard, skip-reason logging, catch-up for messages missed during restarts.
@@ -70,13 +72,26 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
 - **Plugins** — third-party capabilities (model tools, message observers, scheduled jobs). Each
   plugin runs in its **own child process**; it only receives the capabilities it declared, and every
   capability is implemented host-side — a plugin cannot read your config file or bypass the send
-  queue's mute pre-check and rate limits. The console's Plugins page installs from the official
-  index (7 plugins, all zero-dependency), from a local package, or from your own index. **Writing
-  one** is documented in [docs/PLUGINS.md](docs/PLUGINS.md) (scaffold → debug against the real
-  runtime → pack and self-test, three commands); submitting to the official index goes through the
-  [index repository](https://github.com/sakurawwwxh/qq-agent-plugins) PR flow. The console's
+  queue's mute pre-check and rate limits. Since apiVersion 2 a plugin can declare a **settings
+  panel** in its manifest (text / number / boolean / select / secret; the console renders it, and
+  secrets are stored with AES-256-GCM and never echoed). Tools that change external account data go
+  through a **write trust model**: per-action switches default off, every call needs the owner's
+  approval for that exact target, daily quotas apply, two writes from the same plugin are at least
+  60 seconds apart, failures and idempotent skips refund their approval and quota, and every write is
+  audited host-side. The console's Plugins page installs from the official index (12 plugins, all
+  zero-dependency, including Bilibili: search / understand a video / download and merge into the
+  chat / interactions with per-call approval), from a local package, or from your own index.
+  **Writing one** is documented in [docs/PLUGINS.md](docs/PLUGINS.md) (scaffold → debug against the
+  real runtime → pack and self-test, three commands); submitting to the official index goes through
+  the [index repository](https://github.com/sakurawwwxh/qq-agent-plugins) PR flow. The console's
   Plugins → Publish pane lists both, with the commands. Plugins are third-party code — read the
   declared capabilities on the detail page before installing.
+- **Qzone moments** — source can be the persona's own interests (default; no group-log collection),
+  group observations, or persona-first with a light group touch. Scheduled runs only produce a
+  draft by default; you review or edit it in the console before publishing.
+- **MCP read-only resources** — `node src/mcp/resource-server.js` exposes global people memory, the
+  group meme library and pending reminders to any MCP client. Output is sanitised, and there is no
+  access to conversations, config or credentials, and no write path.
 
 Configuration examples are in [docs/CONFIG-EXAMPLES.md](docs/CONFIG-EXAMPLES.md). Operations
 commands are collected in [src/ops.js](src/ops.js) and documented in [docs/OPS.md](docs/OPS.md).
@@ -147,9 +162,9 @@ For container-only deployments:
 
 ```bash
 # GHCR
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.5
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.6
 # China (Aliyun ACR, public, amd64/arm64)
-docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.5
+docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.6
 
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus
@@ -518,9 +533,11 @@ but not keywords, so an old `0-10` setting also answers keywords after the conve
 
 ## Personas
 
-“设置 -> 人设” (the persona card library) provides several built-in persona cards (the default
-小鲸鱼, a sarcastic friend, a warm companion, a homelab enthusiast and a catgirl), stored one markdown
-file per card under [`roles/`](roles); see [docs/PERSONAS.md](docs/PERSONAS.md). Clicking a card
+“设置 -> 人设” (the persona card library) provides seven built-in persona cards (the default
+小鲸鱼, a sarcastic friend, a warm companion, a homelab enthusiast, a catgirl, a meme-loving
+trickster and a study buddy), stored one markdown file per card under [`roles/`](roles); see
+[docs/PERSONAS.md](docs/PERSONAS.md). Each card also has a voice profile (single-bubble length,
+bubble count, gap) and a short few-shot dialogue file under `roles/dialogs/`. Clicking a card
 fills the draft; it takes effect after clicking the always-visible “保存设置” at the bottom. The body
 is shown section by section (signature traits, AI-flavour blacklist and examples each rendered as
 tags or chat bubbles) and every section can be edited on its own, reverted on its own, or the whole

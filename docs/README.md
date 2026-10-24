@@ -10,9 +10,9 @@
 | [DOCKER.md](DOCKER.md) | Docker / Compose 部署：只装 Docker 的机器、首次启动、升级回滚、从裸机迁移、容器模式限制 |
 | [BAOTA.md](BAOTA.md) | 宝塔 / aaPanel 面板部署：面板与 systemd 的分工、非 root 服务用户、端口与反向代理、常见报错 |
 | [OPS.md](OPS.md) | `src/ops.js` 运维入口（体检 / 扫描 / 备份 / 部署 / 看门狗 / 健康巡检 / 隧道）的环境变量与示例 |
-| [CONFIG-EXAMPLES.md](CONFIG-EXAMPLES.md) | 常用配置片段：思考模式、兜底模型、视觉、主动发言、表情包、节奏、拟人化表达 |
-| [HUMANIZE.md](HUMANIZE.md) | 拟人化表达的评估方法：客观指标、盲评量表与调参顺序 |
-| [MCP.md](MCP.md) | MCP 客户端：配置 stdio server、工具挂载、安全边界与运维接口 |
+| [CONFIG-EXAMPLES.md](CONFIG-EXAMPLES.md) | 常用配置片段：思考模式、兜底模型、视觉、主动发言、表情包、节奏、拟人化表达、QQ 空间来源与周期提醒 |
+| [HUMANIZE.md](HUMANIZE.md) | 拟人化表达：运行时实现（气泡整形、角色声音、few-shot、诚实边界）、客观指标、盲评量表与调参顺序 |
+| [MCP.md](MCP.md) | MCP：客户端配置（stdio server、工具挂载）、只读资源服务（人物记忆/梗库/提醒）、安全边界与运维接口 |
 | [MODERATION.md](MODERATION.md) | 群管理动作：管理员门槛、禁言/踢人/撤回/设管理员 |
 | [KNOWLEDGE.md](KNOWLEDGE.md) | 轻量知识库：目录、切片、关键词检索与边界（不是完整 RAG） |
 | [AUTO_UPDATE.md](AUTO_UPDATE.md) | Release 驱动的自动更新：判定规则、两条下载通道（git / API+源码包）、失败策略与状态字段 |
@@ -22,7 +22,7 @@
 | 文档 | 说明 |
 | --- | --- |
 | [CONVERSATION_MODES.md](CONVERSATION_MODES.md) | 对话引擎三模式（legacy / threaded / lifecycle）的差异与选择 |
-| [DAILY_MOMENTS.md](DAILY_MOMENTS.md) | 每日说说：生成、发布、去重与计划/时间口径 |
+| [DAILY_MOMENTS.md](DAILY_MOMENTS.md) | QQ 空间动态：来源（人设自己 / 群聊 / 混合）、默认草稿与编辑、去重、计划与时间口径 |
 | [QZONE_INTERACTIONS.md](QZONE_INTERACTIONS.md) | 好友动态与评论回复的巡检节奏与退避 |
 | [model-prices.md](model-prices.md) | 价格体系：模型 id 归一化与别名、渠道价、账户口径三选一、实付/估算/未定价 |
 | [STABLE_FEATURES.md](STABLE_FEATURES.md) | 已从实验转为默认开启的功能，以及转正的判定标准 |
@@ -60,8 +60,9 @@
 
 ## 角色卡与其它
 
-- 角色卡正文：[`roles/`](../roles)，一张卡一个 markdown（内置默认小鲸鱼、损友、温柔陪聊、
-  技术宅、猫娘），说明见 [PERSONAS.md](PERSONAS.md)；新增卡要在 `src/personas.js` 登记，
+- 角色卡正文：[`roles/`](../roles)，一张卡一个 markdown（内置七张：小鲸鱼、损友、温柔陪聊、
+  技术宅、猫娘、乐子人、学习搭子），说明见 [PERSONAS.md](PERSONAS.md)；声音参数在
+  `roles/voice-profiles.json`，对话示例在 `roles/dialogs/`。新增卡要在 `src/personas.js` 登记，
   由 `test/personas.test.mjs` 检查。
 - 远程价格表（随版本发布）：[`prices.json`](../prices.json)
 - 运行数据与凭据：`data/`（**不入库**，分享前使用 `node scripts/sanitize-release.mjs` 生成脱敏副本）

@@ -22,7 +22,7 @@ import { readOwnerUin } from '../core/notify-owner.js';
 import {
   checkApproval, refundApproval, consumeQuota, refundQuota,
   requestPendingApproval, listPendingApprovals, approvePendingApproval,
-  rejectPendingApproval, recordPluginWrite
+  rejectPendingApproval, recordPluginWrite, normalizeTarget
 } from './grants.js';
 
 export const PLUGIN_TOOL_TIMEOUT_MS = 20000;
@@ -347,6 +347,13 @@ export class PluginRegistry {
   }
 
   async #startOne(item, cfg) {
+    // engines.minVersion 必须在**所有**启动路径上判：懒启动、控制台保存设置后的 reload、
+    // /api/plugins/reload 都走这里。只在 #startImpl 判会被 reload 绕过去（2026-10-24 审查 P2）。
+    const minVersion = item.manifest?.engines?.minVersion || '';
+    if (minVersion && HOST_VERSION && !semverAtLeast(HOST_VERSION, minVersion)) {
+      this.log(`插件 ${item.id} 要求宿主 ≥ ${minVersion}，本机是 ${HOST_VERSION}，不予加载`);
+      return false;
+    }
     // 表里已经有同一个 id 的 host 时**先停掉它**：直接覆盖会让旧进程变成没人管的孤儿
     //（带着自己的心跳、限频窗口、崩溃重启逻辑，还和新的那个抢同一份 plugin-data）
     const existing = this.hosts.get(item.id);
@@ -591,10 +598,17 @@ export class PluginRegistry {
   #gateWrite(host, tool, args) {
     const cfgNow = this.#config();
     const action = tool.action;
-    // 目标取第一个非空的声明参数（actionTarget 可为数组：interact 的目标在 bvid 或 mid 上）
-    const targetKeys = Array.isArray(tool.actionTarget) ? tool.actionTarget : [tool.actionTarget];
-    const target = targetKeys.map((key) => String(args?.[key] ?? '').trim())
-      .find((value) => value.length > 0)?.slice(0, 120) || '';
+    // 目标只能来自 manifest 声明的参数。三种情况分开处理（2026-10-24 审查 P1）：
+    //   · 给了但含非法字符 → 拒绝（旧实现归一成 ''，而 '' 在 checkApproval 里是通配批准）；
+    //   · 同时给了多个不同目标 → 拒绝（批准对象会与实际执行参数错位，例如 follow 用 mid 却绑了 bvid）；
+    //   · 声明了 actionTarget 却一个都没给 → 拒绝（不允许生成"无目标"的动作级批准）。
+    const targetKeys = Array.isArray(tool.actionTarget)
+      ? tool.actionTarget
+      : (tool.actionTarget ? [tool.actionTarget] : []);
+    const rawTargets = targetKeys.map((key) => ({ key, raw: String(args?.[key] ?? '').trim() }));
+    const invalid = rawTargets.find((item) => item.raw && normalizeTarget(item.raw) === null);
+    const values = [...new Set(rawTargets.map((item) => normalizeTarget(item.raw)).filter((value) => value))];
+    const target = values.length === 1 ? values[0] : '';
     const preview = tool.actionPreview ? String(args?.[tool.actionPreview] ?? '').slice(0, 300) : '';
     const declared = (host.manifest.approvals || []).find((item) => item.action === action);
     const denied = (reason, outcome = 'denied', note = '') => {
@@ -615,11 +629,25 @@ export class PluginRegistry {
     if (this.#writeSwitchOn(cfgNow, host.id, action) !== true) {
       return denied('这个写操作的开关没有打开：请在 控制台 → 插件 → 该插件的设置里先打开对应动作的开关');
     }
+    if (invalid) {
+      return denied(`写操作目标不合法（${invalid.key}）：只允许字母、数字、下划线、点、冒号、短横线，最多 120 字符`);
+    }
+    if (values.length > 1) {
+      return denied(`参数里给了多个不同的目标（${rawTargets.filter((item) => item.raw).map((item) => item.key).join(' / ')}），`
+        + '一次调用只能指定一个，否则无法确定批准对象');
+    }
+    if (targetKeys.length && !target) {
+      return denied(`这个写操作需要明确目标（${targetKeys.join(' / ')} 至少填一个）`);
+    }
+    if (tool.actionPreview && !preview) {
+      return denied(`这个写操作需要内容（${tool.actionPreview}），空内容不能提交批准`);
+    }
     const last = Number(this.lastWriteAt.get(host.id)) || 0;
     if (Date.now() - last < PLUGIN_WRITE_FLOOR_MS) {
       return denied(`同一插件的写操作至少间隔 ${Math.round(PLUGIN_WRITE_FLOOR_MS / 1000)} 秒，请稍后再试`, 'denied', 'rate-floor');
     }
-    const approval = checkApproval(this.dataDir, host.id, action, { consume: true, target });
+    // 批准绑定 (动作, 目标, 预览内容)：评论/弹幕换了正文就必须重新批准
+    const approval = checkApproval(this.dataDir, host.id, action, { consume: true, target, preview });
     if (!approval.approved) {
       // 一次批准只对一个目标：没有针对这个目标的通行证 → 生成待批请求并通知管理员
       const pending = requestPendingApproval(this.dataDir, {
@@ -649,11 +677,22 @@ export class PluginRegistry {
     return { proceed: true, action, target, approvalReceipt: approval.receipt, quotaReceipt: quota.receipt };
   }
 
-  /** 写操作收尾：成功记审计；确定未执行（ok:false 或抛错）退还批准与配额；回读核验结果入审计。 */
-  #settleWrite(host, tool, gate, payload) {
+  /**
+   * 写操作收尾：成功记审计；**确定未执行**（ok:false / skipped / 执行前抛错）退还批准与配额；
+   * 结果未知（超时、插件进程退出、写后宿主内部异常）**不退还**、记 unknown —— 退还后模型会重试，
+   * 而请求可能已经到了对方服务器（评论/弹幕没有幂等键），会造成重复写入（2026-10-24 审查 P2）。
+   */
+  #settleWrite(host, tool, gate, payload, { unknown = false } = {}) {
     if (!gate || gate.proceed !== true) return;
     const action = gate.action;
     const target = gate.target;
+    if (unknown) {
+      recordPluginWrite(this.dataDir, host.id, {
+        action, target, outcome: 'unknown',
+        note: String(payload?.note || '结果未知：请求可能已经到达对方，批准与配额保持已消费')
+      });
+      return;
+    }
     if (payload?.ok === false) {
       if (gate.approvalReceipt) refundApproval(this.dataDir, host.id, gate.approvalReceipt);
       if (gate.quotaReceipt) refundQuota(this.dataDir, host.id, gate.quotaReceipt);
@@ -744,18 +783,32 @@ export class PluginRegistry {
     const owner = readOwnerUin(this.getConfig());
     if (!owner || String(fromUserId || '') !== owner) return { handled: false };
     const t = String(text || '').trim();
-    if (!/^(同意|批准|拒绝)[\s,.，。!！]*$/.test(t)) return { handled: false };
+    // 支持「同意 ap_xxx」指定具体一条；不带编号时只在**恰好一条**待批时生效。
+    // 原来无条件批"最新一条"：多条待批时会批错，而且 owner 对别的事情回一句"同意"也会误批。
+    const match = /^(同意|批准|拒绝)(?:[\s,.，。!！]+(ap_[\w-]+))?[\s,.，。!！]*$/.exec(t);
+    if (!match) return { handled: false };
     const pending = listPendingApprovals(this.dataDir);
     if (!pending.length) return { handled: true, reply: '现在没有待批准的插件操作。' };
-    const newest = pending[pending.length - 1];
-    if (t.startsWith('拒绝')) {
-      const rejected = rejectPendingApproval(this.dataDir, newest.id);
+    let hit = null;
+    if (match[2]) {
+      hit = pending.find((item) => item.id === match[2]);
+      if (!hit) return { handled: true, reply: '没有找到这个待批编号（可能已过期或已处理）。' };
+    } else if (pending.length === 1) {
+      hit = pending[0];
+    } else {
+      return {
+        handled: true,
+        reply: `现在有 ${pending.length} 条待批，请回复「同意 <待批编号>」指定一条（编号在通知里），或在控制台处理。`
+      };
+    }
+    if (match[1] === '拒绝') {
+      const rejected = rejectPendingApproval(this.dataDir, hit.id);
       return {
         handled: true,
         reply: `已拒绝：${rejected.label || rejected.action}${rejected.target ? ` → ${rejected.target}` : ''}`
       };
     }
-    const approved = approvePendingApproval(this.dataDir, newest.id);
+    const approved = approvePendingApproval(this.dataDir, hit.id);
     return {
       handled: true,
       reply: `已批准：${approved.pending.label || approved.pending.action}${approved.pending.target ? ` → ${approved.pending.target}` : ''}`
@@ -785,6 +838,7 @@ export class PluginRegistry {
       gate = this.#gateWrite(host, tool, args ?? {});
       if (gate && gate.proceed !== true) return gate.result;
     }
+    let settled = false;
     try {
       // 每次真正调用都刷新"最近使用"：只在冷启动时记的话，一个持续在用的插件会在
       // "冷启动 + idle 分钟"那一刻被当成空闲停掉（日志还写着"空闲 N 分钟"，其实不是）
@@ -800,7 +854,13 @@ export class PluginRegistry {
         context
       });
       const payload = result && typeof result === 'object' ? result : { value: result ?? null };
-      if (gate?.proceed === true) this.#settleWrite(host, tool, gate, payload);
+      if (gate?.proceed === true) {
+        // 先标记已结算：审计落盘失败也不能让外层 catch 把一次**成功**的写当成失败去退款
+        settled = true;
+        try { this.#settleWrite(host, tool, gate, payload); } catch (error) {
+          this.log(`写审计落盘失败（${host.id}/${tool.action}）：${error?.message ?? error}`);
+        }
+      }
       const text = JSON.stringify(sanitizeDeep({ ok: true, ...payload }));
       return {
         content: text.length > MAX_PLUGIN_RESULT_CHARS
@@ -808,11 +868,26 @@ export class PluginRegistry {
           : text
       };
     } catch (error) {
-      // 抛错 = 插件没执行到写动作（协议/参数/进程层失败）：批准与配额退回去，
-      // 否则一次网络抖动就白烧管理员批的一次权限。
-      if (gate?.proceed === true) this.#settleWrite(host, tool, gate, { ok: false, note: String(error?.message ?? error) });
       const code = error?.code || 'E_PLUGIN';
       const message = String(error?.message ?? error);
+      // 超时 / 插件进程掉了 / 连接被重置：请求可能已经到达对方 → 结果未知，不退批准与配额，
+      // 并明确让模型别重试（评论、弹幕没有幂等键，重试就是重复写入）。
+      const uncertain = ['E_TIMEOUT', 'E_PLUGIN_DOWN', 'E_PIPE', 'E_CLOSED'].includes(code)
+        || /timeout|timed out|超时|进程退出|EPIPE|ECONNRESET/i.test(message);
+      if (gate?.proceed === true && !settled) {
+        settled = true;
+        try { this.#settleWrite(host, tool, gate, { ok: false, note: message }, { unknown: uncertain }); } catch { /* 审计失败不遮挡原错误 */ }
+        if (uncertain) {
+          return {
+            content: JSON.stringify({
+              error: sanitizeUserText(`写操作结果未知（${message}）：可能已经生效，不要重试。`
+                + `先在控制台「最近写操作」核对，需要再写请重新发起（插件 ${host.id}，动作 ${tool.action}）`),
+              uncertain: true
+            }),
+            isError: true
+          };
+        }
+      }
       return {
         content: JSON.stringify({ error: sanitizeUserText(`${message}（插件 ${host.id} 工具 ${tool.name}，code=${code}）`) }),
         isError: true

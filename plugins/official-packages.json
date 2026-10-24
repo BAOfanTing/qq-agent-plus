@@ -1,10 +1,10 @@
 {
   "note": "官方插件的**期望包指纹**：index 与包都已搬到独立仓库（https://github.com/sakurawwwxh/qq-agent-plugins），而源码仍在本仓库 examples/plugins/<id>。这份文件是两边之间的『对齐锚』——本仓库的用例拿它跟『现打源码得到的 sha256』比，所以**改了源码忘了重打包会立刻变红**；同时它也是『哪些插件算官方插件』的唯一清单（每个 examples/plugins/<id> 都必须在这里有一条，test/plugin-official-plugins.test.mjs 会按这份清单跑通用护栏）。发布流程里更新索引仓库时，必须同时更新这里的值（见 docs/PLUGINS.md 的上架流程）。",
-  "updatedAt": "2026-10-23",
+  "updatedAt": "2026-10-24",
   "packages": {
     "bilibili": {
-      "version": "1.0.0",
-      "sha256": "0fa85289d2f2fbde65321c1fd6f13961141e4baed4d0a41a9f66b7127eb06d27"
+      "version": "1.0.1",
+      "sha256": "0720b7b215169eee2cbd1194d73f23289b5c97d2fb81997c79dc59836a33142c"
     },
     "exchange-rate": {
       "version": "1.0.0",

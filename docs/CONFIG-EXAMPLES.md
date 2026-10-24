@@ -151,6 +151,11 @@
       "pokeCooldownMs": 300000,
       "voiceCooldownMs": 600000,
       "reactCooldownMs": 30000
+    },
+    "shape": {
+      "enabled": true,
+      "maxBubbles": 3,
+      "maxChars": 60
     }
   }
 }
@@ -160,6 +165,9 @@
 - `respectPersonaCard`：默认 `true`。角色卡优先（`behaviorProfile: 'card'`）时不注入状态行、不改卡的措辞、不追加关系标签；`grounded` 档保留"首先/其次"这类结构词。
 - `preset`：控制台风格预设（`natural` / `active` / `quiet` / `companion`），只用于记住上次选择；实际值以下面的具体参数为准。
 - `actions`：动作冷却与单轮上限，避免连续贴纸/拍一拍/语音。`enabled` 默认 `true`（仅在 `humanize.enabled` 时生效）。
+- `shape`：气泡整形。模型只给一段时按句子拆成 1–3 条（`maxBubbles`）、单条尽量不超过
+  `maxChars`，代码块/URL/行内代码/颜文字受保护；只作用于人格回复，日报/群游戏/插件代发不拆。
+  每张角色卡自己的字数、条数与间隔在 `roles/voice-profiles.json`，与这里的全局上限共同生效。
 - `replyDelay`：只作用于本轮**第一条**消息，按总字数计算发送前延迟；后续气泡仍按 `send.minGapMs/maxGapMs` 的节奏。
   私聊会先显示"正在输入"；暂停/中止会立即取消等待。`perCharMs` 填 0 = 不按字数增加。
 - `antiAi`：过滤助手式自指（如"作为一个 AI"）与客服收尾语；`blockSevere` 打开时，
@@ -550,6 +558,33 @@
   （最多 8 次）。管理员 QQ 或私聊白名单没配好时不跑，绝不猜收件人。
 - 手动触发/查看状态：`POST /api/admin-briefing/run`、`GET /api/admin-briefing/status`。
 
+## dailyMoments：QQ 空间动态（可选，默认关闭）
+
+```json
+{
+  "dailyMoments": {
+    "enabled": true,
+    "source": "self",
+    "autoPublish": false,
+    "hour": 23,
+    "minute": 30,
+    "scheduleWindows": null,
+    "intervalDays": 1,
+    "startupCatchup": true
+  }
+}
+```
+
+- `source`：`self`（默认）= 只写人设自己的观点/兴趣，不收集群聊；`group` = 从群聊候选瞬间取材；
+  `mixed` = 人设为主，群聊素材至多点缀一句。`self` 的素材来自 `roles/interests.json` 的兴趣库与
+  可选的公开资料搜索，并会与最近已发动态做大段查重；"我今天去了/吃了"这类没有现实素材的断言会被拦下。
+- `autoPublish`：默认 `false`，定时只生成**草稿**，在控制台确认或编辑正文后才发布（编辑同样过事实边界
+  检查）。改成 `true` 才会按时直接发；旧行为是 `source: "group"` + `autoPublish: true`。
+- `hour` / `minute`：固定时刻模式，按上海时间；`scheduleWindows: [{ "start": "20:00", "end": "23:00", "count": 1 }]`
+  可按窗口随机取点；`intervalDays` 控制间隔；`startupCatchup` 控制错过定时点后是否补一次。
+- 发布走 SnowLuma `send_qzone_msg`，按日期记录幂等状态，重启不会重复发布结果不明的说说。
+- 控制台「设置 → QQ 空间动态」：来源、发布方式、最近预览（带来源）、草稿编辑与“发布这份草稿”。
+
 ## onebot：WebSocket 心跳与「补课」回复窗口
 
 ```json
@@ -576,12 +611,23 @@
 
 ```json
 {
-  "reminders": { "enabled": true }
+  "reminders": {
+    "enabled": true,
+    "quiet": { "start": "23:30", "end": "08:00" }
+  }
 }
 ```
 
 - 群友/私聊说「明天 9 点提醒我交作业」「30 分钟后提醒我」时，模型用 `remind` 工具把提醒
   **落盘**（`data/reminders.json`，重启不丢），到点主动唤醒、用它自己的口吻把事情说出来。
+- **周期提醒**：`repeat` 传对象——每天 21:00 是 `{"kind":"daily","hour":21,"minute":0}`
+  （只给 `hour` 时 `minute` 按 0）；每周五 18:30 是 `{"kind":"weekly","weekday":5,"hour":18,"minute":30}`；
+  也可用 5 字段 cron：`{"kind":"cron","cron":"30 18 * * 5"}`（分 时 日 月 周；`*`/数字/列表/区间/步长，
+  日与月只支持 `*`）。`tz` 指定 IANA 时区（如 `Asia/Shanghai`，默认跟随项目时区；跨 DST 按挂钟校正），
+  `jitterMs`（0~3600000）用来错开整点。不传 `at`/`minutes` 时首次触发点按 `repeat` 规则算；
+  到点后自动续下一期；机器人离线错过的多次触发**只补最近一次**，超过 12 小时的跳过。
+- **免打扰**：配置里的 `reminders.quiet`（`start`/`end`，HH:MM）把落在窗口内的触发点顺延到窗口结束；
+  周期提醒会把窗口存进条目本身，之后改全局配置不影响已建条目。
 - 是「A 让机器人提醒 B」时（"12 点提醒他吃饭"），提醒会带上归属（谁提的/提醒谁），
   到点说话时如实说出是谁请的；没记住归属时明确"有人托我提醒"，不会猜成被提醒人自己设的。
 - 限制：单条 ≤200 字、最多设到 30 天后、单会话待触发 10 条 / 全局 50 条、
@@ -589,7 +635,7 @@
 - **容量判定（#9）**：新增提醒时会先把「早已过期、还没被巡检标掉」的项标成 expired 再数名额，
   不会因为一堆早该作废的提醒而误报"满了"；全局满时文案是「全局提醒位已满（每人上限 10 条，共 50 条）」。
 - `enabled: false` 后 `remind` 工具与到期派发都停（模型会答"定时提醒未启用"），已存数据保留。
-- 控制台「设置 → 定时提醒」：开关、待触发列表、最近完成（触发/取消/过期），可单条取消。
+- 控制台「设置 → 定时提醒」：开关、待触发列表（带周期标签）、最近完成（触发/取消/过期），可单条取消。
 
 ## groupGame：群游戏（实验性，默认关闭）
 

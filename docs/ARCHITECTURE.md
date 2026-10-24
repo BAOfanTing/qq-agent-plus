@@ -39,13 +39,15 @@ client, and it removes the "unhandled exception in a plugin kills the bot" case.
 | Durable state | `src/core/store.js` | Message deduplication, leases, outbox, lifecycle transcripts and checkpoints |
 | Agent control | `src/core/orchestrator.js` | Debounce, trigger policy, concurrency, model/tool loop and recovery |
 | Prompt and tools | `src/llm/prompt.js`, `src/tools/` | Persona context and tools restricted to the current chat |
+| Persona runtime | `src/personas.js`, `src/llm/bubble-shape.js`, `roles/voice-profiles.json`, `roles/dialogs/` | Card voice profiles, few-shot examples and bubble shaping (code/URL/emoticon-safe) for persona replies only |
 | Delivery | `src/onebot/sender.js` | Per-chat serialization, rate limits, message splitting and outbox completion |
 | Model access | `src/llm/llm.js`, `src/core/providers.js`, `src/core/provider-presets.js` | Chat Completions, retries, provider credentials, usage and per-channel thinking presets |
 | Sticker system | `src/onebot/sticker-manager.js`, `src/onebot/stickers.js` | QQ favourites sync, notes, tiered lookup, auto-collect and local asset storage |
 | Memory | `src/memory/`, `src/identity/` | Member impressions, handoff state and cross-chat identity index |
-| Plugins | `src/plugins/` | Manifest validation, one child process per plugin (NDJSON protocol), host-side capabilities, index fetching, sha256-anchored install/replace/rollback, revocation |
+| Plugins | `src/plugins/` | Manifest validation (v1/v2), one child process per plugin (NDJSON protocol), host-side capabilities, AES-256-GCM secrets, settings schema, object-bound write approvals, quotas and write audit, index fetching, sha256-anchored install/replace/rollback, revocation |
+| MCP resources | `src/mcp/resource-server.js` | Read-only stdio MCP server exposing people memory, memes and pending reminders (sanitised, no config/credentials) |
 | Pilots (observability) | `src/pilots/` | Incident panel, relationship shadow evaluation, slang assets, multimodal-context pilot |
-| Scheduled social work | `src/features/daily-moments.js`, `src/features/qzone-interactions.js` | Independently persisted Qzone decisions and external effects |
+| Scheduled social work | `src/features/daily-moments.js`, `src/core/reminders.js`, `src/features/qzone-interactions.js` | Qzone source/draft decisions, recurring reminders (daily/weekly/cron, IANA zones) and their external effects |
 | Runtime guards | `src/core/token-saver.js`, `src/core/time-gate.js`, `src/core/redact.js` | Token ceilings, active-hour gating, log redaction |
 | Operations | `deploy.sh`, `manage.sh`, `scripts/*.mjs`, `src/ops.js` | Installation, systemd service, health, backup and recovery actions |
 

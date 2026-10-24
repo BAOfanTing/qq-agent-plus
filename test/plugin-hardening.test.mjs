@@ -357,9 +357,13 @@ test('send：发言走宿主那条发送队列（禁言/限频/白名单都在�
   await assert.rejects(() => send({ chatKey: 'group:1', text: '   ' }), /text 不能为空/);
   assert.equal(sent.length, 1, '被拒的请求不许进队列');
 
-  // ③ 单条长度上限（插件不该长篇大论）
-  const long = await send({ chatKey: 'group:1', text: 'x'.repeat(2000) });
-  assert.ok(long.chars <= 800, `单条应被截到 800 字以内，实际 ${long.chars}`);
+  // ③ 单条长度上限：超限**报错**、不静默截断（二维码被截断就扫不出来）；
+  //    1500 以内（半块字符二维码约 1000–1400）要能正常发出去
+  await assert.rejects(() => send({ chatKey: 'group:1', text: 'x'.repeat(2000) }), /超过单条上限/);
+  assert.equal(sent.length, 1, '超限的请求不许进队列');
+  const qrSized = await send({ chatKey: 'group:1', text: '▀'.repeat(1200) });
+  assert.equal(qrSized.chars, 1200, '二维码长度的文本要能发出');
+  sent.pop();
 
   // ④ 每分钟条数上限（防刷屏）：一直说到被拒为止（不数前面的条数，免得测试跟着实现改而失效），
   //    然后换一分钟再看恢复

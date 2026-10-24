@@ -54,7 +54,8 @@ function qrDataUrl(url) {
 }
 
 function qrText(url) {
-  const qr = qrcode(0, 'M');
+  // 用 L 级纠错：二维码模块更少，半块字符文本才装得进单条发言上限。
+  const qr = qrcode(0, 'L');
   qr.addData(url);
   qr.make();
   const n = qr.getModuleCount();
@@ -101,7 +102,9 @@ async function cookies() {
 async function authState() {
   const c = await cookies();
   return {
+    // loggedIn = 可写（SESSDATA + bili_jct）；hasSession = 只读可用（有 SESSDATA 就够）
     loggedIn: Boolean(c.sessdata && c.bili_jct),
+    hasSession: Boolean(c.sessdata),
     mid: c.dedeuserid || '',
     // csrf 字段：写工具的表单要用（auth.bili_jct）。以前漏了这个字段，
     // csrf 被当成字面量 "undefined" 发出去 → B 站必回 -111（Cookie 头是对的也没用）。
@@ -115,9 +118,13 @@ async function authState() {
   };
 }
 
-async function requireLogin() {
+async function requireLogin({ write = true } = {}) {
   const auth = await authState();
-  if (!auth.loggedIn) throw new Error('这个操作需要登录：请在插件设置里填 SESSDATA 与 bili_jct（浏览器登录 B 站后从 Cookie 复制）');
+  if (write ? !auth.loggedIn : !auth.hasSession) {
+    throw new Error(write
+      ? '这个操作需要登录：请在插件设置里填 SESSDATA 与 bili_jct（浏览器登录 B 站后从 Cookie 复制）'
+      : '这个操作需要登录：请填 SESSDATA（只读操作不要求 bili_jct）');
+  }
   return auth;
 }
 
@@ -400,11 +407,12 @@ const tools = {
   },
 
   async account({ what, mediaId, page, cursor } = {}) {
-    const auth = await requireLogin();
-    if (!auth.mid && what !== 'favorites') throw new Error('需要 DedeUserID：请在插件设置里补上（B 站 UID）');
+    // 只读接口有 SESSDATA 就够；doctor 要在 mid 检查之前（它就是用来排查配置缺项的）
+    const auth = await requireLogin({ write: false });
     if (what === 'doctor') {
       return probeStatus();
     }
+    if (!auth.mid && what !== 'favorites') throw new Error('需要 DedeUserID：请在插件设置里补上（B 站 UID）');
     if (what === 'history') {
       // cursor 语义（ps 固定 20）：翻页用上一次返回的 nextCursor，不是页码
       const cursorParam = String(cursor || '').replace(/[^\w=&]/g, '').slice(0, 200);
@@ -449,6 +457,10 @@ const tools = {
     const PASSPORT = 'https://passport.bilibili.com';
     if (action === 'status') return probeStatus();
     if (action === 'logout') {
+      // 群聊里任何一句诱导都不能清掉凭据：退出只允许私聊/控制台
+      if (String(context?.chatKey || '').startsWith('group:')) {
+        throw new Error('退出登录请在私聊或控制台操作（群里不让清凭据）');
+      }
       await callHost('cap.secrets.set', { values: { sessdata: '', bili_jct: '', buvid3: '', dedeuserid: '' } });
       return { ok: true, note: '已退出登录，凭据已清除' };
     }
@@ -464,9 +476,17 @@ const tools = {
         return { ok: true, channel: 'console', qrcodeDataUrl: qrDataUrl(url), note: '用手机 B 站 App 扫这个码，手机上点确认后点「查扫码结果」（8 分钟内有效）。' };
       }
       const target = String(context?.chatKey || '');
-      if (!/^(group|private):\d+$/.test(target)) throw new Error('请在群聊或私聊里发起登录（二维码要发到当前会话）');
+      if (!/^(group|private):\d+$/.test(target)) throw new Error('请在私聊或控制台发起登录（二维码要发到当前会话）');
+      if (target.startsWith('group:')) {
+        throw new Error('群聊里不能扫码登录：二维码会被任意群成员扫走并绑定成机器人的账号。请私聊机器人或在控制台操作');
+      }
       // 二维码本体只在会话里发，登录链接（含会话密钥）绝不交给第三方二维码服务
-      await callHost('cap.send.text', { chatKey: target, text: qrText(url) });
+      const codeText = qrText(url);
+      // 超长会被宿主拒绝（cap.send.text 不静默截断）；提前给出可操作的提示
+      if (codeText.length > 1400) {
+        throw new Error('登录链接太长，二维码放不进一条消息：请在控制台 → 插件 → B 站 → 扫码登录');
+      }
+      await callHost('cap.send.text', { chatKey: target, text: codeText });
       return { ok: true, note: '二维码已发到本会话：用手机 B 站 App 扫码并在手机上点确认，然后说一声"好了"，我查结果（8 分钟内有效）。' };
     }
     if (action === 'poll') {
@@ -511,13 +531,21 @@ const tools = {
         }
         return jar.SESSDATA ? { sessdata: jar.SESSDATA, bili_jct: jar.bili_jct || '', dedeuserid: jar.DedeUserID || '' } : null;
       };
-      const creds = findTokens(data?.data?.url) || fromJar();
-      const values = {};
-      if (creds?.sessdata) {
-        values.sessdata = creds.sessdata;
-        if (creds.bili_jct) values.bili_jct = creds.bili_jct;
-        if (creds.dedeuserid) values.dedeuserid = creds.dedeuserid;
-      }
+      // 两处来源都要取：URL 里通常有 SESSDATA，bili_jct/DedeUserID 有时只在 Set-Cookie 里。
+      // 旧实现 `findTokens(...) || fromJar()` 在 URL 命中 SESSDATA 时就丢掉 Set-Cookie，
+      // 结果只存了一半凭据（2026-10-24 审查 P2）。
+      const fromUrl = findTokens(data?.data?.url) || {};
+      const fromSet = fromJar() || {};
+      const creds = {
+        sessdata: fromUrl.sessdata || fromSet.sessdata || '',
+        bili_jct: fromUrl.bili_jct || fromSet.bili_jct || '',
+        dedeuserid: fromUrl.dedeuserid || fromSet.dedeuserid || ''
+      };
+      if (!creds.sessdata) throw new Error('登录确认成功，但响应里没有 SESSDATA（回跳 URL 与 Set-Cookie 都没有）——请把这个截图发给管理员排查');
+      if (!creds.bili_jct) throw new Error('登录确认成功，但没拿到 bili_jct（写操作会全部失败）：请重新扫码，或在控制台插件详情里重新登录');
+      const values = { sessdata: creds.sessdata, bili_jct: creds.bili_jct };
+      // DedeUserID 缺失时显式清空（空串 = 删除），避免沿用上一个账号的 UID
+      values.dedeuserid = creds.dedeuserid || '';
       if (pickBuvid()) values.buvid3 = pickBuvid();
       // buvid3 从 Cookie jar 里顺带取（没有也不挡登录）
       function pickBuvid() {
@@ -527,11 +555,19 @@ const tools = {
         }
         return '';
       }
-      if (!values.sessdata) throw new Error('登录确认成功，但响应里没有 SESSDATA（回跳 URL 与 Set-Cookie 都没有）——请把这个截图发给管理员排查');
       await callHost('cap.secrets.set', { values });
       pendingLogin = { key: '', url: '', at: 0 };
+      // 保存后实测一次：不把"接口返回了凭据"当成"登录有效"（可能已被风控/账号异常）
       const probe = await probeStatus();
-      return { ok: true, state: 'done', account: probe.uname || `UID ${values.dedeuserid || '?'}`, note: '登录成功，已安全保存并立即生效' };
+      if (!probe.login) {
+        return {
+          ok: true,
+          state: 'unverified',
+          account: probe.uname || `UID ${creds.dedeuserid || '?'}`,
+          note: `凭据已加密保存，但 B 站校验未通过（${probe.note}）。如果是风控，稍后点「检测登录」复查；持续无效请重新扫码`
+        };
+      }
+      return { ok: true, state: 'done', account: probe.uname || `UID ${creds.dedeuserid || '?'}`, note: '登录成功，已安全保存并立即生效' };
     }
     throw new Error('action 只能是 start / poll / status / logout');
   },
@@ -951,9 +987,12 @@ async function probeStatus() {
   return {
     ok: true,
     login,
+    writable: Boolean(c.sessdata && c.bili_jct),
     uname,
     apiOk,
-    note: login ? '登录有效' : (c.sessdata ? 'SESSDATA 已配置但登录态无效（可能过期）' : '未配置 Cookie（只读功能可用，写操作需要登录）'),
+    note: login
+      ? (c.bili_jct ? '登录有效' : '登录有效，但缺 bili_jct：读操作可用，写操作不可用')
+      : (c.sessdata ? 'SESSDATA 已配置但登录态无效（可能过期）' : '未配置 Cookie（只读功能可用，写操作需要登录）'),
     configured: { sessdata: Boolean(c.sessdata), bili_jct: Boolean(c.bili_jct), buvid3: Boolean(c.buvid3), dedeuserid: Boolean(c.dedeuserid) }
   };
 }

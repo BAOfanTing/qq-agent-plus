@@ -12,7 +12,7 @@ process.env.QQ_AGENT_DATA_DIR = __dir;
 process.on('exit', () => { try { fs.rmSync(__dir, { recursive: true, force: true }); } catch { /* Windows 上可能被句柄占着 */ } });
 
 const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
-const { safeFetchBinary, readBounded } = await import('../src/llm/safe-fetch.js');
+const { safeFetchBinary, readBounded, safeFetchRequest } = await import('../src/llm/safe-fetch.js');
 
 function listen(server) {
   return new Promise((resolve) => {
@@ -52,6 +52,44 @@ test('safeFetchBinary accepts a response exactly at the byte limit', async (t) =
 
   const result = await safeFetchBinary(`http://127.0.0.1:${port}/image`, 4);
   assert.deepEqual(result.buffer, Buffer.from([1, 2, 3, 4]));
+});
+
+test('重定向：同源保留凭据，跨源剥掉（白名单 ≠ 可以交 Cookie）', async (t) => {
+  const seenTarget = [];
+  const target = http.createServer((req, res) => {
+    seenTarget.push({ url: req.url, cookie: req.headers.cookie || '' });
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.end('ok');
+  });
+  const targetPort = await listen(target);
+  t.after(() => target.close());
+
+  const seenSource = [];
+  const source = http.createServer((req, res) => {
+    if (req.url === '/same') {
+      res.writeHead(302, { location: '/land' });
+      res.end();
+      return;
+    }
+    if (req.url === '/land') {
+      seenSource.push({ cookie: req.headers.cookie || '' });
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ok');
+      return;
+    }
+    res.writeHead(302, { location: `http://127.0.0.1:${targetPort}/land` });
+    res.end();
+  });
+  const sourcePort = await listen(source);
+  t.after(() => source.close());
+
+  const headers = { cookie: 'SESSDATA=secret' };
+  await safeFetchRequest(`http://127.0.0.1:${sourcePort}/same`, { headers, allowPrivate: true });
+  assert.equal(seenSource.at(-1).cookie, 'SESSDATA=secret', '同源重定向保留凭据');
+
+  await safeFetchRequest(`http://127.0.0.1:${sourcePort}/cross`, { headers, allowPrivate: true });
+  assert.equal(seenTarget.at(-1).url, '/land');
+  assert.equal(seenTarget.at(-1).cookie, '', '跨源（换端口也算）重定向必须剥掉 Cookie');
 });
 
 test('readBounded：正好等于上限（自然读尽）不标 truncated；超过才中断并标（2026-10-09 审查）', async () => {

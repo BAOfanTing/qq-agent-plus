@@ -12,6 +12,7 @@
 // 配额按"插件 + 动作 + 当天"计数，落在宿主侧（插件进程写不到）。跨天自动归零。
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 const ACTION_RE = /^[a-z][a-z0-9_]{0,31}$/;
 const TARGET_RE = /^[\w:.\-]{1,120}$/;
@@ -84,10 +85,21 @@ function assertAction(action) {
   return value;
 }
 
-function normalizeTarget(target) {
+/**
+ * 目标归一化。返回 '' = 没有目标（动作级批准）；null = 给了目标但不合法。
+ * 旧实现对非法字符返回 ''，而 '' 在 checkApproval 里是通配 —— 模型随便传个
+ * 带 `/`/空格/中文的目标就能拿到一张"批一次、任意目标都能用"的通行证（2026-10-24 审查 P1）。
+ */
+export function normalizeTarget(target) {
   const value = String(target ?? '').trim().slice(0, 120);
-  if (value && !TARGET_RE.test(value)) return '';
-  return value;
+  if (!value) return '';
+  return TARGET_RE.test(value) ? value : null;
+}
+
+/** 预览内容摘要：批准必须绑定"管理员看到的那段内容"，不能只绑目标。 */
+function previewKey(preview) {
+  const text = String(preview ?? '');
+  return text ? crypto.createHash('sha256').update(text).digest('hex').slice(0, 16) : '';
 }
 
 function cleanGrants(state, now) {
@@ -101,20 +113,25 @@ function cleanGrants(state, now) {
 
 /**
  * 管理员批准一个动作（对象级）。
- * @param {object} options { uses, ttlMs, target, now } —— target 为空 = 通配（兼容旧 cap.approval.check 路径）
+ * @param {object} options { uses, ttlMs, target, preview, now } —— target 为空 = 动作级（兼容旧路径）；
+ *   preview 非空时通行证只对**同一段预览内容**有效（评论/弹幕不能批了 A 文案再发 B 文案）。
  */
-export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 * 60_000, target = '', now = Date.now() } = {}) {
+export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 * 60_000, target = '', preview = '', now = Date.now() } = {}) {
   const key = assertAction(action);
   const count = Math.max(1, Math.min(MAX_USES, Math.floor(Number(uses) || 1)));
   const ttl = Math.max(60_000, Math.min(MAX_TTL_MS, Math.floor(Number(ttlMs) || 10 * 60_000)));
   const wanted = normalizeTarget(target);
+  if (wanted === null) throw fail('E_ARGS', '批准目标含非法字符');
+  const keyPreview = previewKey(preview);
   const state = load(dataDir, pluginId);
   const grants = cleanGrants(state, now);
-  // 同 (动作, 目标) 的重复批准：次数累加、有效期取更晚（不至于把刚批的几分钟覆盖成更短）
-  const previous = grants.find((entry) => entry.action === key && String(entry.target || '') === wanted);
+  // 同 (动作, 目标, 预览) 的重复批准：次数累加、有效期取更晚（不至于把刚批的几分钟覆盖成更短）
+  const previous = grants.find((entry) => entry.action === key && String(entry.target || '') === wanted
+    && String(entry.previewKey || '') === keyPreview);
   const entry = {
     action: key,
     target: wanted,
+    ...(keyPreview ? { previewKey: keyPreview } : {}),
     expiresAt: Math.max(Number(previous?.expiresAt) || 0, now + ttl),
     usesLeft: (Number(previous?.usesLeft) || 0) + count,
     grantedAt: now
@@ -127,25 +144,38 @@ export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 
 }
 
 /**
- * 检查（并可消费）一次授权。带 target 时只匹配"该目标的授权"或通配授权。
+ * 检查（并可消费）一次授权。带 target 时只匹配"该目标的授权"或动作级授权；
+ * 带 preview 时还必须与批准时的内容摘要一致。
  * @returns {{approved:boolean, reason:string, expiresAt:number, usesLeft:number, receipt?:object}}
  * receipt 用于失败退还：只回 use、不续期 —— 退还的额度立刻对下一次可用。
  */
-export function checkApproval(dataDir, pluginId, action, { consume = false, target = '', now = Date.now() } = {}) {
+export function checkApproval(dataDir, pluginId, action, { consume = false, target = '', preview = '', now = Date.now() } = {}) {
   const key = assertAction(action);
   const wanted = normalizeTarget(target);
+  const keyPreview = previewKey(preview);
+  if (wanted === null) {
+    return { approved: false, reason: '写操作目标含非法字符，已拒绝（这次不会生成通配批准）', expiresAt: 0, usesLeft: 0 };
+  }
   const state = load(dataDir, pluginId);
   const grants = cleanGrants(state, now);
   const hit = grants.find((entry) => entry.action === key
     && Number(entry.usesLeft) > 0
-    && (String(entry.target || '') === '' || String(entry.target) === wanted));
+    && (String(entry.target || '') === '' || String(entry.target) === wanted)
+    && String(entry.previewKey || '') === keyPreview);
   if (!hit) {
     state.approvals = grants;
     save(dataDir, pluginId, state);
     const exactExists = grants.some((entry) => entry.action === key);
+    const contentMismatch = grants.some((entry) => entry.action === key
+      && String(entry.previewKey || '') !== keyPreview
+      && (String(entry.target || '') === '' || String(entry.target) === wanted));
     return {
       approved: false,
-      reason: exactExists ? `没有针对目标 ${wanted || '(空)'} 的批准（一次批准只对一个目标有效）` : '还没有批准过这个动作',
+      reason: contentMismatch
+        ? '批准针对的是另一段内容（评论/弹幕的批准绑定正文，改了内容要重新批准）'
+        : exactExists
+          ? `没有针对目标 ${wanted || '(空)'} 的批准（一次批准只对一个目标有效）`
+          : '还没有批准过这个动作',
       expiresAt: 0,
       usesLeft: 0
     };
@@ -157,7 +187,7 @@ export function checkApproval(dataDir, pluginId, action, { consume = false, targ
     return {
       approved: true, reason: '', expiresAt: Number(hit.expiresAt),
       usesLeft: Math.max(0, Number(hit.usesLeft)),
-      receipt: { action: key, target: String(hit.target || ''), refunded: false }
+      receipt: { action: key, target: String(hit.target || ''), previewKey: String(hit.previewKey || ''), refunded: false }
     };
   }
   state.approvals = grants;
@@ -171,7 +201,8 @@ export function refundApproval(dataDir, pluginId, receipt) {
   const state = load(dataDir, pluginId);
   const grants = cleanGrants(state, Date.now());
   const hit = grants.find((entry) => entry.action === receipt.action
-    && String(entry.target || '') === String(receipt.target || ''));
+    && String(entry.target || '') === String(receipt.target || '')
+    && String(entry.previewKey || '') === String(receipt.previewKey || ''));
   if (hit) {
     hit.usesLeft = Number(hit.usesLeft) + 1;
     state.approvals = grants;
@@ -186,6 +217,7 @@ export function refundApproval(dataDir, pluginId, receipt) {
 export function revokeApproval(dataDir, pluginId, action, target = '') {
   const key = assertAction(action);
   const wanted = target ? normalizeTarget(target) : '';
+  if (wanted === null) throw fail('E_ARGS', '目标含非法字符');
   const state = load(dataDir, pluginId);
   const grants = Array.isArray(state.approvals) ? state.approvals : [];
   state.approvals = wanted
@@ -203,8 +235,13 @@ export function revokeApproval(dataDir, pluginId, action, target = '') {
 export function requestPendingApproval(dataDir, { pluginId, pluginName = '', action, label = '', target = '', preview = '', now = Date.now() } = {}) {
   const key = assertAction(action);
   const wanted = normalizeTarget(target);
+  if (wanted === null) throw fail('E_ARGS', '待批目标含非法字符（不会生成通配批准）');
+  const keyPreview = previewKey(preview);
   const list = loadPending(dataDir).filter((item) => Number(item.expiresAt) > now);
-  const existing = list.find((item) => item.pluginId === pluginId && item.action === key && String(item.target || '') === wanted);
+  // 同 (动作, 目标, 预览) 才去重：同目标换了评论正文时必须是一条新的待批，
+  // 否则管理员看到的是旧文案、批准后却能发出新文案（2026-10-24 审查 P1）。
+  const existing = list.find((item) => item.pluginId === pluginId && item.action === key
+    && String(item.target || '') === wanted && String(item.previewKey || '') === keyPreview);
   if (existing) return { ...existing, duplicate: true };
   const entry = {
     id: `ap_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -214,6 +251,7 @@ export function requestPendingApproval(dataDir, { pluginId, pluginName = '', act
     label: String(label).slice(0, 80),
     target: wanted,
     preview: String(preview).slice(0, 300),
+    ...(keyPreview ? { previewKey: keyPreview } : {}),
     createdAt: now,
     expiresAt: now + PENDING_TTL_MS
   };
@@ -233,8 +271,12 @@ export function approvePendingApproval(dataDir, id, { uses = 1, ttlMs = 10 * 60_
   const list = listPendingApprovals(dataDir, { now });
   const hit = list.find((item) => item.id === id);
   if (!hit) throw fail('E_NOT_FOUND', '这条待批请求不存在或已过期');
+  // 先写通行证、再从待批队列移除：反过来的话两步之间崩溃会让管理员"批准了但没生效"
+  //（2026-10-24 审查 P2）。失败时待批仍在，可以重试。
+  const grant = grantApproval(dataDir, hit.pluginId, hit.action, {
+    uses, ttlMs, target: hit.target, preview: hit.preview, now
+  });
   savePending(dataDir, list.filter((item) => item !== hit));
-  const grant = grantApproval(dataDir, hit.pluginId, hit.action, { uses, ttlMs, target: hit.target, now });
   return { pending: hit, grant };
 }
 
@@ -257,7 +299,7 @@ export function recordPluginWrite(dataDir, pluginId, { action, target, outcome, 
   writes.unshift({
     at: now,
     action: key,
-    target: normalizeTarget(target),
+    target: normalizeTarget(target) ?? '',
     outcome: ['ok', 'failed', 'denied', 'pending', 'unknown'].includes(outcome) ? outcome : 'unknown',
     note: String(note).slice(0, 200)
   });

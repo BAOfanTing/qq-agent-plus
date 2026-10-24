@@ -261,6 +261,23 @@ function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, head
 
 const MAX_REDIRECTS = 5;
 
+const CREDENTIAL_HEADER_RE = /^(cookie|authorization|proxy-authorization)$/i;
+
+function hasCredentialHeaders(headers) {
+  if (!headers || typeof headers !== 'object') return false;
+  return Object.keys(headers).some((key) => CREDENTIAL_HEADER_RE.test(key));
+}
+
+/** 跨源重定向时剥掉凭据头：白名单只说明"这个域可信"，不等于"可以把 Cookie 交给它"。 */
+function stripCredentialHeaders(headers) {
+  if (!headers || typeof headers !== 'object') return headers;
+  const next = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!CREDENTIAL_HEADER_RE.test(key)) next[key] = value;
+  }
+  return next;
+}
+
 /**
  * 域名白名单判定：主机名精确命中，或命中列表里的某个父域（`api.example.com` 被 `example.com` 放行）。
  * 插件的 httpDomains 在**初始 URL 和每一跳重定向**上都要过这道判定 ——
@@ -327,15 +344,23 @@ export async function safeFetchRequest(urlString, {
   const cap = Math.max(1, Math.floor(Number(maxBytes) || 50000));
   let { url, ip } = await validateFetchUrl(urlString, { allowPrivate });
   assertAllowedHost(url, allowedDomains, '请求');
+  // 凭据只交给起始源：重定向到别的源（含 https→http 降级）时剥掉 Cookie/Authorization。
+  // 白名单允许的是"这个域可以访问"，不是"可以把登录态转发给它"（2026-10-24 审查 P2）。
+  let currentHeaders = headers;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, ip, {
-      asBinary: decompress, maxBytes: cap, signal, headers, method: verb, body: payload,
+      asBinary: decompress, maxBytes: cap, signal, headers: currentHeaders, method: verb, body: payload,
       wantSetCookies: withSetCookies
     });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (verb !== 'GET') throw new Error(`请求被重定向（HTTP ${result.statusCode}）：已停止，避免把凭据带到另一个地址`);
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
+      const nextUrl = new URL(next);
+      if (hasCredentialHeaders(currentHeaders)
+        && (nextUrl.protocol !== url.protocol || nextUrl.host !== url.host)) {
+        currentHeaders = stripCredentialHeaders(currentHeaders);
+      }
       ({ url, ip } = await validateFetchUrl(next, { allowPrivate }));
       assertAllowedHost(url, allowedDomains, '重定向');
       continue;
@@ -373,12 +398,19 @@ export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, si
   const allow = allowPrivate === undefined ? getConfig().security?.allowPrivateImageHosts === true : allowPrivate === true;
   let { url, ip } = await validateFetchUrl(urlString, { allowPrivate: allow });
   assertAllowedHost(url, allowedDomains, '下载');
+  let currentHeaders = headers;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     signal?.throwIfAborted();
-    const result = await requestOnce(url, ip, { asBinary: true, maxBytes: maxBytes + 1, signal, headers });
+    const result = await requestOnce(url, ip, { asBinary: true, maxBytes: maxBytes + 1, signal, headers: currentHeaders });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
+      const nextUrl = new URL(next);
+      // 与 safeFetchRequest 同口径：跨源/降级重定向时剥掉凭据，别把 Cookie 交给 CDN 之外的域
+      if (hasCredentialHeaders(currentHeaders)
+        && (nextUrl.protocol !== url.protocol || nextUrl.host !== url.host)) {
+        currentHeaders = stripCredentialHeaders(currentHeaders);
+      }
       ({ url, ip } = await validateFetchUrl(next, { allowPrivate: allow }));
       assertAllowedHost(url, allowedDomains, '重定向');
       continue;

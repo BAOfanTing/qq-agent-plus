@@ -200,8 +200,9 @@ export function normalizeRepeat(raw) {
     if (!parseCron5(String(raw.cron || ''))) throw new Error('cron 表达式不合法（5 字段，日/月只认 *）');
     return { kind, cron: String(raw.cron).trim(), ...(tz ? { tz } : {}), ...(jitterMs ? { jitterMs } : {}) };
   }
-  const hour = Number(raw.hour);
-  const minute = Number(raw.minute);
+  // 缺省与字符串写法同口径：只给 kind 时按 09:00；给了 hour 没给 minute 按整点。
+  const hour = raw.hour === undefined ? 9 : Number(raw.hour);
+  const minute = raw.minute === undefined ? 0 : Number(raw.minute);
   if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
     throw new Error('repeat 需要 hour(0-23) 与 minute(0-59)');
   }

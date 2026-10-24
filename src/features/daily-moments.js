@@ -568,9 +568,9 @@ export class DailyMomentsManager {
 
   async #exclusive(task, execute) {
     if (this.running) throw momentError('MOMENT_BUSY', '已有动态任务正在执行，请等待完成');
-    // 「核对 / 确认结果」是消除 publish-unknown 阻断的唯一出口，且只读+写本地记录：
-    // 非活跃时段把它们拦下，管理员点不动、窗口模式会一直卡在 pending（2026-10-13 全项目审查 P3-4）。
-    if (task !== 'reconcile' && task !== 'resolve-record') assertTimeAllowed('');
+    // 「核对 / 确认结果 / 编辑草稿」都是本地操作：编辑不在活跃时段也应该能做
+    //（否则管理员只能等窗口，草稿会被卡住 —— 2026-10-24 审查 P2）。
+    if (!['reconcile', 'resolve-record', 'edit-draft'].includes(task)) assertTimeAllowed('');
     this.setProactiveSuppressed(true);
     this.task = task;
     this.running = Promise.resolve().then(execute).finally(() => {
@@ -1013,16 +1013,18 @@ export class DailyMomentsManager {
       const text = String(content ?? '').trim();
       if (!text) throw momentError('MOMENT_DECISION_INVALID', '正文不能为空', 422);
       if (text.length > 2000) throw momentError('MOMENT_DECISION_INVALID', '正文太长（上限 2000 字）', 422);
-      record.content = text;
-      record.editedAt = this.now();
-      record.editedBy = 'manual';
-      // 编辑后的正文同样要过诚实边界（人也会顺手编；闸门不区分谁写的）
+      // 先校验、后赋值：record 是内存里同一个对象，旧实现先写 record.content 再校验，
+      // 校验失败只抛错不落盘 —— 但内存已经是违规正文，之后直接点发布就会把它发出去
+      //（2026-10-24 审查 P1）。
       if (record.contentSource === 'self') {
         const fabricated = fabricationReason(text);
         if (fabricated) {
           throw momentError('MOMENT_DECISION_INVALID', `编辑后的正文${fabricated}，self 模式不发现实行动断言`, 422);
         }
       }
+      record.content = text;
+      record.editedAt = this.now();
+      record.editedBy = 'manual';
       this.#saveRecord(record);
       return { ok: true, record };
     });
@@ -1040,6 +1042,14 @@ export class DailyMomentsManager {
       }
       if (record.status !== 'preview' || record.decision !== 'publish' || !record.content?.trim()) {
         throw momentError('MOMENT_NOT_DRAFT', '这不是可发布的草稿，请重新生成');
+      }
+      // 发布前再判一次事实边界：旧实现只在编辑入口校验，内存被绕过（或手改记录）后
+      // 违规正文仍能直接发出去（2026-10-24 审查 P1）。
+      if (record.contentSource === 'self') {
+        const fabricated = fabricationReason(record.content);
+        if (fabricated) {
+          throw momentError('MOMENT_DECISION_INVALID', `这份草稿${fabricated}，self 模式不发现实行动断言；请编辑后再发布`, 422);
+        }
       }
       record.publicationSource = 'manual';
       this.controller = new AbortController();

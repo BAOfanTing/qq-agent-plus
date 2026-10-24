@@ -270,8 +270,14 @@ docker compose up -d
 ### 发版流程（每版一次）
 
 1. 按现有 Release 流程改版本号、提交、打 tag（例如 `v0.9.6`）并推送。
+   **tag 推送并触发镜像构建后不要再移动它**：GHCR 与国内镜像都拒绝覆盖已存在的精确版本 tag；
+   前移 tag 会让这次 tag 的 Docker 构建永久变红，而线上镜像仍指向旧提交。发现镜像内容有问题，
+   正确做法是发一个补丁版本，而不是重打同名 tag。
 2. CI 自动执行：`verify`（单测/lint）→ `smoke`（真实容器冒烟）→ `build`
    （amd64/arm64 构建并推 GHCR）→ `publish-cn`（配置了国内仓库时复制 manifest）。
+   `publish-cn` 对精确版本 tag 也有同样的不可覆盖守卫：重建同一版本镜像时，需要先用
+   `workflow_dispatch` 的 `cn_only=true` + `overwrite=true` 把国内镜像对齐到新 digest，
+   再重跑失败任务；这只是修复事故的手段，正常发版不要依赖它。
 3. 在 Release 说明里贴两条拉取命令（GHCR + 国内镜像），并写清本次是否需要手动迁移数据。
 4. 在一台干净机器上 `docker pull <新版本>` + `sh scripts/docker-smoke.sh` 验证一次再宣布。
 5. 用户升级：`docker compose pull && docker compose up -d`；数据卷不动。
