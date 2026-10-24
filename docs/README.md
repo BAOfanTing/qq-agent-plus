@@ -36,6 +36,7 @@
 | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | 架构总览：模块划分、消息流、存储与外部依赖 |
 | [CHANGES.md](CHANGES.md) | 本分支相对上游的改动清单，每条附「失败模式 → 现行做法」 |
+| [RELEASE-ARCHIVE.md](RELEASE-ARCHIVE.md) | v0.5.0–v0.8.4 已从 GitHub Releases 列表移除的旧发布说明存档（git tag 全部保留） |
 | [KNOWN-ISSUES.md](KNOWN-ISSUES.md) | 当前已知但未修复的问题，以及历史上的基线失败记录 |
 | [PERSONAS.md](PERSONAS.md) | 内置角色卡清单、选择与保存、语气档位（原版群友 / 自然可靠）与生效范围 |
 | [PLUGINS.md](PLUGINS.md) | 插件机制：目录与 manifest 契约、NDJSON 协议、能力白名单、隔离实测与信任声明（含分期）；apiVersion 2 的设置面板/加密凭据/授权与配额/媒体边界；作者向的写插件三条命令与上架流程（控制台「插件 → 发布插件」是同一份路线的界面版） |
