@@ -60,7 +60,7 @@ node scripts/humanize-eval.mjs samples.jsonl --severe-only
   `humanize.shape`（`maxBubbles` 默认 3、`maxChars` 默认 60，可关）。
 - **角色级声音参数**（`roles/voice-profiles.json`，按角色卡 `templateId` 取）：单条字数、条数、
   条间停顿；提示词与发送端用同一份口径，避免“卡里写 10 字、实际发 80 字”。
-- **说话示例**（`roles/dialogs/<id>.json`）：2–3 组 user→assistant few-shot，注入在角色卡正文之后，
+- **说话示例**（`roles/dialogs/<id>.json`）：按顺序注入**前 5 组** user→assistant few-shot，注入在角色卡正文之后，
   只学感觉、不背原句（提示词里明确写了）。
 - **说话指纹**：每张内置卡补了句长、标点、幽默方式、被夸/被怼反应等可观察特征。
 - **诚实边界**（`prompt.js` 的 `honestyFirewall`）：所有档位（含 `card`）固定注入——风格不覆盖事实，

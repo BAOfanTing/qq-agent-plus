@@ -83,7 +83,7 @@ function settingsFormHtml(data) {
           <div class="pd-approval-main">
             <strong>${esc(item.label || item.action)}</strong>
             <span>目标：${esc(item.target || '(未指明)')}</span>
-            ${item.preview ? `<span>内容：${esc(item.preview.slice(0, 160))}</span>` : ''}
+            ${item.preview ? `<span>内容：${esc(item.preview.slice(0, 160))}${Number(item.previewLength) > 160 ? ` …（共 ${Number(item.previewLength)} 字，批准绑定完整正文）` : ''}</span>` : ''}
           </div>
           <div class="pd-approval-state">${esc(new Date(Number(item.expiresAt)).toLocaleTimeString())} 前有效</div>
           <div class="pd-approval-actions">

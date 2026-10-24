@@ -541,7 +541,7 @@ function loadFewShot(persona) {
     const raw = JSON.parse(readFileSync(new URL(`../../roles/dialogs/${id}.json`, import.meta.url), 'utf8'));
     if (!Array.isArray(raw) || !raw.length) return '';
     const lines = ['【说话示例（学这个感觉，不要背原句）】'];
-    for (const row of raw.slice(0, 3)) {
+    for (const row of raw.slice(0, 5)) {
       if (typeof row?.user !== 'string' || !Array.isArray(row?.assistant)) continue;
       lines.push(`- 群友：「${row.user}」`);
       for (const bubble of row.assistant.slice(0, 3)) {

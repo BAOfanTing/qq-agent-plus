@@ -8,6 +8,7 @@
 //
 // 视频下载走宿主的 media 能力（宿主校验 SSRF、限体积、ffmpeg 合流），插件进程不执行命令、也拿不到别的目录。
 import crypto from 'node:crypto';
+import { mergeLoginTokens } from './login-tokens.mjs';
 
 const send = (message) => { process.stdout.write(`${JSON.stringify(message)}\n`); };
 
@@ -183,6 +184,12 @@ function biliError(code, message) {
   return new Error(`${hint}（code=${code}${message && message !== hint ? `，${message}` : ''}）`);
 }
 
+/** 写请求发出后遇到的 5xx/超时/非 JSON：可能已经写成功，必须让宿主按"结果未知"处理。 */
+function isUncertainWriteError(error) {
+  return /HTTP 5\d\d|timed out|timeout|超时|ECONNRESET|EPIPE|fetch failed|network|socket hang up|不是 JSON/i
+    .test(String(error?.message || error));
+}
+
 async function httpJson(url, { method = 'GET', form = null, auth = false, allowCodes = [], headers = {}, asText = false, decompress = false, withSetCookies = false } = {}) {
   const header = { 'user-agent': UA, referer: REFERER, 'accept-encoding': 'identity', ...headers };
   if (auth) {
@@ -220,6 +227,10 @@ async function httpJson(url, { method = 'GET', form = null, auth = false, allowC
   try {
     return await attempt();
   } catch (error) {
+    if (verbMethod === 'POST' && isUncertainWriteError(error)) {
+      // 写请求已经发出：5xx/超时/非 JSON 不能当成"确定没写"，否则宿主退款→模型重试=重复评论/弹幕。
+      throw Object.assign(new Error(String(error?.message ?? error)), { code: 'E_WRITE_UNKNOWN' });
+    }
     const riskHit = verbMethod === 'GET' && /-352|412|-509/.test(String(error?.message || error));
     if (!riskHit) throw error;
     // 匿名读请求被风控是常态：两次退避（2.5s/5s）。写路径在上面已保证绝不进来
@@ -508,6 +519,12 @@ const tools = {
   // ── 扫码登录（聊天内完成，Cookie 进加密凭据、立即生效） ──
   async login({ action, channel: channelArg } = {}, context = {}) {
     const PASSPORT = 'https://passport.bilibili.com';
+    const channel = String(channelArg || 'chat');
+    // 聊天内登录/退出只允许管理员：私聊白名单里的普通好友不能把机器人绑到自己账号上，
+    // 也不能把管理员的凭据清掉。控制台走已鉴权的 callConsoleTool，不受这条限制。
+    if (channel !== 'console' && action !== 'status' && context?.senderIsOwner !== true) {
+      throw new Error('只有管理员可以扫码登录或退出 B 站；其他人请在控制台操作');
+    }
     if (action === 'status') return probeStatus();
     if (action === 'logout') {
       // 群聊里任何一句诱导都不能清掉凭据：退出只允许私聊/控制台
@@ -533,6 +550,7 @@ const tools = {
       if (target.startsWith('group:')) {
         throw new Error('群聊里不能扫码登录：二维码会被任意群成员扫走并绑定成机器人的账号。请私聊机器人或在控制台操作');
       }
+      pendingLogin = { ...pendingLogin, chatKey: target };
       // 二维码本体只在会话里发，登录链接（含会话密钥）绝不交给第三方二维码服务
       const codeText = qrText(url);
       // 超长会被宿主拒绝（cap.send.text 不静默截断）；提前给出可操作的提示
@@ -546,54 +564,19 @@ const tools = {
       if (!pendingLogin.key || Date.now() - pendingLogin.at > 8 * 60_000) {
         throw new Error('没有进行中的扫码，或二维码已过期：请重新开始登录');
       }
+      if (channel !== 'console' && pendingLogin.chatKey
+        && String(context?.chatKey || '') !== pendingLogin.chatKey) {
+        throw new Error('这个扫码登录不是在这个会话发起的：请回到发起登录的会话完成');
+      }
       const data = await httpJson(`${PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(pendingLogin.key)}&source=main-fe-header`, { headers: { origin: REFERER.slice(0, -1) }, withSetCookies: true });
       const code = Number(data?.data?.code);
       if (code === 86038) { pendingLogin = { key: '', url: '', at: 0 }; throw new Error('二维码已过期：请重新开始登录'); }
       if (code === 86101) return { ok: true, state: 'waiting', note: '还没扫码：打开手机 B 站 App 扫一下刚才那张码' };
       if (code === 86090) return { ok: true, state: 'scanned', note: '已扫码：请在手机上点确认' };
       if (code !== 0) throw new Error(`登录状态异常（code=${code}）：${data?.data?.message || ''}`);
-      // 成功：凭据优先在**回跳 URL**里 —— 可能嵌套（新流程把 crossDomain URL 塞在另一个参数里），
-      // 逐层解 URL 找 SESSDATA；找不到再退回本次响应的 Set-Cookie。参考 dsh-bilibili 同款实现。
-      const findTokens = (urlText) => {
-        const queue = [String(urlText ?? '')];
-        const seen = new Set();
-        while (queue.length) {
-          const candidate = queue.shift();
-          if (!candidate || seen.has(candidate)) continue;
-          seen.add(candidate);
-          let parsed;
-          try { parsed = new URL(candidate); } catch { continue; }
-          const sessdata = parsed.searchParams.get('SESSDATA');
-          if (sessdata) {
-            return { sessdata, bili_jct: parsed.searchParams.get('bili_jct') || '', dedeuserid: parsed.searchParams.get('DedeUserID') || '' };
-          }
-          for (const value of parsed.searchParams.values()) {
-            let decoded = value;
-            try { decoded = decodeURIComponent(value); } catch { /* 不是编码串就原样入队 */ }
-            if (/crossDomain|SESSDATA|passport/i.test(decoded)) queue.push(decoded);
-          }
-        }
-        return null;
-      };
-      const fromJar = () => {
-        const jar = {};
-        for (const line of (Array.isArray(data?.setCookies) ? data.setCookies : [])) {
-          const first = String(line).split(';')[0];
-          const eq = first.indexOf('=');
-          if (eq > 0) jar[first.slice(0, eq).trim()] = first.slice(eq + 1).trim();
-        }
-        return jar.SESSDATA ? { sessdata: jar.SESSDATA, bili_jct: jar.bili_jct || '', dedeuserid: jar.DedeUserID || '' } : null;
-      };
-      // 两处来源都要取：URL 里通常有 SESSDATA，bili_jct/DedeUserID 有时只在 Set-Cookie 里。
-      // 旧实现 `findTokens(...) || fromJar()` 在 URL 命中 SESSDATA 时就丢掉 Set-Cookie，
-      // 结果只存了一半凭据（2026-10-24 审查 P2）。
-      const fromUrl = findTokens(data?.data?.url) || {};
-      const fromSet = fromJar() || {};
-      const creds = {
-        sessdata: fromUrl.sessdata || fromSet.sessdata || '',
-        bili_jct: fromUrl.bili_jct || fromSet.bili_jct || '',
-        dedeuserid: fromUrl.dedeuserid || fromSet.dedeuserid || ''
-      };
+      // 成功：回跳 URL（可能嵌套 crossDomain）与 Set-Cookie 按字段合并。
+      // 解析在 login-tokens.mjs（纯函数，单测覆盖"URL 有 SESSDATA、Set-Cookie 只有 bili_jct"）。
+      const creds = mergeLoginTokens(data?.data?.url, data?.setCookies);
       if (!creds.sessdata) throw new Error('登录确认成功，但响应里没有 SESSDATA（回跳 URL 与 Set-Cookie 都没有）——请把这个截图发给管理员排查');
       if (!creds.bili_jct) throw new Error('登录确认成功，但没拿到 bili_jct（写操作会全部失败）：请重新扫码，或在控制台插件详情里重新登录');
       const values = { sessdata: creds.sessdata, bili_jct: creds.bili_jct };

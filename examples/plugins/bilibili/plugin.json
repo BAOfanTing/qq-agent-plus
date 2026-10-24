@@ -2,7 +2,7 @@
   "id": "bilibili",
   "apiVersion": 2,
   "name": "B 站",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "搜索与查看 B 站视频、UP 主、热门、评论、字幕；把视频下载合流后发到群里；点赞/投币/收藏/关注/评论/发弹幕（写操作需管理员批准并按天限额）",
   "entry": "index.mjs",
   "capabilities": [

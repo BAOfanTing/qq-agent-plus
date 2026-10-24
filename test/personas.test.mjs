@@ -177,3 +177,34 @@ test('猫娘卡把招牌写成硬指标，示例给出"索要就给"的路径', 
   assert.match(cat, /你是什么人设/, '身份问题清单里缺"你是什么人设"');
   assert.match(cat, /猫娘喵 小鲸鱼只是个名字|人设是猫娘/, '缺"人设=猫娘、名字=小鲸鱼"的答法');
 });
+
+// 2026-10-24：七张卡统一补「生活线」和更多示例。这里把"每张卡都有"变成结构约束，
+// 防止以后新增卡只写身份/规则、忘了生活段或示例。
+test('七张内置卡都有生活线，示例数量与格式达标（小鲸鱼 9 组，其余 ≥6 组）', () => {
+  for (const [id, persona] of Object.entries(PERSONAS)) {
+    assert.match(persona.text, /你的生活（角色设定，不是现实经历）/, `${id} 缺生活线`);
+    assert.match(persona.text, /不编|不要编|不许编/, `${id} 的生活线要写清"不编现实行动"`);
+    const file = path.join(repoRoot, 'roles', 'dialogs', `${id}.json`);
+    assert.ok(fs.existsSync(file), `${id} 缺示例文件 roles/dialogs/${id}.json`);
+    const dialogs = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.ok(Array.isArray(dialogs) && dialogs.length >= 6, `${id} 示例不足 6 组（实际 ${dialogs?.length}）`);
+    for (const item of dialogs) {
+      assert.ok(item?.user && Array.isArray(item?.assistant) && item.assistant.length > 0, `${id} 示例格式不对`);
+      assert.ok(item.assistant.every((line) => typeof line === 'string' && line.trim()), `${id} 示例里有空回复`);
+    }
+  }
+  const xiao = JSON.parse(fs.readFileSync(path.join(repoRoot, 'roles', 'dialogs', 'xiaojingyu.json'), 'utf8'));
+  assert.ok(xiao.length >= 9, `小鲸鱼示例应 ≥9 组，实际 ${xiao.length}`);
+});
+
+// 示例文件可以写很多组，但提示词只注入前 5 组：顺序就是优先级。
+// 小鲸鱼把"token 软肋"那组放在第 5 位，确保它真的进提示词（而不是写完永远轮不到）。
+test('说话示例注入前 5 组，小鲸鱼的 token 软肋示例在其中', () => {
+  const base = structuredClone(DEFAULT_CONFIG);
+  const card = PERSONAS.xiaojingyu.text;
+  base.persona = { ...base.persona, botName: '小鲸鱼', templateId: 'xiaojingyu', roleText: card };
+  updateConfig(base);
+  const prompt = buildSystemPrompt({});
+  assert.match(prompt, /给你吃穷没 token/, '第 5 组的 token 软肋要进提示词');
+  assert.doesNotMatch(prompt, /你也早点睡/, '第 9 组不该被注入（只取前 5 组）');
+});

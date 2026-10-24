@@ -237,6 +237,15 @@ export class PluginRegistry {
   }
 
   /**
+   * engines.minVersion 的唯一判定入口：常驻启动、懒启动登记、reload、按需拉起都必须过这里。
+   * 只在 #startImpl 判会被 reload/懒启动绕过去（2026-10-24 审查 P2）。
+   */
+  #enginesOk(manifest) {
+    const minVersion = manifest?.engines?.minVersion || '';
+    return !(minVersion && HOST_VERSION && !semverAtLeast(HOST_VERSION, minVersion));
+  }
+
+  /**
    * 按配置起插件进程。**fail-closed**：隔离不可用（本机 Node 不支持权限模型）时，
    * 装了 requireIsolation 就一个都不加载 —— 宁可插件跑不起来，也不假装隔离生效。
    */
@@ -255,10 +264,8 @@ export class PluginRegistry {
     const started = [];
     for (const item of this.discovered) {
       if (!item.manifest) continue;
-      // engines.minVersion：安装时查一次不够，宿主升级/降级/换机后每次加载都要重新判
-      const minVersion = item.manifest.engines?.minVersion || '';
-      if (minVersion && HOST_VERSION && !semverAtLeast(HOST_VERSION, minVersion)) {
-        this.log(`插件 ${item.id} 要求宿主 ≥ ${minVersion}，本机是 ${HOST_VERSION}，不予加载`);
+      if (!this.#enginesOk(item.manifest)) {
+        this.log(`插件 ${item.id} 要求宿主 ≥ ${item.manifest.engines?.minVersion}，本机是 ${HOST_VERSION}，不予加载`);
         continue;
       }
       if (!this.#shouldRun(item.id, cfg, item.manifest.version)) {
@@ -307,6 +314,11 @@ export class PluginRegistry {
   async #ensureRunning(id) {
     const host = this.hosts.get(id);
     if (!host) return null;
+    const item = this.discovered.find((entry) => entry.id === id);
+    if (!item?.manifest || !this.#enginesOk(item.manifest)) {
+      this.log(`插件 ${id} 的 engines.minVersion 不满足（要求 ≥ ${item?.manifest?.engines?.minVersion || '?'}），拒绝按需启动`);
+      return null;
+    }
     if (host.state === 'running') { this.lastUsedAt.set(id, Date.now()); return host; }
     // 被停用（连续崩溃）的插件不许被一次调用顺手拉起来：要恢复就显式重载，否则崩溃循环会一直重复
     if (host.state === 'failed') return null;
@@ -347,11 +359,9 @@ export class PluginRegistry {
   }
 
   async #startOne(item, cfg) {
-    // engines.minVersion 必须在**所有**启动路径上判：懒启动、控制台保存设置后的 reload、
-    // /api/plugins/reload 都走这里。只在 #startImpl 判会被 reload 绕过去（2026-10-24 审查 P2）。
-    const minVersion = item.manifest?.engines?.minVersion || '';
-    if (minVersion && HOST_VERSION && !semverAtLeast(HOST_VERSION, minVersion)) {
-      this.log(`插件 ${item.id} 要求宿主 ≥ ${minVersion}，本机是 ${HOST_VERSION}，不予加载`);
+    // engines.minVersion 必须在**所有**启动路径上判：常驻、懒启动登记、reload、按需拉起。
+    if (!this.#enginesOk(item.manifest)) {
+      this.log(`插件 ${item.id} 要求宿主 ≥ ${item.manifest.engines?.minVersion}，本机是 ${HOST_VERSION}，不予加载`);
       return false;
     }
     // 表里已经有同一个 id 的 host 时**先停掉它**：直接覆盖会让旧进程变成没人管的孤儿
@@ -469,6 +479,9 @@ export class PluginRegistry {
     const old = this.hosts.get(id);
     if (old) { this.hosts.delete(id); await old.stop().catch(() => {}); }
     if (!this.#shouldRun(id, cfg, item.manifest.version)) return { ok: true, running: false };
+    if (!this.#enginesOk(item.manifest)) {
+      return { ok: false, error: `插件要求宿主 ≥ ${item.manifest.engines?.minVersion}，本机是 ${HOST_VERSION}` };
+    }
     // 懒启动插件重载后**停在待命状态**：等下次真要用再起（重启整个插件进程本来就是重载语义）
     if (this.#isLazy(cfg, item.manifest)) { this.#registerIdleHost(item, cfg); return { ok: true, running: false, lazy: true }; }
     const ok = await this.#startOne(item, cfg);
@@ -609,7 +622,7 @@ export class PluginRegistry {
     const invalid = rawTargets.find((item) => item.raw && normalizeTarget(item.raw) === null);
     const values = [...new Set(rawTargets.map((item) => normalizeTarget(item.raw)).filter((value) => value))];
     const target = values.length === 1 ? values[0] : '';
-    const preview = tool.actionPreview ? String(args?.[tool.actionPreview] ?? '').slice(0, 300) : '';
+    const preview = tool.actionPreview ? String(args?.[tool.actionPreview] ?? '') : '';
     const declared = (host.manifest.approvals || []).find((item) => item.action === action);
     const denied = (reason, outcome = 'denied', note = '') => {
       recordPluginWrite(this.dataDir, host.id, { action, target, outcome, note: note || reason });
@@ -729,7 +742,8 @@ export class PluginRegistry {
     const text = [
       `插件「${pending.pluginName}」请求执行写操作：${pending.label || pending.action}`,
       pending.target ? `目标：${pending.target}` : '',
-      pending.preview ? `内容预览：${pending.preview.slice(0, 200)}` : '',
+      pending.preview ? `内容预览：${pending.preview.slice(0, 200)}`
+        + `${Number(pending.previewLength) > 200 ? ` …（共 ${Number(pending.previewLength)} 字，完整正文已绑定）` : ''}` : '',
       `回复「同意」批准一次（${minutes} 分钟内有效），回复「拒绝」取消；多条待批时这里批的是最新一条，其余在控制台处理。`
     ].filter(Boolean).join('\n');
     try {
@@ -846,6 +860,14 @@ export class PluginRegistry {
       // 只给会话 key（group:<id> / private:<id>）：插件要"把结果发回当前会话"（例如 B 站视频）
       // 必须知道目标，但群名/成员/消息都不该交给第三方代码。
       const context = ctx?.chatKey ? { chatKey: String(ctx.chatKey) } : {};
+      // 发起者是不是管理员：只传布尔值，不把 QQ 号交给插件。用于"聊天内扫码登录/退出"这类
+      // 只能由 owner 发起的动作（2026-10-24 审查 P2）。
+      if (ctx?.chatKey) {
+        const owner = readOwnerUin(this.getConfig());
+        const last = [...(ctx?.triggerEntries || [])].reverse()
+          .find((message) => !message?.self && message?.senderId !== undefined && message?.senderId !== null);
+        context.senderIsOwner = Boolean(owner && last && String(last.senderId) === String(owner));
+      }
       // approved：写操作已过宿主三层门，插件不必（也不应）再走自己的 cap.approval.check
       if (gate?.proceed === true) context.approved = { action: gate.action, target: gate.target };
       // 工具级超时优先（manifest.timeoutMs，v2）：媒体类工具默认 20s 必超时，作者按需声明更长的
@@ -872,8 +894,7 @@ export class PluginRegistry {
       const message = String(error?.message ?? error);
       // 超时 / 插件进程掉了 / 连接被重置：请求可能已经到达对方 → 结果未知，不退批准与配额，
       // 并明确让模型别重试（评论、弹幕没有幂等键，重试就是重复写入）。
-      const uncertain = ['E_TIMEOUT', 'E_PLUGIN_DOWN', 'E_PIPE', 'E_CLOSED'].includes(code)
-        || /timeout|timed out|超时|进程退出|EPIPE|ECONNRESET/i.test(message);
+      const uncertain = ['E_TIMEOUT', 'E_PLUGIN_DOWN', 'E_PIPE', 'E_CLOSED', 'E_WRITE_UNKNOWN'].includes(code);
       if (gate?.proceed === true && !settled) {
         settled = true;
         try { this.#settleWrite(host, tool, gate, { ok: false, note: message }, { unknown: uncertain }); } catch { /* 审计失败不遮挡原错误 */ }

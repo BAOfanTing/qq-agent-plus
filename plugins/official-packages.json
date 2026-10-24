@@ -3,8 +3,8 @@
   "updatedAt": "2026-10-24",
   "packages": {
     "bilibili": {
-      "version": "1.0.2",
-      "sha256": "1f63a06717b14d0079b5e6ef007d2fb8254aeb028b7fe1b7b0d1d3ed00b25de1"
+      "version": "1.0.4",
+      "sha256": "0ab8993193872267dcd5631572606bfb802ca41cb657eb2ac23d5a73a594fb26"
     },
     "exchange-rate": {
       "version": "1.0.0",

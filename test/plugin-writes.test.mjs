@@ -79,9 +79,9 @@ function makeRegistry({ switchOn = true, ownerUin = '', behavior = {}, manifestP
   return { registry, host, calls };
 }
 
-const runTool = async (registry, args) => {
+const runTool = async (registry, args, ctx = {}) => {
   const meta = registry.toolDefsFor().find((t) => t.name === 'plugin_call');
-  return meta.execute({ chatKey: 'group:1' }, { tool: 'demo__do', args });
+  return meta.execute({ chatKey: 'group:1', ...ctx }, { tool: 'demo__do', args });
 };
 
 const parse = (result) => JSON.parse(result.content);
@@ -281,4 +281,91 @@ test('超时/进程退出：结果未知 → 不退批准与配额，并明确�
   assert.equal(checkApproval(dataDir, 'demo', 'write', { target: 'BVT', preview: '内容' }).approved, false,
     '结果未知不能退还批准（否则模型重试 = 重复评论）');
   assert.equal(listPluginWrites(dataDir, 'demo')[0].outcome, 'unknown');
+});
+
+test('批准摘要绑定完整正文：前 300 字相同、尾巴不同也必须重新批准', async () => {
+  for (const leftover of listPendingApprovals(dataDir)) rejectPendingApproval(dataDir, leftover.id);
+  const { registry } = makeRegistry({ ownerUin: '10001' });
+  registry.lastWriteAt.set('demo', 0);
+  const head = 'a'.repeat(300);
+  await runTool(registry, { bvid: 'BVL', text: head + '尾巴A' });
+  const pending = listPendingApprovals(dataDir).find((item) => item.target === 'BVL');
+  assert.ok(pending, '首次请求生成待批');
+  assert.equal(pending.previewLength, 303, '待批要记录完整长度');
+  registry.handleOwnerApprovalText(`同意 ${pending.id}`, '10001');
+
+  const same = parse(await runTool(registry, { bvid: 'BVL', text: head + '尾巴A' }));
+  assert.equal(same.ok, true, '同一段完整正文可以执行');
+
+  registry.lastWriteAt.set('demo', Date.now() - PLUGIN_WRITE_FLOOR_MS - 1000);
+  const changed = parse(await runTool(registry, { bvid: 'BVL', text: head + '尾巴B' }));
+  assert.equal(changed.needsApproval, true, '只换后 5 个字也要重新批准（摘要必须覆盖完整正文）');
+  assert.ok(listPendingApprovals(dataDir).some((item) => item.target === 'BVL' && item.previewLength === 303));
+});
+
+test('engines.minVersion 在 reload/懒启动路径同样生效', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-engine-'));
+  const pluginDir = path.join(root, 'demo');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, 'plugin.json'), JSON.stringify({
+    id: 'demo',
+    apiVersion: 2,
+    name: '引擎门槛演示',
+    version: '1.0.0',
+    entry: 'index.mjs',
+    capabilities: ['tools'],
+    engines: { minVersion: '9.0.0' },
+    tools: [{ name: 'noop', description: '什么都不做', parameters: { type: 'object', properties: {} } }]
+  }), 'utf8');
+  fs.writeFileSync(path.join(pluginDir, 'index.mjs'), '', 'utf8');
+  try {
+    const registry = new PluginRegistry({
+      root,
+      dataDir: path.join(root, 'data'),
+      log: () => {},
+      getConfig: () => ({
+        plugins: { enabled: true, enabledIds: ['demo'], lazy: true, requireIsolation: false }
+      })
+    });
+    const started = await registry.start();
+    assert.deepEqual(started.started, [], '启动阶段就该跳过不满足 engines 的插件');
+    assert.equal(registry.hosts.size, 0);
+    const reload = await registry.reload('demo');
+    assert.equal(reload.ok, false, 'reload 不能绕过 engines');
+    assert.match(String(reload.error || ''), /要求宿主/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('E_WRITE_UNKNOWN：结果未知同样不退批准与配额', async () => {
+  const failing = makeRegistry({ behavior: { throw: 'B 站接口返回 HTTP 502', throwCode: 'E_WRITE_UNKNOWN' } });
+  failing.registry.lastWriteAt.set('demo', 0);
+  grantApproval(dataDir, 'demo', 'write', { target: 'BVU', preview: '内容', uses: 1, ttlMs: 60_000 });
+  const res = parse(await runTool(failing.registry, { bvid: 'BVU', text: '内容' }));
+  assert.equal(res.uncertain, true);
+  assert.match(res.error, /不要重试/);
+  assert.equal(checkApproval(dataDir, 'demo', 'write', { target: 'BVU', preview: '内容' }).approved, false);
+  assert.equal(listPluginWrites(dataDir, 'demo')[0].outcome, 'unknown');
+});
+
+test('插件上下文带上 senderIsOwner：只给布尔值，不泄露 QQ 号', async () => {
+  for (const leftover of listPendingApprovals(dataDir)) rejectPendingApproval(dataDir, leftover.id);
+  const { registry, calls } = makeRegistry({ ownerUin: '10001' });
+  registry.lastWriteAt.set('demo', 0);
+  grantApproval(dataDir, 'demo', 'write', { target: 'BVO', preview: '内容', uses: 1, ttlMs: 60_000 });
+  await runTool(registry, { bvid: 'BVO', text: '内容' }, {
+    triggerEntries: [{ senderId: '10001', self: false }]
+  });
+  const mine = calls.at(-1)?.context || {};
+  assert.equal(mine.senderIsOwner, true, JSON.stringify(mine));
+  assert.equal(calls.length, 1, '调用应到达插件');
+  assert.equal(JSON.stringify(mine).includes('10001'), false, '上下文不能带 owner 的 QQ 号');
+
+  registry.lastWriteAt.set('demo', 0);
+  grantApproval(dataDir, 'demo', 'write', { target: 'BVN', preview: '内容', uses: 1, ttlMs: 60_000 });
+  await runTool(registry, { bvid: 'BVN', text: '内容' }, {
+    triggerEntries: [{ senderId: '20002', self: false }]
+  });
+  assert.equal(calls.at(-1)?.context?.senderIsOwner, false);
 });

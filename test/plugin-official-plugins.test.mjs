@@ -143,6 +143,9 @@ test('B站插件：主人 UID 绑定、whoami 与一键三连已声明，所有�
   const src = fs.readFileSync(path.join(dirOf('bilibili'), 'index.mjs'), 'utf8');
   assert.match(src, /async function requireWriteAuth/, '要有统一的写操作鉴权（登录 + 主人 UID 核对）');
   assert.match(src, /navIdentity/, '主人核对要用 nav 读平台实际登录身份，不能只信 Cookie');
+  assert.match(src, /senderIsOwner/, '聊天内扫码登录/退出要校验发起者是管理员');
+  assert.match(src, /E_WRITE_UNKNOWN/, '写请求 5xx/超时/非 JSON 要标记结果未知');
+  assert.match(src, /mergeLoginTokens/, '登录凭据要合并 URL 与 Set-Cookie');
   const writeEntries = src.match(/await requireWriteAuth\(\)/g) || [];
   assert.ok(writeEntries.length >= 3, `interact/comment/danmaku_send 都要走 requireWriteAuth，实际 ${writeEntries.length} 处`);
   const loginCalls = src.match(/await requireLogin\(\)/g) || [];

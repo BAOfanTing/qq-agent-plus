@@ -116,13 +116,15 @@ function cleanGrants(state, now) {
  * @param {object} options { uses, ttlMs, target, preview, now } —— target 为空 = 动作级（兼容旧路径）；
  *   preview 非空时通行证只对**同一段预览内容**有效（评论/弹幕不能批了 A 文案再发 B 文案）。
  */
-export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 * 60_000, target = '', preview = '', now = Date.now() } = {}) {
+export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 * 60_000, target = '', preview = '', previewKey: providedPreviewKey, now = Date.now() } = {}) {
   const key = assertAction(action);
   const count = Math.max(1, Math.min(MAX_USES, Math.floor(Number(uses) || 1)));
   const ttl = Math.max(60_000, Math.min(MAX_TTL_MS, Math.floor(Number(ttlMs) || 10 * 60_000)));
   const wanted = normalizeTarget(target);
   if (wanted === null) throw fail('E_ARGS', '批准目标含非法字符');
-  const keyPreview = previewKey(preview);
+  // 待批批准时直接复用登记时对**完整正文**算出的摘要：待批里只存了展示用的前 300 字，
+  // 拿它重算会把批准范围缩回前 300 字（2026-10-24 审查 P1）。
+  const keyPreview = providedPreviewKey !== undefined ? String(providedPreviewKey || '') : previewKey(preview);
   const state = load(dataDir, pluginId);
   const grants = cleanGrants(state, now);
   // 同 (动作, 目标, 预览) 的重复批准：次数累加、有效期取更晚（不至于把刚批的几分钟覆盖成更短）
@@ -251,6 +253,7 @@ export function requestPendingApproval(dataDir, { pluginId, pluginName = '', act
     label: String(label).slice(0, 80),
     target: wanted,
     preview: String(preview).slice(0, 300),
+    previewLength: String(preview).length,
     ...(keyPreview ? { previewKey: keyPreview } : {}),
     createdAt: now,
     expiresAt: now + PENDING_TTL_MS
@@ -274,7 +277,7 @@ export function approvePendingApproval(dataDir, id, { uses = 1, ttlMs = 10 * 60_
   // 先写通行证、再从待批队列移除：反过来的话两步之间崩溃会让管理员"批准了但没生效"
   //（2026-10-24 审查 P2）。失败时待批仍在，可以重试。
   const grant = grantApproval(dataDir, hit.pluginId, hit.action, {
-    uses, ttlMs, target: hit.target, preview: hit.preview, now
+    uses, ttlMs, target: hit.target, previewKey: hit.previewKey, now
   });
   savePending(dataDir, list.filter((item) => item !== hit));
   return { pending: hit, grant };
