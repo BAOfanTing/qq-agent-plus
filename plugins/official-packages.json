@@ -4,7 +4,7 @@
   "packages": {
     "bilibili": {
       "version": "1.0.0",
-      "sha256": "9f635eb8e01e39a131b868e17c2ad860b716aafe48d93275bcbc54a87128d4de"
+      "sha256": "0fa85289d2f2fbde65321c1fd6f13961141e4baed4d0a41a9f66b7127eb06d27"
     },
     "exchange-rate": {
       "version": "1.0.0",

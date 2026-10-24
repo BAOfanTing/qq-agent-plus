@@ -176,8 +176,15 @@ async function httpJson(url, { method = 'GET', form = null, auth = false, allowC
   } catch (error) {
     const riskHit = verbMethod === 'GET' && /-352|412|-509/.test(String(error?.message || error));
     if (!riskHit) throw error;
+    // 匿名读请求被风控是常态：两次退避（2.5s/5s）。写路径在上面已保证绝不进来
     await new Promise((resolve) => setTimeout(resolve, 2500));
-    return await attempt();
+    try {
+      return await attempt();
+    } catch (error2) {
+      if (!/-352|412|-509/.test(String(error2?.message || error2))) throw error2;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      return await attempt();
+    }
   }
 }
 
@@ -590,14 +597,19 @@ const tools = {
       const playerUrl = await wbiUrl('/x/player/wbi/v2', { bvid: info.bvid, cid: info.cid });
       const player = await httpJson(playerUrl, { auth: true, allowCodes: [-101] });
       const subs = (player?.data?.subtitle?.subtitles || []).filter((item) => item?.subtitle_url);
-      const pickedSub = subs.find((item) => /^zh/i.test(String(item.lan))) || subs[0];
-      if (pickedSub) {
-        const subUrl = String(pickedSub.subtitle_url).startsWith('//') ? `https:${pickedSub.subtitle_url}` : pickedSub.subtitle_url;
-        const sub = await httpJson(subUrl, { auth: true });
-        const body = Array.isArray(sub?.body) ? sub.body : [];
-        if (body.length) {
-          transcript = body.map((line) => ({ at: Math.floor((Number(line.from) || 0) * 1000), text: String(line.content || '') }));
-          transcriptSource = `字幕（${pickedSub.lan_doc || pickedSub.lan}）`;
+      if (!subs.length && player?.data?.subtitle?.need_login_subtitle === true) {
+        // B 站明确说"有字幕轨但要登录"：与"根本没有字幕"是两种事，用户动作不同
+        transcriptError = '这个视频有 AI 字幕轨，但需要登录才能读取（登录后重试即可）';
+      } else {
+        const pickedSub = subs.find((item) => /^zh/i.test(String(item.lan))) || subs[0];
+        if (pickedSub) {
+          const subUrl = String(pickedSub.subtitle_url).startsWith('//') ? `https:${pickedSub.subtitle_url}` : pickedSub.subtitle_url;
+          const sub = await httpJson(subUrl, { auth: true });
+          const body = Array.isArray(sub?.body) ? sub.body : [];
+          if (body.length) {
+            transcript = body.map((line) => ({ at: Math.floor((Number(line.from) || 0) * 1000), text: String(line.content || '') }));
+            transcriptSource = `字幕（${pickedSub.lan_doc || pickedSub.lan}）`;
+          }
         }
       }
     } catch (error) {
