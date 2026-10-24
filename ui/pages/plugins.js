@@ -27,7 +27,7 @@ import {
 } from './plugin-settings.js';
 
 /** 全局待批红点：侧栏「插件」按钮上的未批请求计数（跨插件汇总，审批是全局状态）。 */
-export async function refreshPendingBadge() {
+async function refreshPendingBadge() {
   try {
     const data = await api('/api/plugins/pending-count');
     const n = Number(data?.count) || 0;
@@ -1677,4 +1677,4 @@ async function loadPluginsPage({ force = false } = {}) {
 
 // 导出统一放末尾（本仓 ui/ 的约定：test/ui-module-graph.test.mjs 按 ExportNamedDeclaration 的
 // specifiers 收集名字，而 export function 那种写法没有 specifiers，它收不到）
-export { renderPluginsPage, loadPluginsPage, refreshPlugins, bindPluginsSection, capText };
+export { renderPluginsPage, loadPluginsPage, refreshPendingBadge, refreshPlugins, bindPluginsSection, capText };
