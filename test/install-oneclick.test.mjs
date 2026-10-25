@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { posixOnly } from './helpers/platform.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // root-install.sh 跑在 bash 里：Windows 的 C:\... 不是 POSIX 绝对路径，会被“部署根目录必须是绝对路径”挡下。
@@ -131,7 +132,11 @@ test('显式模型参数/环境变量会透传且不再跳过模型配置', { sk
   assert.deepEqual(stubArgs(b), ['--yes'], '环境变量给了 Key 也不跳过（Key 的值随环境进子进程，不出现在参数里）');
 });
 
-test('root 自动进入降权准备：不会直接执行 deploy-all.sh', { skip }, (t) => {
+test('root 自动进入降权准备：不会直接执行 deploy-all.sh', {
+  // 用 PATH 里一个无扩展名的 `id` 桩模拟 root；Windows 的 Git Bash 不保证会执行这种桩，
+  // 这条只验 POSIX 下的降权分支，Windows 上显式跳过（不拿 fail 当基线）。
+  skip: skip || posixOnly('模拟 root 的 PATH 桩依赖 POSIX 可执行语义')
+}, (t) => {
   const f = fixture(t);
   const binDir = path.join(f.dir, 'bin');
   fs.mkdirSync(binDir, { recursive: true });

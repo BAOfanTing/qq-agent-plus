@@ -177,6 +177,18 @@ function systemctlUser(args, options = {}) {
   return run('systemctl', ['--user', ...args], options);
 }
 
+/**
+ * 这个 unit 是否真的存在。测试/非 systemd 环境里 systemctl 命令可能装了就绪，
+ * 但服务名是假的；此时不能把"起不来"当成恢复失败 —— 那会把一个只恢复数据的演练判红。
+ */
+function serviceLoaded(name) {
+  const unit = String(name || '').trim();
+  if (!unit) return false;
+  const result = systemctlUser(['show', unit, '-p', 'LoadState', '--value'], { timeout: 5000 });
+  if (result.missing) return false;
+  return String(result.stdout || '').trim() === 'loaded';
+}
+
 // ───────────────────────────────── 参数解析 ─────────────────────────────────
 
 const hasFlag = (args, name) => args.includes(name);
@@ -1257,10 +1269,13 @@ async function cmdBackup(args) {
   let serviceManaged = false;
   let tarOk = false;
   try {
-    const stop = systemctlUser(['stop', cfg.service], { timeout: 60000 });
-    serviceManaged = !stop.missing;
-    if (stop.missing) skipLine('缺少 systemctl：跳过停服务（直接打包）');
-    else if (!stop.ok) noteLine(`停止服务返回码 ${stop.code}，仍继续备份`);
+    serviceManaged = serviceLoaded(cfg.service);
+    if (!serviceManaged) {
+      skipLine(`服务 ${cfg.service} 不存在或不可用：跳过停服务（直接打包）`);
+    } else {
+      const stop = systemctlUser(['stop', cfg.service], { timeout: 60000 });
+      if (!stop.ok) noteLine(`停止服务返回码 ${stop.code}，仍继续备份`);
+    }
     await sleep(2000);
     const tar = runTarCreate(plainFile, cfg.dataDir, credsExtra);
     tarOk = tar.ok;
@@ -1394,17 +1409,25 @@ function listBackupFiles(dir) {
   }
 }
 
+/** Windows 上先试 GNU tar 的 --force-local，遇到 bsdtar（不认这个选项）再退回不加。 */
+function runTarWithFallback(args, options) {
+  const attempts = IS_WINDOWS ? [['--force-local', ...args], [...args]] : [args];
+  let last = { ok: false, code: null, stderr: '' };
+  for (const attempt of attempts) {
+    const result = run('tar', attempt, options);
+    if (result.ok) return result;
+    last = result;
+  }
+  return last;
+}
+
 function runTarList(file) {
-  const args = IS_WINDOWS ? ['--force-local', '-tzf', file] : ['-tzf', file];
-  return run('tar', args, { timeout: 120000 });
+  return runTarWithFallback(['-tzf', file], { timeout: 120000 });
 }
 
 function runTarExtract(file, destDir) {
   fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
-  const args = IS_WINDOWS
-    ? ['--force-local', '-xzf', file, '-C', destDir]
-    : ['-xzf', file, '-C', destDir];
-  return run('tar', args, { timeout: 30 * 60 * 1000 });
+  return runTarWithFallback(['-xzf', file, '-C', destDir], { timeout: 30 * 60 * 1000 });
 }
 
 function validateTarEntries(stdout) {
@@ -1519,11 +1542,13 @@ async function cmdRestore(args) {
 
     const stamp = formatStamp();
     const pre = `${cfg.dataDir}.pre-restore-${stamp}`;
-    let serviceManaged = false;
-    const stop = systemctlUser(['stop', cfg.service], { timeout: 60000 });
-    serviceManaged = !stop.missing;
-    if (stop.missing) skipLine('缺少 systemctl：跳过停服务');
-    else if (!stop.ok) noteLine(`停止服务返回码 ${stop.code}，仍继续恢复`);
+    const serviceManaged = serviceLoaded(cfg.service);
+    if (!serviceManaged) {
+      skipLine(`服务 ${cfg.service} 不存在或不可用：跳过停服务（只恢复数据）`);
+    } else {
+      const stop = systemctlUser(['stop', cfg.service], { timeout: 60000 });
+      if (!stop.ok) noteLine(`停止服务返回码 ${stop.code}，仍继续恢复`);
+    }
     await sleep(2000);
 
     let committed = false;
