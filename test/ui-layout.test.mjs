@@ -375,3 +375,15 @@ test('资产页卡片复用设置页的卡片样式', () => {
   assert.match(css, /\.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/);
   assert.match(css, /\.asset-summary \+ \.settings-card,\s*\.friend-save-result \+ \.settings-card \{ margin-top: 14px; \}/);
 });
+
+test('表单型资产页与设置页同一条居中阅读列', () => {
+  // 只分卡不居中，宽屏下卡片仍贴着内容区左缘（标题、摘要、卡片整体偏左）。
+  // 与设置页一致：好友管理用 860 阅读列；人物印象/异常处理有宽表格用 1180。
+  const block = /#friend-page,\s*#identity-page,\s*#incident-page \{([\s\S]*?)\n\}/.exec(css);
+  assert.ok(block, '要有资产页居中列规则');
+  assert.match(block[1], /display: grid;/);
+  assert.match(block[1], /grid-template-columns: minmax\(0, 860px\);/);
+  assert.match(block[1], /justify-content: center;/);
+  assert.match(block[1], /align-content: start;/);
+  assert.match(css, /#identity-page,\s*#incident-page \{ grid-template-columns: minmax\(0, 1180px\); \}/);
+});
