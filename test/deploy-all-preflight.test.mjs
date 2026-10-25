@@ -5,9 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { skipUnlessLinux } from './helpers/platform.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const shellOptions = { skip: process.getuid?.() === 0 ? 'Installer must run as a non-root service user' : false };
+const shellOptions = {
+  skip: process.getuid?.() === 0
+    ? 'Installer must run as a non-root service user'
+    : skipUnlessLinux('Installer preflight needs bash/systemctl/docker fixtures (Linux only)')
+};
 
 function fixture(t, { fakeUid = null } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'qq-stack-preflight-')));

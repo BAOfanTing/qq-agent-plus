@@ -38,9 +38,10 @@ bash -n deploy.sh && bash -n deploy-all.sh && bash -n manage.sh   # 改过 shell
   会被判红：import 绑定只读，别人一写就 TypeError）；
 - 跑一遍 `docs/UI-SMOKE.md` 的手工清单（自动化只覆盖"渲染不抛 + 钩子接上了"，布局与事件靠人看）。
 
-**回归判断口径**：Windows 上有已知的环境性失败用例（`docs/KNOWN-ISSUES.md` 记录在案）。
-判断"有没有引入回归"用**失败用例名集合做差集**，不要只看数字：跑完存日志，与基线
-`✖` 行（去掉耗时）`sort -u` 后 diff。CI 的 ubuntu runner 是权威结论。
+**回归判断口径**：Windows 上只允许显式 skip，不允许 fail（`docs/KNOWN-ISSUES.md`
+「环境相关」一节）。跨平台可修项直接修；POSIX/Linux-only 用例用
+`test/helpers/platform.mjs` 带原因跳过。跑 `npm run test:unit:win` 时，任何未预期失败即红；
+CI 的 ubuntu runner 仍是全量通过的权威结论。
 
 ## 改动的三条铁律
 

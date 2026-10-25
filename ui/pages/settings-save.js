@@ -236,6 +236,27 @@ async function saveConfig({ quiet = false } = {}) {
     patch.reminders = { enabled: chk('#cfg-reminders-enabled', c.reminders?.enabled !== false) };
   }
 
+  if (sec === 'life-feed') {
+    const splitKeywords = (selector) => String(val(selector, '') || '')
+      .split(/[,，\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 20);
+    patch.lifeFeed = {
+      ...(c.lifeFeed || {}),
+      enabled: chk('#cfg-lifefeed-enabled', c.lifeFeed?.enabled === true),
+      forageIntervalMinutes: clampInt(val('#cfg-lifefeed-interval', c.lifeFeed?.forageIntervalMinutes), 60, 1440, 360),
+      maxCandidates: clampInt(val('#cfg-lifefeed-max-candidates', c.lifeFeed?.maxCandidates), 20, 500, 200),
+      maxPerForage: clampInt(val('#cfg-lifefeed-max-per-forage', c.lifeFeed?.maxPerForage), 5, 50, 30),
+      maxOffersPerDay: clampInt(val('#cfg-lifefeed-offers', c.lifeFeed?.maxOffersPerDay), 1, 5, 2),
+      minDurationSec: clampInt(val('#cfg-lifefeed-min-duration', c.lifeFeed?.minDurationSec), 0, 3600, 60),
+      maxDurationSec: clampInt(val('#cfg-lifefeed-max-duration', c.lifeFeed?.maxDurationSec), 60, 7200, 3600),
+      extraKeywords: splitKeywords('#cfg-lifefeed-extra'),
+      excludeKeywords: splitKeywords('#cfg-lifefeed-exclude'),
+      ...(pickedGroups('cfg-lifefeed-groups-box') ? { groups: pickedGroups('cfg-lifefeed-groups-box') } : {})
+    };
+  }
+
   if (sec === 'moments') {
     patch.groupDigest = {
       ...(c.groupDigest || {}),

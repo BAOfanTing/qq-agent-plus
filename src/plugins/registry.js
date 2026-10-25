@@ -18,11 +18,12 @@ import { isolationSummary, probeIsolation } from './isolation.js';
 import { sanitizeUserText } from '../core/util.js';
 import { sanitizeDeep } from '../tools/tools-core.js';
 import { canonicalVersion } from './version.js';
+import { hashManifest } from './manifest-diff.js';
 import { readOwnerUin } from '../core/notify-owner.js';
 import {
   checkApproval, refundApproval, consumeQuota, refundQuota,
   requestPendingApproval, listPendingApprovals, approvePendingApproval,
-  rejectPendingApproval, recordPluginWrite, normalizeTarget
+  rejectPendingApproval, recordPluginWrite, normalizeTarget, backfillManifestHash
 } from './grants.js';
 
 export const PLUGIN_TOOL_TIMEOUT_MS = 20000;
@@ -295,6 +296,9 @@ export class PluginRegistry {
   }
 
   #makeHost(item, cfg) {
+    // 引入 manifestHash 之前签发的授权：加载时绑定到**当前**这版。
+    // 之后升级换了权限面，旧通行证自然对不上（即使调用方忘了清）。
+    try { backfillManifestHash(this.dataDir, item.id, hashManifest(item.manifest)); } catch { /* 授权文件坏了不挡加载 */ }
     return this.hostFactory
       ? this.hostFactory(item.manifest, cfg)
       : new PluginHost({
@@ -660,8 +664,10 @@ export class PluginRegistry {
     if (Date.now() - last < PLUGIN_WRITE_FLOOR_MS) {
       return denied(`同一插件的写操作至少间隔 ${Math.round(PLUGIN_WRITE_FLOOR_MS / 1000)} 秒，请稍后再试`, 'denied', 'rate-floor');
     }
-    // 批准绑定 (动作, 目标, 预览内容)：评论/弹幕换了正文就必须重新批准
-    const approval = checkApproval(this.dataDir, host.id, action, { consume: true, target, preview });
+    // 批准绑定 (动作, 目标, 预览内容, 当前 manifest)：评论/弹幕换了正文就必须重新批准；
+    // 插件升级后权限面变化，旧版本的批准也不能继续用。
+    const manifestHash = hashManifest(host.manifest);
+    const approval = checkApproval(this.dataDir, host.id, action, { consume: true, target, preview, manifestHash });
     if (!approval.approved) {
       // 待批也要限流：否则模型可以在未批准状态下连续刷待批，绕过 60 秒下限，
       // 并且每来一次都再私聊 owner。这里用独立的 lastPendingAt，不占 lastWriteAt ——
@@ -677,7 +683,8 @@ export class PluginRegistry {
         action,
         label: declared?.label || action,
         target,
-        preview
+        preview,
+        manifestHash
       });
       this.lastPendingAt.set(host.id, Date.now());
       recordPluginWrite(this.dataDir, host.id, { action, target, outcome: 'pending', note: pending.id });
@@ -837,7 +844,9 @@ export class PluginRegistry {
         reply: `已拒绝：${rejected.label || rejected.action}${rejected.target ? ` → ${rejected.target}` : ''}`
       };
     }
-    const approved = approvePendingApproval(this.dataDir, hit.id);
+    const approved = approvePendingApproval(this.dataDir, hit.id, {
+      manifestHash: hashManifest(this.hosts.get(hit.pluginId)?.manifest)
+    });
     return {
       handled: true,
       reply: `已批准：${approved.pending.label || approved.pending.action}${approved.pending.target ? ` → ${approved.pending.target}` : ''}`

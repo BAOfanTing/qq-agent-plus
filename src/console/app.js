@@ -27,6 +27,7 @@ import { SendQueue } from '../onebot/sender.js';
 import { SessionRegistry, personaLabelOfPrompt } from '../core/sessions.js';
 import { Orchestrator } from '../core/orchestrator.js';
 import { DailyMomentsManager } from '../features/daily-moments.js';
+import { LifeFeedManager } from '../features/life-feed.js';
 import { QzoneInteractionManager } from '../features/qzone-interactions.js';
 import { GroupDigestManager } from '../features/group-digest.js';
 import { AdminBriefingManager } from '../features/admin-briefing.js';
@@ -77,7 +78,7 @@ import { readOwnerUin } from '../core/notify-owner.js';
 import { pluginSecretStatus, writePluginSecrets, secretFieldKeys, clearPluginSecrets } from '../plugins/secrets.js';
 import {
   grantsStatus, listPendingApprovals, approvePendingApproval,
-  rejectPendingApproval, listPluginWrites, clearPluginGrants
+  rejectPendingApproval, listPluginWrites, clearPluginGrants, resetPluginGrants
 } from '../plugins/grants.js';
 // 平台能力门控的元数据（键→标签/工具/默认取向/配额默认）：控制台不手抄第二份，防漂移
 import {
@@ -670,6 +671,13 @@ export function createApp({
   if (getConfig().mcp?.enabled === true) {
     void mcpManager.start().catch((error) => moduleLog('mcp').warn?.('启动失败:', error?.message ?? error));
   }
+  // 生活层：宿主侧的觅食与候选队列。禁用时不建状态文件、不起定时器。
+  const lifeFeed = new LifeFeedManager({
+    dataDir: DATA_DIR,
+    store,
+    config: () => getConfig(),
+    log: moduleLog('life-feed')
+  });
   const orchestrator = new Orchestrator({
     store,
     memory,
@@ -681,6 +689,7 @@ export function createApp({
     getGames: () => groupGame,
     getPlugins: () => pluginRegistry,
     getMcp: () => mcpManager,
+    getLifeFeed: () => lifeFeed,
     emit,
     getIdentityPilot: () => identityPilot,
     getIncidentPilot: () => incidentPilot
@@ -3239,6 +3248,38 @@ export function createApp({
     } catch (error) { return pluginError(res, error); }
   });
 
+  // 升级预览：只下载/解包/比对，不换目录、不停旧进程。
+  // 权限面有变化时必须先看 diff，再带 expectedDiffHash 安装（fail-closed）。
+  router.add('POST', '/api/plugins/upgrade-preview', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body.id || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
+    try {
+      const hit = (await loadPluginIndex()).plugins.find((item) => item.id === id);
+      if (!hit) return json(res, 404, { ok: false, error: `索引里没有 ${id}` });
+      if (hit.compatible === false) return json(res, 409, { ok: false, error: `这个插件在本机装不了：${hit.reason}` });
+      if (!hit.url || !hit.sha256) return json(res, 400, { ok: false, error: '索引条目缺少下载地址或 sha256' });
+      const mirrorConfig = pluginMirrorConfig();
+      const download = async (target, maxBytes) => {
+        const picked = await fetchBinaryWithMirrors({
+          url: target, mirrors: Array.isArray(hit.mirrors) ? hit.mirrors : [], prefixes: mirrorConfig.prefixes,
+          maxBytes, fetchImpl: safeFetchBinary, log: moduleLog('plugins'),
+          verify: (buffer) => sha256Of(buffer) === String(hit.sha256 || '').toLowerCase()
+        });
+        if (!picked.ok) throw Object.assign(new Error(picked.error), { code: 'E_DOWNLOAD' });
+        return { buffer: picked.buffer };
+      };
+      const result = await installPlugin({
+        id, url: hit.url, sha256: hit.sha256, publisher: hit.publisher || '', signature: hit.signature || '',
+        publishers: getConfig().plugins?.publishers || {},
+        dataDir: DATA_DIR, fetchBinary: download, log: moduleLog('plugins'), previewOnly: true
+      });
+      return json(res, 200, { ok: true, ...result });
+    } catch (error) {
+      return json(res, 400, { ok: false, code: error?.code || '', error: String(error?.message || error) });
+    }
+  });
+
   router.add('POST', '/api/plugins/install', async (req, res) => {
     const body = await readBody(req).catch(() => ({}));
     // 在 try 的第一句声明：catch 里要用它，而 let 在 TDZ 里连 typeof 都会抛
@@ -3288,10 +3329,32 @@ export function createApp({
         // 发布者公钥来自本机配置（不是索引 —— 索引给自己签名等于没签）
         publishers: getConfig().plugins?.publishers || {},
         dataDir: DATA_DIR, fetchBinary: download, log: moduleLog('plugins'),
+        // 权限面变化时，管理员先在预览里确认；这里校验确认哈希，防止"确认的是旧 diff"
+        expectedDiffHash: String(body.expectedDiffHash || ''),
+        force: body.force === true,
         // 升级时先停掉旧进程再换目录（Windows 上 rename 存活进程的 cwd 会失败）
         beforeReplace: (pluginId) => { replaced = true; return pluginRegistry.stopOne(pluginId); }
       });
       auditWrite('plugins.install', `plugins:${result.id}`, { req, version: result.version, upgraded: result.upgraded });
+      // 权限面变了：清对象级批准/待批，并关闭所有写动作开关（保留配额计数，防止用升级刷额度）
+      if (result.upgraded && result.diff?.permissionChanged) {
+        const reset = resetPluginGrants(DATA_DIR, result.id);
+        try {
+          const manifest = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'plugins', result.id, 'plugin.json'), 'utf8'));
+          const actions = (Array.isArray(manifest.approvals) ? manifest.approvals : [])
+            .map((item) => String(item.action || '')).filter(Boolean);
+          if (actions.length) {
+            updateConfig({
+              plugins: { switches: { [result.id]: Object.fromEntries(actions.map((action) => [action, false])) } }
+            });
+          }
+        } catch (error) {
+          log(`[plugins] 升级后关闭写开关失败（相关授权已清空）：${error?.message ?? error}`);
+        }
+        auditWrite('plugins.upgrade', `plugins:${result.id}`, {
+          req, version: result.version, areas: result.diff.areas, summary: result.diff.summary, reset
+        });
+      }
       // 装完重排一次：让控制台立刻看到新插件（默认未授权，不会自动跑）
       await pluginRegistry.reconfigure();
       return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });
@@ -3310,6 +3373,11 @@ export function createApp({
           ok: false,
           code: error.code,
           error: `${error.message}。目录可能刚更新过（控制台手里的目录最多旧 10 分钟）—— 已刷新，再点一次安装即可。`
+        });
+      }
+      if (['E_UPGRADE_CONFIRM', 'E_UPGRADE_CONFIRM_STALE', 'E_DOWNGRADE', 'E_SAME_VERSION'].includes(error?.code)) {
+        return json(res, 409, {
+          ok: false, code: error.code, error: error.message, diff: error.diff || null
         });
       }
       return pluginError(res, error);
@@ -3388,11 +3456,18 @@ export function createApp({
         .filter((value) => value !== id);
       const switches = { ...(plugins.switches || {}) };
       delete switches[id];
-      updateConfig({ plugins: { enabledIds, switches: { __replace__: switches } } });
-      const result = uninstallPlugin({ id, dataDir: DATA_DIR });
+      const purgeData = body?.purgeData === true;
+      const nextPlugins = { enabledIds, switches: { __replace__: switches } };
+      if (purgeData) {
+        const settings = { ...(plugins.settings || {}) };
+        delete settings[id];
+        nextPlugins.settings = { __replace__: settings };
+      }
+      updateConfig({ plugins: nextPlugins });
+      const result = uninstallPlugin({ id, dataDir: DATA_DIR, purgeData });
       clearPluginGrants(DATA_DIR, id);
       clearPluginSecrets(DATA_DIR, id);
-      auditWrite('plugins.uninstall', `plugins:${id}`, { req });
+      auditWrite('plugins.uninstall', `plugins:${id}`, { req, purgeData, dataPurged: result.dataPurged });
       await pluginRegistry.reconfigure();
       return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });
     } catch (error) {
@@ -4739,6 +4814,7 @@ export function createApp({
     }
     const previousProactive = JSON.stringify(cfgNow.proactive || {});
     const previousDailyMoments = JSON.stringify(cfgNow.dailyMoments || {});
+    const previousLifeFeed = JSON.stringify(cfgNow.lifeFeed || {});
     const previousQzoneInteractions = JSON.stringify(cfgNow.qzoneInteractions || {});
     const previousIdentityPilot = JSON.stringify(cfgNow.identityPilot || {});
     const previousPlugins = JSON.stringify(cfgNow.plugins || {});
@@ -4852,6 +4928,9 @@ export function createApp({
     }
     if (JSON.stringify(next.dailyMoments || {}) !== previousDailyMoments) {
       dailyMoments.reconfigure();
+    }
+    if (JSON.stringify(next.lifeFeed || {}) !== previousLifeFeed) {
+      lifeFeed.reconfigure();
     }
     if (JSON.stringify(next.qzoneInteractions || {}) !== previousQzoneInteractions) {
       qzoneInteractions.reconfigure();
@@ -4990,6 +5069,42 @@ export function createApp({
     if (!hit) return json(res, 404, { ok: false, error: '没找到这条待触发的提醒（可能已被触发或取消）' });
     return json(res, 200, { ok: true, canceled: hit.id });
   });
+  // ── 生活层（见闻）────────────────────────────────────────────────────
+  router.add('GET', '/api/life-feed/status', async (req, res) => {
+    return json(res, 200, { ok: true, ...lifeFeed.status() });
+  });
+  router.add('POST', '/api/life-feed/forage', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    if (body?.confirm !== true) {
+      return json(res, 400, { ok: false, error: '觅食会发起外部请求，请带 confirm:true' });
+    }
+    const result = await lifeFeed.forageNow({ reason: 'manual' });
+    return json(res, result.ok ? 200 : 409, result);
+  });
+  router.add('POST', '/api/life-feed/dismiss', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body?.bvid || body?.id || '').trim();
+    if (!id) return json(res, 400, { ok: false, error: '缺少 bvid' });
+    const result = lifeFeed.dismiss(id);
+    return json(res, result.ok ? 200 : 404, result);
+  });
+  router.add('POST', '/api/life-feed/share', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    if (body?.confirm !== true) return json(res, 400, { ok: false, error: '请带 confirm:true' });
+    const chatKey = String(body?.chatKey || '').trim();
+    if (!/^(group|private):\d+$/.test(chatKey)) return json(res, 400, { ok: false, error: 'chatKey 不合法' });
+    const taken = lifeFeed.takeForShare(String(body?.bvid || body?.id || ''), { manual: true });
+    if (taken.error) return json(res, 404, { ok: false, error: taken.error });
+    const item = taken.item;
+    // 不直接发：交给主动发言链路，由模型用自己的语气说，人设/分条/限速/安静时段全部生效。
+    const note = `【系统提醒】可以分享这条 B 站见闻：${item.title}（UP：${item.up}）${item.url}`.slice(0, 600);
+    orchestrator.wake(chatKey, { manual: true, wakeNote: note }).catch((error) => {
+      log(`[life-feed] 手动分享唤醒失败：${error?.message ?? error}`);
+    });
+    auditWrite('life-feed.share', chatKey, { req, bvid: item.id });
+    return json(res, 200, { ok: true, item });
+  });
+
   router.add('GET', '/api/incidents', async (req, res, params, url) => {
     return json(res, 200, {
       status: incidentPilotStatus(),
@@ -5572,6 +5687,7 @@ export function createApp({
     orchestrator.startRecoveryLoop();
     orchestrator.startReminderLoop();
     if (getConfig().dailyMoments?.enabled) dailyMoments.start();
+    if (getConfig().lifeFeed?.enabled) lifeFeed.start();
     if (getConfig().qzoneInteractions?.enabled) qzoneInteractions.start();
     if (getConfig().groupDigest?.enabled) groupDigest.start();
     if (getConfig().adminBriefing?.enabled) adminBriefing.start();
@@ -5638,6 +5754,7 @@ export function createApp({
     stopPluginIndexRefresh();
     releaseTimeControl();
     dailyMoments.stop();
+    lifeFeed.stop();
     dailyMoments.abort();
     qzoneInteractions.stop();
     // 群游戏/群日报的定时器也要停：store.close() 之后它们还在 tick 会撞已关闭的 sqlite，
@@ -5688,6 +5805,7 @@ export function createApp({
     sessions,
     orchestrator,
     dailyMoments,
+    lifeFeed,
     qzoneInteractions,
     assetObserver,
     autoUpdate,

@@ -1,0 +1,126 @@
+#!/usr/bin/env node
+// 浏览器冒烟用的真实服务：临时数据目录 + 固定端口 + 一个无网络的测试插件。
+// Playwright 的 webServer 负责启动/停止它；测试进程通过 test/browser/constants.mjs 共享端口与令牌。
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { E2E_GROUP, E2E_PLUGIN_ID, E2E_PORT, E2E_TOKEN } from '../test/browser/constants.mjs';
+
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-e2e-console-'));
+process.env.QQ_AGENT_DATA_DIR = dataDir;
+process.env.QQ_AGENT_LOG_LEVEL ||= 'error';
+
+const { DEFAULT_CONFIG, updateConfig } = await import('../src/core/config.js');
+const { requestPendingApproval } = await import('../src/plugins/grants.js');
+
+function writeFixturePlugin() {
+  const dir = path.join(dataDir, 'plugins', E2E_PLUGIN_ID);
+  fs.mkdirSync(dir, { recursive: true });
+  const manifest = {
+    id: E2E_PLUGIN_ID,
+    apiVersion: 2,
+    name: '浏览器测试插件',
+    version: '1.0.0',
+    description: 'Playwright 冒烟用的最小插件（无网络、无依赖）',
+    entry: 'index.mjs',
+    capabilities: ['tools', 'approval'],
+    approvals: [
+      { action: 'write', label: '写一条测试内容', description: '仅用于浏览器冒烟' }
+    ],
+    tools: [
+      {
+        name: 'write',
+        description: '写一条测试内容（冒烟桩件，不产生外部副作用）',
+        parameters: {
+          type: 'object',
+          properties: {
+            target: { type: 'string', description: '目标' },
+            text: { type: 'string', description: '正文' }
+          },
+          required: ['target', 'text']
+        },
+        action: 'write',
+        actionTarget: 'target',
+        actionPreview: 'text'
+      }
+    ]
+  };
+  fs.writeFileSync(path.join(dir, 'plugin.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  fs.writeFileSync(path.join(dir, 'index.mjs'), `const send = (m) => process.stdout.write(\`\${JSON.stringify(m)}\\n\`);
+let buffer = '';
+process.stdin.on('data', (chunk) => {
+  buffer += chunk.toString('utf8');
+  let i = buffer.indexOf('\\n');
+  while (i !== -1) {
+    const line = buffer.slice(0, i).trim();
+    buffer = buffer.slice(i + 1);
+    if (line) {
+      const m = JSON.parse(line);
+      if (m.method === 'init') send({ id: m.id, result: { ok: true } });
+      else if (m.method === 'ping') send({ id: m.id, result: { rss: 16 } });
+      else if (m.method === 'probe') send({ id: m.id, result: { ok: true, info: { account: 'fixture' } } });
+      else if (m.method === 'callTool') send({ id: m.id, result: { ok: true } });
+      else if (m.method === 'shutdown') process.exit(0);
+      else send({ id: m.id, result: {} });
+    }
+    i = buffer.indexOf('\\n');
+  }
+});
+`);
+}
+
+function buildConfig() {
+  const cfg = structuredClone(DEFAULT_CONFIG);
+  cfg.server = { ...cfg.server, host: '127.0.0.1', port: E2E_PORT, token: E2E_TOKEN, strictPort: true };
+  cfg.runtime = { ...cfg.runtime, mode: 'observe' };
+  cfg.allow = { ...cfg.allow, groups: [E2E_GROUP], private: [], allowAllWhenEmpty: false };
+  cfg.api = { ...cfg.api, apiKey: '', model: '', baseUrl: '' };
+  cfg.autoUpdate = { ...cfg.autoUpdate, enabled: false };
+  cfg.proactive = { ...cfg.proactive, enabled: false };
+  cfg.dailyMoments = { ...cfg.dailyMoments, enabled: false };
+  cfg.qzoneInteractions = { ...cfg.qzoneInteractions, enabled: false };
+  cfg.groupDigest = { ...cfg.groupDigest, enabled: false };
+  cfg.adminBriefing = { ...cfg.adminBriefing, enabled: false };
+  cfg.reminders = { ...cfg.reminders, enabled: false };
+  cfg.mcp = { enabled: false, servers: [] };
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    enabledIds: [E2E_PLUGIN_ID],
+    requireIsolation: false,
+    networkIsolation: false,
+    indexUrl: '',
+    indexUrls: []
+  };
+  return cfg;
+}
+
+writeFixturePlugin();
+updateConfig(buildConfig());
+requestPendingApproval(dataDir, {
+  pluginId: E2E_PLUGIN_ID,
+  pluginName: '浏览器测试插件',
+  action: 'write',
+  label: '写一条测试内容',
+  target: 'demo-target',
+  preview: 'playwright smoke body'
+});
+
+const { createApp } = await import('../src/console/app.js');
+const app = createApp({ log: (...args) => { if (process.env.E2E_VERBOSE) console.log(...args); } });
+const port = await app.start();
+console.log(`E2E_READY http://127.0.0.1:${port} data=${dataDir}`);
+
+let stopping = false;
+async function shutdown(signal) {
+  if (stopping) return;
+  stopping = true;
+  if (process.env.E2E_VERBOSE) console.log(`[e2e] ${signal}，正在停止`);
+  try { await app.stop(); } catch (error) { console.error(`[e2e] stop 失败：${error?.message || error}`); }
+  try { fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 忽略 */ }
+  process.exit(0);
+}
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
+process.on('uncaughtException', (error) => { console.error('[e2e] uncaughtException', error); void shutdown('uncaughtException'); });
+process.on('unhandledRejection', (error) => { console.error('[e2e] unhandledRejection', error); });

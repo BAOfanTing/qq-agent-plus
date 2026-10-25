@@ -1196,7 +1196,21 @@ function renderInstalled(state) {
     if (item.status?.unconfined) {
       notes.push('<div class="plugin-warn">以「未隔离」方式运行：这个插件进程读得到 config.json（本机没有权限模型，且配置里关掉了 requireIsolation）</div>');
     }
-    if (item.status?.lastError) notes.push(`<div class="plugin-warn bad">最近错误：${esc(item.status.lastError)}</div>`);
+    const stats = item.status?.stats || {};
+    const runtimeBits = [];
+    if (Number(item.status?.restarts) > 0) runtimeBits.push(`重启 ${item.status.restarts} 次`);
+    if (Number(stats.crashes) > 0) runtimeBits.push(`崩溃 ${stats.crashes} 次`);
+    if (Number(stats.timeouts) > 0) runtimeBits.push(`超时 ${stats.timeouts} 次`);
+    if (Number(stats.rateLimited) > 0) runtimeBits.push(`限流 ${stats.rateLimited} 次`);
+    if (Number(stats.memoryKills) > 0) runtimeBits.push(`内存重启 ${stats.memoryKills} 次`);
+    if (runtimeBits.length) notes.push(`<div class="plugin-note">运行统计：${esc(runtimeBits.join(' · '))}</div>`);
+    if (item.status?.state === 'failed') {
+      const crashDisabled = Number(stats.crashes) >= 3;
+      notes.push(`<div class="plugin-warn bad">${crashDisabled ? '连续崩溃已自动停用' : '启动失败'}${
+        item.status.lastError ? `：${esc(item.status.lastError)}` : ''}</div>`);
+    } else if (item.status?.lastError) {
+      notes.push(`<div class="plugin-warn bad">最近错误：${esc(item.status.lastError)}</div>`);
+    }
     // 目录存在但 manifest 读不出来的"发现项"：它不是已装，也不该能点进详情 —— 把原因摆出来
     if (!installed && item.error) notes.push(`<div class="plugin-warn bad">这个目录加载不了：${esc(item.error)}</div>`);
     const caps = Array.isArray(item.manifest?.capabilities) ? item.manifest.capabilities : [];
@@ -1581,12 +1595,18 @@ function bindPluginsSection() {
     const action = button.dataset.pluginAction;
     const id = button.dataset.pluginId || '';
     if (action === 'uninstall') {
-      const ok = await askForConfirmation(`确定卸载插件「${id}」？代码会被移走（插件自己的数据保留，重装后还在）。`);
+      const ok = await askForConfirmation(`确定卸载插件「${id}」？代码会被移走。`);
       if (!ok) return;
+      // 第二次问数据：默认保留（重装后还在），只有明确点「确定」才连凭据一起删
+      const purge = await askForConfirmation(
+        '同时删除这个插件的数据与凭据吗？\n\n'
+        + '「确定」= 一并删除（重装后不会恢复）；「取消」= 只卸载代码，数据保留。'
+      );
       button.disabled = true;
       try {
-        await post('/api/plugins/uninstall', { id, confirm: true });
-        setStatus(`已卸载 ${id}`, { tone: 'success' });
+        await post('/api/plugins/uninstall', { id, confirm: true, purgeData: purge });
+        setStatus(purge ? `已卸载 ${id}（代码与数据都已删除）` : `已卸载 ${id}（代码已移走，数据保留）`,
+          { tone: 'success' });
       } catch (error) { setStatus(`卸载失败：${error?.message || error}`, { tone: 'error' }); }
       await refreshPlugins();
       return;
@@ -1594,8 +1614,32 @@ function bindPluginsSection() {
     button.disabled = true;
     try {
       if (action === 'install' || action === 'upgrade') {
-        setStatus(action === 'upgrade' ? `正在升级 ${id}…` : `正在安装 ${id}…`, { busy: true });
-        await post('/api/plugins/install', { id });
+        if (action === 'upgrade') {
+          // 先预览权限 diff：升级后权限面一变，旧授权就不能继续用了。
+          setStatus(`正在检查 ${id} 的权限差异…`, { busy: true });
+          const preview = await post('/api/plugins/upgrade-preview', { id });
+          const diff = preview.diff;
+          if (diff?.permissionChanged) {
+            const lines = (diff.summary || []).join('\n') || '（权限面有变化）';
+            const ok = await askForConfirmation(
+              `升级 ${id} 会改变插件权限：\n\n${lines}\n\n`
+              + '升级后相关写开关会自动关闭、对象级批准与待批会清空，需要重新授权。确认升级？'
+            );
+            if (!ok) {
+              setStatus('已取消升级', { tone: 'info' });
+              button.disabled = false;
+              return;
+            }
+            setStatus(`正在升级 ${id}…`, { busy: true });
+            await post('/api/plugins/install', { id, expectedDiffHash: diff.diffHash });
+          } else {
+            setStatus(`正在升级 ${id}…`, { busy: true });
+            await post('/api/plugins/install', { id });
+          }
+        } else {
+          setStatus(`正在安装 ${id}…`, { busy: true });
+          await post('/api/plugins/install', { id });
+        }
         setStatus(action === 'upgrade'
           ? `已升级 ${id}（旧版留在 plugins/.backup-* 里，确认没问题可以删）`
           : `已安装 ${id} —— 还要点「启用」才会跑（装上 ≠ 授权）`, { tone: 'success' });

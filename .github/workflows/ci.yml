@@ -115,6 +115,52 @@ jobs:
       - name: 提示词 / 渲染 / 滚动 / 用量端到端回归
         run: npm run test:regression
 
+  # Windows 门禁（2026-10）：只允许显式 skip，不允许 fail。
+  # 跨平台可修项已修；POSIX/Linux-only 用例经 test/helpers/platform.mjs 带原因跳过。
+  # 用 spec 报告与空基线比对，任何未预期失败都会红，避免“Windows 永远一片红”掩盖回归。
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: Windows 单元测试（POSIX-only 跳过，未预期失败即红）
+        run: npm run test:unit:win
+
+  # 真浏览器冒烟（2026-10）：happy-dom/vm 抓不到布局、CSS、真实事件链。
+  # 起真实控制台 + 真 Chromium，覆盖登录、13 页签、设置/好友保存、插件审批、窄屏横向溢出。
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 安装 Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: 浏览器冒烟（真 Chromium）
+        run: npm run test:browser
+
   # ESLint 门禁（改进方案 C4）：与本地 `npm run lint` 同口径 —— 0 error 才能进 main。
   # 与 test 分开成 job：lint 失败时一眼看到是风格/静态问题，不用翻几百行测试输出。
   lint:

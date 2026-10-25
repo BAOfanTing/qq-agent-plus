@@ -411,6 +411,23 @@ export const DEFAULT_CONFIG = {
     followUpEnabled: true,      // 发言后没人接话，过十来分钟补一句
     selfWakeEnabled: true       // 模型用 schedule_wake 给自己安排稍后的主动发言
   },
+  // 生活层（见闻）：定期觅食 B 站公开内容，存候选队列，供主动发言轮次挑选分享。
+  // 默认关闭；按实验功能管理（enabled = 运行开关，graduated = 是否转正）。
+  // 觅食是宿主能力而不是插件：插件协议没有 llm/wake 能力，拿不到人设与上下文。
+  lifeFeed: {
+    enabled: false,
+    graduated: false,
+    sources: ['bilibili'],
+    forageIntervalMinutes: 360,   // 6 小时 ±20% 抖动
+    maxCandidates: 200,
+    maxPerForage: 30,
+    maxOffersPerDay: 2,           // 每天最多领取/分享几次（防刷屏）
+    minDurationSec: 60,           // 太短的（切片/广告）不要
+    maxDurationSec: 3600,         // 超过 1 小时的看不完，不要
+    extraKeywords: [],
+    excludeKeywords: [],
+    groups: []                    // 空 = 沿用 allow.groups
+  },
   // 自主节奏（可选）：消息不再即时触发，改由模型按自己安排的节奏醒来统一处理。
   // 默认关闭；开启后建议先观察一段，确认能接受"延迟接话"的节奏。
   pacing: {

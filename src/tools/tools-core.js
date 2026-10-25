@@ -1789,6 +1789,68 @@ export function buildToolDefs() {
       }
     },
     {
+      name: 'life_feed_next',
+      description: '从生活层候选队列里取 1-3 条 B 站见闻（标题、UP、时长、播放、标签、链接、简介）。想主动分享点群友可能感兴趣的内容时用它；取到后用自己的语气说，不要念标题。每天有领取上限，取完不想用可以用 life_feed_feedback 标记 skip。',
+      parameters: {
+        type: 'object',
+        properties: {
+          count: { type: 'number', description: '要几条，1~3，默认 2' },
+          topic: { type: 'string', description: '可选：只看标题/简介/标签里包含这个词的候选' }
+        }
+      },
+      async execute(ctx, args) {
+        try {
+          const feed = ctx.getLifeFeed?.();
+          if (!feed) return err('生活层没有开启');
+          const count = Math.max(1, Math.min(3, Math.round(Number(args.count) || 2)));
+          const topic = safeSlice(String(args.topic ?? ''), 20);
+          const result = feed.next({ count, topic, manual: false });
+          if (result.error) return err(result.error);
+          return ok({
+            items: result.items.map((item) => ({
+              bvid: item.id,
+              title: item.title,
+              up: item.up,
+              durationSec: item.duration,
+              play: item.play,
+              tags: item.tags,
+              url: item.url,
+              summary: safeSlice(item.desc, 200)
+            })),
+            note: '用自己的话挑一条说，别念标题；不想发就用 life_feed_feedback 标记 skip。'
+          });
+        } catch (error) {
+          return err(`生活层取内容失败：${error?.message ?? error}`);
+        }
+      }
+    },
+    {
+      name: 'life_feed_feedback',
+      description: '回写生活层：shared=已经分享到群里；skip=这条不想用；more_like_this=以后多找类似的。不调用不会报错，但 shared 会让这条从队列移除并计入已领取。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: 'life_feed_next 返回的 BV 号' },
+          action: { type: 'string', enum: ['shared', 'skip', 'more_like_this'], description: '处理结果' }
+        },
+        required: ['bvid', 'action']
+      },
+      async execute(ctx, args) {
+        try {
+          const feed = ctx.getLifeFeed?.();
+          if (!feed) return err('生活层没有开启');
+          const result = feed.feedback({
+            id: String(args.bvid ?? '').trim(),
+            action: String(args.action ?? 'skip'),
+            chatKey: ctx.chatKey
+          });
+          return result.ok ? ok(result) : err(result.error);
+        } catch (error) {
+          return err(`生活层回写失败：${error?.message ?? error}`);
+        }
+      }
+    },
+    {
       name: 'set_group_card',
       description: '修改你自己在当前群的群名片（群昵称）。只能改自己的，不能改别人。名字要符合本群氛围（一般 2~8 字），别带广告或奇怪符号。别人问"你叫什么/改下名片"或名片跟当前人设明显不符时可以用，别频繁改。',
       parameters: {

@@ -143,12 +143,12 @@ v0.6.0..v0.6.4 之间复审成本口径时记录的 6 项“不影响主链路�
 
 ## 环境相关（不属于项目问题）
 
-在 Windows 上执行 `npm run test:unit` 会有 43 个用例失败（2026-10-01 实测基线，仅 Windows 本机特有：
-docker/systemd/linux 集成类）；
-在 Linux 服务器与 CI（ubuntu-latest）上全量通过。判断"有没有新增失败"的办法：把 `✖` 用例名
-（去掉耗时）排序后与上一份日志做差集，失败集合逐条一致 = 零回归。
-（2026-10-09 复核时用 v0.8.1 的 worktree 对同批失败文件跑了一遍对照：38+5 个失败逐条同名同数，
-确认这组红是环境性的，不是代码回归 —— 这个方法以后照用。）
+**Windows 团队**：历史上 `npm run test:unit` 在 Windows 上会固定红 43 条（docker/systemd/linux 集成类）。
+2026-10 起改为：跨平台可修的断言直接修（PATH 分隔符、POSIX 权限位断言、句柄未释放时的清理重试），
+真正依赖 POSIX/Linux 的用例用 `test/helpers/platform.mjs` 显式 skip 并写明原因。
+`test/baseline-failures.json` 应为空；`npm run test:unit:win` 用 spec 报告与基线比对，
+**任何未预期失败都会红**，CI 有独立 `windows` job 守住这个口径。Linux 与 CI（ubuntu-latest）
+仍是全量通过的权威结论。
 
 `test/usage-e2e.mjs` 已改用隔离端口（写进临时配置），机器上跑着机器人也不会 EADDRINUSE；
 自 2026-10-09 起它与另外三个回归脚本都在更新器的部署前预检里（`scripts/test-suite.mjs` 的

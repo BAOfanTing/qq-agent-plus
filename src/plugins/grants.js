@@ -118,7 +118,7 @@ function cleanGrants(state, now) {
  * @param {object} options { uses, ttlMs, target, preview, now } —— target 为空 = 动作级（兼容旧路径）；
  *   preview 非空时通行证只对**同一段预览内容**有效（评论/弹幕不能批了 A 文案再发 B 文案）。
  */
-export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 * 60_000, target = '', preview = '', previewKey: providedPreviewKey, now = Date.now() } = {}) {
+export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 * 60_000, target = '', preview = '', previewKey: providedPreviewKey, manifestHash = '', now = Date.now() } = {}) {
   const key = assertAction(action);
   const count = Math.max(1, Math.min(MAX_USES, Math.floor(Number(uses) || 1)));
   const ttl = Math.max(60_000, Math.min(MAX_TTL_MS, Math.floor(Number(ttlMs) || 10 * 60_000)));
@@ -136,6 +136,9 @@ export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 
     action: key,
     target: wanted,
     ...(keyPreview ? { previewKey: keyPreview } : {}),
+    // 授权绑定**当时那份 manifest**：升级后权限面一变，旧通行证就不再匹配。
+    // 这是重置逻辑之外的兜底 —— 即使调用方忘了清批准，新代码也拿不到旧授权。
+    ...(manifestHash ? { manifestHash: String(manifestHash) } : {}),
     expiresAt: Math.max(Number(previous?.expiresAt) || 0, now + ttl),
     usesLeft: (Number(previous?.usesLeft) || 0) + count,
     grantedAt: now
@@ -153,7 +156,7 @@ export function grantApproval(dataDir, pluginId, action, { uses = 1, ttlMs = 10 
  * @returns {{approved:boolean, reason:string, expiresAt:number, usesLeft:number, receipt?:object}}
  * receipt 用于失败退还：只回 use、不续期 —— 退还的额度立刻对下一次可用。
  */
-export function checkApproval(dataDir, pluginId, action, { consume = false, target = '', preview = '', now = Date.now() } = {}) {
+export function checkApproval(dataDir, pluginId, action, { consume = false, target = '', preview = '', manifestHash = '', now = Date.now() } = {}) {
   const key = assertAction(action);
   const wanted = normalizeTarget(target);
   const keyPreview = previewKey(preview);
@@ -162,10 +165,20 @@ export function checkApproval(dataDir, pluginId, action, { consume = false, targ
   }
   const state = load(dataDir, pluginId);
   const grants = cleanGrants(state, now);
-  const hit = grants.find((entry) => entry.action === key
+  const match = grants.find((entry) => entry.action === key
     && Number(entry.usesLeft) > 0
     && (String(entry.target || '') === '' || String(entry.target) === wanted)
     && String(entry.previewKey || '') === keyPreview);
+  // 传了当前 manifest 指纹就必须匹配：升级后旧授权自动失效。
+  // 没有指纹的老授权（引入绑定之前签发、或直接调用 grantApproval 的旧路径）
+  // 在第一次检查时补绑到当前版本 —— 它们本来就是为当前这版批准的。
+  const hit = match && (!manifestHash || !match.manifestHash
+    || String(match.manifestHash) === String(manifestHash)) ? match : null;
+  if (hit && manifestHash && !hit.manifestHash) {
+    hit.manifestHash = String(manifestHash);
+    state.approvals = grants;
+    save(dataDir, pluginId, state);
+  }
   if (!hit) {
     state.approvals = grants;
     save(dataDir, pluginId, state);
@@ -248,7 +261,7 @@ export function clearPluginGrants(dataDir, pluginId) {
  * 模型请求了一次未获批准的写操作：登记待批（同 插件+动作+目标 在有效期内只留一条）。
  * 返回带 id，控制台与私聊批准都用它。
  */
-export function requestPendingApproval(dataDir, { pluginId, pluginName = '', action, label = '', target = '', preview = '', now = Date.now() } = {}) {
+export function requestPendingApproval(dataDir, { pluginId, pluginName = '', action, label = '', target = '', preview = '', manifestHash = '', now = Date.now() } = {}) {
   const key = assertAction(action);
   const wanted = normalizeTarget(target);
   if (wanted === null) throw fail('E_ARGS', '待批目标含非法字符（不会生成通配批准）');
@@ -269,6 +282,7 @@ export function requestPendingApproval(dataDir, { pluginId, pluginName = '', act
     preview: String(preview).slice(0, 300),
     previewLength: String(preview).length,
     ...(keyPreview ? { previewKey: keyPreview } : {}),
+    ...(manifestHash ? { manifestHash: String(manifestHash) } : {}),
     createdAt: now,
     expiresAt: now + PENDING_TTL_MS
   };
@@ -283,15 +297,19 @@ export function listPendingApprovals(dataDir, { now = Date.now() } = {}) {
 }
 
 /** 批准一条待批请求：生成对象级通行证并移出队列。返回通行证信息。 */
-export function approvePendingApproval(dataDir, id, { uses = 1, ttlMs = 10 * 60_000, now = Date.now() } = {}) {
+export function approvePendingApproval(dataDir, id, { uses = 1, ttlMs = 10 * 60_000, manifestHash = '', now = Date.now() } = {}) {
   if (!PENDING_ID_RE.test(String(id || ''))) throw fail('E_ARGS', '待批 id 不合法');
   const list = listPendingApprovals(dataDir, { now });
   const hit = list.find((item) => item.id === id);
   if (!hit) throw fail('E_NOT_FOUND', '这条待批请求不存在或已过期');
+  // 待批期间插件升级过：旧待批请求描述的是旧权限，必须重新发起
+  if (manifestHash && String(hit.manifestHash || '') && String(hit.manifestHash) !== String(manifestHash)) {
+    throw fail('E_STALE_APPROVAL', '插件在待批期间升级过，这条请求已失效，请让模型重新发起');
+  }
   // 先写通行证、再从待批队列移除：反过来的话两步之间崩溃会让管理员"批准了但没生效"
   //（2026-10-24 审查 P2）。失败时待批仍在，可以重试。
   const grant = grantApproval(dataDir, hit.pluginId, hit.action, {
-    uses, ttlMs, target: hit.target, previewKey: hit.previewKey, now
+    uses, ttlMs, target: hit.target, previewKey: hit.previewKey, manifestHash: hit.manifestHash || manifestHash, now
   });
   savePending(dataDir, list.filter((item) => item !== hit));
   return { pending: hit, grant };
@@ -304,6 +322,46 @@ export function rejectPendingApproval(dataDir, id) {
   if (!hit) throw fail('E_NOT_FOUND', '这条待批请求不存在或已过期');
   savePending(dataDir, list.filter((item) => item !== hit));
   return hit;
+}
+
+/**
+ * 升级后的授权重置：清空该插件的对象级批准与待批。
+ * **保留配额计数**：否则升级一次就能把当天的写额度清零。
+ */
+export function resetPluginGrants(dataDir, pluginId) {
+  const id = String(pluginId || '');
+  if (!id) return { clearedApprovals: 0, clearedPending: 0 };
+  const state = load(dataDir, id);
+  const clearedApprovals = Array.isArray(state.approvals) ? state.approvals.length : 0;
+  state.approvals = [];
+  save(dataDir, id, state);
+  const pending = loadPending(dataDir);
+  const kept = pending.filter((item) => item.pluginId !== id);
+  if (kept.length !== pending.length) savePending(dataDir, kept);
+  return { clearedApprovals, clearedPending: pending.length - kept.length };
+}
+
+/**
+ * 老授权没有 manifestHash（引入绑定之前签发的）：加载时绑定到**当前** manifest。
+ * 这是正确语义——它们本来就是为当前这版批准的；升级后哈希变化，自然失效。
+ */
+export function backfillManifestHash(dataDir, pluginId, manifestHash) {
+  const hash = String(manifestHash || '');
+  if (!hash) return 0;
+  const id = String(pluginId || '');
+  let changed = 0;
+  const state = load(dataDir, id);
+  for (const entry of Array.isArray(state.approvals) ? state.approvals : []) {
+    if (!entry.manifestHash) { entry.manifestHash = hash; changed += 1; }
+  }
+  if (changed) save(dataDir, id, state);
+  const pending = loadPending(dataDir);
+  let pendingChanged = 0;
+  for (const item of pending) {
+    if (item.pluginId === id && !item.manifestHash) { item.manifestHash = hash; pendingChanged += 1; }
+  }
+  if (pendingChanged) savePending(dataDir, pending);
+  return changed + pendingChanged;
 }
 
 // ── 写审计 ─────────────────────────────────────────────────────────────

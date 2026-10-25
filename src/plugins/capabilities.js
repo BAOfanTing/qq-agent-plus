@@ -16,6 +16,7 @@ import { asrAvailable } from '../core/config.js';
 import { visionEnabled } from '../llm/vision-scan.js';
 import { chatCompletion } from '../llm/llm.js';
 import { checkApproval, consumeQuota } from './grants.js';
+import { hashManifest } from './manifest-diff.js';
 
 const MAX_KEY = 64;
 const MAX_VALUE_BYTES = 32 * 1024;
@@ -298,7 +299,9 @@ export function createCapabilities({
     [CAP_METHODS.approvalCheck]: ({ action, consume = true } = {}) => {
       const key = String(action ?? '');
       if (!approvalActions.has(key)) throw fail('E_NOT_DECLARED', `动作 ${key || '(空)'} 没有在 manifest.approvals 里声明`);
-      const result = checkApproval(dataDir, pluginId, key, { consume: consume !== false, now: nowFn() });
+      const result = checkApproval(dataDir, pluginId, key, {
+        consume: consume !== false, now: nowFn(), manifestHash: hashManifest(pluginManifest)
+      });
       stats.approvals += 1;
       log(`[plugin:${pluginId}] 授权检查 ${key}：${result.approved ? '通过' : `拒绝（${result.reason}）`}`);
       return result;

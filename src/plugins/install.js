@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { PLUGIN_API_VERSION, parsePluginManifest } from './manifest.js';
+import { comparePluginVersions, diffManifests } from './manifest-diff.js';
 
 export const MAX_PLUGIN_ARCHIVE_BYTES = 5 * 1024 * 1024;   // 插件是"几个 JS 文件"，5MB 足够
 export const MAX_TOTAL_UNPACKED = 20 * 1024 * 1024;   // 导出给用例用（解压后的上限口径）
@@ -166,7 +167,8 @@ function unwrapSingleRoot(entries) {
 export async function installPlugin({
   id = '', url = '', sha256 = '', tarball = null, dataDir,
   fetchBinary, log = () => {}, now = () => Date.now(), source = '', hostVersion = '',
-  publisher = '', signature = '', publishers = {}, beforeReplace = null
+  publisher = '', signature = '', publishers = {}, beforeReplace = null,
+  expectedDiffHash = '', force = false, previewOnly = false
 } = {}) {
   // 注入点先落到本地常量：scan --strict（CI 门禁）不认"直接调用解构参数的默认值"这种形状
   const download = fetchBinary;
@@ -248,6 +250,60 @@ export async function installPlugin({
 
     let backupDir = '';
     const upgrading = fs.existsSync(target);
+    // 升级前的权限差异：只有真的换了版本才比较；首次安装没有旧 manifest。
+    let upgradeDiff = null;
+    let versionOrder = 0;
+    if (upgrading) {
+      let oldManifest = null;
+      let oldPublisher = '';
+      let oldSignature = '';
+      try {
+        const rawOld = JSON.parse(fs.readFileSync(path.join(target, 'plugin.json'), 'utf8'));
+        // 旧 manifest 也过一遍宿主的归一化：新 manifest 已经补了默认字段，
+        // 直接拿原始 JSON 对比会把"默认值补齐"误判成权限变化。
+        const parsedOld = parsePluginManifest(rawOld, { dir: target });
+        oldManifest = parsedOld.ok ? parsedOld.manifest : rawOld;
+      } catch { oldManifest = null; }
+      try {
+        const info = JSON.parse(fs.readFileSync(path.join(dataDir, 'plugin-data', finalId, 'install.json'), 'utf8'));
+        oldPublisher = String(info.publisher || '');
+        oldSignature = info.signatureVerified === true ? 'verified' : '';
+      } catch { /* 老安装没有来源记录：按空值比较 */ }
+      if (oldManifest) {
+        upgradeDiff = diffManifests(oldManifest, parsed.manifest, {
+          previousPublisher: oldPublisher,
+          nextPublisher: publisherName,
+          previousSignature: oldSignature,
+          nextSignature: signatureVerified ? 'verified' : ''
+        });
+        const order = comparePluginVersions(parsed.manifest.version, oldManifest.version);
+        versionOrder = order;
+        if (!force && order < 0) {
+          throw fail('E_DOWNGRADE', `不允许降级：已装 v${oldManifest.version}，包里是 v${parsed.manifest.version}（确需降级请 force:true）`);
+        }
+      }
+    }
+    if (previewOnly) {
+      // 预览只下载/解包/比对，不换目录、不停旧进程。staging 必须自己清掉。
+      try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* 忽略 */ }
+      return { ok: true, preview: true, id: finalId, version: parsed.manifest.version, upgraded: upgrading, diff: upgradeDiff };
+    }
+    // 只有**版本上升**才强制确认：同版本重装是修复/重装路径（签名仍照常校验），
+    // 强制降级是管理员显式动作。升级时权限面一变，必须先把 diff 给管理员看。
+    if (upgradeDiff?.permissionChanged && versionOrder > 0) {
+      // 权限面变了：管理员必须先看到差异并确认。没有确认哈希 = 拒绝（fail-closed）；
+      // 哈希对不上 = 索引/包在这期间又变了，要求重新预览。
+      if (!String(expectedDiffHash || '').trim()) {
+        const error = fail('E_UPGRADE_CONFIRM', '升级会改变插件权限，需要先确认差异');
+        error.diff = upgradeDiff;
+        throw error;
+      }
+      if (String(expectedDiffHash) !== upgradeDiff.diffHash) {
+        const error = fail('E_UPGRADE_CONFIRM_STALE', '权限差异已经变化（可能索引更新了），请重新预览后再确认');
+        error.diff = upgradeDiff;
+        throw error;
+      }
+    }
     if (upgrading) {
       // 目录名必须**唯一**：同一毫秒内连做两次升级时（脚本里连装、或很快的机器），
       // 只用时间戳会撞名，而 rename 到"非空目录"会 ENOTEMPTY 直接失败
@@ -294,7 +350,7 @@ export async function installPlugin({
     if (!record.ok) log(`[plugins] ${finalId} 的来源记录没写成功（不影响使用）：${record.error}`);
     log(`[plugins] ${upgrading ? '升级' : '安装'} ${finalId} v${parsed.manifest.version} 完成`
       + `${upgrading ? `（旧版备份在 ${path.basename(backupDir)}）` : ''}`);
-    return { ok: true, id: finalId, version: parsed.manifest.version, upgraded: upgrading, backupDir, source: record.ok ? record.source : '' };
+    return { ok: true, id: finalId, version: parsed.manifest.version, upgraded: upgrading, backupDir, source: record.ok ? record.source : '', diff: upgradeDiff };
   } catch (error) {
     // staging 目录必须清掉：留一堆 .staging-* 下次巡检还以为是插件
     try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* 清不掉就留在那儿，巡检会报出来 */ }
@@ -387,10 +443,27 @@ export function listPluginBackups({ id, dataDir } = {}) {
 }
 
 /**
- * 卸载：**只挪走代码目录**，插件的数据（plugin-data/<id>）保留 ——
- * 按本仓的既有约定（禁用/移除不该顺手删数据），重装后状态还在。
+ * 清理旧卸载残留：同一个插件的 `.removed-*` 只留最近 keep 份。
+ * 原来每次卸载堆一个目录，反复装卸会把插件目录变成垃圾场。
  */
-export function uninstallPlugin({ id, dataDir, now = () => Date.now() } = {}) {
+export function pruneRemovedDirs(dataDir, id, keep = 1) {
+  const root = path.join(dataDir, 'plugins');
+  let names = [];
+  try { names = fs.readdirSync(root).filter((name) => name.startsWith(`.removed-${id}.`)).sort(); } catch { return 0; }
+  let removed = 0;
+  for (const name of names.slice(0, Math.max(0, names.length - keep))) {
+    try { fs.rmSync(path.join(root, name), { recursive: true, force: true }); removed += 1; }
+    catch { /* 删不掉就留着，巡检会报出来 */ }
+  }
+  return removed;
+}
+
+/**
+ * 卸载：默认**只挪走代码目录**，插件的数据（plugin-data/<id>）保留 ——
+ * 按本仓的既有约定（禁用/移除不该顺手删数据），重装后状态还在。
+ * `purgeData:true` 才连数据与凭据一起删（控制台会二次确认）。
+ */
+export function uninstallPlugin({ id, dataDir, purgeData = false, now = () => Date.now() } = {}) {
   const name = String(id ?? '').trim();
   if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(name)) throw fail('E_ARGS', '插件 id 不合法');
   const root = path.join(dataDir, 'plugins');
@@ -403,7 +476,22 @@ export function uninstallPlugin({ id, dataDir, now = () => Date.now() } = {}) {
   for (const entry of listPluginBackups({ id: name, dataDir })) {
     fs.rmSync(path.join(root, entry), { recursive: true, force: true });
   }
-  return { ok: true, id: name, removedDir: removed, dataKept: path.join(dataDir, 'plugin-data', name) };
+  let dataPurged = false;
+  if (purgeData) {
+    try {
+      fs.rmSync(path.join(dataDir, 'plugin-data', name), { recursive: true, force: true });
+      dataPurged = true;
+    } catch { /* 有句柄占用时留给巡检 */ }
+    try { fs.rmSync(path.join(dataDir, 'plugin-secrets', `${name}.json`), { force: true }); } catch { /* 忽略 */ }
+  }
+  pruneRemovedDirs(dataDir, name, 1);
+  return {
+    ok: true,
+    id: name,
+    removedDir: removed,
+    dataPurged,
+    dataKept: purgeData ? '' : path.join(dataDir, 'plugin-data', name)
+  };
 }
 
 /**

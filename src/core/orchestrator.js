@@ -489,7 +489,8 @@ export class Orchestrator {
     getIdentityPilot = null,
     getIncidentPilot = null,
     getPlugins = null,
-    getMcp = null
+    getMcp = null,
+    getLifeFeed = null
   }) {
     this.store = store;
     this.memory = memory;
@@ -500,6 +501,7 @@ export class Orchestrator {
     this.reminders = reminders;
     this.getPlugins = typeof getPlugins === 'function' ? getPlugins : null;
     this.getMcp = typeof getMcp === 'function' ? getMcp : null;
+    this.getLifeFeed = typeof getLifeFeed === 'function' ? getLifeFeed : null;
     this.getGames = typeof getGames === 'function' ? getGames : null;
     this.random = random;
     this.getIdentityPilot = typeof getIdentityPilot === 'function' ? getIdentityPilot : (() => null);
@@ -1995,6 +1997,9 @@ export class Orchestrator {
       if (cfg.reminders?.enabled === false && d.name === 'remind') return false;
       if (!searchEnabled && (d.name === 'web_search' || d.name === 'web_fetch')) return false;
       if (!selfWakeEnabled && d.name === 'schedule_wake') return false;
+      // 生活层没开：工具与提示词一起撤（与 schedule_wake / generate_image 同一口径）
+      if (cfg.lifeFeed?.enabled !== true
+        && (d.name === 'life_feed_next' || d.name === 'life_feed_feedback')) return false;
       // 群游戏引擎关掉：group_game 工具一并摘掉 —— 提示词侧（prompt.js 玩法与工具箱）
       // 只在开启时教"主持小游戏"，工具表却恒在，模型仍会去调一个必然报错的工具
       //（group-game.js 对 enabled=false 直接拒），白花一轮（2026-10-10 审查 D3）。
@@ -2199,7 +2204,11 @@ export class Orchestrator {
       ? '就按上面那条提醒处理：想补就补一句很短的，补完就放下；不想补就安静结束。'
       : (privateChat
         ? '你可以主动找个由头说一句（分享点见闻、接着上次的话题、或单纯问候一下），也可以判断现在不该打扰就安静结束。'
-        : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。');
+          + (getConfig().lifeFeed?.enabled === true
+            ? '想分享点具体的见闻，可以调用 life_feed_next 看看队列里有什么。' : '')
+        : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。'
+          + (getConfig().lifeFeed?.enabled === true
+            ? '今天想分享点见闻的话，可以调用 life_feed_next 看看队列里有什么。' : ''));
     const currentUserMessage = {
       role: 'user',
       content: (humanLines ? `${humanLines}\n\n` : '') + (proactive && !manual
@@ -2254,7 +2263,9 @@ export class Orchestrator {
         text: safeSlice(String(m?.text || ''), 300)
       })),
       // 群游戏（group_game 工具）：进行中的局由管理器负责推进与判定
-      games: this.getGames?.() || null
+      games: this.getGames?.() || null,
+      // 生活层（见闻）：候选队列由宿主管理；工具只取/回写，不直接发消息
+      getLifeFeed: () => this.getLifeFeed?.() || null
     };
 
     // 省 Token 模式：轮数与单次运行预算夹上限（关闭时与升级前逐字一致）

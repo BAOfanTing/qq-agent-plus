@@ -112,6 +112,12 @@ jobs:
           node test/render-test.mjs
           node test/scroll-test.mjs
           node test/usage-e2e.mjs
+      # 与 ci.yml 的 browser job 同口径：发布前用真 Chromium 跑一遍控制台冒烟。
+      # 放在最后：它需要 devDeps（上一段已恢复），且不参与加固门禁的依赖裁剪。
+      - name: 安装 Chromium（浏览器冒烟）
+        run: npx playwright install --with-deps chromium
+      - name: 浏览器冒烟（真 Chromium）
+        run: npm run test:browser
 
   release:
     needs: verify

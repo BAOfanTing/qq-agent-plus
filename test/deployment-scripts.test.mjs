@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { skipOnWindows } from './helpers/platform.mjs';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -267,7 +268,9 @@ test('configure-linux creates observe config and preserves runtime mode on updat
   assert.ok(initial.server.token.length >= 32);
   // 安全意图：不得泄露给 group/other。不能精确断言 0600——btrfs（部分 NAS）
   // 上 writeFileSync/chmod 的 mode 会落成 0700（owner-only 但带 x 位，Issue #11）。
-  assert.equal(fs.statSync(configFile).mode & 0o077, 0);
+  // Windows 没有 POSIX 权限位：Node 在 win32 上 stat.mode 的结构与 POSIX 不同，
+  // 这条只能表达“不泄露给 group/other”的安全意图，放到 POSIX 上断言。
+  if (process.platform !== 'win32') assert.equal(fs.statSync(configFile).mode & 0o077, 0);
 
   initial.runtime.mode = 'active';
   fs.writeFileSync(configFile, JSON.stringify(initial), { mode: 0o600 });
@@ -386,7 +389,7 @@ test('configure-snowluma synchronizes global and per-account server tokens', (t)
   assert.ok(fs.existsSync(path.join(configDir, 'onebot_12345.json.bak')));
 });
 
-test('installed manage launcher uses the exact deployed Node runtime', (t) => {
+test('installed manage launcher uses the exact deployed Node runtime', { skip: skipOnWindows('Fake node/launcher are #!/bin/sh scripts; Windows cannot exec them') }, (t) => {
   const root = tempDir(t, 'qq-deploy-root-');
   const home = tempDir(t, 'qq-deploy-home-');
   const data = path.join(root, 'data');
@@ -412,7 +415,7 @@ test('installed manage launcher uses the exact deployed Node runtime', (t) => {
   assert.equal(install.status, 0, install.stderr);
   assert.equal(fs.readFileSync(path.join(root, '.deployment-node'), 'utf8'), `${fakeNode}\n`);
   // 同上：btrfs 上可能落成 0700，只断言不泄露给 group/other
-  assert.equal(fs.statSync(path.join(root, '.deployment-node')).mode & 0o077, 0);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(root, '.deployment-node')).mode & 0o077, 0);
   const unit = fs.readFileSync(path.join(home, '.config/systemd/user/qq-agent-test.service'), 'utf8');
   assert.match(unit, /Environment="SNOWLUMA_WEBUI_URL=http:\/\/127\.0\.0\.1:15099"/);
   const updateUnit = fs.readFileSync(

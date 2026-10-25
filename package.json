@@ -13,8 +13,10 @@
     "ops": "node src/ops.js",
     "test": "node scripts/test-suite.mjs",
     "test:unit": "node scripts/test-suite.mjs unit",
+    "test:unit:win": "node scripts/test-windows.mjs",
     "test:local": "node scripts/test-suite.mjs local",
     "test:regression": "node scripts/test-suite.mjs regression",
+    "test:browser": "playwright test",
     "test:prompt": "node test/test-prompt.mjs",
     "test:render": "node test/render-test.mjs",
     "test:scroll": "node test/scroll-test.mjs",
@@ -51,6 +53,7 @@
   },
   "homepage": "https://github.com/sakurawwwxh/qq-agent-plus#readme",
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "eslint": "^10.13.0",
     "eslint-scope": "^9.1.2",
     "espree": "^11.2.0",

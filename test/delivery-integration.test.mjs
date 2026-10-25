@@ -3,9 +3,10 @@ import { it } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { rmDirBestEffort } from './helpers/cleanup.mjs';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-delivery-'));
 process.env.QQ_AGENT_DATA_DIR = dir;
-process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
+process.on('exit', () => rmDirBestEffort(dir));
 const { ChatStore } = await import('../src/core/store.js');
 const { SessionRegistry } = await import('../src/core/sessions.js');
 const { SendQueue } = await import('../src/onebot/sender.js');
@@ -33,7 +34,7 @@ it('holds uncertain deliveries and does not automatically send again on new inpu
   const runner = new Orchestrator({ store, sessions, sender, onebot,
     stickers: {}, memory: { formatForPrompt: () => '' } });
   const oldFetch = globalThis.fetch;
-  t.after(async () => { globalThis.fetch = oldFetch; await runner.abortAll(); store.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { globalThis.fetch = oldFetch; await runner.abortAll(); store.close(); rmDirBestEffort(dir); });
   globalThis.fetch = async () => Response.json({ choices: [{ message: { tool_calls: [
     { id: 'send-1', function: { name: 'send_message', arguments: '{"messages":"hello"}' } }
   ] } }], usage: { total_tokens: 10 } });
@@ -106,7 +107,7 @@ it('送达之后查被引用消息失败，不能把已经发出的消息改判�
   const store = new ChatStore(0, { dataDir: caseDir });
   // ⚠️ 关库要在删目录**之前**（同一个钩子里按顺序做）：分开注册两个 after 时 Windows 上
   // 会先删目录、撞上还开着的 sqlite 句柄报 EPERM（本文件里那几条环境性失败就是这个成因）。
-  t.after(() => { store.close(); fs.rmSync(caseDir, { recursive: true, force: true }); });
+  t.after(() => { store.close(); rmDirBestEffort(caseDir); });
   const sender = new SendQueue({ store, onebot });
   store.findByMid = () => { throw new Error('disk I/O error'); };
 
@@ -131,7 +132,7 @@ it('改群名片：送达后记账失败不改判成失败，运行中止后不�
   cfg.memory.consolidateEnabled = false;
   setRuntimeConfig(cfg);
   const store = new ChatStore(0, { dataDir: caseDir });
-  t.after(() => { store.close(); fs.rmSync(caseDir, { recursive: true, force: true }); });
+  t.after(() => { store.close(); rmDirBestEffort(caseDir); });
   const calls = [];
   const onebot = {
     selfId: '888',
@@ -165,7 +166,7 @@ it('改群名片：送达后记账失败不改判成失败，运行中止后不�
 
 it('incident pilot quarantines an unknown write without blocking later messages', async (t) => {
   const caseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-delivery-pilot-'));
-  t.after(() => fs.rmSync(caseDir, { recursive: true, force: true }));
+  t.after(() => rmDirBestEffort(caseDir));
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
@@ -242,7 +243,7 @@ it('incident pilot quarantines an unknown write without blocking later messages'
 
 it('manual incident control blocks model work while preserving unread input', async (t) => {
   const caseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-delivery-blocked-'));
-  t.after(() => fs.rmSync(caseDir, { recursive: true, force: true }));
+  t.after(() => rmDirBestEffort(caseDir));
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
@@ -293,7 +294,7 @@ it('manual incident control blocks model work while preserving unread input', as
 
 it('keeps explicit OneBot business rejection retryable without holding the chat', async (t) => {
   const caseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-delivery-definite-'));
-  t.after(() => fs.rmSync(caseDir, { recursive: true, force: true }));
+  t.after(() => rmDirBestEffort(caseDir));
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = ['1'];
