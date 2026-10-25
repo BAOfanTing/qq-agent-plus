@@ -50,7 +50,8 @@ const CAP_LABELS = {
   secrets: '保存凭据（加密）',
   approval: '高风险动作需批准',
   media: '下载与转码媒体',
-  quota: '受每日配额限制'
+  quota: '受每日配额限制',
+  feed: '提供见闻候选'
 };
 
 // 「发布插件」里那三条路的地址：**一处定义**（页面与用例引用同一份，改仓库名不会两边对不上）。
@@ -65,7 +66,7 @@ const PUBLISH = {
 const CAP_ICONS = {
   tools: 'sliders', observe: 'chat', schedule: 'clock', http: 'globe',
   log: 'file', storage: 'database', config: 'gear', send: 'zap',
-  secrets: 'idcard', approval: 'shield', media: 'play', quota: 'gauge'
+  secrets: 'idcard', approval: 'shield', media: 'play', quota: 'gauge', feed: 'chat'
 };
 
 // 权限的"人话解释"：市场页面靠这一栏让使用者判断"要不要信它"。CAP_LABELS 是短词（卡面/台账用），
@@ -82,7 +83,8 @@ const CAP_DETAILS = {
   secrets: '保存凭据（加密）：Cookie/Token 用宿主密钥加密落盘；控制台只显示已配置/未配置，不回显明文',
   approval: '高风险动作需批准：点赞/评论这类写操作要先由管理员在插件详情里批准，过期或次数用完自动失效',
   media: '下载与转码媒体：下载与 ffmpeg 合流都由宿主执行（插件进程不能自己跑命令），有体积上限',
-  quota: '受每日配额限制：宿主按插件+动作+当天计数，超过上限直接拒绝'
+  quota: '受每日配额限制：宿主按插件+动作+当天计数，超过上限直接拒绝',
+  feed: '提供见闻候选：把条目提交给生活层队列（不能调模型、不能直接发消息；机器人自己决定用不用）'
 };
 
 const STATE_LABELS = {

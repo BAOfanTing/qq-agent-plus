@@ -91,6 +91,8 @@ function normalizeState(raw) {
 function publicCandidate(item) {
   return {
     id: item.id,
+    source: item.source || '',
+    via: item.via || '',
     title: item.title,
     up: item.up,
     upMid: item.upMid,
@@ -320,6 +322,7 @@ export class LifeFeedManager {
         extraKeywords: cfg.extraKeywords,
         now
       });
+      const pluginAdded = this.#ingestPluginInbox(profile, cfg, now);
       const items = await forageBilibili({
         profile,
         limit: cfg.maxPerForage,
@@ -329,7 +332,7 @@ export class LifeFeedManager {
         fetchImpl: this.fetchImpl,
         log: this.log
       });
-      const added = this.#merge(items, cfg, profile, now);
+      const added = pluginAdded + this.#merge(items, cfg, profile, now);
       this.state.lastForageAt = now;
       this.state.lastForageCount = added;
       this.state.nextForageAt = now + this.#intervalMs(cfg);
@@ -350,6 +353,63 @@ export class LifeFeedManager {
       this.log(`[life-feed] 觅食失败（连续 ${this.state.failStreak} 次，${minutes} 分钟后重试）：${this.state.lastError}`);
       return { ok: false, error: this.state.lastError, failStreak: this.state.failStreak, nextForageAt: this.state.nextForageAt };
     }
+  }
+
+  /**
+   * 插件提交的见闻候选（cap.feed.publish 写到 data/life-feed-inbox/<id>.json）。
+   * 插件不能调模型、不能发消息；这里只把它们并进队列，由正常的主动发言链路决定用不用。
+   */
+  #ingestPluginInbox(profile, cfg, now) {
+    const inbox = path.join(this.dataDir, 'life-feed-inbox');
+    let files = [];
+    try { files = fs.readdirSync(inbox).filter((name) => name.endsWith('.json')); } catch { return 0; }
+    const known = new Set([
+      ...this.state.candidates.map((item) => item.id),
+      ...this.state.seen.map((item) => item.id)
+    ]);
+    let added = 0;
+    for (const name of files) {
+      let payload = null;
+      try { payload = JSON.parse(fs.readFileSync(path.join(inbox, name), 'utf8')); } catch { continue; }
+      const source = String(payload?.pluginId || name.replace(/\.json$/, ''));
+      for (const item of Array.isArray(payload?.items) ? payload.items : []) {
+        const id = String(item?.id || '').trim();
+        if (!id || known.has(id)) continue;
+        const tags = Array.isArray(item.tags) ? item.tags.map(String) : [];
+        const score = scoreCandidate({
+          title: item.title,
+          desc: item.summary,
+          tags,
+          up: item.up,
+          play: 0,
+          pubdate: 0,
+          duration: item.durationSec
+        }, profile) + tags.reduce((sum, tag) => sum + (Number(this.state.tagWeights[tag]) || 0) * 2, 0);
+        this.state.candidates.push({
+          source: `plugin:${source}`,
+          via: 'plugin',
+          id,
+          title: String(item.title || ''),
+          desc: String(item.summary || ''),
+          up: String(item.up || ''),
+          upMid: '',
+          duration: Number(item.durationSec) || 0,
+          play: 0,
+          pubdate: 0,
+          tags,
+          url: String(item.url || ''),
+          score,
+          addedAt: now
+        });
+        known.add(id);
+        added += 1;
+      }
+    }
+    if (added) {
+      this.state.candidates.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+      this.state.candidates = this.state.candidates.slice(0, cfg.maxCandidates);
+    }
+    return added;
   }
 
   #merge(items, cfg, profile, now) {

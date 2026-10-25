@@ -198,7 +198,24 @@ $DATA_DIR/plugins/weather/
 | `cap.approval.check` | `approval`（动作必须写在 manifest.approvals 里） |
 | `cap.quota.consume` | `quota`（动作必须写在 manifest.quotas 里） |
 | `cap.media.download` / `cap.media.probe` / `cap.media.merge` | `media` |
+| `cap.media.frames` / `cap.media.describe` / `cap.asr.transcribe` | `media` |
+| `cap.feed.publish` | `feed`（只能提交见闻候选，不能调模型、不能发消息） |
 | `cap.send.file` | `send`（目前只支持群聊） |
+
+### 见闻候选（`feed`，v2.1）
+
+插件声明 `feed` 后可以调 `cap.feed.publish`，把条目提交给生活层候选队列：
+
+```js
+await callHost('cap.feed.publish', { items: [
+  { id: 'douyin-123', title: '标题', url: 'https://…', up: '作者',
+    durationSec: 90, tags: ['游戏'], summary: '一句摘要' }
+] });
+```
+
+宿主会校验链接/标题、按 id 去重、每插件每天最多收 20 条。插件**不能**调模型、不能直接发消息；
+生活层在下次觅食时吸收这些候选，由正常的主动发言链路决定是否分享。抖音/小红书等第三方数据源
+插件可以借此接入同一套"见闻"，而不需要拿到发送权或模型权限。
 
 ## apiVersion 2：设置面板、凭据、授权、配额与媒体
 

@@ -472,6 +472,57 @@ export function createCapabilities({
       return { text: String(text || '').slice(0, 20000), seconds: Math.round(pcm.length / 32000) };
     },
 
+    [CAP_METHODS.feedPublish]: ({ items } = {}) => {
+      // 插件只能"提交候选"，不能调模型、不能发消息；宿主生活层决定用不用。
+      // 每插件每天最多 20 条，条目只保留公开元数据（标题/链接/UP/时长/标签/摘要）。
+      const list = Array.isArray(items) ? items.slice(0, 20) : [];
+      const day = new Date(nowFn()).toISOString().slice(0, 10);
+      const inboxDir = path.join(dataDir, 'life-feed-inbox');
+      const file = path.join(inboxDir, `${pluginId}.json`);
+      let state = { version: 1, pluginId, day, items: [] };
+      try {
+        const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (raw?.day === day && Array.isArray(raw.items)) state = raw;
+      } catch { /* 没有或坏了就从空开始 */ }
+      const existing = new Set(state.items.map((item) => item.id));
+      let accepted = 0;
+      let rejected = 0;
+      for (const item of list) {
+        const id = String(item?.id ?? '').trim().slice(0, 100);
+        const title = sanitizeUserText(String(item?.title ?? '')).slice(0, 200);
+        const url = String(item?.url ?? '').trim();
+        if (!id || !title || !/^https?:\/\//i.test(url) || existing.has(id) || state.items.length >= 20) {
+          rejected += 1;
+          continue;
+        }
+        state.items.push({
+          id,
+          title,
+          url,
+          up: sanitizeUserText(String(item?.up ?? '')).slice(0, 60),
+          durationSec: Math.max(0, Math.min(7200, Math.round(Number(item?.durationSec) || 0))),
+          tags: Array.isArray(item?.tags)
+            ? item.tags.map((tag) => sanitizeUserText(String(tag)).slice(0, 30)).slice(0, 6) : [],
+          summary: sanitizeUserText(String(item?.summary ?? '')).slice(0, 200),
+          source: `plugin:${pluginId}`,
+          addedAt: nowFn()
+        });
+        existing.add(id);
+        accepted += 1;
+      }
+      if (accepted) {
+        try {
+          fs.mkdirSync(inboxDir, { recursive: true, mode: 0o700 });
+          const tmp = `${file}.${process.pid}.tmp`;
+          fs.writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
+          fs.renameSync(tmp, file);
+        } catch (error) {
+          throw fail('E_STORAGE', `见闻候选写盘失败：${error?.message || error}`);
+        }
+      }
+      stats.feedItems = (stats.feedItems || 0) + accepted;
+      return { accepted, rejected, remaining: Math.max(0, 20 - state.items.length), day };
+    },
     [CAP_METHODS.sendFile]: async ({ chatKey, file, name } = {}) => {
       const target = String(chatKey ?? '').trim();
       if (!/^group:\d+$/.test(target)) throw fail('E_ARGS', 'send.file 目前只支持群聊（group:<群号>）');

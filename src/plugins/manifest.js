@@ -44,10 +44,11 @@ export const PLUGIN_CAPABILITIES = Object.freeze([
   'secrets',    // 加密存储的凭据（Cookie / Token）；只允许 manifest.settings 里声明为 secret 的字段
   'approval',   // 高风险动作的 owner 授权（控制台按 approvals 清单批准，可按次/按时长）
   'media',      // 宿主侧下载 / ffprobe / ffmpeg 合流（插件不执行命令）
-  'quota'       // 宿主按插件/动作/天强制配额
+  'quota',      // 宿主按插件/动作/天强制配额
+  'feed'        // 向生活层提交"见闻候选"（不能调模型、不能发消息；宿主决定要不要用）
 ]);
 
-export const V2_CAPABILITIES = Object.freeze(['secrets', 'approval', 'media', 'quota']);
+export const V2_CAPABILITIES = Object.freeze(['secrets', 'approval', 'media', 'quota', 'feed']);
 
 const FIELD_TYPES = Object.freeze(['text', 'number', 'boolean', 'select', 'secret']);
 const KEY_RE = /^[a-z][A-Za-z0-9_]{0,31}$/;

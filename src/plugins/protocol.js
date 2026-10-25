@@ -44,6 +44,7 @@ export const CAP_METHODS = Object.freeze({
   mediaFrames: `${CAP_PREFIX}media.frames`,
   mediaDescribe: `${CAP_PREFIX}media.describe`,
   asrTranscribe: `${CAP_PREFIX}asr.transcribe`,
+  feedPublish: `${CAP_PREFIX}feed.publish`,
   sendFile: `${CAP_PREFIX}send.file`
 });
 
@@ -65,6 +66,7 @@ export const CAP_REQUIREMENT = Object.freeze({
   [CAP_METHODS.mediaFrames]: 'media',
   [CAP_METHODS.mediaDescribe]: 'media',
   [CAP_METHODS.asrTranscribe]: 'media',
+  [CAP_METHODS.feedPublish]: 'feed',
   [CAP_METHODS.sendFile]: 'send'
 });
 
