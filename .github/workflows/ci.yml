@@ -161,6 +161,26 @@ jobs:
       - name: 浏览器冒烟（真 Chromium）
         run: npm run test:browser
 
+  # 官方插件打包/安装冒烟：每个 examples/plugins/* 在干净数据目录里真打真装再卸载。
+  official-plugins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 官方插件打包 + 安装 + 卸载
+        run: node scripts/official-plugins-check.mjs
+
   # ESLint 门禁（改进方案 C4）：与本地 `npm run lint` 同口径 —— 0 error 才能进 main。
   # 与 test 分开成 job：lint 失败时一眼看到是风格/静态问题，不用翻几百行测试输出。
   lint:

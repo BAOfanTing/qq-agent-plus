@@ -168,7 +168,8 @@ export async function installPlugin({
   id = '', url = '', sha256 = '', tarball = null, dataDir,
   fetchBinary, log = () => {}, now = () => Date.now(), source = '', hostVersion = '',
   publisher = '', signature = '', publishers = {}, beforeReplace = null,
-  expectedDiffHash = '', force = false, previewOnly = false
+  expectedDiffHash = '', force = false, previewOnly = false,
+  indexMeta = null, allowIndexMismatch = false
 } = {}) {
   // 注入点先落到本地常量：scan --strict（CI 门禁）不认"直接调用解构参数的默认值"这种形状
   const download = fetchBinary;
@@ -244,6 +245,24 @@ export async function installPlugin({
     const parsed = parsePluginManifest(raw, { dir: staging });
     if (!parsed.ok) throw fail('E_MANIFEST', parsed.error);
     if (id && parsed.manifest.id !== id) throw fail('E_ID_MISMATCH', `包里的 id（${parsed.manifest.id}）与预期（${id}）不一致`);
+    // 索引声明 vs 包内 manifest：索引把权限写窄、包里却更宽，是最容易被忽略的信任缺口。
+    // 只在索引**确实声明了**对应字段时比较（没写的旧条目不做有罪推定）。
+    if (indexMeta && typeof indexMeta === 'object' && !allowIndexMismatch) {
+      const advertisedCaps = new Set(Array.isArray(indexMeta.capabilities) ? indexMeta.capabilities : []);
+      const actualCaps = parsed.manifest.capabilities || [];
+      const broaderCaps = advertisedCaps.size
+        ? actualCaps.filter((cap) => !advertisedCaps.has(cap) && !['tools', 'log', 'config'].includes(cap))
+        : [];
+      const advertisedDomains = new Set(Array.isArray(indexMeta.httpDomains) ? indexMeta.httpDomains : []);
+      const broaderDomains = advertisedDomains.size
+        ? (parsed.manifest.httpDomains || []).filter((domain) => !advertisedDomains.has(domain))
+        : [];
+      if (broaderCaps.length || broaderDomains.length) {
+        throw fail('E_INDEX_MISMATCH',
+          `包声明的权限比索引更宽（能力：${broaderCaps.join('、') || '无'}；域名：${broaderDomains.join('、') || '无'}）。`
+          + '请先确认索引是最新的；确实要装请显式允许');
+      }
+    }
     const finalId = parsed.manifest.id;
     const target = path.join(pluginsRoot, finalId);
     if (path.dirname(target) !== pluginsRoot) throw fail('E_ARGS', '插件 id 不合法');
@@ -822,6 +841,21 @@ export function normalizePluginIndexEntry(item, { apiVersion = PLUGIN_API_VERSIO
     homepage: httpUrl(item.homepage),
     tags: Array.isArray(item.tags) ? item.tags.filter((t) => typeof t === 'string').slice(0, 12) : [],
     capabilities: Array.isArray(item.capabilities) ? item.capabilities.filter((c) => typeof c === 'string') : [],
+    // 权限面（2026-10）：安装前给用户看的信任信息；安装时与包内 manifest 对比（包更宽就拦）
+    httpDomains: Array.isArray(item.httpDomains)
+      ? item.httpDomains.filter((domain) => typeof domain === 'string').slice(0, 20) : [],
+    approvals: Array.isArray(item.approvals)
+      ? item.approvals.filter((entry) => entry && typeof entry.action === 'string').slice(0, 20)
+        .map((entry) => ({ action: String(entry.action).slice(0, 32), label: String(entry.label ?? '').slice(0, 80) }))
+      : [],
+    quotas: isPlainObject(item.quotas)
+      ? Object.fromEntries(Object.entries(item.quotas).slice(0, 20)
+        .map(([key, value]) => [String(key).slice(0, 32), Number(value) || 0]))
+      : {},
+    hasWrites: item.hasWrites === true
+      || (Array.isArray(item.approvals) && item.approvals.length > 0),
+    engines: isPlainObject(item.engines)
+      ? { minVersion: String(item.engines.minVersion ?? '').slice(0, 32) } : {},
     // ── 市场呈现用的可选字段（缺了不影响装，界面优雅降级）────────────────────────
     // 索引是"市场"的内容源：光有 id/描述撑不起一个市场，得有图标、说明、更新日志这些。
     // 图标地址：只收 http(s)（与截图同一个口径）。原来是"只截长度" —— 索引里写 `javascript:` 之类

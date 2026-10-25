@@ -3330,6 +3330,7 @@ export function createApp({
       const result = await installPlugin({
         id, url: hit.url, sha256: hit.sha256, publisher: hit.publisher || '', signature: hit.signature || '',
         publishers: getConfig().plugins?.publishers || {},
+        indexMeta: hit,
         dataDir: DATA_DIR, fetchBinary: download, log: moduleLog('plugins'), previewOnly: true
       });
       return json(res, 200, { ok: true, ...result });
@@ -3350,10 +3351,12 @@ export function createApp({
       let publisher = '';
       let signature = '';
       let hitMirrors = [];
+      let hitMeta = null;
       if (!url) {
         if (!id) return json(res, 400, { ok: false, error: '要么给索引里的 id，要么给 url + sha256' });
         const hit = (await loadPluginIndex()).plugins.find((item) => item.id === id);
         if (!hit) return json(res, 404, { ok: false, error: `索引里没有 ${id}` });
+        hitMeta = hit;
         if (hit.compatible === false) {
           // 装上去也跑不起来（apiVersion / minVersion 对不上）—— 在动手之前就拦住，并说清原因
           return json(res, 409, { ok: false, error: `这个插件在本机装不了：${hit.reason}` });
@@ -3390,6 +3393,9 @@ export function createApp({
         // 权限面变化时，管理员先在预览里确认；这里校验确认哈希，防止"确认的是旧 diff"
         expectedDiffHash: String(body.expectedDiffHash || ''),
         force: body.force === true,
+        // 索引是唯一真源：安装时用它核对"包实际声明的权限"有没有超出索引展示的范围
+        indexMeta: hitMeta,
+        allowIndexMismatch: body.allowIndexMismatch === true,
         // 升级时先停掉旧进程再换目录（Windows 上 rename 存活进程的 cwd 会失败）
         beforeReplace: (pluginId) => { replaced = true; return pluginRegistry.stopOne(pluginId); }
       });
@@ -3433,7 +3439,7 @@ export function createApp({
           error: `${error.message}。目录可能刚更新过（控制台手里的目录最多旧 10 分钟）—— 已刷新，再点一次安装即可。`
         });
       }
-      if (['E_UPGRADE_CONFIRM', 'E_UPGRADE_CONFIRM_STALE', 'E_DOWNGRADE', 'E_SAME_VERSION'].includes(error?.code)) {
+      if (['E_UPGRADE_CONFIRM', 'E_UPGRADE_CONFIRM_STALE', 'E_DOWNGRADE', 'E_SAME_VERSION', 'E_INDEX_MISMATCH'].includes(error?.code)) {
         return json(res, 409, {
           ok: false, code: error.code, error: error.message, diff: error.diff || null
         });

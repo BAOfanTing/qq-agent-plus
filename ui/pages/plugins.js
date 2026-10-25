@@ -702,6 +702,7 @@ function renderPluginDetail(item, installed, skipped) {
     item.size ? `<span class="pb-item">${(item.size / 1024).toFixed(1)} KB</span>` : '',
     item.updatedAt ? `<span class="pb-item">${iconSvg('clock', { size: 13 })}更新于 ${esc(relativeTime(item.updatedAt))}</span>` : '',
     item.minVersion ? `<span class="pb-item">要求宿主 ≥ ${esc(item.minVersion)}</span>` : '',
+    `<span class="pb-item">${item.signature ? '已签名（安装时验签）' : '未签名'}</span>`,
     item.source ? `<span class="pb-item">来自 ${esc(item.source)}</span>` : ''
   ].filter(Boolean).join('');
   const tags = Array.isArray(item.tags) ? item.tags : [];
@@ -776,6 +777,16 @@ function renderPluginDetail(item, installed, skipped) {
             <h4 class="pd-block-title">它要哪些权限</h4>
             ${permissionListHtml(item.capabilities)}
           </div>
+          ${(Array.isArray(item.httpDomains) && item.httpDomains.length)
+            || (Array.isArray(item.approvals) && item.approvals.length) ? `
+          <div class="pd-block">
+            <h4 class="pd-block-title">网络与写操作</h4>
+            ${Array.isArray(item.httpDomains) && item.httpDomains.length
+              ? `<div class="plugin-note">会访问：${item.httpDomains.map(esc).join('、')}</div>` : ''}
+            ${Array.isArray(item.approvals) && item.approvals.length
+              ? `<div class="plugin-warn">写动作（每次执行需管理员批准具体目标）：${item.approvals
+                .map((approval) => esc(approval.label || approval.action)).join('、')}</div>` : ''}
+          </div>` : ''}
         </div>
 
         <aside class="plugin-detail-aside">
