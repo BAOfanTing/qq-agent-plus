@@ -2238,6 +2238,14 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
+/* 资产页（好友管理 / 人物印象 / 观测 / 异常）的摘要卡文字有 12px 内边距，而下面
+   control-section 的表单从卡片外缘起排：标签和输入框比卡片文字左 12px，整块看起来向左
+   错位（好友管理最明显）。给这些 section 同一条内缩，标题、字段与卡片文字落在同一条左线上。
+   控制页的 .control-service 卡是"图标 + 文案"三列，文字天然再缩 48px，不适用这一条。 */
+.asset-pane .control-section {
+  padding-left: 12px;
+  padding-right: 12px;
+}
 .control-section h3 { margin: 0 0 10px; font-size: var(--fs-md); }
 .control-section-title {
   display: flex;

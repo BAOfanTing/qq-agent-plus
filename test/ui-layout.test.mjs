@@ -338,3 +338,9 @@ test('新建自定义卡是空表单：角色设定不复制当前卡', () => {
   assert.match(body, /id="new-persona-text"[^>]*><\/textarea>/);
   assert.match(body, /id="new-persona-rules"[^>]*><\/textarea>/);
 });
+
+test('资产页表单与摘要卡文字同一条左线（好友管理/人物印象/观测）', () => {
+  // 摘要卡文字有 12px 内边距，而下面 control-section 的表单从卡片外缘起排，
+  // 标签与输入框会比卡片文字左 12px（好友管理最明显）。
+  assert.match(css, /\.asset-pane \.control-section \{\s*padding-left: 12px;\s*padding-right: 12px;\s*\}/s);
+});
