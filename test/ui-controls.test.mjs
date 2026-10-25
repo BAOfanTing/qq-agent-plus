@@ -42,10 +42,10 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   assert.match(save, /patch\.humanize = \{/, '人类化开关必须接到保存端');
   assert.match(save, /memeUse: \{[\s\S]*?level:[\s\S]*?cfg-humanize-meme-level/,
     '梗密度必须写进 patch.humanize.memeUse.level');
-  // 卡片化只改外层结构：h3 分组必须真的走到 cardify，单勾选行才会变成右侧开关
-  assert.match(settings, /function cardifySettings/);
-  assert.match(settings, /function markSwitchRows/);
-  assert.match(settings, /cardifySettings\(box\)/);
+  // 设置页恢复原版布局：h3 分区不再被包成卡片（卡片样式只留给人物印象/异常处理）
+  assert.doesNotMatch(settings, /function cardifySettings/);
+  assert.doesNotMatch(settings, /cardifySettings\(box\)/);
+  assert.doesNotMatch(settings, /function markSwitchRows/);
   assert.match(settings, /id="settings-search"/, '设置侧栏应有搜索入口');
   assert.match(settings, /id="cfg-dirty-note"/, '保存条应显示未保存提示');
   assert.match(settings, /function filterSettingsMenu/);

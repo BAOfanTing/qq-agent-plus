@@ -234,53 +234,6 @@ function revealDelta(box, item, pad = 8) {
   return 0;
 }
 
-/**
- * 把一个分区的 `<h3>` 组包成卡片。只改外层结构，不动任何 id/控件：
- * 设置页的保存与大量事件都按 id 查找，包一层不影响它们；动态重画也每次重新包。
- */
-function cardifySettings(box) {
-  const children = [...box.children];
-  let card = null;
-  for (const node of children) {
-    if (node.classList.contains('save-bar') || node.classList.contains('settings-divider')) {
-      card = null;
-      continue;
-    }
-    // 平台能力/时间控制等分区自己就是 <section>（甚至已有 .plat-card 卡片样式）：
-    // 再包一层会变成卡片套卡片。h3 在里层，交给原样式。
-    if (node.tagName === 'SECTION') {
-      card = null;
-      continue;
-    }
-    if (node.tagName === 'H3') {
-      card = document.createElement('section');
-      card.className = 'settings-card';
-      node.replaceWith(card);
-      card.appendChild(node);
-      continue;
-    }
-    if (!card) {
-      card = document.createElement('section');
-      card.className = 'settings-card settings-card-intro';
-      node.replaceWith(card);
-      card.appendChild(node);
-      continue;
-    }
-    card.appendChild(node);
-  }
-}
-
-/** 单勾选 + 单标签的行改成右侧开关；多选列表/带额外说明的行保持原样。 */
-function markSwitchRows(box) {
-  for (const row of box.querySelectorAll('.checkbox-row')) {
-    const inputs = row.querySelectorAll('input[type=checkbox]');
-    const labels = row.querySelectorAll(':scope > label');
-    if (inputs.length === 1 && labels.length === 1 && row.children.length === 2) {
-      row.classList.add('switch-row');
-    }
-  }
-}
-
 /** 任意输入变化 → 保存条显示"有未保存改动"；只绑一次（#settings-form 本身不随 innerHTML 替换）。 */
 function bindDirtyTracking() {
   const box = $('#settings-form');
@@ -301,8 +254,6 @@ function renderSettingsImpl() {
   renderSettingsSidebar();
   box.innerHTML = `
     ${renderSettingsSection(c)}`;
-  cardifySettings(box);
-  markSwitchRows(box);
   bindDirtyTracking();
   // 主题选择器等静态节点上的 data-icon 在这里注入 SVG（幂等）
   applyIcons(box);
