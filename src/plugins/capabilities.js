@@ -91,7 +91,7 @@ export function pluginDataDir(dataDir, pluginId) {
  */
 export function createCapabilities({
   pluginId, dataDir, getSettings = () => ({}), log = () => {}, now = () => Date.now(),
-  getSender = () => null, manifest = null
+  getSender = () => null, manifest = null, limits = {}
 } = {}) {
   // 注入点先落到本地常量：`node src/ops.js scan --strict`（CI 门禁）只认 const/let 声明与
   // KNOWN_IGNORE 里的名字，**直接调用解构参数的默认值会被判成"未定义调用"**
@@ -103,6 +103,35 @@ export function createCapabilities({
   const dir = pluginDataDir(dataDir, pluginId);
   const storageFile = path.join(dir, 'storage.json');
   const mediaDir = path.join(dir, 'media');
+  const diskLimitKb = Math.max(0, Math.round((Number(limits?.diskMb) || 0) * 1024));
+  let diskCache = { at: 0, kb: 0 };
+  const pluginDirSizeKb = () => {
+    if (!diskLimitKb) return 0;
+    const t = nowFn();
+    if (t - diskCache.at < 5000) return diskCache.kb;
+    let total = 0;
+    const walk = (current) => {
+      let entries = [];
+      try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { return; }
+      for (const entry of entries) {
+        const file = path.join(current, entry.name);
+        if (entry.isDirectory()) walk(file);
+        else {
+          try { total += fs.statSync(file).size; } catch { /* 忽略单个文件 */ }
+        }
+      }
+    };
+    walk(dir);
+    diskCache = { at: t, kb: Math.round(total / 1024) };
+    return diskCache.kb;
+  };
+  const assertDiskRoom = (additionalBytes = 0) => {
+    if (!diskLimitKb) return;
+    const need = Math.ceil(Math.max(0, Number(additionalBytes) || 0) / 1024);
+    if (pluginDirSizeKb() + need > diskLimitKb) {
+      throw fail('E_DISK_QUOTA', `插件数据超过上限 ${Math.round(diskLimitKb / 1024)}MB（可在「插件宿主（高级）」里调整）`);
+    }
+  };
   let storage = null;
   const writeTimes = [];
   const incidentLogs = [];
@@ -160,6 +189,7 @@ export function createCapabilities({
       if (Buffer.byteLength(JSON.stringify(next)) > MAX_TOTAL_BYTES) {
         throw fail('E_FULL', `状态总量上限 ${MAX_TOTAL_BYTES / 1024}KB，先删掉不用的键`);
       }
+      assertDiskRoom(Buffer.byteLength(JSON.stringify(next)));
       const t = nowFn();
       while (writeTimes.length && t - writeTimes[0] > 60_000) writeTimes.shift();
       if (writeTimes.length >= MAX_WRITES_PER_MIN) throw fail('E_RATE', '写得太频繁（每分钟上限 120 次）');
@@ -336,9 +366,12 @@ export function createCapabilities({
       const fetched = await safeFetchBinary(target, cap, undefined, { allowPrivate: false, headers: cleanHeaders, allowedDomains: httpDomains.length ? httpDomains : null });
       fs.mkdirSync(mediaDir, { recursive: true });
       const file = path.join(mediaDir, fileName);
+      // 磁盘配额：先把新文件算进去，超了就拒绝（不写半个文件，也不把老文件删掉）
+      assertDiskRoom(fetched.buffer.length);
       const tmp = `${file}.${process.pid}.tmp`;
       fs.writeFileSync(tmp, fetched.buffer);
       fs.renameSync(tmp, file);
+      diskCache = { at: 0, kb: 0 };   // 让下一次检查重新统计
       pruneMedia();
       stats.mediaDownloads += 1;
       return { file: fileName, bytes: fetched.buffer.length, contentType: fetched.contentType || '' };

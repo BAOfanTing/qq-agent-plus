@@ -20,7 +20,7 @@ const flag = (name, fallback = '') => {
 };
 
 if (!id) {
-  console.error('用法：node scripts/plugin-create.mjs <插件id> [--name 显示名] [--author 你的名字] [--dir 放到哪个目录] [--tool 工具名]');
+  console.error('用法：node scripts/plugin-create.mjs <插件id> [--name 显示名] [--author 你的名字] [--dir 放到哪个目录] [--tool 工具名] [--api-version 1|2]');
   process.exit(2);
 }
 if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(id)) {
@@ -38,6 +38,7 @@ if (fs.existsSync(target) && fs.readdirSync(target).length) {
 const displayName = flag('name') || id;
 const author = flag('author') || '<你的名字>';
 const tool = flag('tool') || 'hello';
+const apiVersion = Number(flag('api-version', '1')) === 2 ? 2 : 1;
 if (!/^[a-z][a-z0-9_]{1,31}$/.test(tool)) {
   console.error(`✗ 工具名只能是小写字母开头的字母/数字/下划线（2-32 位），实际收到 ${JSON.stringify(tool)}`);
   process.exit(2);
@@ -45,7 +46,7 @@ if (!/^[a-z][a-z0-9_]{1,31}$/.test(tool)) {
 
 const manifest = {
   id,
-  apiVersion: 1,
+  apiVersion,
   name: displayName,
   version: '0.1.0',
   description: `${displayName}（一句话说清它给机器人加了什么能力）`,
@@ -63,6 +64,47 @@ const manifest = {
     }
   ]
 };
+
+// v2 骨架：把 settings / http / storage / 写动作（approval+quota）都摆出来，
+// 让作者知道"要联网、要配置、要写外部数据"分别该声明什么，而不是从文档里猜。
+if (apiVersion === 2) {
+  manifest.capabilities = ['tools', 'log', 'config', 'http', 'storage', 'approval', 'quota'];
+  manifest.httpDomains = ['api.example.com'];
+  manifest.settings = {
+    groups: [{
+      key: 'account',
+      title: '插件设置',
+      fields: [{
+        key: 'channel',
+        label: '频道 / 模式',
+        type: 'text',
+        default: 'demo',
+        help: '示例字段：真实插件按需要改。密钥类字段把 type 改成 secret，宿主会加密保存。'
+      }]
+    }]
+  };
+  manifest.approvals = [{
+    action: 'write',
+    label: '写一条演示内容',
+    description: '示例写动作：每次执行都需要管理员针对具体目标批准一次'
+  }];
+  manifest.quotas = { write: 10 };
+  manifest.tools.push({
+    name: 'write_demo',
+    description: '写一条演示内容（需要管理员批准；真实插件请把这里换成实际写操作）',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: '写到哪里（对象级批准会绑定这个值）' },
+        text: { type: 'string', description: '要写入的内容（批准会绑定这段正文）' }
+      },
+      required: ['target', 'text']
+    },
+    action: 'write',
+    actionTarget: 'target',
+    actionPreview: 'text'
+  });
+}
 
 // 先自己校验一遍：脚手架生出来的 manifest 必须过得了宿主那一关，否则作者第一步就踩坑
 const checked = parsePluginManifest(manifest, { dir: target });
@@ -95,7 +137,14 @@ const tools = {
     // 经宿主的日志出口写一行：好处是统一前缀、统一脱敏，控制台里能一起看到
     await callHost('cap.log.write', { level: 'info', message: \`有人调了 ${tool}：\${text.slice(0, 60)}\` });
     return { echo: text, at: new Date().toISOString() };
-  }
+  }${apiVersion === 2 ? `,
+  write_demo: async (args) => {
+    const target = String(args?.target ?? '');
+    const text = String(args?.text ?? '');
+    // 真实写操作放在这里；宿主已经在调用前完成了开关/批准/配额/目标校验。
+    await callHost('cap.log.write', { level: 'info', message: \`write_demo -> \${target}\` });
+    return { ok: true, target, text };
+  }` : ''}
 };
 
 async function handleRequest(message) {
@@ -218,10 +267,13 @@ fs.mkdirSync(target, { recursive: true });
 fs.writeFileSync(path.join(target, 'plugin.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 fs.writeFileSync(path.join(target, 'index.mjs'), indexJs);
 fs.writeFileSync(path.join(target, 'README.md'), readme);
+if (apiVersion === 2) {
+  fs.writeFileSync(path.join(target, 'dev-settings.json'), `${JSON.stringify({ channel: 'demo' }, null, 2)}\n`);
+}
 
 console.log(`✓ 已生成插件骨架：${target}`);
 console.log(`
-  plugin.json   清单（id=${id}，能力=${manifest.capabilities.join('/')}，工具=${tool}）
+  plugin.json   清单（id=${id}，apiVersion=${apiVersion}，能力=${manifest.capabilities.join('/')}，工具=${manifest.tools.map((t) => t.name).join('/')}）
   index.mjs     入口（真协议骨架，直接能用）
   README.md     怎么起、怎么打包、怎么发布
 

@@ -74,13 +74,15 @@ export class PluginHost {
     // 默认打开等于插件生态在那些平台直接不可用）
     this.networkIsolation = networkIsolation !== false;
     this.requireNetworkIsolation = requireNetworkIsolation === true;
-    this.limits = { memoryMb: 128, callsPerMinute: 120, ...limits };
+    this.limits = { memoryMb: 128, callsPerMinute: 120, concurrency: 4, diskMb: 256, ...limits };
     this.callWindow = [];          // 最近一分钟的调用时间戳（限频用，见 #allowCall）
+    this.inFlight = 0;             // 当前在途工具调用数（并发上限用）
     this.rssKb = 0;                // 最近一次采样到的常驻内存（Linux 读 /proc，其他平台 0）
     this.unconfined = false;
     this.netIsolated = false;
     this.caps = capabilities ?? createCapabilities({
       pluginId: this.id, dataDir, getSettings, log, now, manifest,
+      limits: this.limits,
       getSender      // send 能力用：插件发言必须走机器人自己那条队列（守卫全在里面）
     });
 
@@ -124,6 +126,7 @@ export class PluginHost {
       netIsolated: this.netIsolated, // true = 插件进程在无网络的命名空间里（只能走宿主出网）
       rssKb: this.rssKb,             // 最近一次采样到的常驻内存（Linux；其他平台 0）
       limits: { ...this.limits },
+      inFlight: this.inFlight,
       restarts: this.restarts,
       startedAt: this.startedAt,
       lastError: this.lastError,
@@ -150,6 +153,7 @@ export class PluginHost {
     this.state = 'starting';
     this.stopping = false;
     this.lastError = '';
+    this.rssKb = 0;   // 新进程重新采样/上报，别把上一代的高水位带过来
 
     const entry = this.manifest.entry;
     // 先语法体检：插件写错一个括号，直接 spawn 只会得到"进程秒退"，报错里看不出原因
@@ -252,11 +256,26 @@ export class PluginHost {
   /** 让插件执行一个工具调用。超时/进程不可用/超频都会抛带 code 的错误。 */
   async callTool(name, args, { timeoutMs, context = null } = {}) {
     this.#allowCall('callTool');
-    return this.#request(HOST_METHODS.callTool, {
-      name: String(name ?? ''),
-      args: args ?? {},
-      context: context && typeof context === 'object' ? context : {}
-    }, timeoutMs ?? this.timeouts.callTimeoutMs);
+    // 并发上限：一个插件同时跑太多调用会把宿主的事件循环与内存拖垮。
+    // fail-closed 直接拒绝（模型下一轮可以重试），不在宿主里排队堆积。
+    const maxConcurrency = Math.max(1, Number(this.limits.concurrency) || 4);
+    if (this.inFlight >= maxConcurrency) {
+      this.stats.busy = (this.stats.busy || 0) + 1;
+      throw Object.assign(
+        new Error(`插件 ${this.id} 并发已满（上限 ${maxConcurrency} 个在途调用），请稍后重试`),
+        { code: 'E_BUSY' }
+      );
+    }
+    this.inFlight += 1;
+    try {
+      return await this.#request(HOST_METHODS.callTool, {
+        name: String(name ?? ''),
+        args: args ?? {},
+        context: context && typeof context === 'object' ? context : {}
+      }, timeoutMs ?? this.timeouts.callTimeoutMs);
+    } finally {
+      this.inFlight = Math.max(0, this.inFlight - 1);
+    }
   }
 
   /**
@@ -282,7 +301,9 @@ export class PluginHost {
    */
   #sampleRss() {
     const pid = this.child?.pid;
-    if (!pid || process.platform !== 'linux') return 0;
+    if (!pid) return this.rssKb;
+    // 非 Linux 没有 /proc：保留插件自己在 ping 应答里报的 rssKb（没报就是 0）。
+    if (process.platform !== 'linux') return this.rssKb;
     try {
       const statm = fs.readFileSync(`/proc/${pid}/statm`, 'utf8').trim().split(/\s+/);
       const pages = Number(statm[1]) || 0;                    // [1] = resident
@@ -399,7 +420,13 @@ export class PluginHost {
       this.#sampleRss();
       if (this.#enforceMemoryLimit()) return;
       this.#request(HOST_METHODS.ping, {}, Math.max(1000, Math.floor(this.timeouts.heartbeatMs / 2)))
-        .then(() => { this.heartbeatMisses = 0; })
+        .then((reply) => {
+          this.heartbeatMisses = 0;
+          // 跨平台 RSS：插件可以在 ping 应答里带 { rssKb }（Windows/macOS 没有 /proc）。
+          if (process.platform !== 'linux' && Number.isFinite(Number(reply?.rssKb))) {
+            this.rssKb = Math.max(0, Math.round(Number(reply.rssKb)));
+          }
+        })
         .catch(() => {
           this.heartbeatMisses += 1;
           if (this.heartbeatMisses >= this.timeouts.heartbeatMissLimit) {

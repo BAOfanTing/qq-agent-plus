@@ -194,6 +194,12 @@ ${QUOTA_ROWS.map(([key, label, dflt]) => `          <tr>
         <div class="field"><label for="cfg-plugin-calls">单个插件每分钟最多调用（次）</label>
           <input type="number" id="cfg-plugin-calls" min="10" max="1000" value="${esc(c.plugins?.limits?.callsPerMinute ?? 120)}" /></div>
       </div>
+      <div class="field-row">
+        <div class="field"><label for="cfg-plugin-concurrency">单个插件并发调用上限</label>
+          <input type="number" id="cfg-plugin-concurrency" min="1" max="32" value="${esc(c.plugins?.limits?.concurrency ?? 4)}" /></div>
+        <div class="field"><label for="cfg-plugin-disk">插件数据磁盘上限（MB）</label>
+          <input type="number" id="cfg-plugin-disk" min="8" max="4096" value="${esc(c.plugins?.limits?.diskMb ?? 256)}" /></div>
+      </div>
       <div class="checkbox-row"><input type="checkbox" id="cfg-plugin-netiso" ${c.plugins?.networkIsolation !== false ? 'checked' : ''} />
         <label for="cfg-plugin-netiso">本机支持时，把插件放进无网络命名空间（联网只能走宿主代理）</label></div>
       <div class="checkbox-row"><input type="checkbox" id="cfg-plugin-requirenetiso" ${c.plugins?.requireNetworkIsolation === true ? 'checked' : ''} />

@@ -720,7 +720,7 @@ export const DEFAULT_CONFIG = {
     // 每个插件的资源上限（宿主强制，插件自己声明的不算）：
     //   memoryMb      堆上限 + 常驻内存超过就重启（Linux 上采样 /proc/<pid>/statm）
     //   callsPerMinute 工具调用每分钟上限（防模型连调打爆宿主；周期任务不受此限）
-    limits: { memoryMb: 128, callsPerMinute: 120 },
+    limits: { memoryMb: 128, callsPerMinute: 120, concurrency: 4, diskMb: 256 },
     // 插件工具怎么交给模型：'meta'（默认）只挂一个 `plugin_call`，里面列出可用的插件工具；
     // 'direct' 是每个插件工具各挂一个（老行为）。工具定义每轮都占提示词，装多了差别很明显。
     toolMounting: 'meta',

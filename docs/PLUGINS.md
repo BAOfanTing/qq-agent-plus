@@ -320,6 +320,11 @@ Open-Meteo；也是 issue #37 那个原始诉求）、`gh-activity`（GitHub 仓
 ```bash
 # ① 生成骨架（plugin.json + index.mjs + README.md）
 node scripts/plugin-create.mjs my-plugin --name "我的插件" --author 你的名字
+#    要 settings / http / storage / 写动作（approval + quota）的完整 v2 骨架：
+node scripts/plugin-create.mjs my-plugin --api-version 2
+
+# ①' 校验清单（宿主自己的 validator，唯一真源）
+node scripts/plugin-validate.mjs ./my-plugin
 
 # ② 本地跑起来：真协议 + 真隔离 + 假 QQ。不带参数进交互模式（t 调工具 / o 投消息 / s 触发周期 / l 看日志）
 node scripts/plugin-dev.mjs ./my-plugin --call hello --args '{"text":"你好"}'
@@ -478,10 +483,12 @@ CI 里可选），`--json` 给机器读。
   总量 256KB、每分钟最多写 120 次），进程重启不丢；**卸载插件不会顺手删掉这些数据**。
 - 插件不需要写权限：`--allow-fs-write` 一个都不给。
 - **资源上限由宿主强制**：堆上限默认 128MB（`--max-old-space-size`），常驻内存（RSS）超过
-  **堆上限的 1.5 倍**就重启该插件进程（Linux 上采样 `/proc/<pid>/statm`；两者不用同一个数是因为
-  RSS 还要装 Node 二进制与堆外开销，用同一个数会变成插件刚起来就被判超限）；工具调用每分钟
-  上限 120 次（防模型连调或失败重试风暴打爆宿主），周期任务不受此限。这两项在 `plugins.limits`
-  里调，也可以走控制台「设置 → 平台能力 → 插件宿主（高级）」；保存后按新上限重排插件进程。
+  **堆上限的 1.5 倍**就重启该插件进程（Linux 上采样 `/proc/<pid>/statm`；Windows/macOS 用插件
+  在 `ping` 应答里上报的 `rssKb`，不报则不做 RSS 判杀）；工具调用每分钟上限 120 次、并发在途
+  调用上限 4 个（超了返回 `E_BUSY`，不排队堆积）、插件数据磁盘上限 256MB（storage/media/secrets
+  合计，超了返回 `E_DISK_QUOTA`）。周期任务不受每分钟调用限制。
+  这些都在 `plugins.limits` 里调，也可以走控制台「设置 → 平台能力 → 插件宿主（高级）」；
+  保存后按新上限重排插件进程。
 - **懒启动**：只有工具、不观察消息也不起周期任务的插件，进程**按需起、空闲停**
   （`plugins.lazy` 默认开，空闲 `plugins.idleMinutes` 默认 15 分钟）。工具在模型那边一直可见，
   第一次调用时宿主才起进程 —— 装了十个插件不会常驻十个进程，代价是首次调用多约 100ms。
