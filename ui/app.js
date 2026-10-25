@@ -366,7 +366,7 @@ function renderControlHub(data = {}) {
         </a>`;
       }).join('')}
     </div>
-    <section class="control-section" id="control-qq-login">
+    <section class="settings-card" id="control-qq-login">
       <div class="control-section-title">
         <div><h3>QQ 登录</h3><span class="muted">扫码在 SnowLuma 远程桌面里完成</span></div>
         <a class="btn btn-primary btn-small" href="${esc(serviceUrl(6081))}" target="_blank" rel="noreferrer">打开扫码登录</a>
@@ -385,14 +385,14 @@ function renderControlHub(data = {}) {
         </ul>
       </details>
     </section>
-    <section class="control-section">
+    <section class="settings-card">
       <div class="control-section-title">
         <div><h3>一键体检</h3><span class="muted">控制台 / 协议端 / 入站 / 磁盘 / 更新状态</span></div>
         <button type="button" class="btn btn-small" id="control-health-run">开始体检</button>
       </div>
       <div id="control-health-result" class="control-result muted" role="status" aria-live="polite">点「开始体检」检查当前运行状态。</div>
     </section>
-    <section class="control-section">
+    <section class="settings-card">
       <div class="control-section-title">
         <div><h3>更新部署</h3><span class="muted">${esc(update.repository || '-')} · ${esc(update.branch || 'main')}</span></div>
         <span class="control-service-state ${update.status === 'failed' ? 'offline' : update.enabled ? 'online' : ''}" data-hub-deploy-state>${esc(updateState)}</span>
@@ -430,7 +430,7 @@ function renderControlHub(data = {}) {
         <span id="auto-update-result" class="control-result muted" role="status" aria-live="polite"></span>
       </div>
     </section>
-    <section class="control-section">
+    <section class="settings-card">
       <h3>密钥控制</h3>
       <div class="control-key-list">
         <button type="button" class="control-key-row" data-open-settings="api">
@@ -461,7 +461,7 @@ function renderControlHub(data = {}) {
         </a>
       </div>
     </section>
-    <section class="control-section">
+    <section class="settings-card">
       <div class="control-section-title">
         <div><h3>SnowLuma 登录密钥</h3><span class="muted">修改后 SnowLuma WebUI 的现有登录会话会失效</span></div>
         <a class="btn btn-small" href="${esc(serviceUrl(5099, '/settings?tab=account'))}" target="_blank" rel="noreferrer">打开账号安全</a>

@@ -322,7 +322,7 @@ function renderPluginsPage() {
       <aside class="plugin-facets" id="plugins-facets"></aside>
       <div class="plugin-main">
         <div class="plugin-toolbar">
-          <input type="text" id="plugins-search" placeholder="搜名字 / id / 描述 / 标签" />
+          <input type="text" id="plugins-search" placeholder="搜名字 / id / 描述 / 标签" aria-label="搜索插件" />
           <!-- 窄屏才有：分面栏在 ≤900px 时收起，靠这个按钮展开。否则整条筛选（范围/分类/标签/其他）
                会堆在卡片上方，把插件列表推到屏幕外（用户："标签放在插件上面对吗"）。 -->
           <button type="button" class="btn btn-small plugin-filter-toggle" data-plugin-filters="1">
@@ -332,7 +332,7 @@ function renderPluginsPage() {
             <button type="button" class="plugin-view is-on" data-plugin-view="grid" title="卡片">${iconSvg('layout', { size: 14 })}</button>
             <button type="button" class="plugin-view" data-plugin-view="list" title="列表">${iconSvg('layers', { size: 14 })}</button>
           </div>
-          <select id="plugins-sort" class="plugin-sort">
+          <select id="plugins-sort" class="plugin-sort" aria-label="插件排序">
             <option value="updated">按最近更新</option>
             <option value="downloads">按下载量</option>
             <option value="name">按名字</option>
@@ -357,13 +357,13 @@ function renderPluginsPage() {
       <div class="hint" style="margin-bottom:7px">填包地址与它的 <code>sha256</code>（打包脚本会打印）。
         只填地址不行 —— 装的是要执行的代码，至少得有个可核对的内容锚点。</div>
       <div class="gm-row">
-        <input type="text" id="plugins-manual-url" placeholder="https://…/my-plugin-1.0.0.tar.gz" />
-        <input type="text" id="plugins-manual-sha" placeholder="sha256（64 位十六进制）" />
+        <input type="text" id="plugins-manual-url" placeholder="https://…/my-plugin-1.0.0.tar.gz" aria-label="插件包地址" />
+        <input type="text" id="plugins-manual-sha" placeholder="sha256（64 位十六进制）" aria-label="插件包 sha256" />
         <button class="btn btn-small" id="plugins-manual-install" data-plugin-action="install-url">安装</button>
       </div>
       <div class="hint" style="margin:11px 0 5px">或者直接给一个<b>文件</b>（别人发的包、你自己刚打的包）：</div>
       <div class="gm-row" id="plugins-file-drop">
-        <input type="file" id="plugins-file" accept=".tar.gz,.tgz,application/gzip,application/x-gzip" />
+        <input type="file" id="plugins-file" accept=".tar.gz,.tgz,application/gzip,application/x-gzip" aria-label="选择插件包文件" />
         <button class="btn btn-small" id="plugins-file-install" data-plugin-action="install-file" disabled>装这个文件</button>
         <span class="hint" id="plugins-file-name"></span>
       </div>

@@ -1203,9 +1203,9 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 }
 .settings-card > h3:only-child { margin-bottom: 0; }
 .settings-card > .hint:last-child { margin-bottom: 0; }
-/* 带副标题/操作按钮的卡片头：卡片默认只给裸 h3 留了 12px，这层要自己补上。
-   只作用于复用卡片的资产页，设置页自己的卡片结构保持原样。 */
-.asset-pane .settings-card > .control-section-title { margin-bottom: 12px; }
+/* 带副标题/操作按钮的卡片头：卡片默认只给裸 h3 留了 12px，这层要自己补上。 */
+.asset-pane .settings-card > .control-section-title,
+.control-pane .settings-card > .control-section-title { margin-bottom: 12px; }
 
 /* 单勾选行 → 右侧开关。只在结构确实是"一个 checkbox + 一个 label"时加 .switch-row
    （多选列表、带额外说明的行不碰）。 */
@@ -2182,6 +2182,11 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   min-width: 0;
   overflow-y: auto;
   padding: 22px 26px 40px;
+  /* 与好友管理/人物印象/异常处理同一条 1180 内容列：功能块各自成卡，整块居中。 */
+  display: grid;
+  grid-template-columns: minmax(0, 1180px);
+  justify-content: center;
+  align-content: start;
 }
 .control-head {
   display: flex;
@@ -2194,8 +2199,11 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .control-head span { font-size: var(--fs-xs); }
 .control-service-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  /* auto-fit + 220：1180 内容列里 5 个入口正好排满一行；auto-fill 会留一个空轨道，
+     第五张卡被挤到第二行，右半边空一大块。 */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 9px;
+  margin-bottom: 16px;
 }
 .control-service {
   display: grid;
@@ -5230,7 +5238,10 @@ html[data-motion='reduced'] .view.active { animation-duration: .01ms; }
     padding: 0 0 4px;
     overflow-x: auto;
     overflow-y: hidden;
+    /* 顶部导航是"可横滑"的，不显示系统滚动条：那条灰线会被误认成选中滑块的残影。 */
+    scrollbar-width: none;
   }
+  #tabs::-webkit-scrollbar { display: none; }
   .tab { width: auto; flex-shrink: 0; }
   .side-foot { margin-top: 0; padding-top: 4px; border-top: 0; }
   /* 窄屏这一条横着铺满整屏：不给下拉框限宽的话它会拉成几百像素宽（里面只有"观察/启用"两个字） */

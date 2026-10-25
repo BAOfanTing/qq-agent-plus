@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import { test } from 'node:test';
 
 const persona = fs.readFileSync(new URL('../ui/pages/persona.js', import.meta.url), 'utf8');
+const appJs = fs.readFileSync(new URL('../ui/app.js', import.meta.url), 'utf8');
 const css = fs.readFileSync(new URL('../ui/style.css', import.meta.url), 'utf8');
 
 test('人设身份区：四字段同排，提示统一在行下方', () => {
@@ -371,9 +372,29 @@ test('人物印象与异常处理按功能块分卡', () => {
 });
 
 test('资产页卡片复用同一套卡片样式', () => {
-  assert.match(css, /\.asset-pane \.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/);
+  assert.match(css, /\.asset-pane \.settings-card > \.control-section-title,\s*\.control-pane \.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/);
   assert.match(css, /\.asset-summary \+ \.settings-card,\s*\.friend-save-result \+ \.settings-card \{ margin-top: 14px; \}/);
   assert.match(css, /\.asset-head-actions \{ display: flex; align-items: center; gap: 8px; flex: 0 0 auto; \}/);
+});
+
+test('控制页功能块分卡，服务入口排满一行', () => {
+  const sections = appJs.match(/<section class="settings-card"/g) || [];
+  assert.equal(sections.length, 5, '控制页 5 个功能块都要成卡');
+  assert.doesNotMatch(appJs, /<section class="control-section"/);
+  const block = /\.control-pane \{([\s\S]*?)\n\}/.exec(css);
+  assert.ok(block, '控制页要有独立布局规则');
+  assert.match(block[1], /grid-template-columns: minmax\(0, 1180px\);/);
+  assert.match(block[1], /justify-content: center;/);
+  assert.match(css, /\.control-service-grid \{[^}]*repeat\(auto-fit, minmax\(220px, 1fr\)\)/s,
+    'auto-fill 会留下空轨道，第五个入口被挤到下一行');
+});
+
+test('窄屏顶部导航横滑但不显示系统滚动条', () => {
+  const media = /@media \(max-width: 900px\) \{([\s\S]*?)\n\}/g;
+  const blocks = [...css.matchAll(media)].map((m) => m[1]);
+  const nav = blocks.find((b) => b.includes('#tabs') && b.includes('scrollbar-width: none'));
+  assert.ok(nav, '要有窄屏横滑导航规则并隐藏系统滚动条');
+  assert.match(css, /#tabs::-webkit-scrollbar \{ display: none; \}/);
 });
 
 test('好友管理 / 人物印象 / 异常处理整块内容居中，宽度取 1180', () => {

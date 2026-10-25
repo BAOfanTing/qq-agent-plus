@@ -648,7 +648,7 @@ function renderAssetObservatory() {
           ? ''
           : '<button type="button" class="btn btn-small btn-primary" id="asset-add">＋ 新增</button>'}
         <div class="asset-search">
-        <input type="search" id="asset-query" value="${esc(state.assetQuery)}" placeholder="搜索" />
+        <input type="search" id="asset-query" value="${esc(state.assetQuery)}" placeholder="搜索" aria-label="搜索资产" />
         ${kind === 'slang' ? `<select id="asset-slang-status">
           <option value="" ${slangStatus ? '' : 'selected'}>全部状态</option>
           <option value="confirmed" ${slangStatus === 'confirmed' ? 'selected' : ''}>已确认</option>
@@ -1023,7 +1023,7 @@ function renderIdentityFeaturePageImpl(status, identities, memories, options = {
         <button type="button" class="btn btn-small" id="identity-add-person">＋ 人物</button>
         <button type="button" class="btn btn-small" id="identity-add-memory">＋ 旧印象</button>
         <div class="asset-search">
-          <input type="search" id="identity-feature-query" value="${esc(query)}" placeholder="搜索人物或印象" />
+          <input type="search" id="identity-feature-query" value="${esc(query)}" placeholder="搜索人物或印象" aria-label="搜索人物或印象" />
           <button type="button" class="btn btn-small" id="identity-feature-search">搜索</button>
         </div>
       </div>
