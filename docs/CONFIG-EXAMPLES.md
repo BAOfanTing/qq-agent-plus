@@ -400,7 +400,7 @@
 }
 ```
 
-- **四种适配器**（按 `provider` 分发，`src/llm/tts.js`）：
+- **五种适配器**（按 `provider` 分发，`src/llm/tts.js`）：
   `openai`（兼容 `POST {baseUrl}/audio/speech`，硅基流动/OpenAI/自建，**已实测**）、
   `volc`（火山引擎语音合成 **v1** HTTP，需要数字 `appId` + `apiKey`=Access Token，`cluster` 默认 `volcano_tts`、
   复刻音色自动切 `volcano_icl`（见下文「火山的两套凭据不一样，别混」），
@@ -408,7 +408,9 @@
   `doubao`（火山引擎**豆包大模型语音合成 2.0**，`https://openspeech.bytedance.com/api/v3/tts/unidirectional`，
   只填 `apiKey`（控制台密钥，走 `X-Api-Key`）与 `voice`，`resourceId` 默认 `seed-tts-2.0`；
   **2026-09-28 用真实账号实测**：音频/语速/音量/格式/错误码都核过，自然度明显高于 v1 与硅基流动）、
-  `minimax`（T2A v2，需要 `apiKey` + `groupId`，音色如 `female-shaonv`，音频是 hex 编码、适配器已处理）。
+  `minimax`（T2A v2，需要 `apiKey` + `groupId`，音色如 `female-shaonv`，音频是 hex 编码、适配器已处理）、
+  `mimo`（小米 MiMo token-plan，走 `POST {baseUrl}/chat/completions`，Key 放 `api-key` 头；
+  支持「导演指令」和 `send_voice` 的 `emotion` 参数，**2026-10-25 用 token-plan 账号实测**：有导演指令时停顿/语气明显更自然）。
   volc / minimax 按官方文档实现但机器上没凭据、未实测：填好凭据点控制台「试听」即可验证，报错会把人话原因（含火山错误码含义）带出来。
 
 豆包 2.0 的写法（当前最推荐的音质）：
@@ -428,8 +430,32 @@
 }
 ```
 
+MiMo 的写法（想要语气、又不想上 GPU 时最省事）：
+
+```json
+{
+  "tts": {
+    "enabled": true,
+    "provider": "mimo",
+    "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+    "keys": { "mimo": "<token-plan 控制台里的 Key>" },
+    "model": "mimo-v2.5-tts",
+    "voice": "Chloe",
+    "director": "你是小鲸鱼，声音软一点，像在群里随口聊天，不要播音腔。",
+    "format": "mp3"
+  }
+}
+```
+
+- MiMo 的 Key 走 `api-key` 请求头（不是 `Authorization: Bearer`）；`baseUrl` 填到 `/v1` 即可，适配器会补 `/chat/completions`。
+- `director` 是**全局人设级**的导演提示；模型每次调 `send_voice` 还可以带 `emotion`（`happy` / `soft` / `sad` / `tired` / `playful` …），
+  服务端会把情绪追加成一行「【情绪】…」再发给 MiMo。没有情绪时最少也会带一句「群聊口语、不要播音腔」的默认指导。
+- `voice` 内置候选有 `mimo_default` / 冰糖 / 茉莉 / 苏打 / 白桦 / Mia / Chloe / Milo / Dean；实测 Chloe 偏清亮，最接近「小鲸鱼」那类形象。
+  音色是否可用看账号开通情况，报错会带 HTTP 状态与上游原因。
+- 这不是 RVC/Seed-VC：它能把**说话**的语气做出来，但不能把真人歌声换成另一个声线，也别拿它复刻未授权的第三方声音。
+- **合成失败会自动回落成文字**：`send_voice` 发不出语音时改发同一段文字（返回里带 `fallback: "text"` 与原因），不会让这轮回复消失。
 - 与 `asr` 对称但**默认关**。
-- **服务预设**：控制台「设置 → 语音回复」有预设下拉（硅基流动 / OpenAI 官方 / 火山 v1 / 豆包 2.0 / MiniMax / 自定义），
+- **服务预设**：控制台「设置 → 语音回复」有预设下拉（硅基流动 / OpenAI 官方 / 火山 v1 / 豆包 2.0 / MiniMax / 小米 MiMo / 自定义），
   选中会把地址、资源 ID 填好，并给出这家的常用模型与音色候选；OpenAI 兼容那几家还能点「获取模型列表」从官网拉全量。
   音色没有可查接口（硅基流动与 OpenAI 都实测 404），只能内置——表在 `src/llm/tts-presets.js`。
   火山/豆包/MiniMax **没有模型列表接口**，界面上会直接说明该填什么（不再显示"共 0 个"）。
@@ -455,6 +481,7 @@
 - `speed`（0.25~4）与 `gain`（-10~10 dB）：本机实测**真实生效**（同一句 0.7→8.1s、1.3→4.7s）；聊天语速 1.05~1.15 更活，觉得闷可以把 gain 提 2~4。
 - 平淡的另一半在**文本**：合成内容要写成口语（语气词 + 「——」「……」「？」带停顿），工具描述里已这样教模型。
 - 开启后模型多一个 `send_voice` 工具：短句 1~3 句、≤120 字最自然；提示词只会在开启时才教它用。
+  工具支持 `emotion`（情绪）参数；支持导演指令的供应商会把它变成真实语气，其他供应商忽略。
 - 协议端需要支持 `record` 消息段；不支持时发送会失败并提示改用文字（不会反复重试）。
 - 与 `asr` 的 Key 分开配置（听和说是两个服务是常态）。
 - **Key 按服务分家**：`keys` 映射按服务 id 记着各家的 Key（`{"volc":"…","doubao":"…"}`），

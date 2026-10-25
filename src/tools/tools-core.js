@@ -2337,10 +2337,17 @@ export function buildToolDefs() {
     },
     {
       name: 'send_voice',
-      description: '把一段文字合成语音发到当前会话（想"说"而不是"打"时用）。只适合短句 1~3 句（120 字以内最自然，硬上限 200 字）；内容要自然口语、标点清楚（破折号/省略号/问号能带出停顿），书面句会念得很平；多短、什么语气按【角色设定】与上下文。别整段朗读、别频繁用。',
+      description: '把一段文字合成语音发到当前会话（想"说"而不是"打"时用）。只适合短句 1~3 句（120 字以内最自然，硬上限 200 字）；内容要自然口语、标点清楚（破折号/省略号/问号能带出停顿），书面句会念得很平；多短、什么语气按【角色设定】与上下文。可以用 emotion 指定情绪（支持导演指令的供应商会真的带上语气）。别整段朗读、别频繁用。',
       parameters: {
         type: 'object',
-        properties: { text: { type: 'string', description: '要说的内容（≤200 字，口语短句）' } },
+        properties: {
+          text: { type: 'string', description: '要说的内容（≤200 字，口语短句）' },
+          emotion: {
+            type: 'string',
+            enum: ['neutral', 'happy', 'sad', 'angry', 'soft', 'excited', 'tired', 'shy', 'playful', 'serious'],
+            description: '说话情绪；不确定就不填。温柔/哄人用 soft，开心/分享用 happy，吐槽用 playful 或 angry。'
+          }
+        },
         required: ['text']
       },
       async execute(ctx, args) {
@@ -2353,9 +2360,31 @@ export function buildToolDefs() {
         if (!humanGate.ok) return err(humanGate.reason, { reportIncident: false });
         let audio = null;
         try {
-          audio = await synthesizeSpeech({ cfg: cfg.tts, text, signal: ctx.signal });
+          audio = await synthesizeSpeech({
+            cfg: cfg.tts,
+            text,
+            emotion: String(args.emotion ?? '').trim(),
+            signal: ctx.signal
+          });
         } catch (error) {
-          return err(String(error?.message ?? error));
+          // TTS 是外挂能力：上游挂了/Key 失效/协议端不支持时，不能把这轮回复也一起吞掉。
+          // 改成发同一段文字，模型与用户都还能收到内容；错误只回给模型，避免群里出现报错。
+          const why = String(error?.message ?? error).slice(0, 120);
+          try {
+            await ctx.sender.sendTextBatch(ctx.chatKey, [text], {
+              runId: ctx.session?.leaseId,
+              signal: ctx.signal
+            });
+            actionDone(ctx, 'voice');
+            if (ctx.session) ctx.session.visibleReply = true;
+            return ok({
+              sent: true,
+              fallback: 'text',
+              warning: `语音合成失败（${why}），已改用文字发出；不需要再回复这条结果。`
+            });
+          } catch (sendError) {
+            return sendErr(sendError, {}, `${why}；改发文字也失败了：${String(sendError?.message ?? sendError).slice(0, 120)}`);
+          }
         }
         try {
           const seconds = Math.max(1, Math.round(text.length / 4));

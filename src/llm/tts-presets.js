@@ -197,6 +197,36 @@ export const TTS_SERVICES = [
     note: '按官方文档实现、未实测：需要 API Key + GroupId；音频是 hex 编码（适配器已处理）。填好后点「试听」即可验证。'
   },
   {
+    id: 'mimo',
+    label: '小米 MiMo（token-plan，支持情绪/导演指令）',
+    provider: 'mimo',
+    creds: ['key'],
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+    hosts: ['token-plan-cn.xiaomimimo.com'],
+    // token-plan 控制台没有可用的固定公开链接：keyUrl 留空，界面不硬编一个可能失效的地址
+    keyUrl: '',
+    models: [
+      {
+        id: 'mimo-v2.5-tts',
+        voices: [
+          { id: 'mimo_default', label: '默认音色', cat: 'MiMo' },
+          { id: '冰糖', label: '冰糖（甜、偏亮）', cat: 'MiMo' },
+          { id: '茉莉', label: '茉莉（柔和）', cat: 'MiMo' },
+          { id: '苏打', label: '苏打（清爽）', cat: 'MiMo' },
+          { id: '白桦', label: '白桦（偏低沉）', cat: 'MiMo' },
+          { id: 'Mia', label: 'Mia', cat: 'MiMo' },
+          { id: 'Chloe', label: 'Chloe（清亮，实测近似小鲸鱼）', cat: 'MiMo' },
+          { id: 'Milo', label: 'Milo', cat: 'MiMo' },
+          { id: 'Dean', label: 'Dean', cat: 'MiMo' }
+        ]
+      }
+    ],
+    note: 'token-plan 的语音合成走 /v1/chat/completions：Key 放在 api-key 头，不是 Bearer。'
+      + '「导演指令」可写角色/场景/语气（例如“你是小鲸鱼，声音软一点，像在群里随口聊天”）；'
+      + 'send_voice 的 emotion 参数会自动追加一行情绪。实测有导演指令时停顿和语气更自然。'
+      + '音色是内置候选，实际可用与否看账号开通情况；报错会带 HTTP 状态与上游原因。'
+  },
+  {
     id: 'custom',
     label: '自定义 / 自建（OpenAI 兼容 /audio/speech）',
     provider: 'openai',

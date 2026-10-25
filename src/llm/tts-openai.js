@@ -6,7 +6,10 @@ import { readBytesBounded, readTextBounded } from '../core/http-body.js';
 
 export function ttsConfigured(cfg) {
   const t = cfg?.tts || {};
-  return t.enabled === true && String(t.baseUrl || '').trim() !== '';
+  // MiMo 有内置官方地址：只填 provider/Key 也能用，不强制再抄一遍地址。
+  const hasBase = String(t.baseUrl || '').trim() !== ''
+    || String(t.provider || '').trim().toLowerCase() === 'mimo';
+  return t.enabled === true && hasBase;
 }
 
 /**

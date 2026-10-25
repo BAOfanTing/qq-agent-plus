@@ -208,6 +208,9 @@ function renderAsrSection(c) {
       </div>
       <select id="cfg-tts-voice-pick" style="display:none;margin-top:6px"></select>
       <div class="hint" id="tts-voice-hint" style="display:none"></div></div>
+    <div class="field" id="tts-director-field" style="display:none"><label for="cfg-tts-director">导演指令（MiMo 用，可选）</label>
+      <textarea id="cfg-tts-director" rows="3" placeholder="例如：你是小鲸鱼，声音软一点，像在群里随口聊天，不要播音腔。">${esc(c.tts?.director || '')}</textarea>
+      <div class="hint">MiMo 会把它当作导演提示；模型调用 send_voice 时选的 emotion 会自动追加一行情绪。其他供应商忽略这一栏。</div></div>
     <div class="field-row" id="tts-volc-fields" style="display:none">
       <div class="field"><label for="cfg-tts-appid" id="tts-appid-label">AppID（火山）</label>
         <input type="text" id="cfg-tts-appid" value="${esc(c.tts?.appId || '')}" placeholder="语音技术控制台的 AppID" />
@@ -388,6 +391,11 @@ async function bindTtsControls() {
     // 运行时 ttsServiceOf 是同一口径；不补这条的话，自建配置每次进设置页都被回显成
     // 硅基流动，Key 掩码按错家判断，再保存还会把 Key 存到 siliconflow 名下（2026-09-29 审查 P1）
     const prov = String(state.config?.tts?.provider || '').trim().toLowerCase();
+    if (prov === 'mimo') {
+      // MiMo 有内置官方地址：手写配置只填 provider 也能用，界面要认出它而不是落到「自定义」
+      const mimo = services.find((x) => x.id === 'mimo');
+      if (mimo) return mimo;
+    }
     if (prov === 'openai' || prov === 'custom') {
       const custom = services.find((x) => x.id === 'custom');
       if (custom) return custom;
@@ -486,6 +494,16 @@ async function bindTtsControls() {
     }
     const mmBox = q('#tts-minimax-fields');
     if (mmBox) mmBox.style.display = prov === 'minimax' ? '' : 'none';
+    const directorField = q('#tts-director-field');
+    if (directorField) directorField.style.display = prov === 'mimo' ? '' : 'none';
+    if (keyLabel && prov === 'mimo') {
+      keyLabel.textContent = 'API Key（MiMo token-plan；按供应商分别保存，留空/掩码 = 保持不变）';
+    }
+    if (keyHint && prov === 'mimo') {
+      keyHint.textContent = '填 token-plan 的 API Key（请求头是 api-key，不是 Bearer）。'
+        + '模型用 mimo-v2.5-tts，音色先在控制台确认已开通；服务地址填到 /v1 即可。';
+      keyHint.style.display = '';
+    }
     // 模型栏：这一家不要模型名就整栏藏掉（火山 v1 / 豆包）；「自定义/自建」虽然 models 为空
     // 但**必须填模型名**（note 里写了），也保留；有内置模型但不支持拉取的（MiniMax）
     // 留输入框 + 内置候选，只把「获取模型列表」按钮藏掉

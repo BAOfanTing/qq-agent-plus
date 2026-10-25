@@ -609,6 +609,7 @@ async function saveConfig({ quiet = false } = {}) {
           groupId: String(val('#cfg-tts-groupid', t.groupId || '') || '').trim(),
           model: String(val('#cfg-tts-model', t.model || '') || '').trim(),
           voice: String(val('#cfg-tts-voice', t.voice || '') || '').trim(),
+          director: String(val('#cfg-tts-director', t.director || '') || '').trim(),
           speed: Math.min(4, Math.max(0.25, Number(val('#cfg-tts-speed', t.speed ?? 1)) || 1)),
           gain: Math.min(10, Math.max(-10, Number(val('#cfg-tts-gain', t.gain ?? 0)) || 0)),
           // 只送"这一家新填的"；掩码/空 = 保持（服务端合并进 keys[这家]）

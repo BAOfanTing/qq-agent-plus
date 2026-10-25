@@ -227,7 +227,7 @@ export const DEFAULT_CONFIG = {
   // 开启前填好 baseUrl 与 model（voice 按服务商文档填）。
   tts: {
     enabled: false,
-    provider: 'openai',       // openai（兼容 /audio/speech）/ volc（火山 v1）/ doubao（豆包语音合成 2.0，v3）/ minimax（T2A v2）
+    provider: 'openai',       // openai（兼容 /audio/speech）/ volc（火山 v1）/ doubao（豆包语音合成 2.0，v3）/ minimax（T2A v2）/ mimo（小米 token-plan）
     baseUrl: '',
     apiKey: '',
     appId: '',                // 火山 v1：语音技术控制台的 AppID（纯数字）；豆包 2.0 可不填
@@ -241,6 +241,9 @@ export const DEFAULT_CONFIG = {
     model: '',
     voice: '',
     format: 'mp3',
+    // MiMo 的导演指令（角色/场景/语气）。send_voice 的 emotion 会追加一行具体情绪；
+    // 其它供应商忽略这一栏。留空用内置的「群聊口语」默认提示。
+    director: '',
     speed: 1,                 // 语速（0.25~4；实测硅基流动真实生效，聊天语速 1.05~1.15 更活）
     gain: 0,                  // 音量增益 dB（-10~10；觉得发闷可以 +2~+4）
     timeoutMs: 30000
