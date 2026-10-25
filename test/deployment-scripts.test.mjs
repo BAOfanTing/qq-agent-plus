@@ -499,8 +499,9 @@ test('凭据轮换时预检不再用旧 token 拦截', () => {
 test('deploy-all.sh：栈级互斥锁覆盖 .env 到 deploy.sh 的全程，且失败方不删赢家的锁', () => {
   const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
   assert.match(sh, /acquire_stack_lock/);
-  assert.match(sh, /STACK_LOCK_DIR="\$ROOT_DIR\/\.deploy-all\.lock"/);
-  assert.match(sh, /STACK_LOCK_DIR="\$ROOT_DIR\/\.deploy-all\.lock"\ntrap deploy_all_exit EXIT/);
+  assert.match(sh, /STACK_LOCK_DIR="\$\{TMPDIR:-\/tmp\}\/qq-agent-deploy-/,
+    '锁不能建在部署根：预检拒绝时要保持“什么都没创建”');
+  assert.match(sh, /STACK_LOCK_DIR="\$\{TMPDIR:-\/tmp\}\/qq-agent-deploy-[^\n]*\ntrap deploy_all_exit EXIT/);
   assert.match(sh, /STACK_LOCK_OWNED=false/);
   assert.match(sh, /if \[\[ "\$\{STACK_LOCK_OWNED:-false\}" == true/,
     '只有锁的所有者才能删除锁');

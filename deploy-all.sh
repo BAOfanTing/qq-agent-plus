@@ -563,9 +563,9 @@ EXISTING_STACK=false
 PREFLIGHT_NODE=""
 # 栈级锁必须在“归属判定/凭据读回”之前拿到：两个实例交错时，后启动的那个不能先按
 # 全新安装预检、等前一个结束后再拿锁继续（会把受管栈的凭据轮换掉，2026-10 审查 P2）。
-STACK_LOCK_DIR="$ROOT_DIR/.deploy-all.lock"
+# 锁放在临时目录而不是部署根：预检拒绝时不能留下任何部署目录（fresh preflight 的契约）。
+STACK_LOCK_DIR="${TMPDIR:-/tmp}/qq-agent-deploy-$(id -u)-$(printf '%s' "$ROOT_DIR" | sha256sum | cut -c1-12).lock"
 trap deploy_all_exit EXIT
-mkdir -p -- "$ROOT_DIR"
 acquire_stack_lock
 check_local_ownership
 if [[ "$EXISTING_STACK" == true ]]; then
