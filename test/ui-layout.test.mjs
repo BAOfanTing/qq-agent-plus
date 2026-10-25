@@ -339,16 +339,20 @@ test('新建自定义卡是空表单：角色设定不复制当前卡', () => {
   assert.match(body, /id="new-persona-rules"[^>]*><\/textarea>/);
 });
 
-test('好友管理保持原有表单结构，不套资产页卡片', () => {
-  // 用户明确要求：好友管理改回原样，设置页不动；只调整异常处理与人物印象。
+test('好友管理保留卡片版：8 张功能卡，保存按钮在页头', () => {
+  // 这是用户确认过的版本：五个设置区 + 三个列表区，不能退回扁平旧版。
   const start = features.indexOf('function renderFriendFeaturePageImpl');
   const end = features.indexOf('async function saveFriendFeatureConfig', start);
   const friend = features.slice(start, end);
   assert.ok(start >= 0 && end > start, '要找到好友管理渲染函数');
-  assert.match(friend, /<section class="control-section">/);
+  for (const title of ['基础设置', '触发条件', '频率与配额', '评分权重', '入站好友请求', '收到的好友请求', '主动好友候选', '消息触发与评估记录']) {
+    assert.match(friend, new RegExp(`<h3>${title}</h3>`), `缺少「${title}」卡片`);
+  }
+  const cards = friend.match(/<section class="settings-card"/g) || [];
+  assert.equal(cards.length, 8, `好友管理应有 8 张卡片，实际 ${cards.length}`);
+  assert.match(friend, /class="asset-head-actions"/);
   assert.match(friend, /id="friend-feature-save"/);
-  assert.doesNotMatch(friend, /settings-card/,
-    '好友管理不再使用资产页的卡片结构');
+  assert.match(friend, /id="friend-feature-save-result"/);
 });
 
 test('人物印象与异常处理按功能块分卡', () => {
@@ -366,21 +370,17 @@ test('人物印象与异常处理按功能块分卡', () => {
   assert.match(incident, /<section class="settings-card">\s*<div class="control-section-title">\s*<div><h3>异常日志<\/h3>/);
 });
 
-test('资产页卡片复用设置页的卡片样式，但不反向污染设置页', () => {
+test('资产页卡片复用同一套卡片样式', () => {
   assert.match(css, /\.asset-pane \.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/);
-  assert.match(css, /\.asset-summary \+ \.settings-card \{ margin-top: 14px; \}/);
-  assert.doesNotMatch(css, /\n\.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/,
-    '这条不能是全局规则，否则会改到设置页');
+  assert.match(css, /\.asset-summary \+ \.settings-card,\s*\.friend-save-result \+ \.settings-card \{ margin-top: 14px; \}/);
+  assert.match(css, /\.asset-head-actions \{ display: flex; align-items: center; gap: 8px; flex: 0 0 auto; \}/);
 });
 
-test('人物印象与异常处理整块内容居中，宽度取 1180', () => {
-  // 这两页是用户要求调整的目标：卡片保留，整块内容居中，避免贴内容区左缘。
-  const block = /#identity-page,\s*#incident-page \{([\s\S]*?)\n\}/.exec(css);
-  assert.ok(block, '人物印象/异常处理要有居中列规则');
+test('好友管理 / 人物印象 / 异常处理整块内容居中，宽度取 1180', () => {
+  const block = /#friend-page,\s*#identity-page,\s*#incident-page \{([\s\S]*?)\n\}/.exec(css);
+  assert.ok(block, '三页要有同一条居中列规则');
   assert.match(block[1], /display: grid;/);
   assert.match(block[1], /grid-template-columns: minmax\(0, 1180px\);/);
   assert.match(block[1], /justify-content: center;/);
   assert.match(block[1], /align-content: start;/);
-  assert.doesNotMatch(css, /#friend-page \{/,
-    '好友管理不再单独套内容列');
 });

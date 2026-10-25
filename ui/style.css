@@ -1182,8 +1182,8 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .settings-pane h3 { margin: 22px 0 12px; font-size: var(--fs-md); color: var(--accent); }
 .settings-pane h3:first-child { margin-top: 0; }
 
-/* ── 功能块卡片（人物印象 / 异常处理）──
-   这两个资产页按 <h3> 功能块分卡；设置页保持原有分区排版，不再套卡片。
+/* ── 功能块卡片（设置页 / 人物印象 / 异常处理 / 好友管理）──
+   设置页由 settings.js 的 cardifySettings 分卡；资产页复用同一套卡片。
    控件 id、保存逻辑与列表接口都不受影响。 */
 .settings-card {
   max-width: 1180px;
@@ -2357,10 +2357,11 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   overflow-y: auto;
   padding: 22px 26px 40px;
 }
-/* 人物印象/异常处理的卡片跟内容区同宽，不再受设置页 1180 上限约束。 */
+/* 资产页卡片跟内容区同宽，不再受设置页 1180 上限约束。 */
 .asset-pane .settings-card { max-width: none; }
-/* 这两页整块居中，内容宽度取和插件目录相近的 1180：
-   标题、摘要、卡片左右留白一致，不贴内容区左缘。好友管理保持原有表单结构。 */
+/* 好友管理 / 人物印象 / 异常处理整块居中，内容宽度取和插件目录相近的 1180：
+   标题、摘要、卡片左右留白一致，不贴内容区左缘。 */
+#friend-page,
 #identity-page,
 #incident-page {
   display: grid;
@@ -2377,13 +2378,17 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 }
 .asset-head h2 { margin: 0 0 3px; font-size: var(--fs-xl); }
 .asset-head > div > span { font-size: var(--fs-xs); }
+.asset-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .asset-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
 }
-/* 资产页的卡片与摘要卡之间留出与设置页一致的间隔。 */
-.asset-summary + .settings-card { margin-top: 14px; }
+/* 资产页的卡片与摘要卡之间留出与设置页一致的间隔；保存结果为空时不占高度。 */
+.asset-summary + .settings-card,
+.friend-save-result + .settings-card { margin-top: 14px; }
+.friend-save-result { margin: 8px 0 0; }
+.friend-save-result:empty { display: none; }
 .asset-summary-item {
   min-width: 0;
   padding: 10px 12px;
@@ -2545,6 +2550,8 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .asset-table tr:last-child td { border-bottom: 0; }
 
 @media (max-width: 600px) {
+  .asset-head { flex-wrap: wrap; }
+  .asset-head-actions { width: 100%; }
   .asset-toolbar-actions { width: 100%; align-items: stretch; flex-direction: column; }
   .asset-toolbar-actions .asset-search { width: 100%; }
   .asset-actions { justify-content: flex-start; }
