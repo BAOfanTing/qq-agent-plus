@@ -177,8 +177,9 @@ printf '       https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/
 printf '       https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/console-tunnel.sh\n'
 printf '   （Windows 10+ 自带 ssh；没有就在“设置 → 应用 → 可选功能”里装 OpenSSH 客户端。）\n'
 printf '   在「设置 → 模型 API」里选服务、填 Key、保存，点「测试连通性」通过即可。\n\n'
-printf '   注意：SnowLuma WebUI（%s）与 QQ 远程桌面（%s）当前监听所有网卡；\n' "$SNOWLUMA_PORT" "$NOVNC_PORT"
-printf '   没有安全组/防火墙限制来源时，请只走上面的 SSH 隧道，不要直接对公网开放。\n\n'
+printf '   注意：新装默认只监听 127.0.0.1（SnowLuma WebUI %s / QQ 远程桌面 %s）；\n' "$SNOWLUMA_PORT" "$NOVNC_PORT"
+printf '   远程访问只走上面的 SSH 隧道。存量安装如果是旧安装器部署的，可能仍绑 0.0.0.0；\n'
+printf '   需要收紧就重跑 deploy-all.sh --loopback（显式对外开放才用 --publish）。\n\n'
 if [[ -n "$VNC_URL" ]]; then
   printf '② 登录 QQ：隧道里打开 http://127.0.0.1:%s（密码：%s）→ 按页面提示扫码登录。\n' "$NOVNC_PORT" "$VNC_PASSWORD"
   printf '   （若已放行 %s，也可直接打开 %s）\n' "$NOVNC_PORT" "$VNC_URL"

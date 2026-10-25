@@ -499,6 +499,18 @@ test('凭据轮换时预检不再用旧 token 拦截', () => {
   assert.match(check, /if \(!allowRotation\)/);
 });
 
+test('deploy-all 默认只绑回环，--publish 才对外开放', () => {
+  const source = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
+  assert.match(source, /PUBLISH_HOST="127\.0\.0\.1"/, '默认必须是 127.0.0.1');
+  assert.match(source, /--publish\) PUBLISH_HOST="0\.0\.0\.0"/, '--publish 才能切到 0.0.0.0');
+  assert.match(source, /--loopback\) PUBLISH_HOST="127\.0\.0\.1"/, '--loopback 显式收回');
+  assert.match(source, /"\$\{PUBLISH_HOST\}:\$\{NOVNC_PORT\}:6081"/, 'noVNC 用 PUBLISH_HOST');
+  assert.match(source, /"\$\{PUBLISH_HOST\}:\$\{SNOWLUMA_WEBUI_HOST_PORT\}:5099"/, 'WebUI 用 PUBLISH_HOST');
+  assert.match(source, /DEPLOY_ARGS\+=\(--host "\$PUBLISH_HOST"\)/, '控制台 host 跟随 PUBLISH_HOST');
+  // 存量安装不能因为一次更新被改回回环
+  assert.match(source, /EXISTING_STACK.*PUBLISH_EXPLICIT|PUBLISH_EXPLICIT.*EXISTING_STACK/s);
+});
+
 test('deploy-all.sh：栈级互斥锁覆盖 .env 到 deploy.sh 的全程，且失败方不删赢家的锁', () => {
   const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
   assert.match(sh, /acquire_stack_lock/);

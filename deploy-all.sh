@@ -9,6 +9,10 @@ SNOWLUMA_PORT="5099"
 NOVNC_PORT="6081"
 ONEBOT_HTTP_PORT="3000"
 ONEBOT_WS_PORT="3001"
+# 控制台 / SnowLuma WebUI / noVNC 的宿主监听地址。
+# 默认只绑回环：远程访问走 SSH 隧道；只有显式 --publish 才对外开放（安全组仍需自行收紧）。
+PUBLISH_HOST="127.0.0.1"
+PUBLISH_EXPLICIT=false
 AGENT_PORT_SET=false
 SNOWLUMA_PORT_SET=false
 NOVNC_PORT_SET=false
@@ -84,11 +88,17 @@ Options:
   --rotate-credentials        Replace stored credentials during an update
   --no-install-docker         Fail instead of installing Docker when missing
   --check-only                Inspect ownership and ports without changing anything
+  --publish                   Bind console / SnowLuma WebUI / noVNC to 0.0.0.0
+                              (default is 127.0.0.1; requires a tightened security group)
+  --loopback                  Explicitly bind them to 127.0.0.1 (default for new installs)
   -y, --yes                   Accept defaults; suitable for non-interactive use
   -h, --help                  Show this help
 
-The installer never asks for a LAN IP. Services bind locally and the script
-detects addresses to print after deployment. OneBot ports bind to 127.0.0.1.
+The installer never asks for a LAN IP. By default the console, SnowLuma WebUI
+and noVNC bind to 127.0.0.1 only; use an SSH tunnel (console-tunnel.bat or
+`ops console`) or pass --publish to expose them. OneBot ports always bind to
+127.0.0.1. Existing installations keep their current bind address unless
+--publish/--loopback is passed explicitly.
 Existing installations not owned by this installer are never adopted.
 Use deploy.sh with the existing data directory and endpoints to update Agent only.
 EOF
@@ -125,6 +135,8 @@ while (($#)); do
     --rotate-credentials) ROTATE_CREDENTIALS=true; shift ;;
     --no-install-docker) INSTALL_DOCKER=false; shift ;;
     --check-only) CHECK_ONLY=true; ASSUME_YES=true; shift ;;
+    --publish) PUBLISH_HOST="0.0.0.0"; PUBLISH_EXPLICIT=true; shift ;;
+    --loopback) PUBLISH_HOST="127.0.0.1"; PUBLISH_EXPLICIT=true; shift ;;
     -y|--yes) ASSUME_YES=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -568,6 +580,16 @@ STACK_LOCK_DIR="${TMPDIR:-/tmp}/qq-agent-deploy-$(id -u)-$(printf '%s' "$ROOT_DI
 trap deploy_all_exit EXIT
 acquire_stack_lock
 check_local_ownership
+# 存量安装：没有显式 --publish/--loopback 时沿用现有绑定，避免一次更新把远程访问改没。
+# 先读 .env 的 PUBLISH_HOST；老版本没有这个键，就从 compose 的 0.0.0.0 绑定反推。
+if [[ "$EXISTING_STACK" == true && "$PUBLISH_EXPLICIT" != true ]]; then
+  if [[ -f "$ENV_FILE" ]] && grep -q '^PUBLISH_HOST=' "$ENV_FILE"; then
+    PUBLISH_HOST="$(sed -n 's/^PUBLISH_HOST=//p' "$ENV_FILE" | head -n 1)"
+  elif [[ -f "$COMPOSE_FILE" ]] && grep -q '"0\.0\.0\.0:' "$COMPOSE_FILE"; then
+    PUBLISH_HOST="0.0.0.0"
+  fi
+  [[ "$PUBLISH_HOST" == "0.0.0.0" ]] || PUBLISH_HOST="127.0.0.1"
+fi
 if [[ "$EXISTING_STACK" == true ]]; then
   if [[ "$SERVICE_SET" != true ]]; then
     SERVICE="$(env_value "$ENV_FILE" QQ_AGENT_SERVICE)"; SERVICE="${SERVICE:-qq-agent-linux}"
@@ -766,6 +788,7 @@ fi
 cat >"$ENV_FILE.tmp" <<EOF
 SNOWLUMA_IMAGE=$IMAGE
 SNOWLUMA_CONTAINER=qq-agent-snowluma
+PUBLISH_HOST=$PUBLISH_HOST
 AGENT_PORT=$AGENT_PORT
 QQ_AGENT_SERVICE=$SERVICE
 SNOWLUMA_UID=$(id -u)
@@ -825,8 +848,8 @@ services:
       SNOWLUMA_QQ_FLAGS: --disable-gpu --disable-software-rasterizer --disable-gpu-compositing
       SNOWLUMA_TELEMETRY: "${SNOWLUMA_TELEMETRY}"
     ports:
-      - "0.0.0.0:${NOVNC_PORT}:6081"
-      - "0.0.0.0:${SNOWLUMA_WEBUI_HOST_PORT}:5099"
+      - "${PUBLISH_HOST}:${NOVNC_PORT}:6081"
+      - "${PUBLISH_HOST}:${SNOWLUMA_WEBUI_HOST_PORT}:5099"
       - "127.0.0.1:${ONEBOT_HTTP_PORT}:3000"
       - "127.0.0.1:${ONEBOT_WS_PORT}:3001"
     volumes:
@@ -969,9 +992,9 @@ fi
 # 从此不一致，后续所有预检都会拒绝（2026-10 审查 P1）。
 DEPLOY_ARGS=(--install-dir "$APP_DIR" --data-dir "$AGENT_DATA_DIR" --service "$SERVICE" --port "$AGENT_PORT")
 if [[ "$EXISTING_STACK" != true ]]; then
-  # 新装才强制 0.0.0.0；已有安装让 deploy.sh 沿用 config.json 里的 host，
+  # 新装按 --publish/--loopback 落 host；已有安装让 deploy.sh 沿用 config.json 里的 host，
   # 否则用户按文档改成 127.0.0.1 后会被安装器改回去。
-  DEPLOY_ARGS+=(--host 0.0.0.0)
+  DEPLOY_ARGS+=(--host "$PUBLISH_HOST")
 fi
 bash "$SOURCE_DIR/deploy.sh" "${DEPLOY_ARGS[@]}"
 # Agent 已装好，栈不再是"半成品"：撤销失败清理，保留 .env / compose。
@@ -1031,10 +1054,17 @@ wait_http "http://127.0.0.1:$AGENT_PORT/healthz" 30 \
 HOST_IP="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)"
 HOST_IP="${HOST_IP:-$(hostname -I 2>/dev/null | awk '{print $1}' || true)}"
 HOST_IP="${HOST_IP:-127.0.0.1}"
+if [[ "$PUBLISH_HOST" == "127.0.0.1" ]]; then
+  HOST_IP="127.0.0.1"
+  PUBLISH_NOTE="bound to 127.0.0.1 only — use an SSH tunnel (console-tunnel.bat / ops console) or re-run with --publish"
+else
+  PUBLISH_NOTE="bound to 0.0.0.0 — restrict the cloud security group / firewall to trusted sources"
+fi
 MODE="$("$NODE_BIN" -e 'const c=require(process.argv[1]);process.stdout.write(c.runtime.mode)' \
   "$AGENT_DATA_DIR/config.json")"
 cat >"$ACCESS_FILE.tmp" <<EOF
 QQ Agent full-stack access
+Publish host: $PUBLISH_HOST
 Agent console: http://$HOST_IP:$AGENT_PORT
 Agent token: $AGENT_TOKEN
 SnowLuma WebUI: http://$HOST_IP:$SNOWLUMA_PORT
@@ -1052,6 +1082,7 @@ chmod 600 "$ACCESS_FILE"
 rm -f "$ENV_FILE.pre-deploy"
 
 printf '\nDeployment complete. Agent mode: %s.\n' "$MODE"
+printf 'Bind: %s\n' "$PUBLISH_NOTE"
 printf '1. Open QQ login:     http://%s:%s\n' "$HOST_IP" "$NOVNC_PORT"
 printf '2. Scan the QR code and finish QQ login.\n'
 printf '3. Open Agent console: http://%s:%s\n' "$HOST_IP" "$AGENT_PORT"

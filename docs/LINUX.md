@@ -62,8 +62,11 @@ bash deploy-all.sh
 The interactive installer asks for the stack root and all five host ports, plus
 the model fields — leaving the model API key blank skips model configuration
 (finish it in the console). It does not ask
-for a local/LAN IP. The Agent console, SnowLuma WebUI and noVNC bind all host
-interfaces; OneBot HTTP and WebSocket bind only `127.0.0.1`. If Docker is
+for a local/LAN IP. New installs bind the Agent console, SnowLuma WebUI and
+noVNC to `127.0.0.1` by default; pass `--publish` to bind them to `0.0.0.0`
+(and tighten the security group accordingly). Existing installations keep
+their current binding unless `--publish`/`--loopback` is passed explicitly.
+OneBot HTTP and WebSocket always bind only `127.0.0.1`. If Docker is
 missing, the installer asks before installing Docker Engine and Compose through
 the host package manager.
 The installer does not modify UFW, firewalld or cloud security-group policy.
@@ -530,18 +533,29 @@ to a retention count of 2000 and are additionally pruned after 90 days by the
 daily retention sweep (whichever limit hits first).
 
 ```bash
-bash manage.sh observe
-bash manage.sh backup /mnt/data/backups/qq-agent-20260911
+# 加密备份（默认 AES-256-GCM；密钥在 ~/.config/qq-agent/backup.key，
+# 也可用 QQ_AGENT_BACKUP_KEY 覆盖）。备份目录 0700、文件 0600。
+node src/ops.js backup --dry-run
+node src/ops.js backup --confirm --keep=4
+
+# 恢复演练：解密最近一份备份到临时目录 + SQLite integrity_check
+node src/ops.js backup --drill
+
+# 恢复：先 --dry-run 看条目，再 --confirm；服务起不来会自动回滚
+node src/ops.js restore --from ~/qq-agent/backups/qq-agent-data-XXXX.tar.gz.enc --confirm
 ```
 
 A consistent multi-file snapshot requires observe mode or a cancelled run, and
 waiting for runs to finish. SQLite backup uses the online backup API rather than a
 raw copy of the database that could omit WAL data. Backups contain credentials
-and private messages.
+and private messages, so they are encrypted by default; the key file must be
+kept separately from the backups (losing it makes the archive unrecoverable).
+`--no-encrypt` exists only as an explicit escape hatch.
 
-The restore procedure is: stop this service, archive its current data directory,
-restore the backup into an empty data directory owned by the service user, then
-start in observe mode. The old qq-bridge data must not be overwritten.
+`restore` stops the service, moves the current data directory to
+`data.pre-restore-<timestamp>`, extracts the archive, starts the service and
+checks it. If it does not come back, the previous directory is restored
+automatically. The old qq-bridge data must not be overwritten.
 
 ## Validation
 

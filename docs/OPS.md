@@ -106,9 +106,18 @@ node src/ops.js scan
 node src/ops.js scan --ignore=
 node src/ops.js scan --log="$HOME/qq-agent-undefined-calls.log"   # 有可疑调用时追加记录
 
-# 备份（先预演，再执行；N 默认取 QQ_AGENT_KEEP=4）
+# 备份（默认 AES-256-GCM 加密；先预演，再执行；N 默认取 QQ_AGENT_KEEP=4）
 node src/ops.js backup --dry-run
 node src/ops.js backup --confirm --keep=4
+# 密钥：QQ_AGENT_BACKUP_KEY（64 位 hex 或口令）优先；否则用
+# ~/.config/qq-agent/backup.key（首次备份自动生成，丢失则备份不可恢复）
+
+# 恢复演练（解密最近一份备份到临时目录 + SQLite integrity_check，不碰生产数据）
+node src/ops.js backup --drill
+
+# 恢复（确认前先 --dry-run 看归档条目；服务起不来会自动回滚）
+node src/ops.js restore --from ~/qq-agent/backups/qq-agent-data-xxxx.tar.gz.enc --dry-run
+node src/ops.js restore --from ~/qq-agent/backups/qq-agent-data-xxxx.tar.gz.enc --confirm
 
 # 审计日志清理（控制台写操作留痕，按自然月切文件；默认保留 6 个月）
 node src/ops.js audit-prune --dry-run
@@ -157,6 +166,8 @@ node src/ops.js install-timers --confirm
 | `QQ_AGENT_APP_DIR` | `$QQ_AGENT_DIR/app` | 应用目录（`src/`、`ui/`、自带 `.runtime/node`） |
 | `QQ_AGENT_DATA_DIR` | `$QQ_AGENT_DIR/data` | 数据目录（config.json、sqlite、sessions） |
 | `QQ_AGENT_BACKUP_DIR` | `$HOME/qq-agent/backups` | 备份输出目录 |
+| `QQ_AGENT_BACKUP_KEY` | 空 | 备份加密密钥（64 位 hex 或口令）；不设则读密钥文件 |
+| `QQ_AGENT_BACKUP_KEY_FILE` | `~/.config/qq-agent/backup.key` | 密钥文件；首次加密备份自动生成（0600） |
 | `QQ_AGENT_SERVICE` | `qq-agent-linux.service` | systemd user 服务名 |
 | `QQ_AGENT_KEEP` | `4` | `backup` 保留份数（也可用 `--keep=N`） |
 | `QQ_AGENT_USER` | 当前登录用户 | 进程/定时任务检查的目标用户 |

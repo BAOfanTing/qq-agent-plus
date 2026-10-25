@@ -19,6 +19,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './core/sqlite.js';
@@ -1177,12 +1179,22 @@ async function cmdBackup(args) {
   });
   const keep = Math.max(1, intOpt(args, '--keep', cfg.keep));
   const dryRun = hasFlag(args, '--dry-run');
+  const noEncrypt = hasFlag(args, '--no-encrypt');
+  const keyFile = optValue(args, '--key-file', '');
+  if (hasFlag(args, '--drill')) {
+    return runBackupDrill({ cfg, from: optValue(args, '--from', null), keyFile, noEncrypt });
+  }
+  const keyPath = backupKeyFile(keyFile);
   if (dryRun) {
     say('备份预演（不会停服务、不会写文件）:');
     noteLine(`数据目录: ${cfg.dataDir}`);
     noteLine(`备份目录: ${cfg.backupDir}`);
     noteLine(`服务名: ${cfg.service}（先 stop、打包后 start）`);
     noteLine(`保留份数: ${keep}`);
+    noteLine(`加密: ${noEncrypt ? '关闭（--no-encrypt，不建议）' : 'AES-256-GCM'}`);
+    if (!noEncrypt) {
+      noteLine(`密钥: ${String(process.env.QQ_AGENT_BACKUP_KEY || '').trim() ? '来自 QQ_AGENT_BACKUP_KEY' : keyPath}`);
+    }
     return 0;
   }
   if (!hasFlag(args, '--confirm')) {
@@ -1198,9 +1210,12 @@ async function cmdBackup(args) {
     ngLine('本机缺少 tar 命令，无法备份');
     return 1;
   }
-  // 包里是 config.json（含密钥）/console-access.txt/messages.sqlite，权限必须收紧
+  // 包里是 config.json（含密钥）/console-access.txt/messages.sqlite，权限必须收紧；
+  // 默认再加密一层 —— 备份一旦离开主机，明文 tar.gz 就是一份完整凭据。
   fs.mkdirSync(cfg.backupDir, { recursive: true, mode: 0o700 });
-  const outFile = path.join(cfg.backupDir, `qq-agent-data-${formatStamp()}.tar.gz`);
+  const stamp = formatStamp();
+  const outFile = path.join(cfg.backupDir, `qq-agent-data-${stamp}.tar.gz${noEncrypt ? '' : '.enc'}`);
+  const plainFile = noEncrypt ? outFile : path.join(cfg.backupDir, `.qq-agent-data-${stamp}.tar.gz.plain`);
   const du = run('du', ['-sh', cfg.dataDir]);
   if (!du.missing && du.ok) noteLine(`源大小: ${du.stdout.trim().split(/\s+/)[0]}`);
 
@@ -1212,7 +1227,7 @@ async function cmdBackup(args) {
     if (stop.missing) skipLine('缺少 systemctl：跳过停服务（直接打包）');
     else if (!stop.ok) noteLine(`停止服务返回码 ${stop.code}，仍继续备份`);
     await sleep(2000);
-    const tar = runTarCreate(outFile, cfg.dataDir);
+    const tar = runTarCreate(plainFile, cfg.dataDir);
     tarOk = tar.ok;
     if (!tarOk) ngLine(`tar 打包失败（返回码 ${tar.code}${tar.stderr ? `：${tar.stderr.trim().split('\n')[0]}` : ''}）`);
   } finally {
@@ -1226,27 +1241,299 @@ async function cmdBackup(args) {
     }
   }
   if (!tarOk) {
-    try { fs.rmSync(outFile, { force: true }); } catch { /* 忽略 */ }
+    try { fs.rmSync(plainFile, { force: true }); } catch { /* 忽略 */ }
     ngLine('tar 失败，本次备份作废（服务已恢复）');
     return 1;
   }
-  let backups = [];
-  try {
-    backups = fs.readdirSync(cfg.backupDir)
-      .filter((name) => /^qq-agent-data-.*\.tar\.gz$/.test(name))
-      .map((name) => ({ name, mtime: fs.statSync(path.join(cfg.backupDir, name)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime);
-  } catch { backups = []; }
+  // 服务已经恢复，加密放在这里做：不占停机时间。
+  if (!noEncrypt) {
+    try {
+      await encryptBackupFile(plainFile, outFile, loadBackupKey({ create: true, keyFile }));
+      try { fs.rmSync(plainFile, { force: true }); } catch { /* 忽略 */ }
+    } catch (error) {
+      try { fs.rmSync(plainFile, { force: true }); } catch { /* 忽略 */ }
+      try { fs.rmSync(outFile, { force: true }); } catch { /* 忽略 */ }
+      ngLine(`加密失败：${error?.message || error}（本次备份作废）`);
+      return 1;
+    }
+  }
+  const backups = listBackupFiles(cfg.backupDir);
   for (const stale of backups.slice(keep)) {
-    try { fs.rmSync(path.join(cfg.backupDir, stale.name), { force: true }); } catch { /* 忽略 */ }
+    try { fs.rmSync(stale.file, { force: true }); } catch { /* 忽略 */ }
   }
   const size = (() => {
     try { return (fs.statSync(outFile).size / 1024 / 1024).toFixed(1); } catch { return '?'; }
   })();
   try { fs.chmodSync(outFile, 0o600); } catch { /* 权限设不上不影响备份本身 */ }
   okLine(`备份完成: ${size} MB ${outFile}`);
+  if (!noEncrypt) noteLine(`加密: AES-256-GCM；密钥 ${String(process.env.QQ_AGENT_BACKUP_KEY || '').trim() ? '来自环境变量' : keyFile || keyPath}`);
   for (const item of backups.slice(0, keep)) noteLine(`  ${item.name}`);
   return 0;
+}
+
+// ─────────────────────────── 备份加密 / 恢复 ───────────────────────────
+
+const BACKUP_MAGIC = Buffer.from('QQAGENT1');
+
+function backupKeyFile(explicit = '') {
+  return explicit || envStr('QQ_AGENT_BACKUP_KEY_FILE', path.join(os.homedir(), '.config', 'qq-agent', 'backup.key'));
+}
+
+/** 密钥来源：QQ_AGENT_BACKUP_KEY（64 位 hex 或口令）优先，其次密钥文件；备份时缺文件会自动生成。 */
+function loadBackupKey({ create = false, keyFile = '' } = {}) {
+  const envKey = String(process.env.QQ_AGENT_BACKUP_KEY || '').trim();
+  if (envKey) {
+    if (/^[0-9a-fA-F]{64}$/.test(envKey)) return Buffer.from(envKey, 'hex');
+    // 口令：固定 salt 是为了同一口令在不同机器上能解开同一份备份（备份恢复不依赖本机状态）。
+    return crypto.scryptSync(envKey, 'qq-agent-backup-v1', 32);
+  }
+  const file = backupKeyFile(keyFile);
+  try {
+    const raw = fs.readFileSync(file);
+    const textValue = raw.toString('utf8').trim();
+    if (/^[0-9a-fA-F]{64}$/.test(textValue)) return Buffer.from(textValue, 'hex');
+    if (raw.length === 32) return raw;
+    throw new Error('密钥文件格式不对（需要 64 位十六进制或 32 字节）');
+  } catch (error) {
+    if (!create) {
+      throw new Error(`找不到可用的备份密钥：${file}（${error?.message || error}）。`
+        + '请设置 QQ_AGENT_BACKUP_KEY 或用 --key-file 指定');
+    }
+    const key = crypto.randomBytes(32);
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, `${key.toString('hex')}\n`, { mode: 0o600 });
+    noteLine(`已生成备份密钥: ${file}（请与备份分开保管；丢了备份无法恢复）`);
+    return key;
+  }
+}
+
+async function encryptBackupFile(inFile, outFile, key) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const writer = fs.createWriteStream(outFile, { mode: 0o600 });
+  writer.write(BACKUP_MAGIC);
+  writer.write(iv);
+  await pipeline(fs.createReadStream(inFile), cipher, writer);
+  fs.appendFileSync(outFile, cipher.getAuthTag(), { mode: 0o600 });
+}
+
+async function decryptBackupFile(inFile, outFile, key) {
+  const size = fs.statSync(inFile).size;
+  if (size < BACKUP_MAGIC.length + 12 + 16) throw new Error('备份文件太短，不是有效归档');
+  const head = Buffer.alloc(BACKUP_MAGIC.length + 12);
+  const tag = Buffer.alloc(16);
+  const fd = fs.openSync(inFile, 'r');
+  try {
+    fs.readSync(fd, head, 0, head.length, 0);
+    fs.readSync(fd, tag, 0, tag.length, size - 16);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (!head.subarray(0, BACKUP_MAGIC.length).equals(BACKUP_MAGIC)) {
+    throw new Error('不是 QQ Agent 加密备份（文件头不符）');
+  }
+  const iv = head.subarray(BACKUP_MAGIC.length);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  await pipeline(
+    fs.createReadStream(inFile, { start: head.length, end: size - 17 }),
+    decipher,
+    fs.createWriteStream(outFile, { mode: 0o600 })
+  );
+}
+
+function listBackupFiles(dir) {
+  try {
+    return fs.readdirSync(dir)
+      .filter((name) => /^qq-agent-data-.*\.tar\.gz(\.enc)?$/.test(name))
+      .map((name) => {
+        const file = path.join(dir, name);
+        return { name, file, mtime: fs.statSync(file).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch {
+    return [];
+  }
+}
+
+function runTarList(file) {
+  const args = IS_WINDOWS ? ['--force-local', '-tzf', file] : ['-tzf', file];
+  return run('tar', args, { timeout: 120000 });
+}
+
+function runTarExtract(file, destDir) {
+  fs.mkdirSync(destDir, { recursive: true, mode: 0o700 });
+  const args = IS_WINDOWS
+    ? ['--force-local', '-xzf', file, '-C', destDir]
+    : ['-xzf', file, '-C', destDir];
+  return run('tar', args, { timeout: 30 * 60 * 1000 });
+}
+
+function validateTarEntries(stdout) {
+  const entries = String(stdout || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const unsafe = entries.filter((entry) => entry.startsWith('/')
+    || /^[A-Za-z]:/.test(entry)
+    || entry.split('/').includes('..'));
+  if (unsafe.length) throw new Error(`归档包含不安全路径：${unsafe.slice(0, 3).join('、')}`);
+  return entries;
+}
+
+/** 归档里数据目录可能在顶层，也可能套了一层（`data/config.json`）。 */
+function locateDataRoot(dir) {
+  if (exists(path.join(dir, 'config.json'))) return dir;
+  let children = [];
+  try { children = fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory()); } catch { return null; }
+  for (const child of children) {
+    if (child.name.startsWith('.')) continue;
+    const candidate = path.join(dir, child.name);
+    if (exists(path.join(candidate, 'config.json'))) return candidate;
+  }
+  return null;
+}
+
+/** 恢复演练：解密 -> 校验路径 -> 解到临时目录 -> SQLite integrity_check。不碰生产数据。 */
+async function runBackupDrill({ cfg, from = null, keyFile = '', noEncrypt = false } = {}) {
+  const source = from
+    ? { name: path.basename(from), file: path.resolve(from) }
+    : listBackupFiles(cfg.backupDir)[0];
+  if (!source || !exists(source.file)) {
+    ngLine(`没有可演练的备份文件（目录：${cfg.backupDir}）`);
+    return 1;
+  }
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-backup-drill-'));
+  const tarFile = path.join(temp, 'restore.tar.gz');
+  try {
+    if (!noEncrypt && source.file.endsWith('.enc')) {
+      await decryptBackupFile(source.file, tarFile, loadBackupKey({ keyFile }));
+    } else {
+      fs.copyFileSync(source.file, tarFile);
+    }
+    const listed = runTarList(tarFile);
+    if (listed.missing) { ngLine('本机缺少 tar，无法演练'); return 1; }
+    if (!listed.ok) { ngLine(`归档读取失败：${(listed.stderr || '').trim().split('\n')[0] || listed.code}`); return 1; }
+    const entries = validateTarEntries(listed.stdout);
+    const extractDir = path.join(temp, 'extract');
+    const extracted = runTarExtract(tarFile, extractDir);
+    if (!extracted.ok) { ngLine(`解包失败：${(extracted.stderr || '').trim().split('\n')[0] || extracted.code}`); return 1; }
+    const dataRoot = locateDataRoot(extractDir);
+    if (!dataRoot) { ngLine('归档里没有 config.json，不像 QQ Agent 数据目录'); return 1; }
+    const databases = fs.readdirSync(dataRoot).filter((name) => name.endsWith('.sqlite'));
+    for (const name of databases) {
+      let db = null;
+      try {
+        db = openDatabase(path.join(dataRoot, name), { readOnly: true });
+        const row = db.prepare('PRAGMA integrity_check').get();
+        const verdict = row ? Object.values(row)[0] : '';
+        if (verdict !== 'ok') { ngLine(`${name}: integrity_check=${verdict || '未知'}`); return 1; }
+      } catch (error) {
+        noteLine(`${name}: 跳过 integrity_check（${error?.message || error}）`);
+      } finally {
+        try { db?.close(); } catch { /* 忽略 */ }
+      }
+    }
+    okLine(`演练通过: ${source.name}（${entries.length} 个条目，${databases.length} 个 SQLite）`);
+    return 0;
+  } catch (error) {
+    ngLine(`演练失败：${error?.message || error}`);
+    return 1;
+  } finally {
+    try { fs.rmSync(temp, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  }
+}
+
+async function cmdRestore(args) {
+  if (wantsHelp(args)) { say(HELP.restore); return 0; }
+  const from = String(optValue(args, '--from', '') || '').trim();
+  if (!from) { ngLine('缺少 --from <备份文件>'); return 2; }
+  if (!exists(from)) { ngLine(`备份文件不存在: ${from}`); return 2; }
+  const cfg = config({ data: optValue(args, '--data', null) });
+  const keyFile = optValue(args, '--key-file', '');
+  const noEncrypt = hasFlag(args, '--no-encrypt');
+  const dryRun = hasFlag(args, '--dry-run');
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-restore-'));
+  const tarFile = path.join(temp, 'restore.tar.gz');
+  try {
+    if (!noEncrypt && from.endsWith('.enc')) {
+      await decryptBackupFile(from, tarFile, loadBackupKey({ keyFile }));
+    } else {
+      fs.copyFileSync(from, tarFile);
+    }
+    const listed = runTarList(tarFile);
+    if (listed.missing) { ngLine('本机缺少 tar，无法恢复'); return 1; }
+    if (!listed.ok) { ngLine(`归档读取失败：${(listed.stderr || '').trim().split('\n')[0] || listed.code}`); return 1; }
+    const entries = validateTarEntries(listed.stdout);
+    noteLine(`归档条目: ${entries.length}`);
+    if (dryRun) {
+      for (const entry of entries.slice(0, 20)) noteLine(`  ${entry}`);
+      if (entries.length > 20) noteLine(`  … 还有 ${entries.length - 20} 条`);
+      say('恢复预演（未停服务、未写数据目录）');
+      return 0;
+    }
+    if (!hasFlag(args, '--confirm')) {
+      ngLine('恢复会覆盖数据目录：请加 --confirm（或 --dry-run 预览）');
+      return 1;
+    }
+    const extractDir = path.join(temp, 'extract');
+    const extracted = runTarExtract(tarFile, extractDir);
+    if (!extracted.ok) { ngLine(`解包失败：${(extracted.stderr || '').trim().split('\n')[0] || extracted.code}`); return 1; }
+    const dataRoot = locateDataRoot(extractDir);
+    if (!dataRoot) { ngLine('归档里没有 config.json，不像 QQ Agent 数据目录'); return 1; }
+
+    const stamp = formatStamp();
+    const pre = `${cfg.dataDir}.pre-restore-${stamp}`;
+    let serviceManaged = false;
+    const stop = systemctlUser(['stop', cfg.service], { timeout: 60000 });
+    serviceManaged = !stop.missing;
+    if (stop.missing) skipLine('缺少 systemctl：跳过停服务');
+    else if (!stop.ok) noteLine(`停止服务返回码 ${stop.code}，仍继续恢复`);
+    await sleep(2000);
+
+    let committed = false;
+    try {
+      if (exists(cfg.dataDir)) fs.renameSync(cfg.dataDir, pre);
+      fs.mkdirSync(path.dirname(cfg.dataDir), { recursive: true });
+      fs.cpSync(dataRoot, cfg.dataDir, { recursive: true, force: true });
+      try { fs.chmodSync(cfg.dataDir, 0o700); } catch { /* 忽略 */ }
+      committed = true;
+    } catch (error) {
+      ngLine(`恢复失败：${error?.message || error}`);
+      try {
+        if (exists(pre) && !exists(cfg.dataDir)) fs.renameSync(pre, cfg.dataDir);
+      } catch (rollbackError) {
+        ngLine(`回滚失败，恢复前的数据仍在 ${pre}：${rollbackError?.message || rollbackError}`);
+      }
+      return 1;
+    } finally {
+      if (serviceManaged) {
+        const start = systemctlUser(['start', cfg.service], { timeout: 60000 });
+        await sleep(3000);
+        const state = systemctlUser(['is-active', cfg.service]);
+        noteLine(`服务: ${state.stdout.trim() || text(state) || '未知'}`);
+        if (committed && !start.ok) {
+          ngLine('恢复后服务起不来：正在回滚到恢复前的数据');
+          systemctlUser(['stop', cfg.service], { timeout: 60000 });
+          try {
+            const failed = `${cfg.dataDir}.restore-failed-${stamp}`;
+            if (exists(cfg.dataDir)) fs.renameSync(cfg.dataDir, failed);
+            if (exists(pre)) fs.renameSync(pre, cfg.dataDir);
+            systemctlUser(['start', cfg.service], { timeout: 60000 });
+            ngLine(`已回滚；恢复失败的数据留在 ${failed}`);
+          } catch (rollbackError) {
+            ngLine(`回滚失败：${rollbackError?.message || rollbackError}`);
+          }
+          return 1;
+        }
+      }
+    }
+    okLine(`恢复完成: ${cfg.dataDir}`);
+    if (exists(pre)) noteLine(`恢复前的数据已留档: ${pre}`);
+    return 0;
+  } catch (error) {
+    ngLine(`恢复失败：${error?.message || error}`);
+    return 1;
+  } finally {
+    try { fs.rmSync(temp, { recursive: true, force: true }); } catch { /* 忽略 */ }
+  }
 }
 
 // ─────────────────────────── watch-send 子命令（原 watch-send.py） ───────────────────────────
@@ -2026,6 +2313,30 @@ Unit=qq-agent-backup.service
 [Install]
 WantedBy=timers.target
 `;
+  const backupDrillService = `[Unit]
+# 每月恢复演练：解密最近一份备份到临时目录 + SQLite integrity_check。
+# 不碰生产数据；密钥必须放在文件里（unit 不带 QQ_AGENT_BACKUP_KEY 环境变量）。
+Description=QQ Agent backup restore drill
+
+[Service]
+Type=oneshot
+Environment="QQ_AGENT_DATA_DIR=${cfg.dataDir}"
+Environment="QQ_AGENT_BACKUP_DIR=${cfg.backupDir}"
+Environment="QQ_AGENT_BACKUP_KEY_FILE=${envStr('QQ_AGENT_BACKUP_KEY_FILE', path.join(os.homedir(), '.config', 'qq-agent', 'backup.key'))}"
+ExecStart=${nodeBin} ${opsPath} backup --drill
+`;
+  const backupDrillTimer = `[Unit]
+# 每月 1 日 05:10 演练一次（排在 04:10 的每周备份之后）。
+Description=Monthly QQ Agent backup restore drill (1st 05:10)
+
+[Timer]
+OnCalendar=*-*-01 05:10:00
+Persistent=true
+Unit=qq-agent-backup-drill.service
+
+[Install]
+WantedBy=timers.target
+`;
   const guardService = `[Unit]
 # 进程看门狗：用户进程数异常增长（脚本失控递归）时清理并记录。
 # 由 node src/ops.js install-timers 生成；路径按实际部署改。
@@ -2105,6 +2416,8 @@ WantedBy=timers.target
   return [
     ['qq-agent-backup.service', backupService],
     ['qq-agent-backup.timer', backupTimer],
+    ['qq-agent-backup-drill.service', backupDrillService],
+    ['qq-agent-backup-drill.timer', backupDrillTimer],
     ['process-guard.service', guardService],
     ['process-guard.timer', guardTimer],
     ['qq-agent-health.service', healthService],
@@ -2323,16 +2636,38 @@ SSH 配置、防火墙、定时任务、可升级包、TLS 证书到期、备份
 环境变量: QQ_AGENT_DATA_DIR`,
 
   backup: `用法: node src/ops.js backup --confirm [--keep=N] [--data=目录] [--backup-dir=目录]
+       [--no-encrypt] [--key-file=文件]
        node src/ops.js backup --dry-run
+       node src/ops.js backup --drill [--from=备份文件] [--key-file=文件]
 
-停服务几秒 -> tar.gz 打包数据目录 -> 起服务 -> 只留最近 N 份。
-任何失败路径都会把服务拉起来；tar 失败时本次备份作废。
+停服务几秒 -> tar.gz 打包数据目录 -> 起服务 -> 加密 -> 只留最近 N 份。
+任何失败路径都会把服务拉起来；tar 或加密失败时本次备份作废。
+默认 AES-256-GCM 加密；密钥来自 QQ_AGENT_BACKUP_KEY 或
+~/.config/qq-agent/backup.key（首次备份自动生成，务必与备份分开保管）。
 
 --confirm     实际执行（必需；没有它会打印提醒后退出 1）
 --dry-run     只打印将要做什么
 --keep=N      保留份数（默认 QQ_AGENT_KEEP=4）
+--no-encrypt  不加密（仅在明确知道备份不会离开主机时使用）
+--key-file    指定密钥文件
+--drill       恢复演练：解密最近一份备份到临时目录并跑 SQLite integrity_check，
+              不碰生产数据；定时演练要求密钥在文件里（unit 不带环境变量）。
 
-环境变量: QQ_AGENT_DATA_DIR / QQ_AGENT_BACKUP_DIR / QQ_AGENT_SERVICE / QQ_AGENT_KEEP`,
+环境变量: QQ_AGENT_DATA_DIR / QQ_AGENT_BACKUP_DIR / QQ_AGENT_SERVICE /
+          QQ_AGENT_KEEP / QQ_AGENT_BACKUP_KEY / QQ_AGENT_BACKUP_KEY_FILE`,
+
+  restore: `用法: node src/ops.js restore --from <备份文件> [--data=目录] [--dry-run]
+       [--confirm] [--key-file=文件] [--no-encrypt]
+
+解密 -> 校验归档路径 -> 停服务 -> 旧数据留档 -> 解包 -> 起服务 -> 检查状态。
+服务起不来时自动回滚到恢复前的数据（留在 data.pre-restore-*）。
+
+--from        备份文件（.tar.gz.enc 或 .tar.gz）
+--data        目标数据目录（默认沿用配置）
+--dry-run     只解密/列目录，不写任何数据
+--confirm     实际执行（必需）
+--key-file    指定密钥文件
+--no-encrypt  归档未加密时使用`,
 
   scan: `用法: node src/ops.js scan [目录] [--ignore=名1,名2] [--no-ignore] [--log=文件] [--strict]
 
@@ -2472,6 +2807,7 @@ const COMMANDS = {
   'audit-host': { run: auditHost, help: HELP['audit-host'] },
   'audit-prune': { run: cmdAuditPrune, help: HELP['audit-prune'] },
   backup: { run: cmdBackup, help: HELP.backup },
+  restore: { run: cmdRestore, help: HELP.restore },
   scan: { run: cmdScan, help: HELP.scan },
   'watch-send': { run: cmdWatchSend, help: HELP['watch-send'] },
   'watch-login': { run: cmdWatchLogin, help: HELP['watch-login'] },
