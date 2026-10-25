@@ -1184,7 +1184,8 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 
 /* ── 设置卡片化（2026-10-23）──
    每个 <h3> 组一张卡：外层结构由 settings.js 的 cardifySettings 生成，控件 id 与保存逻辑不变。
-   目的是把"一整面输入框"拆成可扫读的组，而不是只调间距。 */
+   目的是把"一整面输入框"拆成可扫读的组，而不是只调间距。
+   资产页（好友管理 / 人物印象 / 异常处理）直接复用同一套卡片，功能块之间不再靠一条细线分隔。 */
 .settings-card {
   max-width: 1180px;
   margin: 0 0 16px;
@@ -1203,6 +1204,8 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 }
 .settings-card > h3:only-child { margin-bottom: 0; }
 .settings-card > .hint:last-child { margin-bottom: 0; }
+/* 带副标题/操作按钮的卡片头：卡片默认只给裸 h3 留了 12px，这层要自己补上。 */
+.settings-card > .control-section-title { margin-bottom: 12px; }
 
 /* 单勾选行 → 右侧开关。只在结构确实是"一个 checkbox + 一个 label"时加 .switch-row
    （多选列表、带额外说明的行不碰）。 */
@@ -2238,14 +2241,8 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
-/* 资产页（好友管理 / 人物印象 / 观测 / 异常）的摘要卡文字有 12px 内边距，而下面
-   control-section 的表单从卡片外缘起排：标签和输入框比卡片文字左 12px，整块看起来向左
-   错位（好友管理最明显）。给这些 section 同一条内缩，标题、字段与卡片文字落在同一条左线上。
-   控制页的 .control-service 卡是"图标 + 文案"三列，文字天然再缩 48px，不适用这一条。 */
-.asset-pane .control-section {
-  padding-left: 12px;
-  padding-right: 12px;
-}
+/* 资产页已改用 .settings-card（见「设置卡片化」）：每个功能块自带 18px 内边距，
+   不再需要给扁平 control-section 补 12px 的左内缩。 */
 .control-section h3 { margin: 0 0 10px; font-size: var(--fs-md); }
 .control-section-title {
   display: flex;
@@ -2369,11 +2366,17 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 }
 .asset-head h2 { margin: 0 0 3px; font-size: var(--fs-xl); }
 .asset-head > div > span { font-size: var(--fs-xs); }
+.asset-head-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .asset-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
 }
+/* 资产页的卡片与摘要卡之间留出与设置页一致的间隔；保存结果为空时不占高度。 */
+.asset-summary + .settings-card,
+.friend-save-result + .settings-card { margin-top: 14px; }
+.friend-save-result { margin: 8px 0 0; }
+.friend-save-result:empty { display: none; }
 .asset-summary-item {
   min-width: 0;
   padding: 10px 12px;
@@ -2535,6 +2538,8 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
 .asset-table tr:last-child td { border-bottom: 0; }
 
 @media (max-width: 600px) {
+  .asset-head { flex-wrap: wrap; }
+  .asset-head-actions { width: 100%; }
   .asset-toolbar-actions { width: 100%; align-items: stretch; flex-direction: column; }
   .asset-toolbar-actions .asset-search { width: 100%; }
   .asset-actions { justify-content: flex-start; }

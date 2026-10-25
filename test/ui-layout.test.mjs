@@ -339,8 +339,39 @@ test('新建自定义卡是空表单：角色设定不复制当前卡', () => {
   assert.match(body, /id="new-persona-rules"[^>]*><\/textarea>/);
 });
 
-test('资产页表单与摘要卡文字同一条左线（好友管理/人物印象/观测）', () => {
-  // 摘要卡文字有 12px 内边距，而下面 control-section 的表单从卡片外缘起排，
-  // 标签与输入框会比卡片文字左 12px（好友管理最明显）。
-  assert.match(css, /\.asset-pane \.control-section \{\s*padding-left: 12px;\s*padding-right: 12px;\s*\}/s);
+test('资产页按功能块分卡：好友管理不再是一整面输入框', () => {
+  // 用户对照设置页的卡片分组后提的：好友管理 20 多个字段挤在一个 control-section 里，
+  // 每格输入框又窄又靠左，整页看起来像向左偏。拆成「基础设置 / 触发条件 / 频率与配额 /
+  // 评分权重 / 入站好友请求」五张设置卡后，每块功能有自己的边界和标题。
+  const start = features.indexOf('function renderFriendFeaturePageImpl');
+  const end = features.indexOf('async function saveFriendFeatureConfig', start);
+  const friend = features.slice(start, end);
+  assert.ok(start >= 0 && end > start, '要找到好友管理渲染函数');
+  for (const title of ['基础设置', '触发条件', '频率与配额', '评分权重', '入站好友请求', '收到的好友请求', '主动好友候选', '消息触发与评估记录']) {
+    assert.match(friend, new RegExp(`<h3>${title}</h3>`), `缺少「${title}」卡片`);
+  }
+  const cards = friend.match(/<section class="settings-card"/g) || [];
+  assert.ok(cards.length >= 8, `好友管理应有至少 8 张卡片，实际 ${cards.length}`);
+  assert.doesNotMatch(friend, /<section class="control-section"/,
+    '资产页不能再退回扁平 control-section：功能块要靠卡片分组');
+});
+
+test('人物印象与异常处理同样按功能块分卡', () => {
+  const identity = features.slice(
+    features.indexOf('function renderIdentityFeaturePageImpl'),
+    features.indexOf('function renderFriendFeaturePageImpl')
+  );
+  assert.match(identity, /<section class="settings-card">\s*<h3>统一人物<\/h3>/);
+  assert.match(identity, /<section class="settings-card">\s*<h3>旧印象<\/h3>/);
+  const incident = features.slice(
+    features.indexOf('function renderIncidentFeaturePageImpl'),
+    features.indexOf('async function saveIncidentFeatureConfig')
+  );
+  assert.match(incident, /<section class="settings-card">\s*<div class="control-section-title">\s*<div><h3>告警与策略<\/h3>/);
+  assert.match(incident, /<section class="settings-card">\s*<div class="control-section-title">\s*<div><h3>异常日志<\/h3>/);
+});
+
+test('资产页卡片复用设置页的卡片样式', () => {
+  assert.match(css, /\.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/);
+  assert.match(css, /\.asset-summary \+ \.settings-card,\s*\.friend-save-result \+ \.settings-card \{ margin-top: 14px; \}/);
 });
