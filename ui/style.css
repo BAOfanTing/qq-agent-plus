@@ -2357,20 +2357,10 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   overflow-y: auto;
   padding: 22px 26px 40px;
 }
-/* 表单型资产页与设置页用同一条居中阅读列（设置页见 .settings-pane 的单列网格）。
-   只做卡片分组还不够：宽屏下 1180px 的卡片贴着内容区左缘，右侧留一大片空白，
-   整块看起来仍然"偏左"；这里把标题、摘要和卡片一起收进居中列。
-   人物印象与异常处理有宽表格，列宽放到 1180；观测页是图库，保持通栏。 */
-#friend-page,
-#identity-page,
-#incident-page {
-  display: grid;
-  grid-template-columns: minmax(0, 860px);
-  justify-content: center;
-  align-content: start;
-}
-#identity-page,
-#incident-page { grid-template-columns: minmax(0, 1180px); }
+/* 资产页的卡片跟内容区同宽：控制、观测、用量等页面都是通栏，单独把好友管理
+   收成 860 窄列会显得"只有这一页变小了"。设置页的 860 阅读列由 .settings-pane
+   自己的单列网格负责，不影响这里。 */
+.asset-pane .settings-card { max-width: none; }
 .asset-head {
   display: flex;
   align-items: center;
