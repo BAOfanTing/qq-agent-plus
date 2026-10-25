@@ -849,7 +849,10 @@ test('㉝ P2：两个 load 函数的 catch 也要过 token 守卫（过期失败
 
 test('㉞ P3：记忆整理要先给"期间新增的"留配额（否则整批并不进去还虚报日志）', async () => {
   const src = fs.readFileSync('src/core/orchestrator.js', 'utf8');
-  assert.match(src, /const room = Math\.max\(0, maxKeep - appendedDuring\.length\);/,
+  // 现在 fixed 还先装了手工印象（issue #55），所以配额基准是 fixed.length 而不是 appendedDuring.length。
+  assert.match(src, /const fixed = \[\.\.\.manualContents\];/,
+    '手工印象必须先占位，不能被模型输出挤掉');
+  assert.match(src, /const room = Math\.max\(0, maxKeep - fixed\.length\);/,
     'clean 之前已 slice 到 maxKeep，先满再并一条都进不去（2026-10-04 复审 P3）');
   assert.match(src, /mergedCount \+= 1;/, '日志要按实际并回数打，不能按 appendedDuring.length 虚报');
 });

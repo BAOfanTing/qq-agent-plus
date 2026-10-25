@@ -542,6 +542,11 @@ return `
         <label>④ 全响应时：发未读 + <input type="number" id="cfg-allcount" min="0" max="500" value="${esc(st.allCount ?? 80)}" /> 条已读</label>
         <div class="hint">滑条拖到 <b>100%</b> 时，任何消息都响应。</div>
       </div>
+      <div class="field" style="margin-top:10px">
+        <label for="cfg-pastchars">过去状态最多字符数</label>
+        <input type="number" id="cfg-pastchars" min="100" max="100000" step="1000" value="${esc(st.pastStateMaxChars ?? 24000)}" />
+        <div class="hint">上限 100000。条数和字符数是两道闸门，先到哪道按哪道截；调大上下文更全，但每轮 token 花费也更高。</div>
+      </div>
     </div>
 
     <h3>屏蔽名单</h3>

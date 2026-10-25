@@ -928,13 +928,18 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   return { tier: 0, count: 0, reason: '未触发', shouldRespond: false };
 }
 
+/** 与控制台四个「条已读」输入框的上限一致；超过它只会在 UI 上造成"配置没生效"的错觉。 */
+export const PAST_STATE_MAX_MESSAGES = 500;
+/** 过去状态正文的硬上限。控制台没有单独输入框时也按这个上限收口。 */
+export const PAST_STATE_MAX_CHARS = 100000;
+
 /**
  * 组装"过去状态"文本：消息 JSON 的最近一段（带时间与已读语义）。
  * 读取条数由**上下文档位**决定（见 resolveContextTier），不再是固定值。
  */
 export function buildPastState(store, chatKey, { excludeIds = [], limit = null } = {}) {
   const cfg = getConfig().store;
-  const maxLimit = Math.min(300, limit === null ? Math.max(1, Number(cfg.allCount) || 300) : Math.max(0, Number(limit) || 0));
+  const maxLimit = Math.min(PAST_STATE_MAX_MESSAGES, limit === null ? Math.max(1, Number(cfg.allCount) || 300) : Math.max(0, Number(limit) || 0));
   const exclude = new Set(excludeIds);
   if (maxLimit <= 0) return { text: '', count: 0, messages: [] };
   let messages = store.recent(chatKey, { limit: maxLimit + exclude.size, readOnly: true }).filter((m) => !exclude.has(m.id));
@@ -949,7 +954,7 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
     if (blocked.size) messages = messages.filter((m) => m.self || !blocked.has(String(m.senderId)));
   }
   messages = messages.slice(-maxLimit);
-  const maxChars = Math.min(24000, Math.max(100, Number(cfg.pastStateMaxChars) || 24000));
+  const maxChars = Math.min(PAST_STATE_MAX_CHARS, Math.max(100, Number(cfg.pastStateMaxChars) || 24000));
   let remaining = maxChars;
   const selected = [];
   const lines = [];

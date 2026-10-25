@@ -16,7 +16,8 @@ const {
   proactiveWindows,
   proactiveWindowState,
   randomWakeDelay,
-  triggerKindForTier
+  triggerKindForTier,
+  finishBarrierBlock
 } = await import('../src/core/orchestrator.js');
 const { ChatStore } = await import('../src/core/store.js');
 const { SessionRegistry } = await import('../src/core/sessions.js');
@@ -374,6 +375,28 @@ describe('Orchestrator', () => {
     assert.deepEqual(handoffs[0].state.openQuestions, ['第二项是否正常']);
     assert.deepEqual(handoffs[0].meta.participantIds, ['42']);
     assert.ok(handoffs[0].meta.sourceSessionId);
+  });
+
+  it('同批前置发送失败时不允许 finish 提交（issue #58）', async (t) => {
+    const failingSender = { sendTextBatch: async () => { throw new Error('send failed'); } };
+    const { runner, handoffs, append } = fixture(t, { sender: failingSender });
+    append(1);
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls += 1;
+      const toolCalls = calls === 1
+        ? [
+          { id: 's1', type: 'function', function: { name: 'send_message', arguments: JSON.stringify({ text: '你好' }) } },
+          { id: 'f1', type: 'function', function: { name: 'finish', arguments: JSON.stringify({ summary: '第一条' }) } }
+        ]
+        : [{ id: 'f2', type: 'function', function: { name: 'finish', arguments: JSON.stringify({ summary: '第二条' }) } }];
+      return Response.json({ choices: [{ message: { tool_calls: toolCalls } }], usage: { total_tokens: 10 } });
+    };
+
+    await runner.wake('group:1');
+    assert.equal(calls, 2, '失败批次里的 finish 必须被挡住，让模型再走一轮');
+    assert.equal(handoffs.length, 1);
+    assert.equal(handoffs[0].state.summary, '第二条', '只有第二轮（没有前置失败）的 finish 能提交');
   });
 
   it('creates a conservative handoff when a successful reply ends without finish', async (t) => {
@@ -2370,6 +2393,15 @@ describe('proactiveProbability（冷场开话题的发言概率）', () => {
   });
 
 
+});
+
+describe('finish 同批屏障（issue #58）', () => {
+  it('前置工具失败时拒绝 finish；finish 成功后拒绝后续副作用', () => {
+    assert.equal(finishBarrierBlock('finish', {}), '');
+    assert.match(finishBarrierBlock('finish', { priorFailure: true }), /失败项/);
+    assert.match(finishBarrierBlock('send_message', { finished: true }), /终止边界/);
+    assert.equal(finishBarrierBlock('send_message', { priorFailure: true }), '', '失败只挡 finish，不挡其它工具');
+  });
 });
 
 process.on('exit', () => fs.rmSync(root, { recursive: true, force: true }));

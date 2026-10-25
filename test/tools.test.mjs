@@ -416,6 +416,41 @@ test('过去状态：有历史但这次没带（档位 0 条）时，不说"你�
   store.close();
 });
 
+test('过去状态按控制台上限 500 条 / 100000 字符读取，不再偷偷卡 300/24000', async () => {
+  const { buildPastState, PAST_STATE_MAX_MESSAGES, PAST_STATE_MAX_CHARS } = await import('../src/llm/prompt.js');
+  const { ChatStore } = await import('../src/core/store.js');
+  const { getConfig } = await import('../src/core/config.js');
+  assert.equal(PAST_STATE_MAX_MESSAGES, 500);
+  assert.equal(PAST_STATE_MAX_CHARS, 100000);
+  const cfg = getConfig();
+  const old = { allCount: cfg.store.allCount, pastStateMaxChars: cfg.store.pastStateMaxChars };
+  try {
+    cfg.store.allCount = 500;
+    cfg.store.pastStateMaxChars = 100000;
+    const store = new ChatStore(0);
+    const chatKey = 'group:777003';
+    for (let i = 0; i < 520; i += 1) {
+      store.appendIncoming(chatKey, { mid: 7000 + i, ts: Date.now() - i * 1000, senderId: '42', senderName: '阿卡林', text: `第 ${i} 条` });
+    }
+    store.drainUnread(chatKey);
+    const many = buildPastState(store, chatKey);
+    assert.equal(many.count, 500, '条数上限应跟控制台一致，而不是 300');
+
+    const longKey = 'group:777004';
+    for (let i = 0; i < 80; i += 1) {
+      store.appendIncoming(longKey, { mid: 9000 + i, ts: Date.now() - i * 1000, senderId: '42', senderName: '阿卡林', text: `${i}-${'x'.repeat(2000)}` });
+    }
+    store.drainUnread(longKey);
+    const long = buildPastState(store, longKey);
+    assert.ok(long.text.length > 24000, '字符上限应跟控制台一致，而不是 24000');
+    assert.ok(long.text.length <= 100000, '但仍要受 100000 字符的硬上限约束');
+    store.close();
+  } finally {
+    cfg.store.allCount = old.allCount;
+    cfg.store.pastStateMaxChars = old.pastStateMaxChars;
+  }
+});
+
 test('memory_query 有条数上限：跨会话记忆不会被一次全灌进一个群的上下文（2026-10-03 全量审查）', async () => {
   const many = Array.from({ length: 200 }, (_, i) => ({
     userId: String(1000 + i), name: `人${i}`, impression: 'x'.repeat(120),

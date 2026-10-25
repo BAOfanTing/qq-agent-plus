@@ -130,3 +130,28 @@ test('整理链路：遗留条目并到本人名下、重名不猜、坏时间�
   assert.ok(result3.results.some((r) => r.userId === '456'), '这条人物应该被正常整理');
   third.store.close();
 });
+
+test('整理不覆盖控制台手写的 manual 印象（issue #55）', async (t) => {
+  const oldFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = oldFetch; });
+  writeMemberFile('789', '小美', [
+    { content: '手写：别叫她全名', createdAt: 2000, lastObservedAt: 2000, origin: 'manual' },
+    { content: '模型：爱吃辣', createdAt: 2000, lastObservedAt: 2000, origin: 'consolidated' }
+  ], ['group:4'], 2000);
+  const runner = makeRunner(['4']);
+  seedChat(runner.store, 'group:4', [['789', '小美', 4]]);
+  // 模型只回了自动条目，完全没有提手工那条 —— 写回时也必须把手工条目强制保留。
+  globalThis.fetch = async () => Response.json({
+    choices: [{ message: { content: JSON.stringify({ impressions: ['模型：爱吃辣，也爱喝奶茶'] }) } }],
+    usage: { total_tokens: 10 }
+  });
+
+  const result = await runner.runner.consolidateMemoryForChat('group:4');
+  assert.deepEqual(result.failed, []);
+  const impressions = runner.memory.getMember('group:4', '789').impressions;
+  const manual = impressions.find((e) => e.content === '手写：别叫她全名');
+  assert.ok(manual, '手工印象不能被模型删掉');
+  assert.equal(manual.origin, 'manual', '手工来源要保持 manual');
+  assert.ok(impressions.some((e) => e.content.includes('爱喝奶茶')), '模型整理结果仍要生效');
+  runner.store.close();
+});

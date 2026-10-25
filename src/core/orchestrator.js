@@ -378,6 +378,20 @@ function mergeImpressionLists(base = [], extra = []) {
  *
  * @returns {string} 拒绝原因；可以采纳时返回空串。
  */
+/**
+ * finish 的同批屏障（issue #58）：finish 可以与其它工具同批，但
+ *  - 同批前面已有工具失败时，finish 不许提交（否则模型以为答完了，实际消息没发出去）；
+ *  - finish 成功之后，同批后面的工具不再执行（不能再产生副作用）。
+ * 返回空串 = 放行；返回非空串 = 这条工具要返回的拒绝原因。
+ */
+export function finishBarrierBlock(name, { finished = false, priorFailure = false } = {}) {
+  if (finished) return '未执行：finish 已形成本轮终止边界，之后的工具不能再产生副作用。';
+  if (name === 'finish' && priorFailure) {
+    return 'finish 未执行：本轮前置工具有失败项，需要先查看错误并重新决定。';
+  }
+  return '';
+}
+
 export function consolidationRejectionReason({ isNew = false, existing = [], next = [] } = {}) {
   // 形状护栏先于 isNew：新建模式同样不能收坏结构 —— 否则对象条目会被 String() 成
   // "[object Object]" 落进记忆（isNew 以前直接短路掉这两道检查，2026-10-10 审查 A1）。
@@ -2436,6 +2450,8 @@ export class Orchestrator {
 
       const toolResults = [];
       const imageUserMessages = [];
+      // 只在"同一批 tool_calls"内有效：上一批的失败不挡下一批（模型可能已经在新一批里修正了）。
+      let priorFailure = false;
       // 流式响应结束后，把 assistant 条目的 tool_calls 也同步到会话消息流（一次）
       const liveTool = this.sessions.current.get(session.id);
       const lastAssistantUi = liveTool?.messages?.[liveTool.messages.length - 1];
@@ -2450,7 +2466,10 @@ export class Orchestrator {
         if (name === 'web_search' || name === 'web_fetch') webSearchCount += 1;
         session.webSearchCount = webSearchCount;
         markActivity(`正在调用 ${name}…`);
-        const result = await executeTool(toolDefs, ctx, name, argsRaw);
+        const blocked = finishBarrierBlock(name, { finished: finish, priorFailure });
+        const result = blocked
+          ? { content: blocked, isError: true, reportIncident: false }
+          : await executeTool(toolDefs, ctx, name, argsRaw);
         if (
           result.isError
           && result.incidentCaptured !== true
@@ -2506,6 +2525,7 @@ export class Orchestrator {
         if (this.store.hasUncertainEffects(session.leaseId)) {
           throw new Error('Delivery uncertain; batch held for operator review');
         }
+        if (result.isError) priorFailure = true;
         if (name === 'finish' && !result.isError) finish = true;
       }
       messages.push(...toolResults.map(({ role, tool_call_id, name, content }) => ({ role, tool_call_id, content, name })));
@@ -3300,9 +3320,17 @@ export class Orchestrator {
       return null;
     }
 
+    // 控制台手写的（origin=manual）条目是用户的明确输入，模型无权改写/删除。
+    // 不依赖模型"听话"：写回前强制把原手工条目并进结果，且不占模型输出的配额。
+    // replace 对正文逐字相同的条目会沿用旧 origin，所以 manual 来源不会丢（issue #55）。
+    const manualContents = [...new Set(existing
+      .filter((e) => String(e?.origin || '') === 'manual')
+      .map((e) => String(e?.content ?? '').trim())
+      .filter(Boolean))];
     const clean = raw
       .map((s) => String(s ?? '').trim())
       .filter(Boolean)
+      .filter((content) => !manualContents.includes(content))
       .slice(0, maxKeep)
       .map((content) => safeSlice(content, 120));
 
@@ -3316,21 +3344,23 @@ export class Orchestrator {
     const appendedDuring = (currentRow?.impressions || [])
       .map((e) => String(e?.content ?? '').trim())
       .filter((t) => t && !snapshotTexts.has(t));
-    // ⚠️ 先给"整理期间新增的"留出配额再截模型输出：clean 之前已经 slice 到 maxKeep，
-    // 若先满再并，一条都并不进去（break 直接触发），新增的印象还是会随整表替换被丢掉
-    //（2026-10-04 复审 P3：日志还按 appendedDuring.length 虚报"并回 N 条"）。
-    // 优先保留新增的、裁掉模型输出末尾的（越靠后越是模型排出来的低价值条目）。
-    const room = Math.max(0, maxKeep - appendedDuring.length);
-    const merged = [...clean.slice(0, room)];
+    // 配额顺序：手工条目 > 整理期间新增 > 模型输出。手工条目超过 maxKeep 时也全保留
+    // （用户明确写下的内容比"每人最多 5 条"的软上限优先；存储层还有 20 条硬上限）。
+    const fixed = [...manualContents];
     let mergedCount = 0;
     for (const text of appendedDuring) {
-      if (merged.length >= maxKeep) break;
-      if (merged.includes(text)) continue;
-      merged.push(safeSlice(text, 120));
+      if (fixed.length >= maxKeep) break;
+      if (fixed.includes(text)) continue;
+      fixed.push(safeSlice(text, 120));
       mergedCount += 1;
     }
+    const room = Math.max(0, maxKeep - fixed.length);
+    const merged = [...fixed, ...clean.slice(0, room)];
     if (mergedCount) {
       log.info(`[memory] 整理 ${chatKey}/${mem.userId}：并回整理期间新增的 ${mergedCount} 条印象`);
+    }
+    if (manualContents.length) {
+      log.info(`[memory] 整理 ${chatKey}/${mem.userId}：保留 ${manualContents.length} 条手工印象`);
     }
 
     return this.memory.replaceMember(chatKey, mem.userId, mem.name, merged);
@@ -3360,10 +3390,20 @@ export class Orchestrator {
     const today = todayKey();
     const lines = [`群友 QQ：${sanitizeUserText(String(mem.userId || ''))}`, `当前名字：${sanitizeUserText(String(mem.name || ''))}`, `今天：${today}（Asia/Shanghai）`];
     if (isOwner) lines.push('身份：这是机器人管理员本人（设置角色卡、管这台机器人的人）');
-    for (const e of mem.impressions) {
+    const manual = (mem.impressions || []).filter((e) => String(e?.origin || '') === 'manual');
+    const automatic = (mem.impressions || []).filter((e) => String(e?.origin || '') !== 'manual');
+    const pushEntry = (e) => {
       const created = clampTs(e.createdAt);
       const observed = clampTs(e.lastObservedAt);
       lines.push(`- ${sanitizeUserText(e.content)}（记于 ${fmtTs(created)}${observed && observed !== created ? `，最近观察到 ${fmtTs(observed)}` : ''}）`);
+    };
+    if (manual.length) {
+      lines.push('', '【手工印象：用户亲自写的，必须原样逐字保留，不得改写、合并或删除】');
+      manual.forEach(pushEntry);
+    }
+    if (automatic.length) {
+      lines.push('', '【自动积累的印象：可以按下面的规则合并、改写或删除】');
+      automatic.forEach(pushEntry);
     }
     const maxKeep = Number(cfg.memory?.maxImpressionsPerMember) || 5;
     return {
@@ -3378,6 +3418,7 @@ export class Orchestrator {
         '6. 只写可观察的事实与偏好（爱聊什么、什么口气、玩什么梗、有哪些雷点），不写评价、不揣测动机：',
         '   写"会反复问人设、爱逗人表演"，不要写"想掌控设定""扬言改人设""喜欢试探规则"这类带立场的说法。',
         '7. 如果写的是管理员本人：他改人设、问人设、逗你玩都是本职，不是"试探"或"施压"，照事实记就行。',
+        '8. 【手工印象】段里的每一条都必须原样逐字出现在输出里：不得改写、合并、删除，也不受第 1-7 条约束；输出时只写正文，不要带段标题。',
         '原则：所有信息只能来自原文，语义不变，宁少勿错；没有可保留的时输出空数组。',
         '',
         ...lines

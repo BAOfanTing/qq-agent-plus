@@ -607,7 +607,7 @@ export function buildToolDefs() {
             }
             throw error;
           }
-          if (!sticker) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`);
+          if (!sticker) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`, { reportIncident: false });
           if (!sticker.url) return err(`表情 ${sticker.id} 没有可发送的图片地址`);
           const targetError = messageTargetError(ctx, args);
           if (targetError) return err(targetError);
@@ -683,7 +683,7 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           const sticker = await ctx.stickers.findForSend(args.stickerId);
-          if (!sticker) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`);
+          if (!sticker) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`, { reportIncident: false });
           if (!sticker.url) return err('该表情没有图片地址');
           const dataUrl = await downloadImageAsDataUrl(sticker.url, ctx.signal);
           // 备注是"图里文字经视觉判定入库"的内容，可能是别人画的图自带段头（2026-10-12 审查）
@@ -709,7 +709,7 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           const entry = ctx.stickers.note(String(args.stickerId), { note: args.note, tags: args.tags, usage: args.usage });
-          if (!entry) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`);
+          if (!entry) return err(`找不到表情。${await stickerLookupHint(ctx, args.stickerId)}`, { reportIncident: false });
           return ok({ updated: true, id: entry.id, localNote: sanitizeUserText(String(entry.localNote || '')), tags: (Array.isArray(entry.tags) ? entry.tags : []).map((t) => sanitizeUserText(String(t))) });
         } catch (error) {
           return err(error?.message ?? error);
@@ -901,7 +901,7 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         try {
           const hit = faceLookup(unquoteJsonString(args.name));
-          if (hit.error) return err(hit.error);
+          if (hit.error) return err(hit.error, { reportIncident: false });
           const targetError = messageTargetError(ctx, args);
           if (targetError) return err(targetError);
           const result = await ctx.sender.sendFace(ctx.chatKey, hit.face, {
@@ -1076,7 +1076,7 @@ export function buildToolDefs() {
           let file = '';
           if (stickerId) {
             const sticker = await ctx.stickers.findForSend(stickerId).catch(() => null);
-            if (!sticker?.url) return err(`找不到表情 ${stickerId}。${await stickerLookupHint(ctx, stickerId)}`);
+            if (!sticker?.url) return err(`找不到表情 ${stickerId}。${await stickerLookupHint(ctx, stickerId)}`, { reportIncident: false });
             // 与 send_sticker 同一道防线：本地托管的走 base64，公网链接必须过校验
             const managedInline = Boolean(sticker.localFile) && sticker.url.startsWith('base64://');
             if (!managedInline) {
@@ -2880,7 +2880,7 @@ export function buildToolDefs() {
     },
     {
       name: 'finish',
-      description: '明确结束本次处理，并把下一次新会话需要的工作状态交接下去。summary 写本轮结论；话题还会继续时补充 topic/hypotheses/evidence/facts/decisions/rejectedDirections/openQuestions/nextStep。只写简洁、可检查的状态，不写逐步隐藏思维。话题已经完成且旧交接不再有用时设 clearHandoff=true。不调用也可以，直接结束文本输出同样代表结束。',
+      description: '明确结束本次处理，并把下一次新会话需要的工作状态交接下去。可以和本轮其它已经成功的工具放在同一批；但同批前置工具有失败时 finish 会被拒绝（先看错误再决定），finish 成功后同批后续工具不会执行。summary 写本轮结论；话题还会继续时补充 topic/hypotheses/evidence/facts/decisions/rejectedDirections/openQuestions/nextStep。只写简洁、可检查的状态，不写逐步隐藏思维。话题已经完成且旧交接不再有用时设 clearHandoff=true。不调用也可以，直接结束文本输出同样代表结束。',
       parameters: {
         type: 'object',
         properties: {

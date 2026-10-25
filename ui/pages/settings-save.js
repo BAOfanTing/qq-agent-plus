@@ -981,6 +981,7 @@ async function saveConfig({ quiet = false } = {}) {
         .split('\n').map((x) => x.trim()).filter(Boolean),
       randomCount: clampInt(val('#cfg-randcount', c.store?.randomCount), 0, 500, 8),
       allCount: clampInt(val('#cfg-allcount', c.store?.allCount), 0, 500, 80),
+      pastStateMaxChars: clampInt(val('#cfg-pastchars', c.store?.pastStateMaxChars), 100, 100000, 24000),
       // 统一开关 + 分群滑条表（__replace__：删掉的群设置要真删，深合并做不到）
       unifiedTier: chk('#cfg-unifiedtier', c.store?.unifiedTier !== false),
       // 明确声明语义：滑条上的数字就是概率（后端据此跳过老配置迁移）

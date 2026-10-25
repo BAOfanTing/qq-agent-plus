@@ -154,6 +154,31 @@ test('prompt exposes sticker IDs and exact unique labels remain compatible', () 
   ], '无语团子'), null);
 });
 
+test('prompt 用 localNote 优先；全角/半角引号查询也能命中', () => {
+  const entries = [
+    { id: 'st-1', desc: 'GIF', localNote: '哈士奇：指着镜头，适合威胁', url: 'https://example.com/1.png' },
+    { id: 'st-2', desc: '他说"别动"', localNote: '', url: 'https://example.com/2.png' }
+  ];
+  const prompt = buildStickerContext(entries, 10);
+  assert.match(prompt, /哈士奇：指着镜头/);
+  assert.equal(prompt.includes('GIF'), false, '不能把采集时的格式名当成备注');
+  assert.equal(findSticker(entries, '他说“别动”')?.id, 'st-2', '模型传全角引号也要命中半角备注');
+});
+
+test('send_sticker 找不到表情不刷异常面板', async () => {
+  const manager = new StickerManager({ call: async () => [] });
+  const tool = buildToolDefs().find((x) => x.name === 'send_sticker');
+  const result = await tool.execute({
+    chatKey: 'group:1',
+    stickers: manager,
+    sender: {},
+    session: { leaseId: 'lease', triggerText: '测试', sent: [] },
+    emit: () => {}
+  }, { stickerId: 'missing-sticker' });
+  assert.equal(result.isError, true);
+  assert.equal(result.reportIncident, false, '预期内的"找不到"不该进异常库');
+});
+
 test('sticker list keeps familiar ones and rotates unused ones in', () => {
   // 复现用户反馈的场景：收藏很多，但发过的图永远占住名额，其余永远不露面。
   const entries = [];
