@@ -378,14 +378,14 @@ test('资产页卡片复用设置页的卡片样式', () => {
   assert.match(css, /\.asset-summary \+ \.settings-card,\s*\.friend-save-result \+ \.settings-card \{ margin-top: 14px; \}/);
 });
 
-test('资产页卡片跟内容区同宽，不单独收成窄列', () => {
-  // 用户反馈：好友管理被单独收成 860 窄列后，比控制/观测等页面小一圈。
-  // 卡片分组保留，但宽度跟随资产页内容区；设置页自己的 860 阅读列不受影响。
+test('资产页卡片跟内容区同宽，好友字段自动铺满', () => {
+  // 用户反馈：好友管理被单独收成 860 窄列后比别的页面小一圈；把卡片放回通栏后，
+  // 字段也不能继续挤在左半边，按卡片宽度自动分列铺开。
   assert.doesNotMatch(css, /#friend-page,\s*#identity-page,\s*#incident-page \{/,
     '资产页不要再单独套居中窄列');
   assert.match(css, /\.asset-pane \.settings-card \{ max-width: none; \}/);
-  assert.match(css, /#friend-page \.friend-settings-card > \* \{[^}]*max-width: 860px;[^}]*margin-left: auto;[^}]*margin-right: auto;/s,
-    '通栏卡片里的表单内容要居中，不能继续贴左缘');
+  assert.match(css, /#friend-page \.friend-settings-card \.field-row \{[^}]*grid-template-columns: repeat\(auto-fit, minmax\(190px, 1fr\)\);/s,
+    '好友管理的字段要按通栏宽度自动铺开，不能挤在左边');
   assert.match(css, /\.settings-card \{[^}]*max-width: 1180px;/s,
     '设置页的卡片宽度仍然保留');
 });
