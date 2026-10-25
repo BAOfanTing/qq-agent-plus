@@ -7,6 +7,7 @@ import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRouter } from './router.js';
+import { createMetrics } from './metrics.js';
 
 import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCredentialResolve, asrCredentialSlot, asrCredentialSlotOf, asrCredentials, asrEndpointHost, asrKeyHost, asrKeySlots, asrKeySource, asrLocalBin, asrLocalModel, asrSecretId, asrSecretKey, ASR_PROVIDERS, conversationConfigForChat, findWhisperBinSync, getConfig, identityPilotEnabled, imageGenAvailable, imageGenKeyHosts, imageGenKeyOwnedBy, imageGenKeyResolve, incidentPilotEnabled, slangPilotEnabled, updateConfig, onTimeControlChange, pinImageGenKeyHost, DATA_DIR, ROOT } from '../core/config.js';
 import { tokenSaverEffective } from '../core/token-saver.js';
@@ -15,7 +16,7 @@ import { catchupReplyWindowMs, catchupLogLine, isFreshForReply } from '../core/c
 import { budgetStatus } from '../core/budget.js';
 import { sanitizeConfigSecrets } from '../core/secret-keys.js';
 import { appendAudit, queryAudit } from '../core/audit-log.js';
-import { lastTraceId } from '../core/logger.js';
+import { lastTraceId, createLogger } from '../core/logger.js';
 import { customSearch, webSearch } from '../llm/web-search.js';
 import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes } from '../onebot/onebot.js';
 import { faceNameOf } from '../onebot/face-catalog.js';
@@ -284,8 +285,13 @@ function consoleUrlHost(host) {
   return value;
 }
 
+// 默认日志走结构化 logger（scope=console）：QQ_AGENT_LOG_FORMAT=json 对控制台日志也生效；
+// 测试/嵌入方传自己的 log 函数时保持原样。
+const consoleLogger = createLogger('console');
+const defaultConsoleLog = (...args) => consoleLogger.info(...args);
+
 export function createApp({
-  log = console.log,
+  log = defaultConsoleLog,
   autoUpdateOptions = {},
   asrInstaller = null,
   // 事件流的两个阈值只在测试里改（见 test/sse-stream.test.mjs）：默认值就是生产口径
@@ -1957,10 +1963,12 @@ export function createApp({
     return [...keys].filter((k) => JSON.stringify(a?.[k]) !== JSON.stringify(b?.[k])).sort();
   }
 
+  const metrics = createMetrics();
   const router = createRouter({
     authorize,
     json,
     keyEndpointAllowed,
+    metrics,
     // 审计（#5）：鉴权成功后由 router 记下本次凭据指纹（sha256 前 8 位），写接口埋点直接
     // 读 req.consoleTokenFp —— 与鉴权同一次取值，不在每个埋点里各自重算。
     tokenFp: () => tokenFpOf(getConfig().server?.token)
@@ -1977,6 +1985,70 @@ export function createApp({
       timestamp: Date.now()
     });
   }, { auth: false });
+
+  router.add('GET', '/api/metrics', async (req, res, params, url) => {
+    const memory = process.memoryUsage();
+    const chats = store.listChats?.() || [];
+    const outbox = chats.reduce((acc, chat) => {
+      acc.pending += Number(chat.pending ?? chat.unread ?? 0) || 0;
+      acc.held += Number(chat.held || 0);
+      acc.failed += Number(chat.failed || 0);
+      return acc;
+    }, { pending: 0, held: 0, failed: 0 });
+    const plugins = (pluginRegistry.list?.().plugins || []).map((plugin) => ({
+      id: plugin.id,
+      state: plugin.status?.state || 'unknown',
+      rssKb: Number(plugin.status?.rssKb) || 0,
+      inFlight: Number(plugin.status?.inFlight) || 0,
+      stats: plugin.status?.stats || {}
+    }));
+    const snapshot = {
+      ok: true,
+      timestamp: Date.now(),
+      process: {
+        uptimeSeconds: Math.round(process.uptime()),
+        rssBytes: memory.rss,
+        heapUsedBytes: memory.heapUsed,
+        heapTotalBytes: memory.heapTotal
+      },
+      http: metrics.snapshot(),
+      onebot: { connected: Boolean(onebot?.connected) },
+      outbox,
+      plugins
+    };
+    if (String(url.searchParams.get('format') || '').toLowerCase() === 'prometheus') {
+      const lines = [
+        '# HELP qqagent_uptime_seconds Process uptime.',
+        '# TYPE qqagent_uptime_seconds gauge',
+        `qqagent_uptime_seconds ${snapshot.process.uptimeSeconds}`,
+        '# TYPE qqagent_http_requests_total counter',
+        `qqagent_http_requests_total ${snapshot.http.requests.total}`,
+        '# TYPE qqagent_outbox_pending gauge',
+        `qqagent_outbox_pending ${outbox.pending}`,
+        '# TYPE qqagent_outbox_held gauge',
+        `qqagent_outbox_held ${outbox.held}`,
+        '# TYPE qqagent_onebot_connected gauge',
+        `qqagent_onebot_connected ${snapshot.onebot.connected ? 1 : 0}`
+      ];
+      for (const [bucket, count] of Object.entries(snapshot.http.requests.byStatus)) {
+        lines.push(`qqagent_http_responses_total{class="${bucket}"} ${count}`);
+      }
+      for (const plugin of plugins) {
+        lines.push(`qqagent_plugin_up{id="${plugin.id}"} ${plugin.state === 'running' ? 1 : 0}`);
+      }
+      res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
+      res.end(`${lines.join('\n')}\n`);
+      return;
+    }
+    return json(res, 200, snapshot);
+  });
+
+  // 最近一次巡检结果（health.json 由 ops health-check 写；控制台只读）
+  router.add('GET', '/api/health', async (req, res) => {
+    let health = null;
+    try { health = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'health.json'), 'utf8')); } catch { health = null; }
+    return json(res, 200, { ok: true, health });
+  });
 
   router.add('POST', '/api/login', async (req, res) => {
     const origin = String(req.headers.origin || '');

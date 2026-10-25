@@ -124,6 +124,12 @@ node src/ops.js restore --from ~/qq-agent/backups/qq-agent-data-xxxx.tar.gz.enc 
 node src/ops.js prune --days=90 --dry-run
 node src/ops.js prune --days=90 --confirm
 
+# 轻量指标（需控制台令牌）：JSON 或 Prometheus 文本
+curl -s -H "x-console-token: $TOKEN" http://127.0.0.1:3210/api/metrics
+curl -s -H "x-console-token: $TOKEN" "http://127.0.0.1:3210/api/metrics?format=prometheus"
+# 最近一次巡检结果（health.json）
+curl -s -H "x-console-token: $TOKEN" http://127.0.0.1:3210/api/health
+
 # 审计日志清理（控制台写操作留痕，按自然月切文件；默认保留 6 个月）
 node src/ops.js audit-prune --dry-run
 node src/ops.js audit-prune --confirm --keep-months=6
