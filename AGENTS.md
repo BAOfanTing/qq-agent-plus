@@ -13,7 +13,9 @@ In particular:
 
 ## 本地访问 Web 控制台（给用户/协作者的入口）
 
-控制台默认只监听服务器本机 `127.0.0.1:3210`，不对外开放。两条等价入口：
+控制台监听地址取决于安装方式：`deploy.sh` 默认只监听服务器本机 `127.0.0.1:3210`；
+`deploy-all.sh` / `install.sh` 默认监听 `0.0.0.0:3210`（需自行用安全组/防火墙限制来源）。
+两条等价入口：
 
 - **无需 Node（推荐给终端用户）**：Windows 用 `console-tunnel.bat`，macOS/Linux 用
   `bash console-tunnel.sh`。首次运行输入 `user@host` 并记住，自动通过 SSH 读取服务器上的

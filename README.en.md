@@ -627,7 +627,7 @@ bash -n deploy.sh && bash -n deploy-all.sh && bash -n manage.sh
 ```
 
 CI (GitHub Actions) runs the syntax check, the strict undefined-call scan, unit tests, the local
-regression, and the prompt / render / scroll / usage end-to-end suites on every push and pull request. Two small confirmed issues are open on this baseline,
+regression, and the prompt / render / scroll / usage end-to-end suites on pushes to main and all pull requests. Two small confirmed issues are open on this baseline,
 neither on the main path; see [KNOWN-ISSUES](docs/KNOWN-ISSUES.md) for the current list and the
 history. The [Chinese README](README.md) carries the complete option lists and the per-page
 description of the console; the [documentation index](docs/README.md) lists all documents.

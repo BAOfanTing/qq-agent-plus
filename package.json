@@ -55,6 +55,6 @@
     "eslint-scope": "^9.1.2",
     "espree": "^11.2.0",
     "globals": "^17.13.0",
-    "happy-dom": "^21.0.3"
+    "happy-dom": "^21.0.4"
   }
 }

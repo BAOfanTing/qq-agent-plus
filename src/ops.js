@@ -1150,9 +1150,12 @@ function cmdScan(args) {
 function runTarCreate(outFile, dataDir) {
   const parent = path.dirname(dataDir);
   const base = path.basename(dataDir);
+  // 部署快照 / 更新缓存都是可重建的大目录；与 scripts/manage.mjs backup 的排除清单保持一致，
+  // 否则每周定时备份会把它们整套再打包一份（2026-10 审查 P3）。
+  const excludes = ['--exclude=deploy-backups', '--exclude=update-work', '--exclude=update-repository.git'];
   const attempts = IS_WINDOWS
-    ? [['--force-local', '-czf', outFile, '-C', parent, base], ['-czf', outFile, '-C', parent, base]]
-    : [['-czf', outFile, '-C', parent, base]];
+    ? [['--force-local', ...excludes, '-czf', outFile, '-C', parent, base], [...excludes, '-czf', outFile, '-C', parent, base]]
+    : [[...excludes, '-czf', outFile, '-C', parent, base]];
   let last = { ok: false, code: null, stderr: '' };
   for (const tarArgs of attempts) {
     // 有界超时：备份在 systemctl stop 之后跑，tar 卡住 = 机器人一直停着等人

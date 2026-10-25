@@ -331,7 +331,7 @@ Docker Hub 拉不到 `node` 基础镜像时，构建参数可以换前缀：
 
 ```bash
 docker build \
-  --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:22.23.2-bookworm-slim \
+  --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:22.23.3-bookworm-slim \
   -t qq-agent-plus:local .
 QQ_AGENT_IMAGE=qq-agent-plus:local docker compose up -d agent
 ```

@@ -77,7 +77,7 @@ import { readOwnerUin } from '../core/notify-owner.js';
 import { pluginSecretStatus, writePluginSecrets, secretFieldKeys, clearPluginSecrets } from '../plugins/secrets.js';
 import {
   grantsStatus, listPendingApprovals, approvePendingApproval,
-  rejectPendingApproval, listPluginWrites
+  rejectPendingApproval, listPluginWrites, clearPluginGrants
 } from '../plugins/grants.js';
 // 平台能力门控的元数据（键→标签/工具/默认取向/配额默认）：控制台不手抄第二份，防漂移
 import {
@@ -3064,6 +3064,10 @@ export function createApp({
     const pendingHit = listPendingApprovals(DATA_DIR).find((item) => item.id === pendingId);
     if (!pendingHit) return json(res, 404, { ok: false, error: '这条待批请求不存在或已过期' });
     if (pendingHit.pluginId !== id) return json(res, 400, { ok: false, error: '这条待批请求属于另一个插件' });
+    // 安全接口显式白名单：以前只有 reject 被识别，拼错/漏传 decision 会被当成批准（fail-open）。
+    if (body.decision !== 'approve' && body.decision !== 'reject') {
+      return json(res, 400, { ok: false, error: 'decision 只能是 approve 或 reject' });
+    }
     try {
       if (body.decision === 'reject') {
         const rejected = rejectPendingApproval(DATA_DIR, pendingId);
@@ -3371,12 +3375,23 @@ export function createApp({
     // 破坏性操作统一 confirm 门槛（与全站口径一致）
     if (body?.confirm !== true) return json(res, 409, { ok: false, error: '卸载插件需要 body.confirm === true' });
     const id = String(body.id || '').trim();
+    if (!pluginIdValid(id)) return json(res, 400, { ok: false, error: '插件 id 不合法' });
     try {
       // 先停掉这个插件的进程再挪目录：子进程的 cwd 就是插件目录，Windows 上"作为存活进程 cwd 的
       // 目录"不能被 rename（EPERM/EBUSY），会出现"点卸载报错、插件还在"。Linux 上虽然能挪，
       // 但让一个已卸载插件的进程继续跑也没有道理。
       await pluginRegistry.stopOne(id);
+      // 卸载 = 这个安装实例结束：enabledIds/动作开关、对象级批准、凭据、待批与备份都不能
+      // 留给同 id 的下一个包（2026-10 审查 P1）。配置先改，避免卸载后重装即自动运行。
+      const plugins = getConfig().plugins || {};
+      const enabledIds = (Array.isArray(plugins.enabledIds) ? plugins.enabledIds : [])
+        .filter((value) => value !== id);
+      const switches = { ...(plugins.switches || {}) };
+      delete switches[id];
+      updateConfig({ plugins: { enabledIds, switches: { __replace__: switches } } });
       const result = uninstallPlugin({ id, dataDir: DATA_DIR });
+      clearPluginGrants(DATA_DIR, id);
+      clearPluginSecrets(DATA_DIR, id);
       auditWrite('plugins.uninstall', `plugins:${id}`, { req });
       await pluginRegistry.reconfigure();
       return json(res, 200, { ok: true, ...result, ...pluginRegistry.list() });

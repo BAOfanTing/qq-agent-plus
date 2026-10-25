@@ -180,6 +180,9 @@ export async function installPlugin({
     // 混用同一个 code/文案的话，用例咬不出"校验被挪到写盘之后"这种改动（2026-10-15 复审）
     throw fail('E_BAD_ID', '插件 id 不合法（只允许小写字母/数字/连字符，2-32 位）');
   }
+  if (requestedId === 'pending') {
+    throw fail('E_BAD_ID', '插件 id「pending」是宿主保留名，请换一个');
+  }
 
   let buffer = tarball;
   if (!buffer) {
@@ -195,6 +198,11 @@ export async function installPlugin({
     if (buffer.length > MAX_PLUGIN_ARCHIVE_BYTES) throw fail('E_DOWNLOAD', `超过体积上限 ${MAX_PLUGIN_ARCHIVE_BYTES / 1024 / 1024}MB`);
   }
   if (!buffer?.length) throw fail('E_ARGS', '没有可安装的内容');
+  // 上传文件（install-file）也要过同一个包体积上限：只限制下载分支时，
+  // 直接 POST base64 可以塞进更大的包（2026-10 审查 P3）。
+  if (buffer.length > MAX_PLUGIN_ARCHIVE_BYTES) {
+    throw fail('E_TOO_BIG', `插件包超过体积上限 ${MAX_PLUGIN_ARCHIVE_BYTES / 1024 / 1024}MB`);
+  }
   // 给了 sha256 就得是个能核对的东西：形状不对就报错，而不是"跳过校验继续装"（与 verifySha256 同口径）
   const declaredSha = String(sha256 ?? '').trim();
   if (declaredSha && !isSha256(declaredSha)) throw fail('E_SHA_SHAPE', 'sha256 必须是 64 位十六进制');
@@ -391,6 +399,10 @@ export function uninstallPlugin({ id, dataDir, now = () => Date.now() } = {}) {
   if (!fs.existsSync(target)) throw fail('E_NOT_FOUND', `没有装着 ${name}`);
   const removed = path.join(root, `.removed-${name}.${now()}`);   // 同上：用 id 字符集里没有的分隔符
   fs.renameSync(target, removed);
+  // 备份也属于这个安装实例：留着会让"回退上一版"把已卸载的旧代码换回来。
+  for (const entry of listPluginBackups({ id: name, dataDir })) {
+    fs.rmSync(path.join(root, entry), { recursive: true, force: true });
+  }
   return { ok: true, id: name, removedDir: removed, dataKept: path.join(dataDir, 'plugin-data', name) };
 }
 

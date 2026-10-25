@@ -136,7 +136,8 @@ async function runFfmpeg(ffmpegPath, buffer, vf, signal) {
  */
 export async function fetchOversizedImageAsJpeg(safeUrl, originalError, signal, {
   cap = 12 * 1024 * 1024,
-  largeCap = 96 * 1024 * 1024
+  // 与音频/视频通道同一个 64MB 上限：整包读内存 + 解压/抽帧的峰值已经够高。
+  largeCap = 64 * 1024 * 1024
 } = {}) {
   if (!OVERSIZE_LIMIT_RE.test(String(originalError?.message ?? ''))) throw originalError;
   const ffmpegPath = await resolveFfmpeg();

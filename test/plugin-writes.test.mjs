@@ -13,7 +13,8 @@ process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: tr
 const {
   grantApproval, checkApproval, refundApproval, consumeQuota, refundQuota,
   requestPendingApproval, listPendingApprovals, approvePendingApproval,
-  rejectPendingApproval, recordPluginWrite, listPluginWrites
+  rejectPendingApproval, recordPluginWrite, listPluginWrites,
+  normalizeTarget, clearPluginGrants
 } = await import('../src/plugins/grants.js');
 const { PluginRegistry, PLUGIN_WRITE_FLOOR_MS } = await import('../src/plugins/registry.js');
 
@@ -234,6 +235,33 @@ test('目标缺失/非法：拒绝且不生成通配批准（旧实现会退化�
     '更不许出现任意目标都能命中的通行证');
 });
 
+test('目标超过 120 字符直接拒绝，不截断成前缀批准', () => {
+  assert.equal(normalizeTarget('a'.repeat(120)), 'a'.repeat(120));
+  assert.equal(normalizeTarget('a'.repeat(121)), null, '截断后校验会让批准只绑定前 120 字符');
+});
+
+test('待批请求也计入 60s 写间隔，不能连续刷待批', async () => {
+  for (const leftover of listPendingApprovals(dataDir)) rejectPendingApproval(dataDir, leftover.id);
+  const { registry } = makeRegistry({ ownerUin: '10001' });
+  registry.lastWriteAt.set('demo', 0);
+  const first = parse(await runTool(registry, { bvid: 'BVQ', text: '内容' }));
+  assert.equal(first.needsApproval, true);
+  const second = parse(await runTool(registry, { bvid: 'BVQ', text: '内容' }));
+  assert.match(second.error, /至少间隔/, '第二次应被写间隔挡住，而不是再生成一条待批');
+  assert.equal(listPendingApprovals(dataDir).filter((item) => item.target === 'BVQ').length, 1);
+});
+
+test('卸载清理：清掉授权与待批，不影响其他插件', () => {
+  grantApproval(dataDir, 'clear-a', 'write', { target: 'X', uses: 1, ttlMs: 60_000 });
+  requestPendingApproval(dataDir, { pluginId: 'clear-a', action: 'write', target: 'Y' });
+  grantApproval(dataDir, 'clear-b', 'write', { target: 'Z', uses: 1, ttlMs: 60_000 });
+  clearPluginGrants(dataDir, 'clear-a');
+  assert.equal(checkApproval(dataDir, 'clear-a', 'write', { target: 'X' }).approved, false);
+  assert.equal(listPendingApprovals(dataDir).some((item) => item.pluginId === 'clear-a'), false);
+  assert.equal(checkApproval(dataDir, 'clear-b', 'write', { target: 'Z' }).approved, true,
+    '别的插件的授权不能被顺手清掉');
+});
+
 test('预览内容改变：旧批准失效，并为新内容单独生成待批', async () => {
   for (const leftover of listPendingApprovals(dataDir)) rejectPendingApproval(dataDir, leftover.id);
   const { registry } = makeRegistry({ ownerUin: '10001' });
@@ -269,6 +297,20 @@ test('一次调用给了多个不同目标：拒绝（否则批准对象与实�
   const one = parse(await runTool(registry, { mid: '12345', text: '内容' }));
   assert.equal(one.needsApproval, true);
   assert.equal(listPendingApprovals(dataDir).find((item) => item.target === '12345')?.action, 'write');
+});
+
+test('控制台直调不能绕过写门：声明 action 的登录工具也拒绝', async () => {
+  const tools = [{
+    name: 'login',
+    description: '扫码登录',
+    parameters: { type: 'object', properties: {} },
+    action: 'start'
+  }];
+  const { registry } = makeRegistry({ manifestPatch: { tools } });
+  await assert.rejects(
+    () => registry.callConsoleTool('demo', 'login', { action: 'start' }),
+    /不能从控制台直调/
+  );
 });
 
 test('超时/进程退出：结果未知 → 不退批准与配额，并明确不重试', async () => {

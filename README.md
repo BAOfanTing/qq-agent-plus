@@ -613,7 +613,7 @@ npm audit --omit=dev
 bash -n deploy.sh && bash -n deploy-all.sh && bash -n manage.sh
 ```
 
-CI（GitHub Actions）在每次推送和 PR 上执行语法检查、未定义调用扫描（严格模式）、单元测试、本地回归，
+CI（GitHub Actions）在 main 分支推送和所有 PR 上执行语法检查、未定义调用扫描（严格模式）、单元测试、本地回归，
 以及提示词 / 渲染 / 滚动 / 用量端到端回归。
 当前基线上仍有一批已确认、暂不修的问题；数量与状态以[已知问题](docs/KNOWN-ISSUES.md)为准，不要在这里写死条数。
 

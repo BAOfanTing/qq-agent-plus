@@ -35,7 +35,10 @@ const systemctl = (action) => {
   const r = spawnSync('systemctl', ['--user', action, `${deploy.service}.service`, '--no-pager'], { stdio: 'inherit' });
   process.exitCode = r.status || 0;
 };
-const host = cfg.server.host === '0.0.0.0' ? '127.0.0.1' : cfg.server.host;
+// URL 里的 IPv6 必须加方括号：`http://::1:3210` / `http://:::3210` 都是非法 URL。
+const rawHost = String(cfg.server.host || '127.0.0.1');
+let host = rawHost === '0.0.0.0' ? '127.0.0.1' : (rawHost === '::' ? '::1' : rawHost);
+if (host.includes(':') && !host.startsWith('[')) host = `[${host}]`;
 const base = `http://${host}:${cfg.server.port}`;
 async function api(route, body) {
   const res = await fetch(base + route, {

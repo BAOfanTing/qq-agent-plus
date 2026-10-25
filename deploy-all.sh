@@ -561,6 +561,12 @@ ACCESS_FILE="$ROOT_DIR/deployment-access.txt"
 
 EXISTING_STACK=false
 PREFLIGHT_NODE=""
+# 栈级锁必须在“归属判定/凭据读回”之前拿到：两个实例交错时，后启动的那个不能先按
+# 全新安装预检、等前一个结束后再拿锁继续（会把受管栈的凭据轮换掉，2026-10 审查 P2）。
+STACK_LOCK_DIR="$ROOT_DIR/.deploy-all.lock"
+trap deploy_all_exit EXIT
+mkdir -p -- "$ROOT_DIR"
+acquire_stack_lock
 check_local_ownership
 if [[ "$EXISTING_STACK" == true ]]; then
   if [[ "$SERVICE_SET" != true ]]; then
@@ -738,14 +744,8 @@ mkdir -p "$APP_DIR" "$AGENT_DATA_DIR" \
 chmod 700 "$AGENT_DATA_DIR" "$SNOWLUMA_DIR" "$SNOWLUMA_DATA_DIR" \
   "$SNOWLUMA_DIR/client-config" "$SNOWLUMA_DIR/client-data"
 
-# 2026-10-06 复审 P3：退出钩子必须挂在第一次写盘之前 —— 原先 fresh 的清理 trap 在
-# .env/compose 写完之后才挂（655 行），写盘窗口内失败（ENOSPC/权限）会留下半成品 .env，
-# 重跑被 check_local_ownership 拒绝，正是本节注释声称要避免的死结。
-# EXISTING_STACK 的失败退出由 deploy_all_exit 里的 .env 回滚兜底。
-trap deploy_all_exit EXIT
-STACK_LOCK_DIR="$ROOT_DIR/.deploy-all.lock"
-acquire_stack_lock
-# 只有拿到锁的实例才允许做 fresh 清理；抢锁失败的实例退出时不能删赢家的 .env/compose。
+# 退出钩子与栈级锁已在归属判定之前挂好（见上方 EXISTING_STACK 初始化处）。
+# 只有拿到锁且确认是 fresh 的实例才允许做清理；抢锁失败的实例退出时不能删赢家的 .env/compose。
 if [[ "$EXISTING_STACK" != true ]]; then
   FRESH_STACK_CLEANUP=true
 fi
@@ -949,6 +949,9 @@ export QQ_AGENT_ONEBOT_HTTP_TOKEN="$ONEBOT_TOKEN"
 export QQ_AGENT_ONEBOT_HTTP_URL="http://127.0.0.1:$ONEBOT_HTTP_PORT"
 export QQ_AGENT_ONEBOT_WS_URL="ws://127.0.0.1:$ONEBOT_WS_PORT"
 export QQ_SNOWLUMA_WEBUI_URL="http://127.0.0.1:$SNOWLUMA_PORT"
+# 协议端更新器用这个端口做就绪探测；只在 URL 里带端口不够（自定义 --snowluma-port 时
+# 会一直探默认 5099 → 超时回滚，2026-10 审查 P2）。
+export QQ_AGENT_WEBUI_PORT="$SNOWLUMA_PORT"
 [[ -z "$MODEL_BASE_URL" ]] || export QQ_AGENT_MODEL_BASE_URL="$MODEL_BASE_URL"
 # 模型 Key 不走子进程环境（/proc/<pid>/environ 里读得到）：写 0600 临时文件，
 # 部署脚本按 QQ_AGENT_MODEL_KEY_FILE 读，脚本退出时删掉。
@@ -961,11 +964,14 @@ fi
 [[ -z "$MODEL_NAME" ]] || export QQ_AGENT_MODEL="$MODEL_NAME"
 [[ -z "$ALLOW_GROUPS" ]] || export QQ_AGENT_ALLOW_GROUPS="$ALLOW_GROUPS"
 [[ -z "$ALLOW_PRIVATE" ]] || export QQ_AGENT_ALLOW_PRIVATE="$ALLOW_PRIVATE"
-DEPLOY_ARGS=(--install-dir "$APP_DIR" --data-dir "$AGENT_DATA_DIR" --service "$SERVICE")
+# 端口每一轮都显式传给 deploy.sh：.env 在重跑时已经写成了新端口，如果 deploy.sh 仍沿用
+# config.json 的旧端口，部署会"成功"但随后按新端口做健康检查必然超时，.env 与 config.json
+# 从此不一致，后续所有预检都会拒绝（2026-10 审查 P1）。
+DEPLOY_ARGS=(--install-dir "$APP_DIR" --data-dir "$AGENT_DATA_DIR" --service "$SERVICE" --port "$AGENT_PORT")
 if [[ "$EXISTING_STACK" != true ]]; then
-  # 新装才强制 0.0.0.0/所选端口；已有安装让 deploy.sh 沿用 config.json 里的现值，
+  # 新装才强制 0.0.0.0；已有安装让 deploy.sh 沿用 config.json 里的 host，
   # 否则用户按文档改成 127.0.0.1 后会被安装器改回去。
-  DEPLOY_ARGS+=(--host 0.0.0.0 --port "$AGENT_PORT")
+  DEPLOY_ARGS+=(--host 0.0.0.0)
 fi
 bash "$SOURCE_DIR/deploy.sh" "${DEPLOY_ARGS[@]}"
 # Agent 已装好，栈不再是"半成品"：撤销失败清理，保留 .env / compose。

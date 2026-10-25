@@ -22,7 +22,9 @@ import { iflytekOptions, iflytekTranscribe } from '../llm/asr-iflytek.js';
 import { hasSilkMagic, looksLikeSilk, silkToPcm } from '../llm/silk.js';
 import { createQuota } from '../core/quota.js';
 
-const AUDIO_MAX_BYTES = 200 * 1024 * 1024; // 200MB：QQ 文件上限内
+// 群友可控的媒体会整包读进内存（readBytesBounded 还要 Buffer.concat 一次，峰值约 2 倍）。
+// 200MB 在双并发下接近 800MB，小内存机器会被打 OOM；64MB 足够覆盖语音与常见短视频。
+const AUDIO_MAX_BYTES = 64 * 1024 * 1024;
 // PCM 全量进内存：16kHz 单声道 s16 = 32KB/s，15 分钟约 28.8MB（上限按这个算）。
 // 更要防的是"群友连发长语音刷账单"，所以再加一道每小时次数闸门（asr.maxPerHour）。
 const ASR_MAX_PCM_SECONDS = 60 * 15;

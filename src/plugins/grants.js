@@ -91,8 +91,10 @@ function assertAction(action) {
  * 带 `/`/空格/中文的目标就能拿到一张"批一次、任意目标都能用"的通行证（2026-10-24 审查 P1）。
  */
 export function normalizeTarget(target) {
-  const value = String(target ?? '').trim().slice(0, 120);
+  const value = String(target ?? '').trim();
   if (!value) return '';
+  // 不能先截断再校验：批准只绑定前 120 字符，而插件实际收到完整原值 ——
+  // 尾部追加非法字符/另一个目标就能绕过对象级批准（2026-10 审查 P2）。
   return TARGET_RE.test(value) ? value : null;
 }
 
@@ -226,6 +228,18 @@ export function revokeApproval(dataDir, pluginId, action, target = '') {
     ? grants.filter((entry) => !(entry.action === key && String(entry.target || '') === wanted))
     : grants.filter((entry) => entry.action !== key);
   save(dataDir, pluginId, state);
+}
+
+/**
+ * 卸载时清空某个插件的授权、配额、写审计与待批请求。
+ * 卸载不能只挪代码目录：enabledIds/开关、对象级批准、旧的 pending 都属于这个安装实例，
+ * 重装同 id 的另一个包不能继承它们（2026-10 审查 P1）。
+ */
+export function clearPluginGrants(dataDir, pluginId) {
+  try { fs.rmSync(grantsFile(dataDir, pluginId), { force: true }); } catch { /* 本来就不存在 */ }
+  const pending = loadPending(dataDir);
+  const kept = pending.filter((item) => item.pluginId !== pluginId);
+  if (kept.length !== pending.length) savePending(dataDir, kept);
 }
 
 // ── 待批队列 ────────────────────────────────────────────────────────────

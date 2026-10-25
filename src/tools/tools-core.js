@@ -227,7 +227,7 @@ export async function downloadImageAsDataUrl(url, signal) {
 export async function downloadVideoAsFrameStrip(url, signal) {
   signal?.throwIfAborted();
   const safeUrl = await validateImageUrl(url);
-  const { buffer } = await safeFetchBinary(safeUrl, 96 * 1024 * 1024, signal);
+  const { buffer } = await safeFetchBinary(safeUrl, 64 * 1024 * 1024, signal);
   if (!buffer?.length) throw new Error('视频内容为空');
   const strip = await convertVideoToFrameStrip(buffer, signal);
   if (!strip?.length) throw new Error('视频抽帧失败（服务器上需要可用的 ffmpeg/ffprobe）');
@@ -2772,7 +2772,7 @@ export function buildToolDefs() {
       },
       async execute(ctx, args) {
         try {
-          const result = await webFetch(String(args.url ?? ''));
+          const result = await webFetch(String(args.url ?? ''), { signal: ctx.signal });
           const body = String(result.body || '');
           return ok({
             url: result.url,

@@ -500,11 +500,12 @@ test('deploy-all.sh：栈级互斥锁覆盖 .env 到 deploy.sh 的全程，且�
   const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
   assert.match(sh, /acquire_stack_lock/);
   assert.match(sh, /STACK_LOCK_DIR="\$ROOT_DIR\/\.deploy-all\.lock"/);
-  assert.match(sh, /trap deploy_all_exit EXIT\nSTACK_LOCK_DIR=/);
+  assert.match(sh, /STACK_LOCK_DIR="\$ROOT_DIR\/\.deploy-all\.lock"\ntrap deploy_all_exit EXIT/);
   assert.match(sh, /STACK_LOCK_OWNED=false/);
   assert.match(sh, /if \[\[ "\$\{STACK_LOCK_OWNED:-false\}" == true/,
     '只有锁的所有者才能删除锁');
-  assert.match(sh, /acquire_stack_lock\n# 只有拿到锁的实例才允许做 fresh 清理/);
+  assert.match(sh, /acquire_stack_lock\ncheck_local_ownership/,
+    '锁必须在归属判定之前拿到（防止并发重跑按 fresh 处理受管栈）');
   assert.match(sh, /STACK_LOCK_DIR\.takeover/, '陈旧锁接管要有互斥');
   assert.match(sh, /mv -- "\$STACK_LOCK_DIR" "\$takeover\/stale"/,
     '接管要先原子搬走旧锁，不能 rm -rf 后再 mkdir');
@@ -547,4 +548,32 @@ test('deploy.sh：systemd 安装树不铺 Docker 全栈文件', () => {
   ]) {
     assert.ok(sh.includes(rule), `deploy.sh 缺少 Docker 文件排除：${rule}`);
   }
+});
+
+test('deploy-all：已有安装重跑也把端口显式交给 deploy.sh', () => {
+  const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
+  assert.match(sh, /DEPLOY_ARGS=\([^)]*--port "\$AGENT_PORT"\)/,
+    '端口只在全新安装分支传：.env 已改成新端口、config.json 还是旧端口，健康检查必超时');
+  assert.doesNotMatch(sh, /DEPLOY_ARGS\+=\(--host 0\.0\.0\.0 --port/, '新装分支不要重复追加端口');
+});
+
+test('deploy-all：栈级锁在归属判定与凭据读回之前获取', () => {
+  const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
+  const lock = sh.indexOf('acquire_stack_lock\ncheck_local_ownership');
+  assert.ok(lock >= 0, '锁必须紧接在 check_local_ownership 之前');
+  assert.ok(sh.indexOf('acquire_stack_lock') < sh.indexOf('check_host_ownership'), 'host 预检也要在锁之后');
+});
+
+test('SnowLuma 自定义端口同时写进服务环境与部署记录', () => {
+  const sh = fs.readFileSync(path.join(repo, 'deploy-all.sh'), 'utf8');
+  const svc = fs.readFileSync(path.join(repo, 'scripts/install-service.mjs'), 'utf8');
+  assert.match(sh, /export QQ_AGENT_WEBUI_PORT="\$SNOWLUMA_PORT"/);
+  assert.match(svc, /QQ_AGENT_WEBUI_PORT=\$\{webuiPort\}/);
+  assert.match(svc, /\.\.\.\(webuiPort \? \{ webuiPort \} : \{\}\)/);
+});
+
+test('manage.mjs：IPv6 host 写 URL 时加方括号', () => {
+  const src = fs.readFileSync(path.join(repo, 'scripts/manage.mjs'), 'utf8');
+  assert.match(src, /host\.includes\(':'.*?\) host = `\[\$\{host\}\]`/s);
+  assert.match(src, /rawHost === '::'/);
 });

@@ -59,6 +59,9 @@ const MAX_ACTIONS = 24;
 const MAX_DOMAIN = 120;
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+// plugin-grants/pending.json 是全局待批队列；插件 id 撞上它会把旧队列覆盖成对象/数组，
+// 导致所有插件的待批请求静默消失（2026-10 审查 P2）。
+const RESERVED_IDS = new Set(['pending']);
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]{1,31}$/;
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
 const MAX_TOOLS = 12;
@@ -324,6 +327,9 @@ export function parsePluginManifest(raw, { dir = '' } = {}) {
   const id = str(raw.id);
   if (!ID_RE.test(id)) {
     return { ok: false, error: `id 只能是小写字母/数字/连字符（2-32 位，首字符为字母或数字），实际 ${JSON.stringify(raw.id)}` };
+  }
+  if (RESERVED_IDS.has(id)) {
+    return { ok: false, error: `id「${id}」是宿主保留名，请换一个` };
   }
   if (!SUPPORTED_API_VERSIONS.includes(Number(raw.apiVersion))) {
     return {

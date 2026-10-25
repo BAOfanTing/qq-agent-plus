@@ -55,11 +55,27 @@ test('单个台账失败不向上抛、不拖累其余，也不在同日重试�
   assert.deepEqual(calls, ['ok', 'ok']);
 });
 
-test('start/stop：可重复 start 不叠加、stop 可重入', () => {
-  const scheduler = createDailyRetentionScheduler({ targets: [], log: SILENT });
+test('start/stop：可重复 start 不叠加、stop 可重入且真的清掉定时器', (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let nowMs = Date.parse('2026-10-09T10:00:00+08:00');
+  let calls = 0;
+  const scheduler = createDailyRetentionScheduler({
+    targets: [{ name: 'A', run: () => { calls++; } }],
+    intervalMs: 60 * 60 * 1000,
+    nowFn: () => nowMs,
+    log: SILENT
+  });
   scheduler.start();
-  scheduler.start();
+  scheduler.start();                 // 重复 start 不能叠加第二个 interval
   scheduler.stop();
+  scheduler.stop();                  // stop 必须可重入
+  nowMs += 24 * 60 * 60 * 1000;
+  t.mock.timers.tick(60 * 60 * 1000);
+  assert.equal(calls, 0, 'stop 后不能再有残留定时器触发清理');
+
+  scheduler.start();                 // stop 之后还能重新启动
+  nowMs += 24 * 60 * 60 * 1000;
+  t.mock.timers.tick(60 * 60 * 1000);
+  assert.equal(calls, 1, '重新 start 后跨日应执行一次');
   scheduler.stop();
-  assert.ok(true);
 });

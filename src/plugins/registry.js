@@ -117,6 +117,7 @@ export class PluginRegistry {
     this.opChain = Promise.resolve(); // 起停/重载/安装的串行队列（见 #serialize）
     this.scheduleState = new Map();   // "<id>:<任务名>" -> 上次触发时间（内存态：重启后重新计时）
     this.lastWriteAt = new Map();     // pluginId -> 上次写操作时间（60s 间隔下限，内存态即可）
+    this.lastPendingAt = new Map();   // pluginId -> 上次登记待批时间（防止未批准请求绕过写间隔刷屏）
     this.lastUsedAt = new Map();      // id -> 最近一次被用到的时间（懒启动的"空闲"判据）
     this.starting = new Map();        // id -> 在途的按需启动 promise（并发调用共享同一个）
     this.scheduleTimer = null;
@@ -662,6 +663,13 @@ export class PluginRegistry {
     // 批准绑定 (动作, 目标, 预览内容)：评论/弹幕换了正文就必须重新批准
     const approval = checkApproval(this.dataDir, host.id, action, { consume: true, target, preview });
     if (!approval.approved) {
+      // 待批也要限流：否则模型可以在未批准状态下连续刷待批，绕过 60 秒下限，
+      // 并且每来一次都再私聊 owner。这里用独立的 lastPendingAt，不占 lastWriteAt ——
+      // 管理员批准后模型马上重试时不能被这条挡成"再等 60 秒"。
+      const lastPending = Number(this.lastPendingAt.get(host.id)) || 0;
+      if (Date.now() - lastPending < PLUGIN_WRITE_FLOOR_MS) {
+        return denied(`待批请求至少间隔 ${Math.round(PLUGIN_WRITE_FLOOR_MS / 1000)} 秒，请稍后再试`, 'denied', 'rate-floor');
+      }
       // 一次批准只对一个目标：没有针对这个目标的通行证 → 生成待批请求并通知管理员
       const pending = requestPendingApproval(this.dataDir, {
         pluginId: host.id,
@@ -671,8 +679,9 @@ export class PluginRegistry {
         target,
         preview
       });
+      this.lastPendingAt.set(host.id, Date.now());
       recordPluginWrite(this.dataDir, host.id, { action, target, outcome: 'pending', note: pending.id });
-      void this.#notifyOwnerApproval(pending);
+      if (pending.duplicate !== true) void this.#notifyOwnerApproval(pending);
       return denied(
         `需要管理员批准：${declared?.label || action}${target ? ` → ${target}` : ''}。`
           + `已通知管理员（待批编号 ${pending.id}），批准后让用户再试一次即可`,
@@ -687,6 +696,7 @@ export class PluginRegistry {
       return denied(quota.reason, 'denied', 'quota');
     }
     this.lastWriteAt.set(host.id, Date.now());
+    this.lastPendingAt.delete(host.id);   // 已放行一次：下一次待批不用再等"待批间隔"
     return { proceed: true, action, target, approvalReceipt: approval.receipt, quotaReceipt: quota.receipt };
   }
 
@@ -760,6 +770,11 @@ export class PluginRegistry {
     if (!host?.manifest) throw Object.assign(new Error('插件没有在运行列表里（先启用它）'), { code: 'E_NOT_FOUND' });
     const tool = host.manifest.tools.find((t) => t.name === toolName);
     if (!tool) throw Object.assign(new Error(`插件 ${id} 没有工具 ${toolName}`), { code: 'E_NOT_FOUND' });
+    // 控制台直调是登录类工具的专用通道，不是绕开写门的后门：声明了 action 的工具必须走
+    // 模型路径（开关 + 对象级批准 + 配额），否则"扫码登录"按钮能触发未批准的写操作。
+    if (tool.action) {
+      throw Object.assign(new Error('这个工具声明了写动作，不能从控制台直调'), { code: 'E_FORBIDDEN' });
+    }
     const ready = host.state === 'running' ? host : await this.#ensureRunning(id);
     if (!ready || ready.state !== 'running') {
       throw Object.assign(new Error(`插件未在运行（${ready?.lastError || '按需启动失败'}）`), { code: 'E_DOWN' });

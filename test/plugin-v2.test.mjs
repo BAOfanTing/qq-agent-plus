@@ -56,6 +56,12 @@ test('apiVersion 2：合法 manifest 通过，v1 不能声明 v2 能力', () => 
   assert.match(legacy.error, /apiVersion 1 不能声明/);
 });
 
+test('保留 id：pending 不能作为插件 id（会覆盖全局待批队列）', () => {
+  const result = parse({ ...v2(), id: 'pending' });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /保留名/);
+});
+
 test('apiVersion 2：schema / 授权 / 配额校验 fail-closed', () => {
   const cases = [
     [v2({ capabilities: ['tools'] }), /secret 字段就必须.*secrets/],
