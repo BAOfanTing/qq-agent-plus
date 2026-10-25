@@ -350,10 +350,8 @@ test('资产页按功能块分卡：好友管理不再是一整面输入框', ()
   for (const title of ['基础设置', '触发条件', '频率与配额', '评分权重', '入站好友请求', '收到的好友请求', '主动好友候选', '消息触发与评估记录']) {
     assert.match(friend, new RegExp(`<h3>${title}</h3>`), `缺少「${title}」卡片`);
   }
-  const cards = friend.match(/<section class="settings-card(?:\s|")/g) || [];
-  assert.ok(cards.length >= 8, `好友管理应有至少 8 张卡片，实际 ${cards.length}`);
-  const formCards = friend.match(/<section class="settings-card friend-settings-card"/g) || [];
-  assert.equal(formCards.length, 5, '五个设置区块要套居中阅读列');
+  const cards = friend.match(/<section class="settings-card"/g) || [];
+  assert.equal(cards.length, 8, `好友管理应有 8 张卡片，实际 ${cards.length}`);
   assert.doesNotMatch(friend, /<section class="control-section"/,
     '资产页不能再退回扁平 control-section：功能块要靠卡片分组');
 });
@@ -378,14 +376,17 @@ test('资产页卡片复用设置页的卡片样式', () => {
   assert.match(css, /\.asset-summary \+ \.settings-card,\s*\.friend-save-result \+ \.settings-card \{ margin-top: 14px; \}/);
 });
 
-test('资产页卡片跟内容区同宽，好友字段自动铺满', () => {
-  // 用户反馈：好友管理被单独收成 860 窄列后比别的页面小一圈；把卡片放回通栏后，
-  // 字段也不能继续挤在左半边，按卡片宽度自动分列铺开。
-  assert.doesNotMatch(css, /#friend-page,\s*#identity-page,\s*#incident-page \{/,
-    '资产页不要再单独套居中窄列');
-  assert.match(css, /\.asset-pane \.settings-card \{ max-width: none; \}/);
-  assert.match(css, /#friend-page \.friend-settings-card \.field-row \{[^}]*grid-template-columns: repeat\(auto-fit, minmax\(190px, 1fr\)\);/s,
-    '好友管理的字段要按通栏宽度自动铺开，不能挤在左边');
-  assert.match(css, /\.settings-card \{[^}]*max-width: 1180px;/s,
-    '设置页的卡片宽度仍然保留');
+test('好友管理整块内容居中，宽度按表单页取 1180', () => {
+  // 用量页的 940 是给它自己的数字卡/表格刚好铺满的；好友管理是表单，照搬会窄。
+  // 这里取与插件目录相近的 1180，整块居中，避免贴内容区左缘。
+  assert.match(css, /\.usage-wrap \{ max-width: 940px; margin: 0 auto; \}/,
+    '用量页保持自己的 940px 居中列');
+  const block = /#friend-page \{([\s\S]*?)\n\}/.exec(css);
+  assert.ok(block, '好友管理要有自己的居中列规则');
+  assert.match(block[1], /display: grid;/);
+  assert.match(block[1], /grid-template-columns: minmax\(0, 1180px\);/);
+  assert.match(block[1], /justify-content: center;/);
+  assert.match(block[1], /align-content: start;/);
+  assert.doesNotMatch(css, /friend-settings-card/,
+    '不要再给好友管理单独加窄列/铺满特例');
 });

@@ -2361,11 +2361,14 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
    收成 860 窄列会显得"只有这一页变小了"。设置页的 860 阅读列由 .settings-pane
    自己的单列网格负责，不影响这里。 */
 .asset-pane .settings-card { max-width: none; }
-/* 好友管理是通栏卡片：字段按卡片可用宽度自动铺开（宽屏 5 列），
-   不再集中到左半边，也不把表单挤成中间一条窄列。
-   ID 前缀用于压过后面的 .field-row 固定三轨定义。 */
-#friend-page .friend-settings-card .field-row {
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+/* 好友管理是表单页，内容宽度取和插件目录相近的 1180（不是用量页的 940：
+   用量是数字卡/表格刚好铺满 940，表单照搬会显得窄）。整块居中，
+   标题、摘要、卡片和表单左右留白一致，不再贴着内容区左缘。 */
+#friend-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1180px);
+  justify-content: center;
+  align-content: start;
 }
 .asset-head {
   display: flex;
