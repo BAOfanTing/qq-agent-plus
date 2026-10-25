@@ -2361,6 +2361,14 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
    收成 860 窄列会显得"只有这一页变小了"。设置页的 860 阅读列由 .settings-pane
    自己的单列网格负责，不影响这里。 */
 .asset-pane .settings-card { max-width: none; }
+/* 好友管理的设置卡通栏，但表单内容收在卡片中间的一条阅读列里：
+   卡片外框与摘要卡同宽（不再"只有这一页变小"），标题和输入框也不再贴着卡片左缘。 */
+/* ID 前缀是为了压过后面 .field-row 自己的 max-width: 1180px（同权重时后者会赢）。 */
+#friend-page .friend-settings-card > * {
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
+}
 .asset-head {
   display: flex;
   align-items: center;

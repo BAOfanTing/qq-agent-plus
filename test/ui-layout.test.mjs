@@ -350,8 +350,10 @@ test('资产页按功能块分卡：好友管理不再是一整面输入框', ()
   for (const title of ['基础设置', '触发条件', '频率与配额', '评分权重', '入站好友请求', '收到的好友请求', '主动好友候选', '消息触发与评估记录']) {
     assert.match(friend, new RegExp(`<h3>${title}</h3>`), `缺少「${title}」卡片`);
   }
-  const cards = friend.match(/<section class="settings-card"/g) || [];
+  const cards = friend.match(/<section class="settings-card(?:\s|")/g) || [];
   assert.ok(cards.length >= 8, `好友管理应有至少 8 张卡片，实际 ${cards.length}`);
+  const formCards = friend.match(/<section class="settings-card friend-settings-card"/g) || [];
+  assert.equal(formCards.length, 5, '五个设置区块要套居中阅读列');
   assert.doesNotMatch(friend, /<section class="control-section"/,
     '资产页不能再退回扁平 control-section：功能块要靠卡片分组');
 });
@@ -382,6 +384,8 @@ test('资产页卡片跟内容区同宽，不单独收成窄列', () => {
   assert.doesNotMatch(css, /#friend-page,\s*#identity-page,\s*#incident-page \{/,
     '资产页不要再单独套居中窄列');
   assert.match(css, /\.asset-pane \.settings-card \{ max-width: none; \}/);
+  assert.match(css, /#friend-page \.friend-settings-card > \* \{[^}]*max-width: 860px;[^}]*margin-left: auto;[^}]*margin-right: auto;/s,
+    '通栏卡片里的表单内容要居中，不能继续贴左缘');
   assert.match(css, /\.settings-card \{[^}]*max-width: 1180px;/s,
     '设置页的卡片宽度仍然保留');
 });

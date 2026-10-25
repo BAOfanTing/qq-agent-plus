@@ -1086,7 +1086,7 @@ function renderFriendFeaturePageImpl(c, status) {
       <div class="asset-summary-item"><span>好友关系快照</span><strong>${status.friendProposal?.friendStatusTrusted ? '可信' : '不可用'}</strong><small>${status.friendProposal?.friendSnapshotAt ? esc(fmtTime(status.friendProposal.friendSnapshotAt)) : '未知时不触发'}</small></div>
     </div>
     <div class="hint friend-save-result" id="friend-feature-save-result"></div>
-    <section class="settings-card">
+    <section class="settings-card friend-settings-card">
       <div class="control-section-title">
         <div><h3>基础设置</h3><span class="muted">主动加好友已退役（Issue #10），以下主动配置不再生效；入站好友请求审批不受影响</span></div>
       </div>
@@ -1108,7 +1108,7 @@ function renderFriendFeaturePageImpl(c, status) {
         <label for="cfg-identity-friend-dispatch">管理员批准后主动发送好友申请</label>
       </div>
     </section>
-    <section class="settings-card">
+    <section class="settings-card friend-settings-card">
       <div class="control-section-title">
         <div><h3>触发条件</h3><span class="muted">消息进入评估队列前先过这些门槛</span></div>
       </div>
@@ -1122,7 +1122,7 @@ function renderFriendFeaturePageImpl(c, status) {
         <div class="field"><label>好友快照最长缓存（分钟）</label><input type="number" id="cfg-friend-trigger-friend-age" min="1" max="1440" value="${esc(triggered.friendStatusMaxAgeMinutes ?? 15)}" /></div>
       </div>
     </section>
-    <section class="settings-card">
+    <section class="settings-card friend-settings-card">
       <div class="control-section-title">
         <div><h3>频率与配额</h3><span class="muted">冷却、每日额度与提名分数线</span></div>
       </div>
@@ -1136,7 +1136,7 @@ function renderFriendFeaturePageImpl(c, status) {
         <div class="field"><label>评估排队期限（秒）</label><input type="number" id="cfg-friend-trigger-queue-age" min="5" max="3600" value="${esc(triggered.maxQueueAgeSeconds ?? 120)}" /></div>
       </div>
     </section>
-    <section class="settings-card">
+    <section class="settings-card friend-settings-card">
       <div class="control-section-title">
         <div><h3>评分权重</h3><span class="muted">四项权重共同决定提名分数</span></div>
       </div>
@@ -1148,7 +1148,7 @@ function renderFriendFeaturePageImpl(c, status) {
       </div>
       <div class="hint">已经是好友的用户不会进入抽签或模型评估；好友状态无法确认时同样不会触发。四项权重合计必须为 100。</div>
     </section>
-    <section class="settings-card">
+    <section class="settings-card friend-settings-card">
       <h3>入站好友请求</h3>
       <div class="field-row">
         <div class="field"><label>入站请求待审批上限</label><input type="number" id="cfg-identity-incoming-max-pending" min="1" max="500" value="${esc(incoming.maxPending ?? 50)}" /></div>
