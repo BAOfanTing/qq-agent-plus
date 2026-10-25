@@ -1536,6 +1536,52 @@ async function cmdRestore(args) {
   }
 }
 
+function configuredRetentionDays(dataDir) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'config.json'), 'utf8'));
+    return Math.max(0, Math.floor(Number(cfg?.store?.retentionDays) || 0));
+  } catch {
+    return 0;
+  }
+}
+
+/** 按天清理已确认（acked）的历史消息；未处理/held 永不删除。 */
+function cmdPrune(args) {
+  if (wantsHelp(args)) { say(HELP.prune); return 0; }
+  const cfg = config({ data: optValue(args, '--data', null) });
+  const days = Math.max(0, intOpt(args, '--days', configuredRetentionDays(cfg.dataDir)));
+  if (!days) {
+    ngLine('没有指定 --days，config.json 的 store.retentionDays 也是 0（不删除任何消息）');
+    return 1;
+  }
+  const file = path.join(cfg.dataDir, 'messages.sqlite');
+  if (!exists(file)) { ngLine(`找不到消息库: ${file}`); return 1; }
+  const cutoff = Date.now() - days * 86400000;
+  const db = openDatabase(file);
+  try {
+    const total = Number(db.prepare("SELECT COUNT(*) AS n FROM messages WHERE state='acked' AND ts < ?").get(cutoff)?.n) || 0;
+    noteLine(`候选: ${total} 条（state=acked 且 ts < ${new Date(cutoff).toISOString()}，保留最近 ${days} 天）`);
+    if (hasFlag(args, '--dry-run')) return 0;
+    if (!hasFlag(args, '--confirm')) {
+      ngLine('这会删除历史消息：请加 --confirm 执行（或 --dry-run 预览）');
+      return 1;
+    }
+    let removed = 0;
+    while (true) {
+      const result = db.prepare(`DELETE FROM messages WHERE id IN (
+        SELECT id FROM messages WHERE state='acked' AND ts < ? LIMIT 1000
+      )`).run(cutoff);
+      const changes = Number(result?.changes) || 0;
+      removed += changes;
+      if (!changes) break;
+    }
+    okLine(`已删除 ${removed} 条（保留最近 ${days} 天；未处理/held 未动）`);
+    return 0;
+  } finally {
+    try { db.close(); } catch { /* 忽略 */ }
+  }
+}
+
 // ─────────────────────────── watch-send 子命令（原 watch-send.py） ───────────────────────────
 
 function outboxSnapshot(dataDir) {
@@ -2669,6 +2715,12 @@ SSH 配置、防火墙、定时任务、可升级包、TLS 证书到期、备份
 --key-file    指定密钥文件
 --no-encrypt  归档未加密时使用`,
 
+  prune: `用法: node src/ops.js prune --days=N [--data=目录] [--dry-run] [--confirm]
+
+只删除 state='acked' 且早于 N 天的消息；pending / leased / failed / held 永远不删。
+--days 省略时读 config.json 的 store.retentionDays（0 = 不删）。
+--dry-run 预览条数；--confirm 实际执行。`,
+
   scan: `用法: node src/ops.js scan [目录] [--ignore=名1,名2] [--no-ignore] [--log=文件] [--strict]
 
 扫描"调用了但本文件既没定义也没 import"的函数名（把注释/字符串/正则/模板串抹白后匹配）。
@@ -2808,6 +2860,7 @@ const COMMANDS = {
   'audit-prune': { run: cmdAuditPrune, help: HELP['audit-prune'] },
   backup: { run: cmdBackup, help: HELP.backup },
   restore: { run: cmdRestore, help: HELP.restore },
+  prune: { run: cmdPrune, help: HELP.prune },
   scan: { run: cmdScan, help: HELP.scan },
   'watch-send': { run: cmdWatchSend, help: HELP['watch-send'] },
   'watch-login': { run: cmdWatchLogin, help: HELP['watch-login'] },

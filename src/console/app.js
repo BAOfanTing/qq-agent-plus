@@ -2372,15 +2372,73 @@ export function createApp({
   });
   router.add('GET', /^\/api\/chats\/(group|private)_(\d+)\/messages$/, async (req, res, params, url) => {
     const chatKey = `${params[1]}:${params[2]}`;
-    // 单群消息上限 2^20（Kondius 钦定）：约等于不限，存档一口气全给
-    const limit = Math.min(1048576, Math.max(1, Number(url.searchParams.get('limit')) || 1048576));
-    const messages = store.recent(chatKey, { limit }).map((m) => ({
+    // 服务端游标分页：默认 500，普通上限 2000。旧客户端传 limit=100000 仍然兼容，但会被封顶。
+    const requested = Number(url.searchParams.get('limit'));
+    const limit = Math.min(2000, Math.max(1, Number.isFinite(requested) && requested > 0 ? requested : 500));
+    const beforeId = Math.max(0, Number(url.searchParams.get('before')) || 0);
+    const afterId = Math.max(0, Number(url.searchParams.get('after')) || 0);
+    const rows = store.recent(chatKey, { limit: limit + 1, beforeId, afterId });
+    const hasMore = rows.length > limit;
+    if (hasMore) {
+      if (afterId) rows.pop(); else rows.shift();
+    }
+    const messages = rows.map((m) => ({
       id: m.id, mid: m.mid, ts: m.ts, senderId: m.senderId, senderName: m.senderName,
       // 与提示词同一套渲染：正文缺引用块时补上（回复 + 合并转发卡片那类记录）
       text: textWithQuote(m), self: m.self, read: m.read, reply: m.reply,
       media: m.media || []
     }));
-    return json(res, 200, { chatKey, messages });
+    const meta = store.getChatMeta?.(chatKey) || {};
+    return json(res, 200, {
+      chatKey,
+      messages,
+      hasMore,
+      nextBefore: messages.length ? Number(messages[0].id) || 0 : 0,
+      nextAfter: messages.length ? Number(messages[messages.length - 1].id) || 0 : afterId,
+      total: Number(meta.total) || 0
+    });
+  });
+  // 全量导出：单独入口，流式写出，避免把十万条塞进控制台的一次响应。
+  router.add('GET', /^\/api\/chats\/(group|private)_(\d+)\/export$/, async (req, res, params, url) => {
+    const chatKey = `${params[1]}:${params[2]}`;
+    const format = String(url.searchParams.get('format') || 'jsonl').toLowerCase() === 'csv' ? 'csv' : 'jsonl';
+    const safeName = chatKey.replace(':', '_');
+    const MAX_ROWS = 200000;
+    res.writeHead(200, {
+      'content-type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/x-ndjson; charset=utf-8',
+      'content-disposition': `attachment; filename="${safeName}.${format}"`,
+      'cache-control': 'no-store'
+    });
+    if (format === 'csv') res.write('\uFEFFid,ts,senderId,senderName,self,text\n');
+    const csvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+    let after = 0;
+    let wrote = 0;
+    while (wrote < MAX_ROWS) {
+      const page = store.recent(chatKey, { afterId: after, limit: 5000 });
+      if (!page.length) break;
+      for (const message of page) {
+        if (wrote >= MAX_ROWS) break;
+        if (format === 'csv') {
+          res.write(`${csvCell(message.id)},${Number(message.ts) || 0},${csvCell(message.senderId)},`
+            + `${csvCell(message.senderName)},${message.self ? 1 : 0},${csvCell(message.text)}\n`);
+        } else {
+          res.write(`${JSON.stringify({
+            id: message.id,
+            mid: message.mid,
+            ts: message.ts,
+            senderId: message.senderId,
+            senderName: message.senderName,
+            self: Boolean(message.self),
+            text: message.text,
+            reply: message.reply || null
+          })}\n`);
+        }
+        wrote += 1;
+      }
+      after = Number(page[page.length - 1].id) || after;
+    }
+    log(`[export] ${chatKey} ${format} ${wrote} 条`);
+    res.end();
   });
   router.add('GET', /^\/api\/groups\/(\d+)\/members$/, async (req, res, params) => {
     try {

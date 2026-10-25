@@ -1037,17 +1037,30 @@ export class ChatStore {
     };
   }
 
-  recent(chatKey, { limit = 80, offset = 0, includeSelf = true, readOnly = false, afterId = 0 } = {}) {
+  recent(chatKey, { limit = 80, offset = 0, includeSelf = true, readOnly = false, afterId = 0, beforeId = 0 } = {}) {
     // afterId：增量消费按 id **升序**取"游标之后最早的一批"；积压超过 limit 时下一轮继续，
     // 不能按 DESC 取最新 N 条再 reverse —— 那会把落在窗口外的最老消息静默跳过（游戏丢票）。
+    // beforeId：控制台向上翻页，取"比这个 id 更老的最新 N 条"，仍按时间正序返回。
     // 非增量调用仍保持"最新 N 条、按时间正序返回"的既有语义。
     const after = Number(afterId) > 0 ? Number(afterId) : 0;
-    const rows = this.db.prepare(`SELECT * FROM messages WHERE chat_key=? ${includeSelf ? '' : 'AND self=0'}
-      ${readOnly ? "AND state='acked'" : ''}
-      ${after ? 'AND id > ?' : ''}
-      ORDER BY id ${after ? 'ASC' : 'DESC'} LIMIT ? OFFSET ?`)
-      .all(chatKey, ...(after ? [after] : []), Math.max(1, Number(limit) || 1), Math.max(0, Number(offset) || 0));
-    return (after ? rows : rows.reverse()).map(entry);
+    const before = !after && Number(beforeId) > 0 ? Number(beforeId) : 0;
+    const filters = `${includeSelf ? '' : 'AND self=0'} ${readOnly ? "AND state='acked'" : ''}`;
+    if (after) {
+      const rows = this.db.prepare(`SELECT * FROM messages WHERE chat_key=? ${filters}
+        AND id > ? ORDER BY id ASC LIMIT ?`)
+        .all(chatKey, after, Math.max(1, Number(limit) || 1));
+      return rows.map(entry);
+    }
+    if (before) {
+      const rows = this.db.prepare(`SELECT * FROM messages WHERE chat_key=? ${filters}
+        AND id < ? ORDER BY id DESC LIMIT ?`)
+        .all(chatKey, before, Math.max(1, Number(limit) || 1));
+      return rows.reverse().map(entry);
+    }
+    const rows = this.db.prepare(`SELECT * FROM messages WHERE chat_key=? ${filters}
+      ORDER BY id DESC LIMIT ? OFFSET ?`)
+      .all(chatKey, Math.max(1, Number(limit) || 1), Math.max(0, Number(offset) || 0));
+    return rows.reverse().map(entry);
   }
 
   /**

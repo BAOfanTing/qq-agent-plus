@@ -775,24 +775,55 @@ async function selectChat(key) {
  *    —— 表现为"明明滚下去了，过一会儿自己弹回上面"。
  */
 async function loadChatMessages(key, { keepView = false } = {}) {
+  // 注册给滚动加载器（模块求值期不碰 state：真 ESM 环境里有 TDZ / 环引用风险）
+  state.chatLoadOlder = loadOlderChatMessages;
   try {
-    const data = await api(`/api/chats/${key.replace(':', '_')}/messages?limit=100000`);
+    const base = `/api/chats/${key.replace(':', '_')}/messages`;
+    if (keepView && (state.chatMessages || []).length) {
+      // 轮询只取"比当前最新一条更新的"，不再整页重拉（否则已加载的更早分页会被冲掉）
+      const lastId = Number(state.chatMessages[state.chatMessages.length - 1]?.id) || 0;
+      const data = await api(`${base}?limit=${CHAT_MSG_PAGE}&after=${lastId}`);
+      if (state.currentChatKey !== key) return;
+      const fresh = data.messages || [];
+      if (!fresh.length) return;
+      state.chatMessages.push(...fresh);
+      updateChatMessagesBody(true);
+      return;
+    }
+
+    const data = await api(`${base}?limit=${CHAT_MSG_PAGE}`);
     // 期间用户可能切走了会话，那就别覆盖当前视图
     if (state.currentChatKey !== key) return;
     state.chatMessages = data.messages || [];
-
-    if (keepView && (state.chatMsgLimit || 0) > 0 && $('#chat-msg-body')) {
-      // 只更新表格内容：分页不变、滚动位置不变
-      updateChatMessagesBody(true);
-    } else {
-      // 切换会话：重置分页并从第一页开始
-      state.chatMsgLimit = CHAT_MSG_PAGE;
-      renderChatMessages();
-    }
+    state.chatHasMore = data.hasMore === true;
+    state.chatNextBefore = Number(data.nextBefore) || 0;
+    state.chatMsgLimit = CHAT_MSG_PAGE;
+    renderChatMessages();
   } catch (e) {
     if (state.currentChatKey !== key) return;
     const box = $('#chat-detail');
     if (box) box.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+/** 向上翻页：取比当前最老一条更早的一批，插到数组头部（表格末尾）。 */
+async function loadOlderChatMessages() {
+  if (state.chatLoadingOlder || !state.chatHasMore || !state.chatNextBefore) return 0;
+  const key = state.currentChatKey;
+  state.chatLoadingOlder = true;
+  try {
+    const data = await api(`/api/chats/${key.replace(':', '_')}/messages?limit=${CHAT_MSG_PAGE}&before=${state.chatNextBefore}`);
+    if (state.currentChatKey !== key) return 0;
+    state.chatHasMore = data.hasMore === true;
+    state.chatNextBefore = Number(data.nextBefore) || 0;
+    const older = data.messages || [];
+    if (!older.length) return 0;
+    state.chatMessages = [...older, ...state.chatMessages];
+    return older.length;
+  } catch {
+    return 0;
+  } finally {
+    state.chatLoadingOlder = false;
   }
 }
 
@@ -958,8 +989,10 @@ function updateChatMessagesMeta(newestFirst) {
   const more = $('#chat-msg-more');
   if (more) {
     more.textContent = rest > 0
-      ? `向下滚动加载更早的（还有 ${rest} 条）`
-      : (total > CHAT_MSG_PAGE ? `已显示全部 ${total} 条` : '');
+      ? `向下滚动加载更早的（已载入里还有 ${rest} 条）`
+      : (state.chatHasMore
+        ? '向下滚动加载更早的（还有更早的存档）'
+        : (total > CHAT_MSG_PAGE ? `已显示全部 ${total} 条` : ''));
   }
   const cnt = $('#chat-detail')?.querySelector('[data-field="chat-msg-count"]');
   if (cnt) {

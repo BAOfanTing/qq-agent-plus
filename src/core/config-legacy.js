@@ -777,6 +777,9 @@ export const DEFAULT_CONFIG = {
     //   - store 的 #trim 在 maxPerChat<=0 时直接跳过
     // 注意：单群文件会随时间增长，磁盘占用请自行留意。
     maxMessagesPerChat: 0,
+    // 按天保留：0 = 不删。只由 `node src/ops.js prune --confirm` 显式执行，
+    // 不会在运行时自动删历史；只删 state='acked' 的行，未处理/held 永不删除。
+    retentionDays: 0,
     // ── 响应概率（滑条上的数字就是概率）──
     // 0 = 只回 @ 和关键词；100 = 任何消息都响应；中间值 = 普通消息按该概率响应。
     // 被 @ 或命中关键词一定响应，不受这个数字影响。

@@ -498,10 +498,16 @@ function initSessionScrollLoader() {
  *   表现为"滑到临界线继续向下滚动反应迟钝"。
  */
 function initChatScrollLoader() {
-  attachScrollLoader('chat-detail', () => {
-    const total = (state.chatMessages || []).length;
+  attachScrollLoader('chat-detail', async () => {
+    let total = (state.chatMessages || []).length;
     const prev = Math.max(CHAT_MSG_PAGE, Number(state.chatMsgLimit) || CHAT_MSG_PAGE);
-    if (prev >= total) return;                     // 已经全显示了
+    if (prev >= total) {
+      // 已加载的都显示了：向服务端要更早的一页（游标分页），成功后再继续增量追加。
+      if (typeof state.chatLoadOlder !== 'function') return;
+      const added = await state.chatLoadOlder();
+      total = (state.chatMessages || []).length;
+      if (!added || prev >= total) return;
+    }
     state.chatMsgLimit = Math.min(total, prev + CHAT_MSG_MORE);
     // 行数账本对不上（结构刚被轮询重建过等异常）→ 全量兜底；正常走追加
     if ((state.chatMsgRendered || 0) !== Math.min(prev, total)) {

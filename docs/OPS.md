@@ -119,6 +119,11 @@ node src/ops.js backup --drill
 node src/ops.js restore --from ~/qq-agent/backups/qq-agent-data-xxxx.tar.gz.enc --dry-run
 node src/ops.js restore --from ~/qq-agent/backups/qq-agent-data-xxxx.tar.gz.enc --confirm
 
+# 历史消息清理（只删 state='acked' 且超期的；pending/held 永远不删）
+# 不传 --days 时读 config.json 的 store.retentionDays（0 = 不删）
+node src/ops.js prune --days=90 --dry-run
+node src/ops.js prune --days=90 --confirm
+
 # 审计日志清理（控制台写操作留痕，按自然月切文件；默认保留 6 个月）
 node src/ops.js audit-prune --dry-run
 node src/ops.js audit-prune --confirm --keep-months=6
