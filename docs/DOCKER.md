@@ -183,7 +183,7 @@ QQ_AGENT_IMAGE=<镜像>:<新版本> docker compose up -d agent
 数据卷不动。回滚：把 compose 里的 `QQ_AGENT_IMAGE` 固定到上一个版本 tag，再 `up -d`：
 
 ```bash
-QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:0.9.8 docker compose up -d agent
+QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:<上一个版本> docker compose up -d agent
 ```
 
 协议端升级同理：改 `SNOWLUMA_IMAGE` 后 `docker compose pull snowluma && docker compose up -d snowluma`。
