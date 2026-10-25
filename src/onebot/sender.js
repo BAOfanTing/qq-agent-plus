@@ -96,6 +96,22 @@ function muteUntilMs(raw, nowSec) {
   return shut * 1000;                         // 超限值由 muteMark 一处兜住（超限即返回 0）
 }
 
+/**
+ * 人类化首条延迟（纯函数，便于单测，不依赖墙钟）。
+ * 未开启或 replyDelay 关闭时返回 null（调用方回退到普通 #gap）。
+ */
+export function leadDelayFor(humanize, parts) {
+  const h = humanize;
+  if (h?.enabled !== true || h?.replyDelay?.enabled === false) return null;
+  const n = (Array.isArray(parts) ? parts : []).reduce((sum, part) => sum + String(part || '').length, 0);
+  const min = Math.max(0, Math.min(30000, Number(h?.replyDelay?.minMs) || 0));
+  const max = Math.max(min, Math.min(30000, Number(h?.replyDelay?.maxMs) || min));
+  const perChar = Math.max(0, Math.min(200, Number(h?.replyDelay?.perCharMs) || 0));
+  const cap = Math.max(max, Math.min(60000, Number(h?.replyDelay?.capMs) || 8000));
+  const base = min + Math.random() * (max - min) + n * perChar;
+  return Math.min(cap, Math.max(0, Math.round(base)));
+}
+
 export class SendQueue {
 /**
    * 送达之后的记账：把自己发出去的话写进库 + 通知 onSent。
@@ -235,15 +251,7 @@ export class SendQueue {
    * 未开启时返回 null（调用方回退到原来的 #gap），保证升级前后发送节奏逐字一致。
    */
   #leadDelay(parts) {
-    const h = getConfig().humanize;
-    if (h?.enabled !== true || h?.replyDelay?.enabled === false) return null;
-    const n = parts.reduce((sum, part) => sum + String(part || '').length, 0);
-    const min = Math.max(0, Math.min(30000, Number(h?.replyDelay?.minMs) || 0));
-    const max = Math.max(min, Math.min(30000, Number(h?.replyDelay?.maxMs) || min));
-    const perChar = Math.max(0, Math.min(200, Number(h?.replyDelay?.perCharMs) || 0));
-    const cap = Math.max(max, Math.min(60000, Number(h?.replyDelay?.capMs) || 8000));
-    const base = min + Math.random() * (max - min) + n * perChar;
-    return Math.min(cap, Math.max(0, Math.round(base)));
+    return leadDelayFor(getConfig().humanize, parts);
   }
 
   /**

@@ -255,7 +255,9 @@ describe('Orchestrator', () => {
       const timer = setInterval(() => runner.scheduleWake('group:1'), 10);
       t.after(() => clearInterval(timer));
     });
-    assert.ok(elapsed >= 100 && elapsed < 300, `elapsed=${elapsed}`);
+    // 上限放宽到 5s：部署机/满载 CI 上一次事件循环调度就可能超过 300ms；
+    // 这里要抓的是"防抖窗口被无限续期"，不是墙钟精度。
+    assert.ok(elapsed >= 100 && elapsed < 5000, `elapsed=${elapsed}`);
   });
 
   it('manual wake bypasses trigger rules and can run from read archive context', async (t) => {

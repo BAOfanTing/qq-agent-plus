@@ -468,8 +468,9 @@ test('巡检：探测带超时，挂死的服务拖不住整轮', async () => {
     );
     assert.match(check.detail, /abort/i, `${name} 的失败原因应是被中止：${check.detail}`);
   }
-  // 两个探测各 60ms 上限；放宽到 1 秒只为避开 CI 抖动，仍然远小于 undici 的默认上限
-  assert.ok(elapsed < 1000, `整轮巡检不该被挂死服务拖住，实测 ${elapsed}ms`);
+  // 两个探测各 60ms 上限；上限放到 5 秒只为避开部署机/满载 CI 的调度抖动，
+  // 仍然远小于 undici 的默认上限，也足以抓住"被挂死服务拖住"的回归。
+  assert.ok(elapsed < 5000, `整轮巡检不该被挂死服务拖住，实测 ${elapsed}ms`);
   assert.equal(r.healthy, false);
   assert.equal(r.code, 1);
   fs.rmSync(dir, { recursive: true, force: true });

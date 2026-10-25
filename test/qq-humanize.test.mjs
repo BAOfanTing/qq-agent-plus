@@ -10,7 +10,7 @@ process.env.QQ_AGENT_DATA_DIR = dir;
 process.on('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
 
 const { ChatStore } = await import('../src/core/store.js');
-const { SendQueue } = await import('../src/onebot/sender.js');
+const { SendQueue, leadDelayFor } = await import('../src/onebot/sender.js');
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js');
 const { findAiTells, humanizeText, memeDensityPrompt, normalizeMemeUseLevel } = await import('../src/llm/humanize.js');
 const { buildToolDefs } = await import('../src/tools/tools.js');
@@ -69,7 +69,7 @@ it('默认关闭：升级后发送节奏不变', () => {
   assert.equal(DEFAULT_CONFIG.humanize.enabled, false);
 });
 
-it('开启后首条按配置等待；关闭后不等', async () => {
+it('开启后首条按配置等待；关闭后回退普通节奏', async () => {
   const cfg = baseConfig();
   cfg.humanize = {
     ...cfg.humanize,
@@ -77,6 +77,9 @@ it('开启后首条按配置等待；关闭后不等', async () => {
     replyDelay: { enabled: true, minMs: 120, maxMs: 120, perCharMs: 0, capMs: 120 }
   };
   setRuntimeConfig(cfg);
+  // 纯函数断言首条延迟本身；不拿墙钟卡“关闭后 <100ms”——
+  // 慢机器上一次普通调度就可能 158ms，原断言会把与人类化无关的调度延迟当成回归。
+  assert.equal(leadDelayFor(cfg.humanize, ['hi']), 120);
   const store = new ChatStore(0, { dataDir: dir });
   const sender = senderFor(store);
   const started = Date.now();
@@ -84,12 +87,11 @@ it('开启后首条按配置等待；关闭后不等', async () => {
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 100, `应至少等待约 120ms，实际 ${elapsed}ms`);
 
-  cfg.humanize.enabled = false;
+  cfg.humanize = { ...cfg.humanize, enabled: false };
   setRuntimeConfig(cfg);
-  const fastStarted = Date.now();
+  assert.equal(leadDelayFor(cfg.humanize, ['hi']), null, '关闭后不能再加人类化首条延迟');
+  // 仍然真发一次，确认关闭后链路可用（不判断墙钟上限）
   await sender.sendTextBatch('group:1', ['hi']);
-  const fastElapsed = Date.now() - fastStarted;
-  assert.ok(fastElapsed < 100, `关闭后不应等待，实际 ${fastElapsed}ms`);
   store.close();
 });
 
