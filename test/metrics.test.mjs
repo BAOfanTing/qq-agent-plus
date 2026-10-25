@@ -59,6 +59,8 @@ test('createMetrics：状态分桶与 p50/p95', () => {
   assert.equal(snap.latencyMs.samples, 3);
   assert.ok(snap.latencyMs.p50 > 0);
   assert.ok(snap.latencyMs.p95 >= snap.latencyMs.p50);
+  assert.equal(typeof snap.eventLoop.utilization, 'number');
+  assert.ok(snap.eventLoop.utilization >= 0);
 });
 
 test('/api/metrics：真实请求计数、进程指标、脱敏；prometheus 输出可用', async (t) => {
@@ -76,8 +78,16 @@ test('/api/metrics：真实请求计数、进程指标、脱敏；prometheus 输
   assert.ok(body.process.rssBytes > 0);
   assert.equal(typeof body.process.uptimeSeconds, 'number');
   assert.equal(body.onebot.connected, false);
+  assert.equal(typeof body.onebot.sendFailures, 'number');
   assert.ok(Array.isArray(body.plugins));
   assert.match(response.text, /"outbox"/);
+  assert.equal(typeof body.outbox.total, 'number');
+  assert.equal(typeof body.outbox.byState, 'object');
+  assert.equal(typeof body.queues.oldestAgeMs, 'number');
+  assert.equal(typeof body.llm.requests, 'number');
+  assert.equal(typeof body.llm.failures, 'number');
+  assert.equal(typeof body.llm.retries, 'number');
+  assert.equal(typeof body.llm.costToday, 'number');
   // 指标里不能出现控制台令牌/密钥字段
   assert.doesNotMatch(response.text, /"(token|apiKey|secret|accessToken)"/);
 
@@ -87,6 +97,11 @@ test('/api/metrics：真实请求计数、进程指标、脱敏；prometheus 输
   assert.match(prometheus.text, /qqagent_uptime_seconds \d+/);
   assert.match(prometheus.text, /qqagent_http_requests_total \d+/);
   assert.match(prometheus.text, /qqagent_outbox_pending \d+/);
+  assert.match(prometheus.text, /qqagent_inbound_pending \d+/);
+  assert.match(prometheus.text, /qqagent_inbound_oldest_age_seconds \d+/);
+  assert.match(prometheus.text, /qqagent_llm_requests_total \d+/);
+  assert.match(prometheus.text, /qqagent_llm_failures_total \d+/);
+  assert.match(prometheus.text, /qqagent_event_loop_utilization [\d.]+/);
 });
 
 test('/api/health 返回最近巡检结果（没有文件时 health=null）', async (t) => {

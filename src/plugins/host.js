@@ -54,7 +54,8 @@ export class PluginHost {
     manifest, dataDir, log = () => {}, getSettings = () => ({}), getSender = () => null,
     spawn = spawnChild, spawnSyncImpl = spawnSync, nodePath = process.execPath,
     timeouts = {}, capabilities = null, now = () => Date.now(), requireIsolation = true,
-    networkIsolation = true, requireNetworkIsolation = false, limits = {}
+    networkIsolation = true, requireNetworkIsolation = false, limits = {},
+    approveAll = false, httpMock = null
   } = {}) {
     this.manifest = manifest;
     this.id = manifest.id;
@@ -83,6 +84,7 @@ export class PluginHost {
     this.caps = capabilities ?? createCapabilities({
       pluginId: this.id, dataDir, getSettings, log, now, manifest,
       limits: this.limits,
+      approveAll, httpMock,
       getSender      // send 能力用：插件发言必须走机器人自己那条队列（守卫全在里面）
     });
 
@@ -293,6 +295,11 @@ export class PluginHost {
       throw Object.assign(new Error(`插件 ${this.id} 调用太频繁（每分钟上限 ${limit} 次，来源：${kind}）`), { code: 'E_RATE_LIMIT' });
     }
     this.callWindow.push(this.now());
+  }
+
+  /** 主动采样一次 RSS（注册表做"全部插件总内存"预算时用；非 Linux 返回插件自报值）。 */
+  refreshRss() {
+    return this.#sampleRss();
   }
 
   /**

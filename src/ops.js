@@ -31,7 +31,7 @@ import { readOwnerUin, sendOwnerText } from './core/notify-owner.js';
 import { isContainerRuntime, containerUpdateHint } from './core/runtime.js';
 import { idList } from './core/list.js';
 import { pruneAudit } from './core/audit-log.js';
-import { installPlugin, readPluginInstallInfo, sha256Of } from './plugins/install.js';
+import { installPlugin, uninstallPlugin, readPluginInstallInfo, sha256Of } from './plugins/install.js';
 import { resolveModelPrice, modelLabel, setRemotePrices, setChannelPrices } from './pricing/model-prices.js';
 
 const REPO_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1149,15 +1149,18 @@ function cmdScan(args) {
 
 // GNU tar 会把 "C:/..." 当成远程主机（Windows 盘符），失败时退回不带 --force-local 的形式
 // （bsdtar 不认该选项，但它本身不解析远程归档，可以直接处理盘符路径）。
-function runTarCreate(outFile, dataDir) {
+function runTarCreate(outFile, dataDir, extra = null) {
   const parent = path.dirname(dataDir);
   const base = path.basename(dataDir);
   // 部署快照 / 更新缓存都是可重建的大目录；与 scripts/manage.mjs backup 的排除清单保持一致，
   // 否则每周定时备份会把它们整套再打包一份（2026-10 审查 P3）。
   const excludes = ['--exclude=deploy-backups', '--exclude=update-work', '--exclude=update-repository.git'];
+  const baseArgs = [...excludes, '-czf', outFile, '-C', parent, base];
+  // 可选：把部署凭据放在归档顶层 stack-credentials/ 下（恢复时不会自动写回，需人工取用）
+  if (extra?.dir && extra?.name) baseArgs.push('-C', extra.dir, extra.name);
   const attempts = IS_WINDOWS
-    ? [['--force-local', ...excludes, '-czf', outFile, '-C', parent, base], [...excludes, '-czf', outFile, '-C', parent, base]]
-    : [[...excludes, '-czf', outFile, '-C', parent, base]];
+    ? [['--force-local', ...baseArgs], [...baseArgs]]
+    : [[...baseArgs]];
   let last = { ok: false, code: null, stderr: '' };
   for (const tarArgs of attempts) {
     // 有界超时：备份在 systemctl stop 之后跑，tar 卡住 = 机器人一直停着等人
@@ -1180,6 +1183,7 @@ async function cmdBackup(args) {
   const keep = Math.max(1, intOpt(args, '--keep', cfg.keep));
   const dryRun = hasFlag(args, '--dry-run');
   const noEncrypt = hasFlag(args, '--no-encrypt');
+  const includeStackCreds = hasFlag(args, '--include-stack-creds');
   const keyFile = optValue(args, '--key-file', '');
   if (hasFlag(args, '--drill')) {
     return runBackupDrill({ cfg, from: optValue(args, '--from', null), keyFile, noEncrypt });
@@ -1191,6 +1195,7 @@ async function cmdBackup(args) {
     noteLine(`备份目录: ${cfg.backupDir}`);
     noteLine(`服务名: ${cfg.service}（先 stop、打包后 start）`);
     noteLine(`保留份数: ${keep}`);
+    noteLine(`含部署凭据: ${includeStackCreds ? '是（.env / .deployment.json / deployment-access.txt → stack-credentials/）' : '否'}`);
     noteLine(`加密: ${noEncrypt ? '关闭（--no-encrypt，不建议）' : 'AES-256-GCM'}`);
     if (!noEncrypt) {
       noteLine(`密钥: ${String(process.env.QQ_AGENT_BACKUP_KEY || '').trim() ? '来自 QQ_AGENT_BACKUP_KEY' : keyPath}`);
@@ -1219,6 +1224,36 @@ async function cmdBackup(args) {
   const du = run('du', ['-sh', cfg.dataDir]);
   if (!du.missing && du.ok) noteLine(`源大小: ${du.stdout.trim().split(/\s+/)[0]}`);
 
+  // --include-stack-creds：把部署机上的 .env / .deployment.json / deployment-access.txt
+  // 复制到临时目录再打进归档顶层。默认不含，避免一份备份把整台机器的凭据都带走。
+  let credsTemp = null;
+  let credsExtra = null;
+  if (includeStackCreds) {
+    credsTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-stack-creds-'));
+    const stackDir = path.join(credsTemp, 'stack-credentials');
+    fs.mkdirSync(stackDir, { recursive: true, mode: 0o700 });
+    const candidates = [
+      { src: path.join(REPO_DIR, '.env'), name: 'app.env' },
+      { src: path.join(path.dirname(REPO_DIR), '.env'), name: 'deployment.env' },
+      { src: path.join(REPO_DIR, '.deployment.json'), name: 'deployment.json' },
+      { src: path.join(path.dirname(REPO_DIR), 'deployment-access.txt'), name: 'deployment-access.txt' }
+    ];
+    let copied = 0;
+    for (const item of candidates) {
+      if (!exists(item.src)) continue;
+      try {
+        const dest = path.join(stackDir, item.name);
+        fs.copyFileSync(item.src, dest);
+        try { fs.chmodSync(dest, 0o600); } catch { /* Windows 上忽略 */ }
+        copied += 1;
+      } catch (error) {
+        noteLine(`部署凭据复制失败（${item.name}）：${error?.message || error}`);
+      }
+    }
+    if (copied) credsExtra = { dir: credsTemp, name: 'stack-credentials' };
+    else noteLine('没有找到可打包的部署凭据（.env / .deployment.json / deployment-access.txt）');
+  }
+
   let serviceManaged = false;
   let tarOk = false;
   try {
@@ -1227,10 +1262,13 @@ async function cmdBackup(args) {
     if (stop.missing) skipLine('缺少 systemctl：跳过停服务（直接打包）');
     else if (!stop.ok) noteLine(`停止服务返回码 ${stop.code}，仍继续备份`);
     await sleep(2000);
-    const tar = runTarCreate(plainFile, cfg.dataDir);
+    const tar = runTarCreate(plainFile, cfg.dataDir, credsExtra);
     tarOk = tar.ok;
     if (!tarOk) ngLine(`tar 打包失败（返回码 ${tar.code}${tar.stderr ? `：${tar.stderr.trim().split('\n')[0]}` : ''}）`);
   } finally {
+    if (credsTemp) {
+      try { fs.rmSync(credsTemp, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
     // 无论 tar 成败都要把服务拉起来——备份失败可以下次再试，机器人停着才是事故。
     if (serviceManaged) {
       const start = systemctlUser(['start', cfg.service], { timeout: 60000 });
@@ -2577,6 +2615,38 @@ async function cmdPlugins(args) {
     return 0;
   }
 
+  if (sub === 'uninstall') {
+    // 只把真正的子命令后的位置参数当 id：--data 的值不能混进来（支持 --data=目录 与 --data 目录 两种写法）
+    const positional = [];
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i];
+      if (arg === '--data') { i += 1; continue; }
+      if (arg.startsWith('-')) continue;
+      positional.push(arg);
+    }
+    const id = positional[1] || '';
+    if (!id) { ngLine('要指定插件 id：node src/ops.js plugins uninstall <id> --confirm [--purge-data]'); return 2; }
+    const purgeData = hasFlag(args, '--purge-data');
+    const target = path.join(cfg.dataDir, 'plugins', id);
+    if (!fs.existsSync(target)) { ngLine(`没有装着 ${id}（${target}）`); return 1; }
+    noteLine(`卸载 ${id}：代码目录会移走，插件数据${purgeData ? '与凭据会一并删除' : '保留（重装后还能接着用）'}`);
+    if (hasFlag(args, '--dry-run')) return 0;
+    if (!hasFlag(args, '--confirm')) {
+      ngLine('这会移除插件代码：请加 --confirm 执行（或 --dry-run 只预览）');
+      return 1;
+    }
+    try {
+      const result = uninstallPlugin({ id, dataDir: cfg.dataDir, purgeData });
+      okLine(`已卸载 ${result.id}`);
+      noteLine(`代码移到了 ${result.removedDir}（只留最近一份，巡检会清理）`);
+      noteLine(result.dataPurged ? '插件数据与凭据已删除' : `插件数据保留在 ${result.dataKept}`);
+      return 0;
+    } catch (error) {
+      ngLine(`卸载失败：${error?.message ?? error}${error?.code ? `（${error.code}）` : ''}`);
+      return 1;
+    }
+  }
+
   if (sub === 'install') {
     const file = args.filter((a) => !a.startsWith('-'))[1] || '';
     if (!file) { ngLine('要指定一个包文件：node src/ops.js plugins install <文件.tar.gz>'); return 2; }
@@ -2601,7 +2671,7 @@ async function cmdPlugins(args) {
     }
   }
 
-  ngLine(`认不得的子命令：${sub}（可用：list / install）`);
+  ngLine(`认不得的子命令：${sub}（可用：list / install / uninstall）`);
   return 2;
 }
 
@@ -2645,8 +2715,10 @@ OneBot get_status、协议端版本、Docker 套接字可读写性、
 
   list                              列出已装插件（版本/能力/来源）与已授权清单
   install <文件.tar.gz>             从**本地文件**装一个插件（别人发你的包、或你自己打的包）
+  uninstall <id> [--purge-data]     卸载插件；默认保留数据与凭据，--purge-data 一并删除
 
 本地文件安装不需要你提供 sha256 —— 装完会打印算出来的值供核对；来源记录里写"本地文件：<文件名>"。
+卸载会移走代码目录（留一份 .removed-* 便于巡检），必须加 --confirm；--dry-run 只预览。
 装上不等于授权：要让它跑，还得在控制台点启用（或写进 plugins.enabledIds）。`,
   audit: `用法: node src/ops.js audit [--app=目录] [--data=目录] [--dir=部署根目录]
 
@@ -2682,7 +2754,7 @@ SSH 配置、防火墙、定时任务、可升级包、TLS 证书到期、备份
 环境变量: QQ_AGENT_DATA_DIR`,
 
   backup: `用法: node src/ops.js backup --confirm [--keep=N] [--data=目录] [--backup-dir=目录]
-       [--no-encrypt] [--key-file=文件]
+       [--include-stack-creds] [--no-encrypt] [--key-file=文件]
        node src/ops.js backup --dry-run
        node src/ops.js backup --drill [--from=备份文件] [--key-file=文件]
 
@@ -2694,6 +2766,8 @@ SSH 配置、防火墙、定时任务、可升级包、TLS 证书到期、备份
 --confirm     实际执行（必需；没有它会打印提醒后退出 1）
 --dry-run     只打印将要做什么
 --keep=N      保留份数（默认 QQ_AGENT_KEEP=4）
+--include-stack-creds  把 .env / .deployment.json / deployment-access.txt 放进归档顶层
+              stack-credentials/（默认不含；恢复时不会自动写回，需人工取用）
 --no-encrypt  不加密（仅在明确知道备份不会离开主机时使用）
 --key-file    指定密钥文件
 --drill       恢复演练：解密最近一份备份到临时目录并跑 SQLite integrity_check，

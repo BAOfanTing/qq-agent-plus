@@ -13,6 +13,10 @@
 //   node scripts/plugin-dev.mjs <插件目录> --call players --args '{"host":"play.example.com"}'
 //   node scripts/plugin-dev.mjs <插件目录> --observe '{"chatKey":"group:1","text":"喂"}'
 //   node scripts/plugin-dev.mjs <插件目录> --json          # 机器可读输出
+//   node scripts/plugin-dev.mjs <插件目录> --call write_demo --approve-all
+//   node scripts/plugin-dev.mjs <插件目录> --call fetch_demo --http-mock '{"api.example.com":{"status":200,"body":"{\"ok\":true}"}}'
+//
+// --approve-all / --http-mock 只在这个假宿主里生效，生产宿主没有这两个注入点。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,7 +34,7 @@ const has = (name) => args.includes(`--${name}`);
 const asJson = has('json');
 
 if (!dir) {
-  console.error('用法：node scripts/plugin-dev.mjs <插件目录> [--call 工具名 --args \'{"…":1}\'] [--observe \'{"…":1}\'] [--schedule 任务名] [--json]');
+  console.error('用法：node scripts/plugin-dev.mjs <插件目录> [--call 工具名 --args \'{"…":1}\'] [--observe \'{"…":1}\'] [--schedule 任务名] [--approve-all] [--http-mock JSON或文件] [--json]');
   process.exit(2);
 }
 
@@ -58,11 +62,47 @@ if (fs.existsSync(settingsFile)) {
   catch (error) { console.warn(`（dev-settings.json 读不了，按空配置跑：${error?.message ?? error}）`); }
 }
 
+// --approve-all：写动作不再需要人工批准（只影响 approvalCheck；配额/开关仍按 manifest 走）
+const approveAll = has('approve-all');
+// --http-mock：把指定 URL 的 cap.http.request 直接返回固定响应，格式两种都吃：
+//   { "api.example.com": { "status": 200, "body": "..." } }   按 URL 子串匹配
+//   [{ "match": "/v1/play", "method": "POST", "status": 200, "body": "..." }]
+const httpMockRaw = flag('http-mock');
+let httpMock = null;
+if (httpMockRaw) {
+  let spec = null;
+  try {
+    const text = /^[\[{]/.test(httpMockRaw.trim())
+      ? httpMockRaw
+      : fs.readFileSync(path.resolve(httpMockRaw), 'utf8');
+    spec = JSON.parse(text);
+  } catch (error) {
+    fail(`--http-mock 需要 JSON 或 JSON 文件：${error?.message ?? error}`);
+  }
+  const entries = Array.isArray(spec)
+    ? spec
+    : Object.entries(spec && typeof spec === 'object' ? spec : {}).map(([match, value]) => (
+      value && typeof value === 'object' ? { match, ...value } : { match, body: String(value ?? '') }
+    ));
+  if (!entries.length) fail('--http-mock 里没有规则');
+  for (const entry of entries) {
+    if (!entry || typeof entry.match !== 'string' || !entry.match) fail('每条 --http-mock 规则都要有 match 字符串');
+  }
+  httpMock = ({ url, method }) => {
+    const hit = entries.find((entry) => (!entry.method || String(entry.method).toUpperCase() === method)
+      && url.includes(entry.match));
+    if (!hit) return null;
+    return { status: Number(hit.status) || 200, body: hit.body ?? '', headers: hit.headers || {} };
+  };
+}
+
 const host = new PluginHost({
   manifest: parsed.manifest,
   dataDir,
   // 插件自己的那段配置：从 dev-settings.json 读（线上等价于 plugins.settings.<id>）
   getSettings: () => settings,
+  approveAll,
+  httpMock,
   log: (...parts) => { const line = parts.map(String).join(' '); logs.push(line); if (!asJson) console.log(`  [宿主日志] ${line}`); }
 });
 const cleanup = () => { try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* Windows 上句柄占用就算了 */ } };
@@ -74,6 +114,9 @@ if (!asJson) {
   console.log(`工具：${parsed.manifest.tools.map((t) => t.name).join(', ') || '（无）'}`);
   console.log(`周期：${parsed.manifest.schedule.map((s) => `${s.name} 每 ${Math.round(s.everyMs / 60000)} 分钟`).join(', ') || '（无）'}`);
   console.log(`隔离：${host.unconfined ? '⚠️ 未隔离（本机不支持或配置关掉了 requireIsolation）' : '已开启（读不到插件目录外的文件、起不了子进程）'}`);
+  if (approveAll || httpMock) {
+    console.log(`开发开关：${[approveAll ? '--approve-all' : '', httpMock ? '--http-mock' : ''].filter(Boolean).join(' ')}（只在本脚本生效）`);
+  }
 }
 if (!started) {
   if (asJson) console.log(JSON.stringify({ ok: false, started: false, error: host.lastError, logs }));

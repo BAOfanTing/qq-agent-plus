@@ -109,6 +109,9 @@ node src/ops.js scan --log="$HOME/qq-agent-undefined-calls.log"   # 有可疑调
 # 备份（默认 AES-256-GCM 加密；先预演，再执行；N 默认取 QQ_AGENT_KEEP=4）
 node src/ops.js backup --dry-run
 node src/ops.js backup --confirm --keep=4
+# 可选：把部署机的 .env / .deployment.json / deployment-access.txt 也加密进包
+# （归档顶层 stack-credentials/；恢复时不会自动写回，需人工取用）
+node src/ops.js backup --confirm --include-stack-creds
 # 密钥：QQ_AGENT_BACKUP_KEY（64 位 hex 或口令）优先；否则用
 # ~/.config/qq-agent/backup.key（首次备份自动生成，丢失则备份不可恢复）
 
@@ -124,7 +127,13 @@ node src/ops.js restore --from ~/qq-agent/backups/qq-agent-data-xxxx.tar.gz.enc 
 node src/ops.js prune --days=90 --dry-run
 node src/ops.js prune --days=90 --confirm
 
+# 插件卸载（默认保留 plugin-data 与凭据；--purge-data 一并删除；--dry-run 预览）
+node src/ops.js plugins uninstall my-plugin --confirm
+node src/ops.js plugins uninstall my-plugin --purge-data --confirm
+
 # 轻量指标（需控制台令牌）：JSON 或 Prometheus 文本
+# 含 HTTP 请求/延迟、进程 RSS/heap、event-loop 利用率、LLM 调用/失败/重试/今日成本、
+# outbox 各状态、入站队列最老年龄、OneBot 连接与发送失败、插件状态/RSS/调用统计。
 curl -s -H "x-console-token: $TOKEN" http://127.0.0.1:3210/api/metrics
 curl -s -H "x-console-token: $TOKEN" "http://127.0.0.1:3210/api/metrics?format=prometheus"
 # 最近一次巡检结果（health.json）

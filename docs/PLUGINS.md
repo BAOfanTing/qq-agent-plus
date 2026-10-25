@@ -363,6 +363,12 @@ node scripts/plugin-pack.mjs ./my-plugin --base-url https://github.com/你/my-pl
   和两边对不上"的地方。
 - **`plugin-dev` 用的就是宿主那一套**：同一个 manifest 校验、同一组子进程隔离参数、同一份能力实现。
   所以在这里看到的网络拦截、越权被拒、超时，与线上是同一条路。
+- 开发期有两个**只在这个假宿主里生效**的开关：
+  `--approve-all` 让 `cap.approval.check` 直接放行（不用先去控制台点批准）；
+  `--http-mock '<JSON 或文件>'` 把匹配 URL 的 `cap.http.request` 直接返回固定响应，
+  支持 `{ "api.example.com": { "status": 200, "body": "..." } }` 或
+  `[{ "match": "/v1/play", "method": "POST", "status": 200, "body": "..." }]`。
+  未命中的 URL 仍走真实网络；生产宿主没有这两个注入点。
 
 骨架就是"读 stdin 的一行行 JSON、按方法名回一行行 JSON"（完整形状见上面的协议表）。
 `plugin-create` 生成的就是下面这段的完整版（还带能力调用与工具表）：
@@ -504,6 +510,8 @@ CI 里可选），`--json` 给机器读。
   在 `ping` 应答里上报的 `rssKb`，不报则不做 RSS 判杀）；工具调用每分钟上限 120 次、并发在途
   调用上限 4 个（超了返回 `E_BUSY`，不排队堆积）、插件数据磁盘上限 256MB（storage/media/secrets
   合计，超了返回 `E_DISK_QUOTA`）。周期任务不受每分钟调用限制。
+  另有可选的**全部插件总内存上限** `plugins.limits.totalMemoryMb`（默认 0 = 不限；只在 Linux 有可靠
+  RSS 读数）：运行中插件 RSS 之和达到上限后不再启动新插件，启动后超限的会被停掉并记 `E_TOTAL_MEMORY`。
   这些都在 `plugins.limits` 里调，也可以走控制台「设置 → 平台能力 → 插件宿主（高级）」；
   保存后按新上限重排插件进程。
 - **懒启动**：只有工具、不观察消息也不起周期任务的插件，进程**按需起、空闲停**

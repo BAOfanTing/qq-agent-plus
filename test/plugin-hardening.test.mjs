@@ -242,6 +242,28 @@ test('并发重排（双击启用 / 启用后顺手保存设置）不会留下�
   assert.equal(registry.hosts.size, 2, '每个启用的插件在表里恰好一份');
 });
 
+test('注册表把并发/磁盘/总内存上限原样传给 host，非法值回落默认', async (t) => {
+  const created = [];
+  const registry = new PluginRegistry({
+    root: FIXTURES, dataDir, log: () => {}, hostFactory: fakeHostFactory(created),
+    getConfig: () => ({
+      plugins: {
+        enabled: true,
+        enabledIds: ['good'],
+        limits: { memoryMb: 'bad', callsPerMinute: 0, concurrency: 3, diskMb: 512, totalMemoryMb: 256 }
+      }
+    })
+  });
+  t.after(() => registry.stop());
+  await registry.start();
+  assert.equal(created.length, 1);
+  assert.equal(created[0].limits.memoryMb, 128, '非法内存值回落默认');
+  assert.equal(created[0].limits.callsPerMinute, 120, '非法调用上限回落默认');
+  assert.equal(created[0].limits.concurrency, 3, '并发上限不能被注册表吞掉');
+  assert.equal(created[0].limits.diskMb, 512, '磁盘上限不能被注册表吞掉');
+  assert.equal(created[0].limits.totalMemoryMb, 256);
+});
+
 test('空闲停：有在途调用的插件不下手（别把正在干活的进程收走）', async (t) => {
   const created = [];
   const registry = new PluginRegistry({

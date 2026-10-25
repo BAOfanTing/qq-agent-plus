@@ -91,7 +91,8 @@ export function pluginDataDir(dataDir, pluginId) {
  */
 export function createCapabilities({
   pluginId, dataDir, getSettings = () => ({}), log = () => {}, now = () => Date.now(),
-  getSender = () => null, manifest = null, limits = {}
+  getSender = () => null, manifest = null, limits = {},
+  approveAll = false, httpMock = null
 } = {}) {
   // 注入点先落到本地常量：`node src/ops.js scan --strict`（CI 门禁）只认 const/let 声明与
   // KNOWN_IGNORE 里的名字，**直接调用解构参数的默认值会被判成"未定义调用"**
@@ -100,6 +101,9 @@ export function createCapabilities({
   const nowFn = now;
   const senderOf = getSender;
   const pluginManifest = manifest;
+  // plugin-dev 的两个开发开关：只在这个脚本里注入，宿主生产路径永远不传。
+  const devApproveAll = approveAll === true;
+  const devHttpMock = typeof httpMock === 'function' ? httpMock : null;
   const dir = pluginDataDir(dataDir, pluginId);
   const storageFile = path.join(dir, 'storage.json');
   const mediaDir = path.join(dir, 'media');
@@ -282,6 +286,17 @@ export function createCapabilities({
       // 上限跟 manifest 的 httpMaxBytes 走（B 站搜索/每周必看这类接口 40KB 就会截断）
       const limit = Math.min(Number(maxChars) > 0 ? Math.floor(Number(maxChars)) : MAX_HTTP_CHARS, httpCap);
       stats.httpRequests += 1;
+      // --http-mock：只在 plugin-dev 里注入。返回 null 表示"这条不 mock，继续走真网络"，
+      // 这样作者可以只钉住某几个接口，其余仍按真实宿主的拦截/超时跑。
+      if (devHttpMock) {
+        const mocked = await devHttpMock({ url: target, method: verb, headers: cleanHeaders, body: verb === 'POST' ? body : null });
+        if (mocked !== null && mocked !== undefined) {
+          const status = Number(mocked?.status ?? 200) || 200;
+          const mockBody = typeof mocked === 'string' ? mocked : String(mocked?.body ?? '');
+          log(`[plugin:${pluginId}] dev --http-mock ${verb} ${parsed.host}${parsed.pathname} → ${status}`);
+          return { status, truncated: false, body: mockBody.slice(0, limit) };
+        }
+      }
       // 复用宿主的 safe-fetch：内网/字面量拦截、重定向逐跳复检、体积与超时上限都在里面。
       // ⚠️ 这是"方便 + 可审计"，不是安全边界：插件进程自己有网络（Node 权限模型不管网络），
       //    要真禁网得靠命名空间/容器，v1 做不到（docs/PLUGINS.md 写明了）。
@@ -329,6 +344,12 @@ export function createCapabilities({
     [CAP_METHODS.approvalCheck]: ({ action, consume = true } = {}) => {
       const key = String(action ?? '');
       if (!approvalActions.has(key)) throw fail('E_NOT_DECLARED', `动作 ${key || '(空)'} 没有在 manifest.approvals 里声明`);
+      if (devApproveAll) {
+        // 只给本地开发：生产宿主没有这个注入点，授权仍由控制台/管理员批准。
+        stats.approvals += 1;
+        log(`[plugin:${pluginId}] 授权检查 ${key}：dev --approve-all 放行`);
+        return { approved: true, reason: 'dev --approve-all', expiresAt: nowFn() + 3600000, usesLeft: 1 };
+      }
       const result = checkApproval(dataDir, pluginId, key, {
         consume: consume !== false, now: nowFn(), manifestHash: hashManifest(pluginManifest)
       });

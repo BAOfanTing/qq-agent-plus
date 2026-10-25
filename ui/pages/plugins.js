@@ -353,6 +353,7 @@ function renderPluginsPage() {
         <span class="plugin-sec-sub" id="plugins-installed-sub"></span>
       </div>
       <div id="plugins-installed" class="plugin-ledger"><div class="plugin-empty">正在读取…</div></div>
+      <div id="plugins-trust" class="plugin-trust"></div>
     </div>
 
     <div data-plugin-pane-body="manual" hidden>
@@ -1145,6 +1146,35 @@ function renderIndex(index, installed) {
   }).join('') + skippedLine(skipped);
 }
 
+/**
+ * 信任与撤回（只读）：发布者公钥与撤回名单分散在配置里，出问题时最容易被忘掉。
+ * 这里只展示，不提供编辑 —— 公钥是安全边界，改它应该走配置文件并留下审计，而不是随手点。
+ */
+function renderTrust(state) {
+  const box = $('#plugins-trust');
+  if (!box) return;
+  const publishers = state?.publishers && typeof state.publishers === 'object'
+    ? Object.entries(state.publishers).filter(([name]) => name)
+    : [];
+  const revoked = Array.isArray(state?.revoked) ? state.revoked.filter(Boolean) : [];
+  if (!publishers.length && !revoked.length) {
+    box.innerHTML = '<div class="hint">还没有登记发布者公钥，也没有撤回名单。</div>';
+    return;
+  }
+  const keyText = (value) => {
+    const raw = typeof value === 'string' ? value : JSON.stringify(value ?? '');
+    return raw.length > 32 ? `${raw.slice(0, 24)}…` : raw;
+  };
+  box.innerHTML = `
+    <h3>信任与撤回</h3>
+    <div class="hint">只读视图：发布者公钥用于安装时验签，撤回名单命中后插件不会加载。修改请编辑配置 <code>plugins.publishers</code> / <code>plugins.revoked</code>。</div>
+    ${publishers.length ? `<div class="plugin-trust-title">已登记发布者（${publishers.length}）</div>
+      <ul class="plugin-trust-list">${publishers.map(([name, value]) => `<li><b>${esc(name)}</b> <code>${esc(keyText(value))}</code></li>`).join('')}</ul>` : ''}
+    ${revoked.length ? `<div class="plugin-trust-title">撤回名单（${revoked.length}）</div>
+      <ul class="plugin-trust-list">${revoked.map((rule) => `<li><code>${esc(String(rule))}</code></li>`).join('')}</ul>` : ''}
+  `;
+}
+
 /** 已装：台账（发丝线分行，每条一行；左侧状态轨由状态类给色）。 */
 function renderInstalled(state) {
   const box = $('#plugins-installed');
@@ -1292,6 +1322,7 @@ async function refreshPlugins() {
     renderTabCounts(state);
     renderPane();
     renderInstalled(state);
+    renderTrust(state);
     renderIndex(lastIndex, state);
 
     let index = { plugins: [], skipped: [], sources: [] };
@@ -1307,11 +1338,13 @@ async function refreshPlugins() {
     lastIndex = index;
     renderTabCounts(state);
     renderInstalled(state);       // 台账里的"有更新"提示要等索引到了才出得准
+    renderTrust(state);
     renderIndex(index, state);
     return state;
   } catch (error) {
     setStatus(`读取插件状态失败：${error?.message || error}`, { tone: 'error' });
     renderInstalled(null);
+    renderTrust(null);
     return null;
   }
 }

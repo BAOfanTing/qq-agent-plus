@@ -40,7 +40,7 @@ import { searchRegistry } from '../mcp/registry.js';
 import { searchPresets } from '../mcp/presets.js';
 import { knowledgeEnabled, knowledgeStats, listKnowledgeFiles, writeKnowledgeFile, deleteKnowledgeFile, reindexKnowledge } from '../knowledge/store.js';
 import { listMemes, rememberMeme, deleteMeme, memeStats } from '../memes/store.js';
-import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage } from '../llm/llm.js';
+import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage, llmRuntimeStats } from '../llm/llm.js';
 import { synthesizeSpeech } from '../llm/tts.js';
 import { generateImage, imageGenEffectiveHost, imageGenKeyStale, resolveImageGenAuth } from '../llm/image-gen.js';
 import { imageType } from '../core/image-type.js';
@@ -1986,15 +1986,39 @@ export function createApp({
     });
   }, { auth: false });
 
+  // 用量统计要读会话文件；指标抓取可能很频繁，缓存 60 秒，避免每次 scrape 都把磁盘扫一遍。
+  let metricsUsageCache = { at: 0, value: null };
+  function metricsUsageToday() {
+    const now = Date.now();
+    if (now - metricsUsageCache.at < 60000) return metricsUsageCache.value;
+    let value = null;
+    try {
+      const usage = buildUsageStats({ range: 'today' });
+      value = {
+        calls: Number(usage?.totals?.runs) || 0,
+        cost: Math.round((Number(usage?.totals?.cost) || 0) * 10000) / 10000,
+        promptTokens: Number(usage?.totals?.promptTokens) || 0,
+        completionTokens: Number(usage?.totals?.completionTokens) || 0,
+        totalTokens: Number(usage?.totals?.totalTokens) || 0
+      };
+    } catch { value = null; }
+    metricsUsageCache = { at: now, value };
+    return value;
+  }
+
   router.add('GET', '/api/metrics', async (req, res, params, url) => {
     const memory = process.memoryUsage();
-    const chats = store.listChats?.() || [];
-    const outbox = chats.reduce((acc, chat) => {
-      acc.pending += Number(chat.pending ?? chat.unread ?? 0) || 0;
-      acc.held += Number(chat.held || 0);
-      acc.failed += Number(chat.failed || 0);
-      return acc;
-    }, { pending: 0, held: 0, failed: 0 });
+    const queues = store.queueStats?.() || { byState: {}, oldestAt: 0, oldestAgeMs: 0 };
+    const outbox = store.outboxStats?.() || { total: 0, byState: {} };
+    const usage = metricsUsageToday();
+    const llm = {
+      ...llmRuntimeStats,
+      callsToday: usage?.calls ?? 0,
+      costToday: usage?.cost ?? 0,
+      promptTokensToday: usage?.promptTokens ?? 0,
+      completionTokensToday: usage?.completionTokens ?? 0,
+      totalTokensToday: usage?.totalTokens ?? 0
+    };
     const plugins = (pluginRegistry.list?.().plugins || []).map((plugin) => ({
       id: plugin.id,
       state: plugin.status?.state || 'unknown',
@@ -2012,8 +2036,13 @@ export function createApp({
         heapTotalBytes: memory.heapTotal
       },
       http: metrics.snapshot(),
-      onebot: { connected: Boolean(onebot?.connected) },
+      onebot: {
+        connected: Boolean(onebot?.connected),
+        sendFailures: Number(outbox?.byState?.failed) || 0
+      },
       outbox,
+      queues,
+      llm,
       plugins
     };
     if (String(url.searchParams.get('format') || '').toLowerCase() === 'prometheus') {
@@ -2024,14 +2053,34 @@ export function createApp({
         '# TYPE qqagent_http_requests_total counter',
         `qqagent_http_requests_total ${snapshot.http.requests.total}`,
         '# TYPE qqagent_outbox_pending gauge',
-        `qqagent_outbox_pending ${outbox.pending}`,
-        '# TYPE qqagent_outbox_held gauge',
-        `qqagent_outbox_held ${outbox.held}`,
+        `qqagent_outbox_pending ${Number(outbox?.byState?.pending) || 0}`,
+        '# TYPE qqagent_outbox_failed gauge',
+        `qqagent_outbox_failed ${Number(outbox?.byState?.failed) || 0}`,
+        '# TYPE qqagent_inbound_pending gauge',
+        `qqagent_inbound_pending ${Number(queues?.byState?.pending) || 0}`,
+        '# TYPE qqagent_inbound_oldest_age_seconds gauge',
+        `qqagent_inbound_oldest_age_seconds ${Math.round((Number(queues?.oldestAgeMs) || 0) / 1000)}`,
+        '# TYPE qqagent_llm_requests_total counter',
+        `qqagent_llm_requests_total ${llm.requests}`,
+        '# TYPE qqagent_llm_failures_total counter',
+        `qqagent_llm_failures_total ${llm.failures}`,
+        '# TYPE qqagent_llm_retries_total counter',
+        `qqagent_llm_retries_total ${llm.retries}`,
+        '# TYPE qqagent_llm_cost_today gauge',
+        `qqagent_llm_cost_today ${llm.costToday}`,
+        '# TYPE qqagent_event_loop_utilization gauge',
+        `qqagent_event_loop_utilization ${snapshot.http.eventLoop?.utilization ?? 0}`,
         '# TYPE qqagent_onebot_connected gauge',
         `qqagent_onebot_connected ${snapshot.onebot.connected ? 1 : 0}`
       ];
       for (const [bucket, count] of Object.entries(snapshot.http.requests.byStatus)) {
         lines.push(`qqagent_http_responses_total{class="${bucket}"} ${count}`);
+      }
+      for (const [state, count] of Object.entries(outbox?.byState || {})) {
+        lines.push(`qqagent_outbox{state="${state}"} ${count}`);
+      }
+      for (const [state, count] of Object.entries(queues?.byState || {})) {
+        lines.push(`qqagent_inbound_queue{state="${state}"} ${count}`);
       }
       for (const plugin of plugins) {
         lines.push(`qqagent_plugin_up{id="${plugin.id}"} ${plugin.state === 'running' ? 1 : 0}`);
@@ -3075,7 +3124,11 @@ export function createApp({
       indexUrl: String(getConfig().plugins?.indexUrl || ''),
       indexUrls: Array.isArray(getConfig().plugins?.indexUrls) ? getConfig().plugins.indexUrls : [],
       lazy: getConfig().plugins?.lazy !== false,
-      idleMinutes: Math.max(0, Number(getConfig().plugins?.idleMinutes) || 0)
+      idleMinutes: Math.max(0, Number(getConfig().plugins?.idleMinutes) || 0),
+      // 只读信任视图：发布者公钥与撤回名单（公钥不是秘密；撤回名单是集中下架的依据）
+      publishers: getConfig().plugins?.publishers && typeof getConfig().plugins.publishers === 'object'
+        ? getConfig().plugins.publishers : {},
+      revoked: Array.isArray(getConfig().plugins?.revoked) ? getConfig().plugins.revoked : []
     }));
 
   // ── 插件 v2：统一设置面板 / 凭据 / 授权与配额 ─────────────────────────────

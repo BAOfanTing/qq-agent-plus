@@ -200,6 +200,9 @@ ${QUOTA_ROWS.map(([key, label, dflt]) => `          <tr>
         <div class="field"><label for="cfg-plugin-disk">插件数据磁盘上限（MB）</label>
           <input type="number" id="cfg-plugin-disk" min="8" max="4096" value="${esc(c.plugins?.limits?.diskMb ?? 256)}" /></div>
       </div>
+      <div class="field"><label for="cfg-plugin-total-memory">全部插件总内存上限（MB，0=不限；Linux 生效）</label>
+        <input type="number" id="cfg-plugin-total-memory" min="0" max="8192" value="${esc(c.plugins?.limits?.totalMemoryMb ?? 0)}" />
+        <div class="hint">按运行中插件的 RSS 总和计算；达到上限后不再启动新插件。0 表示不设总预算，仍受上面的单插件内存上限约束。</div></div>
       <div class="checkbox-row"><input type="checkbox" id="cfg-plugin-netiso" ${c.plugins?.networkIsolation !== false ? 'checked' : ''} />
         <label for="cfg-plugin-netiso">本机支持时，把插件放进无网络命名空间（联网只能走宿主代理）</label></div>
       <div class="checkbox-row"><input type="checkbox" id="cfg-plugin-requirenetiso" ${c.plugins?.requireNetworkIsolation === true ? 'checked' : ''} />

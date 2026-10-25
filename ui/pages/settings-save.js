@@ -1062,7 +1062,8 @@ async function saveConfig({ quiet = false } = {}) {
         memoryMb: numKeep(val('#cfg-plugin-memory', c.plugins?.limits?.memoryMb ?? 128), c.plugins?.limits?.memoryMb, 32, 1024, 128),
         callsPerMinute: numKeep(val('#cfg-plugin-calls', c.plugins?.limits?.callsPerMinute ?? 120), c.plugins?.limits?.callsPerMinute, 10, 1000, 120),
         concurrency: numKeep(val('#cfg-plugin-concurrency', c.plugins?.limits?.concurrency ?? 4), c.plugins?.limits?.concurrency, 1, 32, 4),
-        diskMb: numKeep(val('#cfg-plugin-disk', c.plugins?.limits?.diskMb ?? 256), c.plugins?.limits?.diskMb, 8, 4096, 256)
+        diskMb: numKeep(val('#cfg-plugin-disk', c.plugins?.limits?.diskMb ?? 256), c.plugins?.limits?.diskMb, 8, 4096, 256),
+        totalMemoryMb: numKeep(val('#cfg-plugin-total-memory', c.plugins?.limits?.totalMemoryMb ?? 0), c.plugins?.limits?.totalMemoryMb, 0, 8192, 0)
       },
       networkIsolation: chk('#cfg-plugin-netiso', c.plugins?.networkIsolation !== false),
       requireNetworkIsolation: chk('#cfg-plugin-requirenetiso', c.plugins?.requireNetworkIsolation === true)

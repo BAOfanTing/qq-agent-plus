@@ -303,6 +303,39 @@ export class ChatStore {
     this.db.exec(`PRAGMA synchronous=${normalizeSynchronous(mode)}`);
   }
   listChats() { return this.db.prepare('SELECT chat_key FROM chats ORDER BY chat_key').all().map((r) => r.chat_key); }
+
+  /** 发送 outbox 的各状态计数（低基数，控制台 /api/metrics 用）。 */
+  outboxStats() {
+    const rows = this.db.prepare('SELECT state, COUNT(*) AS n FROM outbox GROUP BY state').all();
+    const byState = {};
+    let total = 0;
+    for (const row of rows) {
+      const state = String(row?.state || 'unknown');
+      const count = Number(row.n) || 0;
+      byState[state] = count;
+      total += count;
+    }
+    return { total, byState };
+  }
+
+  /** 入站处理队列的低基数计数与最老一条的年龄（控制台 /api/metrics 用）。 */
+  queueStats() {
+    const rows = this.db.prepare(`SELECT state, COUNT(*) AS n, MIN(ts) AS oldest
+      FROM messages WHERE state IN ('pending','leased','held') GROUP BY state`).all();
+    const byState = { pending: 0, leased: 0, held: 0 };
+    let oldestAt = 0;
+    for (const row of rows) {
+      const state = String(row?.state || '');
+      if (Object.hasOwn(byState, state)) byState[state] = Number(row.n) || 0;
+      const oldest = Number(row?.oldest) || 0;
+      if (oldest && (!oldestAt || oldest < oldestAt)) oldestAt = oldest;
+    }
+    return {
+      byState,
+      oldestAt,
+      oldestAgeMs: oldestAt ? Math.max(0, Date.now() - oldestAt) : 0
+    };
+  }
   close() { this.db.close(); }
 
   getChatMeta(chatKey) {

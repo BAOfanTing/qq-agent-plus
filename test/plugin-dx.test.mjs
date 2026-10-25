@@ -58,14 +58,41 @@ test('插件磁盘配额：storage 写入超过 limits.diskMb 时拒绝（E_DISK
   );
 });
 
-test('插件并发上限与磁盘上限有默认值，且控制台可保存', async () => {
+test('插件并发/磁盘/总内存上限有默认值，且控制台可保存', async () => {
   const { DEFAULT_CONFIG } = await import('../src/core/config.js');
   assert.equal(DEFAULT_CONFIG.plugins.limits.concurrency, 4);
   assert.equal(DEFAULT_CONFIG.plugins.limits.diskMb, 256);
+  assert.equal(DEFAULT_CONFIG.plugins.limits.totalMemoryMb, 0);
   const platform = fs.readFileSync(path.join(ROOT, 'ui/pages/platform.js'), 'utf8');
   assert.match(platform, /cfg-plugin-concurrency/);
   assert.match(platform, /cfg-plugin-disk/);
+  assert.match(platform, /cfg-plugin-total-memory/);
   const save = fs.readFileSync(path.join(ROOT, 'ui/pages/settings-save.js'), 'utf8');
   assert.match(save, /concurrency: numKeep/);
   assert.match(save, /diskMb: numKeep/);
+  assert.match(save, /totalMemoryMb: numKeep/);
+});
+
+test('plugin-dev 开发开关：approveAll 放行授权，httpMock 只拦匹配的 URL', async () => {
+  const caps = createCapabilities({
+    pluginId: 'demo-dx',
+    dataDir: path.join(root, 'dev-switches-data'),
+    manifest: {
+      id: 'demo-dx',
+      capabilities: ['approval', 'http'],
+      approvals: [{ action: 'write' }],
+      httpDomains: ['api.example.com']
+    },
+    approveAll: true,
+    httpMock: async ({ url }) => (url.includes('/ok') ? { status: 201, body: 'MOCK' } : null)
+  });
+  const approval = caps.methods[CAP_METHODS.approvalCheck]({ action: 'write' });
+  assert.equal(approval.approved, true);
+  const mocked = await caps.methods[CAP_METHODS.httpRequest]({ url: 'https://api.example.com/ok' });
+  assert.equal(mocked.status, 201);
+  assert.equal(mocked.body, 'MOCK');
+  // 源码头也要有这两个开关：只写能力层、脚本没接线等于作者用不到
+  const script = fs.readFileSync(path.join(ROOT, 'scripts/plugin-dev.mjs'), 'utf8');
+  assert.match(script, /--approve-all/);
+  assert.match(script, /--http-mock/);
 });

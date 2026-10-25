@@ -186,8 +186,10 @@ export class PluginRegistry {
    */
   #sanitizeLimits(raw) {
     const source = raw && typeof raw === 'object' ? raw : {};
-    const limits = { memoryMb: 128, callsPerMinute: 120 };
-    for (const key of ['memoryMb', 'callsPerMinute']) {
+    // 这四项都要**真的传给 PluginHost**：之前这里只保留了 memoryMb / callsPerMinute，
+    // 控制台保存的 concurrency / diskMb 会在注册表这一层被静默丢掉（2026-10-25 复核）。
+    const limits = { memoryMb: 128, callsPerMinute: 120, concurrency: 4, diskMb: 256, totalMemoryMb: 0 };
+    for (const key of ['memoryMb', 'callsPerMinute', 'concurrency', 'diskMb']) {
       if (source[key] === undefined) continue;
       const value = Number(source[key]);
       if (!Number.isFinite(value) || value <= 0) {
@@ -196,7 +198,35 @@ export class PluginRegistry {
       }
       limits[key] = Math.floor(value);
     }
+    // 0 = 不启用总预算；正数才是上限。非法值按 0 处理并留日志，避免误把全部插件卡死。
+    if (source.totalMemoryMb !== undefined) {
+      const value = Number(source.totalMemoryMb);
+      if (!Number.isFinite(value) || value < 0) {
+        this.log(`插件资源上限 totalMemoryMb 的值不合法（${JSON.stringify(source.totalMemoryMb)}），已按 0（不限）处理`);
+      } else {
+        limits.totalMemoryMb = Math.floor(value);
+      }
+    }
     return limits;
+  }
+
+  /** 所有正在跑的插件 RSS 之和（KB）；总预算只在 Linux 上有可靠读数。 */
+  #totalRssKb() {
+    let used = 0;
+    for (const host of this.hosts.values()) {
+      if (host.state !== 'running') continue;
+      used += Math.max(0, Number(host.rssKb) || 0);
+    }
+    return used;
+  }
+
+  #totalMemoryExceeded(cfg) {
+    const capMb = Math.max(0, Number(cfg?.limits?.totalMemoryMb) || 0);
+    if (!capMb) return false;
+    const usedKb = this.#totalRssKb();
+    if (usedKb < capMb * 1024) return false;
+    this.log(`插件总内存已到上限：${(usedKb / 1024).toFixed(0)}MB ≥ ${capMb}MB，拒绝再启动新插件（可在「插件宿主（高级）」调大或停掉不用的插件）`);
+    return true;
   }
 
   /**
@@ -332,10 +362,21 @@ export class PluginRegistry {
     // 一次注定会成功的调用被当成失败回给模型。
     const inFlight = this.starting.get(id);
     if (inFlight) return inFlight;
+    const cfgNow = this.#config();
+    if (this.#totalMemoryExceeded(cfgNow)) {
+      host.lastError = `E_TOTAL_MEMORY：插件总内存已达上限 ${cfgNow.limits.totalMemoryMb}MB，未启动`;
+      return null;
+    }
     const task = (async () => {
       const ok = await host.start();
       if (!ok) {
         this.log(`插件 ${id} 按需启动失败：${host.lastError || '未知原因'}`);
+        return null;
+      }
+      host.refreshRss?.();
+      if (this.#totalMemoryExceeded(cfgNow)) {
+        await host.stop().catch(() => {});
+        host.lastError = `E_TOTAL_MEMORY：启动后插件总内存超过 ${cfgNow.limits.totalMemoryMb}MB，已停止`;
         return null;
       }
       this.lastUsedAt.set(id, Date.now());
@@ -376,6 +417,13 @@ export class PluginRegistry {
       this.hosts.delete(item.id);
       await existing.stop().catch(() => {});
     }
+    if (this.#totalMemoryExceeded(cfg)) {
+      const blocked = this.#makeHost(item, cfg);
+      blocked.lastError = `E_TOTAL_MEMORY：插件总内存已达上限 ${cfg.limits.totalMemoryMb}MB，未启动`;
+      this.hosts.set(item.id, blocked);
+      this.log(`插件 ${item.id} 未启动：${blocked.lastError}`);
+      return false;
+    }
     const host = this.#makeHost(item, cfg);
     this.hosts.set(item.id, host);
     const ok = await host.start();
@@ -383,6 +431,13 @@ export class PluginRegistry {
       // 启动失败**保留** host：lastError 要能通过 list() 到达控制台，否则界面上只有一个没有原因的
       // "待启动"，用户只能去翻日志（与"每个插件为什么在跑/为什么没跑都要能答上来"的自我要求不符）
       this.log(`插件 ${item.id} 启动失败：${host.lastError || '未知原因'}`);
+      return false;
+    }
+    host.refreshRss?.();
+    if (this.#totalMemoryExceeded(cfg)) {
+      await host.stop().catch(() => {});
+      host.lastError = `E_TOTAL_MEMORY：启动后插件总内存超过 ${cfg.limits.totalMemoryMb}MB，已停止`;
+      this.log(`插件 ${item.id} 已停止：${host.lastError}`);
       return false;
     }
     this.log(`插件 ${item.id}（${item.manifest.name} v${item.manifest.version}）已加载：`
