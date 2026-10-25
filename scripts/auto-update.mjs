@@ -986,7 +986,9 @@ async function run() {
     TMP: testTmpDir,
     TEMP: testTmpDir
   };
-  command(process.execPath, ['--test', ...tests], {
+  // 强制 TAP：默认 reporter 在管道里可能是 spec（✔/✖），failureDetail 解析不到失败项，
+  // 只能回退成输出尾部——#50 的日志就是这样把「install-oneclick 假红」显示成狼人杀用例。
+  command(process.execPath, ['--test', '--test-reporter=tap', ...tests], {
     cwd: workDir,
     timeout: 20 * 60 * 1000,
     env: testEnv
