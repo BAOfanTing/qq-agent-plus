@@ -1074,10 +1074,7 @@ function renderFriendFeaturePageImpl(c, status) {
   const __html = `
     <div class="asset-head">
       <div><h2>好友管理</h2><span class="muted" id="friend-feature-state">${status.active ? '统一身份库运行中' : status.enabled ? '统一身份库启动失败' : '人物统一印象已停用'}</span></div>
-      <div class="asset-head-actions">
-        <button type="button" class="btn btn-small" id="friend-feature-refresh" title="刷新好友工作流" aria-label="刷新好友工作流">${iconSvg('refresh', { size: 15 })}<span>刷新</span></button>
-        <button type="button" class="btn btn-primary btn-small" id="friend-feature-save">保存好友设置</button>
-      </div>
+      <button type="button" class="btn btn-small" id="friend-feature-refresh" title="刷新好友工作流" aria-label="刷新好友工作流">${iconSvg('refresh', { size: 15 })}<span>刷新</span></button>
     </div>
     <div class="asset-summary">
       <div class="asset-summary-item"><span>主动候选待审批</span><strong>${fmtTok(proposalCounts.pending)}</strong><small>管理员批准后发送</small></div>
@@ -1085,10 +1082,10 @@ function renderFriendFeaturePageImpl(c, status) {
       <div class="asset-summary-item"><span>评估中</span><strong>${fmtTok(opportunityCounts.active)}</strong><small>${fmtTok(opportunityCounts.reviewFailed)} 次失败</small></div>
       <div class="asset-summary-item"><span>好友关系快照</span><strong>${status.friendProposal?.friendStatusTrusted ? '可信' : '不可用'}</strong><small>${status.friendProposal?.friendSnapshotAt ? esc(fmtTime(status.friendProposal.friendSnapshotAt)) : '未知时不触发'}</small></div>
     </div>
-    <div class="hint friend-save-result" id="friend-feature-save-result"></div>
-    <section class="settings-card">
+    <section class="control-section">
       <div class="control-section-title">
-        <div><h3>基础设置</h3><span class="muted">主动加好友已退役（Issue #10），以下主动配置不再生效；入站好友请求审批不受影响</span></div>
+        <div><h3>运行设置</h3><span class="muted">主动加好友已退役（Issue #10），下表配置不再生效；入站好友请求审批不受影响</span></div>
+        <button type="button" class="btn btn-primary btn-small" id="friend-feature-save">保存好友设置</button>
       </div>
       <div class="field-row">
         <!-- 管理员 QQ 的唯一编辑入口在「设置 → 模型 API → 全局管理员 QQ」：这里从第一次渲染起
@@ -1103,42 +1100,25 @@ function renderFriendFeaturePageImpl(c, status) {
         <div class="field"><label>同一用户冷却天数</label><input type="number" id="cfg-identity-friend-cooldown" min="1" max="365" value="${esc(friend.cooldownDays ?? 30)}" /></div>
         <div class="field"><label>主动候选待审批上限</label><input type="number" id="cfg-identity-friend-max-pending" min="1" max="100" value="${esc(friend.maxPending ?? 10)}" /></div>
       </div>
-      <div class="checkbox-row switch-row">
-        <input type="checkbox" id="cfg-identity-friend-dispatch" ${friend.activeDispatchEnabled === true ? 'checked' : ''} />
-        <label for="cfg-identity-friend-dispatch">管理员批准后主动发送好友申请</label>
-      </div>
-    </section>
-    <section class="settings-card">
-      <div class="control-section-title">
-        <div><h3>触发条件</h3><span class="muted">消息进入评估队列前先过这些门槛</span></div>
-      </div>
       <div class="field-row">
         <div class="field"><label>抽签概率（%）</label><input type="number" id="cfg-friend-trigger-probability" min="0" max="100" step="0.1" value="${esc((Number(triggered.probability ?? 0.05) * 100).toFixed(1))}" /></div>
         <div class="field"><label>统计窗口（天）</label><input type="number" id="cfg-friend-trigger-history-days" min="1" max="365" value="${esc(triggered.historyDays ?? 30)}" /></div>
         <div class="field"><label>最低有效发言</label><input type="number" id="cfg-friend-trigger-min-messages" min="0" max="10000" value="${esc(triggered.minMessages ?? 50)}" /></div>
         <div class="field"><label>最低活跃日</label><input type="number" id="cfg-friend-trigger-min-days" min="0" max="365" value="${esc(triggered.minActiveDays ?? 3)}" /></div>
         <div class="field"><label>最低双向交流</label><input type="number" id="cfg-friend-trigger-min-exchanges" min="0" max="1000" value="${esc(triggered.minDirectExchanges ?? 3)}" /></div>
-        <div class="field"><label>触发消息最长延迟（分钟）</label><input type="number" id="cfg-friend-trigger-max-age" min="1" max="1440" value="${esc(triggered.maxTriggerAgeMinutes ?? 10)}" /></div>
-        <div class="field"><label>好友快照最长缓存（分钟）</label><input type="number" id="cfg-friend-trigger-friend-age" min="1" max="1440" value="${esc(triggered.friendStatusMaxAgeMinutes ?? 15)}" /></div>
-      </div>
-    </section>
-    <section class="settings-card">
-      <div class="control-section-title">
-        <div><h3>频率与配额</h3><span class="muted">冷却、每日额度与提名分数线</span></div>
       </div>
       <div class="field-row">
+        <div class="field"><label>触发消息最长延迟（分钟）</label><input type="number" id="cfg-friend-trigger-max-age" min="1" max="1440" value="${esc(triggered.maxTriggerAgeMinutes ?? 10)}" /></div>
+        <div class="field"><label>好友快照最长缓存（分钟）</label><input type="number" id="cfg-friend-trigger-friend-age" min="1" max="1440" value="${esc(triggered.friendStatusMaxAgeMinutes ?? 15)}" /></div>
         <div class="field"><label>抽签冷却（分钟）</label><input type="number" id="cfg-friend-trigger-draw-cooldown" min="1" max="10080" value="${esc(triggered.drawCooldownMinutes ?? 30)}" /></div>
         <div class="field"><label>每人每日抽签上限</label><input type="number" id="cfg-friend-trigger-max-draws" min="1" max="1000" value="${esc(triggered.maxDrawsPerUserPerDay ?? 6)}" /></div>
         <div class="field"><label>每日模型评估上限</label><input type="number" id="cfg-friend-trigger-max-reviews" min="0" max="1000" value="${esc(triggered.maxReviewsPerDay ?? 10)}" /></div>
         <div class="field"><label>提名分数线</label><input type="number" id="cfg-friend-trigger-threshold" min="0" max="100" value="${esc(triggered.scoreThreshold ?? 70)}" /></div>
+      </div>
+      <div class="field-row">
         <div class="field"><label>模型跳过冷却（天）</label><input type="number" id="cfg-friend-trigger-skip-cooldown" min="0" max="365" value="${esc(triggered.skipCooldownDays ?? 7)}" /></div>
         <div class="field"><label>评估失败冷却（分钟）</label><input type="number" id="cfg-friend-trigger-error-cooldown" min="1" max="10080" value="${esc(triggered.errorCooldownMinutes ?? 60)}" /></div>
         <div class="field"><label>评估排队期限（秒）</label><input type="number" id="cfg-friend-trigger-queue-age" min="5" max="3600" value="${esc(triggered.maxQueueAgeSeconds ?? 120)}" /></div>
-      </div>
-    </section>
-    <section class="settings-card">
-      <div class="control-section-title">
-        <div><h3>评分权重</h3><span class="muted">四项权重共同决定提名分数</span></div>
       </div>
       <div class="field-row">
         <div class="field"><label>互动质量权重</label><input type="number" id="cfg-friend-weight-quality" min="0" max="100" value="${esc(triggered.weights?.quality ?? 40)}" /></div>
@@ -1147,27 +1127,29 @@ function renderFriendFeaturePageImpl(c, status) {
         <div class="field"><label>关系稳定权重</label><input type="number" id="cfg-friend-weight-stability" min="0" max="100" value="${esc(triggered.weights?.stability ?? 10)}" /></div>
       </div>
       <div class="hint">已经是好友的用户不会进入抽签或模型评估；好友状态无法确认时同样不会触发。四项权重合计必须为 100。</div>
-    </section>
-    <section class="settings-card">
-      <h3>入站好友请求</h3>
+      <div class="checkbox-row">
+        <input type="checkbox" id="cfg-identity-friend-dispatch" ${friend.activeDispatchEnabled === true ? 'checked' : ''} />
+        <label for="cfg-identity-friend-dispatch">管理员批准后主动发送好友申请</label>
+      </div>
       <div class="field-row">
         <div class="field"><label>入站请求待审批上限</label><input type="number" id="cfg-identity-incoming-max-pending" min="1" max="500" value="${esc(incoming.maxPending ?? 50)}" /></div>
       </div>
-      <div class="checkbox-row switch-row">
+      <div class="checkbox-row">
         <input type="checkbox" id="cfg-identity-incoming-auto-whitelist" ${incoming.autoWhitelist !== false ? 'checked' : ''} />
         <label for="cfg-identity-incoming-auto-whitelist">同意或确认成为好友后自动加入私聊白名单</label>
       </div>
       <div class="hint" id="identity-friend-protocol">${esc(status.friendProposal?.protocolNote || '')}</div>
+      <div class="hint" id="friend-feature-save-result"></div>
     </section>
-    <section class="settings-card" id="identity-incoming-friend-box">
+    <section class="control-section" id="identity-incoming-friend-box">
       <h3>收到的好友请求</h3>
       <div class="identity-pilot-people" id="identity-incoming-friend-requests"></div>
     </section>
-    <section class="settings-card" id="identity-friend-proposal-box">
+    <section class="control-section" id="identity-friend-proposal-box">
       <h3>主动好友候选</h3>
       <div class="identity-pilot-people" id="identity-friend-proposals"></div>
     </section>
-    <section class="settings-card" id="identity-friend-opportunity-box">
+    <section class="control-section" id="identity-friend-opportunity-box">
       <h3>消息触发与评估记录</h3>
       <div class="identity-pilot-people" id="identity-friend-opportunities"></div>
     </section>`;

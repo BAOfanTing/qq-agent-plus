@@ -339,24 +339,19 @@ test('新建自定义卡是空表单：角色设定不复制当前卡', () => {
   assert.match(body, /id="new-persona-rules"[^>]*><\/textarea>/);
 });
 
-test('资产页按功能块分卡：好友管理不再是一整面输入框', () => {
-  // 用户对照设置页的卡片分组后提的：好友管理 20 多个字段挤在一个 control-section 里，
-  // 每格输入框又窄又靠左，整页看起来像向左偏。拆成「基础设置 / 触发条件 / 频率与配额 /
-  // 评分权重 / 入站好友请求」五张设置卡后，每块功能有自己的边界和标题。
+test('好友管理保持原有表单结构，不套资产页卡片', () => {
+  // 用户明确要求：好友管理改回原样，设置页不动；只调整异常处理与人物印象。
   const start = features.indexOf('function renderFriendFeaturePageImpl');
   const end = features.indexOf('async function saveFriendFeatureConfig', start);
   const friend = features.slice(start, end);
   assert.ok(start >= 0 && end > start, '要找到好友管理渲染函数');
-  for (const title of ['基础设置', '触发条件', '频率与配额', '评分权重', '入站好友请求', '收到的好友请求', '主动好友候选', '消息触发与评估记录']) {
-    assert.match(friend, new RegExp(`<h3>${title}</h3>`), `缺少「${title}」卡片`);
-  }
-  const cards = friend.match(/<section class="settings-card"/g) || [];
-  assert.equal(cards.length, 8, `好友管理应有 8 张卡片，实际 ${cards.length}`);
-  assert.doesNotMatch(friend, /<section class="control-section"/,
-    '资产页不能再退回扁平 control-section：功能块要靠卡片分组');
+  assert.match(friend, /<section class="control-section">/);
+  assert.match(friend, /id="friend-feature-save"/);
+  assert.doesNotMatch(friend, /settings-card/,
+    '好友管理不再使用资产页的卡片结构');
 });
 
-test('人物印象与异常处理同样按功能块分卡', () => {
+test('人物印象与异常处理按功能块分卡', () => {
   const identity = features.slice(
     features.indexOf('function renderIdentityFeaturePageImpl'),
     features.indexOf('function renderFriendFeaturePageImpl')
@@ -371,22 +366,21 @@ test('人物印象与异常处理同样按功能块分卡', () => {
   assert.match(incident, /<section class="settings-card">\s*<div class="control-section-title">\s*<div><h3>异常日志<\/h3>/);
 });
 
-test('资产页卡片复用设置页的卡片样式', () => {
-  assert.match(css, /\.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/);
-  assert.match(css, /\.asset-summary \+ \.settings-card,\s*\.friend-save-result \+ \.settings-card \{ margin-top: 14px; \}/);
+test('资产页卡片复用设置页的卡片样式，但不反向污染设置页', () => {
+  assert.match(css, /\.asset-pane \.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/);
+  assert.match(css, /\.asset-summary \+ \.settings-card \{ margin-top: 14px; \}/);
+  assert.doesNotMatch(css, /\n\.settings-card > \.control-section-title \{ margin-bottom: 12px; \}/,
+    '这条不能是全局规则，否则会改到设置页');
 });
 
-test('好友管理整块内容居中，宽度按表单页取 1180', () => {
-  // 用量页的 940 是给它自己的数字卡/表格刚好铺满的；好友管理是表单，照搬会窄。
-  // 这里取与插件目录相近的 1180，整块居中，避免贴内容区左缘。
-  assert.match(css, /\.usage-wrap \{ max-width: 940px; margin: 0 auto; \}/,
-    '用量页保持自己的 940px 居中列');
-  const block = /#friend-page \{([\s\S]*?)\n\}/.exec(css);
-  assert.ok(block, '好友管理要有自己的居中列规则');
+test('人物印象与异常处理整块内容居中，宽度取 1180', () => {
+  // 这两页是用户要求调整的目标：卡片保留，整块内容居中，避免贴内容区左缘。
+  const block = /#identity-page,\s*#incident-page \{([\s\S]*?)\n\}/.exec(css);
+  assert.ok(block, '人物印象/异常处理要有居中列规则');
   assert.match(block[1], /display: grid;/);
   assert.match(block[1], /grid-template-columns: minmax\(0, 1180px\);/);
   assert.match(block[1], /justify-content: center;/);
   assert.match(block[1], /align-content: start;/);
-  assert.doesNotMatch(css, /friend-settings-card/,
-    '不要再给好友管理单独加窄列/铺满特例');
+  assert.doesNotMatch(css, /#friend-page \{/,
+    '好友管理不再单独套内容列');
 });
