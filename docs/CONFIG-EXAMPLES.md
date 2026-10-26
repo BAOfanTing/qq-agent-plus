@@ -846,7 +846,7 @@ MiMo 的写法（想要语气、又不想上 GPU 时最省事）：
   —— 先按索引里的 sha256 校验再换入，最多是"取不到"。
 - `indexUrl`：单条索引地址（默认官方索引，住在独立仓库 `qq-agent-plugins`）。它等价于 `indexUrls` 里排在最后的一项；
   两个都留空 = 完全不看索引（控制台那一栏会说清"没有配置来源"，手动填地址仍然可用）。
-  拉取走 safe-fetch：内网地址被拦、有体积与超时上限。官方索引先从 `raw.githubusercontent.com` 取，
+  拉取走 safe-fetch：HTTPS 优先 HTTP/2、失败回落 HTTP/1.1；内网地址被拦、有体积与超时上限。官方索引先从 `raw.githubusercontent.com` 取，
   该地址请求失败（超时或非 200，国内常见超时）时自动改用 GitHub Contents API 的 raw 媒体类型——
   仍然是 GitHub 自己的地址，不经过第三方 CDN。
 - `networkIsolation`：Linux 上把插件进程放进**没有网络接口**的命名空间（默认开，有就用）；

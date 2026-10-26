@@ -59,7 +59,9 @@ node src/ops.js install-timers --confirm   # 写入并启用 backup / process-gu
 | `audit` | `ops/audit-server.sh` | 服务、代码与数据体检：systemd user 服务/定时器、启动补丁链可执行性、全量 js 语法、未定义调用扫描、关键补丁标记、config.json 关键项（密钥只报告有/无）、sqlite 完整性、控制台与协议端运行态、最近日志、主机资源 | 部署后验收；出现问题时用于定位 |
 | `audit-host` | `ops/audit-host.sh` | 主机只读体检：失败单元、内存/磁盘/journald、Docker 容器与重启次数、监听端口、SSH 安全、防火墙、定时任务、可升级包、TLS 证书到期、备份现状 | 接手机器后的检查、例行巡检 |
 | `audit-prune` | —（改进方案 #5 新增） | 删除 `data/audit-log/` 下超过保留月数的 `audit-YYYYMM.jsonl`（控制台写操作的审计留痕）；默认保留 6 个月，先 `--dry-run` 预演 | 每月定时执行（`qq-agent-audit-prune.timer`）；磁盘吃紧时手动执行 |
-| `backup` | `ops/backup-qq-agent-data.sh` | 停止服务数秒 → tar.gz 打包数据目录 → 启动服务 → 仅保留最近 N 份；任何失败路径都会重新启动服务 | 每周定时执行（配合 `.timer`）；重大变更前手动执行 |
+| `backup` | `ops/backup-qq-agent-data.sh` | 停止服务数秒 → AES-256-GCM 加密打包数据目录（`*.tar.gz.enc`）→ 启动服务 → 仅保留最近 N 份；任何失败路径都会重新启动服务 | 每周定时执行（配合 `.timer`）；重大变更前手动执行 |
+| `restore` | —（0.9.9 新增） | 解密 → 路径校验 → 停服务 → 旧数据移到 `data.pre-restore-*` → 解包 → 以 observe 模式启动 → 健康检查；失败自动回滚。先 `--dry-run` 看归档条目，再 `--confirm` | 迁移、灾难恢复、备份演练 |
+| `prune` | —（0.9.9 新增） | 只删除 `state='acked'` 且超过保留期的消息；`pending` / `held` 永远不删。`--days=N` 不传时读 `store.retentionDays`（0 = 不删） | 历史消息占用磁盘时；先 `--dry-run` |
 | `scan` | `ops/scan-undefined-calls.py` + `ops/check-undefined-calls.sh` | 将注释/字符串/正则/模板串抹白后，查找「已调用但本文件既未定义也未 import」的函数名；默认只记录、不阻断（退出码 0）；`--strict` 下有可疑调用**或目录不存在**则退出 1（2026-10-03：路径写错也要让 CI 变红） | 修改 `src/*.js` 后；也可挂载到服务 `ExecStartPost` |
 | `watch-send` | `ops/watch-send.py` | 监视 outbox 表的 rowid 水位线：基线之后新增 failed 行报 SEND_FAIL，新增成功行报 SEND_OK；同时检查是否再次出现未定义函数事故 | 修复发送链路后的线上验证 |
 | `watch-login` | `ops/watch-login.py` | 每 15 秒轮询协议端 HTTP 端口，直至 QQ 登录成功，随后打印登录信息 / 控制台状态 / 最近日志 | 重启协议端容器或掉线重登后确认恢复 |
@@ -69,7 +71,7 @@ node src/ops.js install-timers --confirm   # 写入并启用 backup / process-gu
 | `snowluma-update` | —（协议端管理新增） | 把协议端镜像更新到项目基线（或 `--to` 指定镜像）：备份 .env/compose → pull → up -d → 等就绪，起不来自动回滚；`--dry-run` 预演 | 控制台「设置 → OneBot」一键更新的命令行等价 |
 | `deploy` | `ops/deploy_qq_agent.sh` | 非交互部署：设置模型凭据后调用源码目录的 `deploy-all.sh -y` | 新机器初始化、CI 或远程 SSH 环境中的部署 |
 | `console` | `ops/qq-console.bat` | 使用系统 `ssh` 建立控制台 / WebUI / 远程桌面三个端口的隧道，就绪后提示或打开控制台（Windows/macOS/Linux 通用） | 日常打开控制台 |
-| `plugins` | —（插件生态新增） | 插件管理：`list` 列出已装插件（版本/能力/来源）与已授权清单；`install <文件.tar.gz>` **从本地文件装**（别人发的包、自己打的包）——sha256 由它算给你核对，装完来源记录写「本地文件：<文件名>」 | 不打开控制台就能装/看；小白用户拿到包只会在控制台装，命令行这条给运维与作者自测 |
+| `plugins` | —（插件生态新增） | 插件管理：`list` 列出已装插件（版本/能力/来源）与已授权清单；`install <文件.tar.gz>` **从本地文件装**（别人发的包、自己打的包）——sha256 由它算给你核对，装完来源记录写「本地文件：<文件名>」；`uninstall <id> [--purge-data]` 卸载并可选删除插件数据 | 不打开控制台就能装/看；小白用户拿到包只会在控制台装，命令行这条给运维与作者自测 |
 | `install-timers` | `ops/systemd/` | 生成并安装四个 systemd user 定时器：备份（每周日 04:10）、进程看门狗（每 10 分钟）、健康巡检（每 5 分钟）、审计日志清理（每月 1 日 04:20） | 安装定时任务 |
 
 ## 部署纪律：只改 `ui/` 就不要重启服务

@@ -34,6 +34,11 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   replying, keep the sticker catalogue in the system prompt, self-check before finishing.
 - **Send path** — retry transient network failures, QQ system faces, message-id normalisation,
   fallback parsing for inline tool calls.
+- **Network fetch** — all host-side fetches go through `safe-fetch`. HTTPS GETs and media downloads
+  prefer HTTP/2 (ALPN), falling back to HTTP/1.1 when the server or connection cannot use it. DNS
+  pinning, private-address blocking, per-hop redirect validation, cross-origin credential stripping,
+  body/decompression caps and timeouts remain in force. POST stays on HTTP/1.1 to avoid duplicate
+  writes. Cloudflare sites that challenge HTTP/1.1 (e926/e621) now work.
 - **Sticker system** — auto-collect with QQ favourites first, fuzzy lookup fallback, sync guard so
   an API failure cannot wipe the local library.
 - **Games & reminders** — hosts mini-games: stateless ones run straight from the prompt (word chain,
@@ -48,6 +53,9 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
 - **Proactive talk** — three independently switchable links (cold-topic opener / follow-up
   nudge when nobody answers / model-scheduled wake-up), multiple active windows, interval
   guard, skip-reason logging, catch-up for messages missed during restarts.
+- **Life feed** — optionally forages Bilibili's public API, ranks candidates by the persona's
+  interests and recent group topics, and lets the bot choose what to share. Off by default; it
+  reuses the existing proactive quiet hours, budget and send queue. See [LIFE-FEED](docs/LIFE-FEED.md).
 - **Model access** — thinking levels translated per channel preset, settable per provider and per
   task (Settings -> Model API -> "Advanced: thinking"), retry on provider moderation refusals,
   automatic fallback model.
@@ -78,7 +86,9 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   through a **write trust model**: per-action switches default off, every call needs the owner's
   approval for that exact target, daily quotas apply, two writes from the same plugin are at least
   60 seconds apart, failures and idempotent skips refund their approval and quota, and every write is
-  audited host-side. The console's Plugins page installs from the official index (12 plugins, all
+  audited host-side. Upgrades diff the manifest first; any permission-surface change must be
+  confirmed, grants are bound to the manifest hash, and approvals/switches are reset by scope after
+  an upgrade. The console's Plugins page installs from the official index (12 plugins, all
   zero-dependency, including Bilibili: search / understand a video / download and merge into the
   chat / interactions with per-call approval), from a local package, or from your own index.
   **Writing one** is documented in [docs/PLUGINS.md](docs/PLUGINS.md) (scaffold → debug against the
@@ -86,6 +96,9 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   the [index repository](https://github.com/sakurawwwxh/qq-agent-plugins) PR flow. The console's
   Plugins → Publish pane lists both, with the commands. Plugins are third-party code — read the
   declared capabilities on the detail page before installing.
+- **Operations & observability** — backups are AES-256-GCM encrypted by default, with restore and
+  drill support; message APIs use cursor pagination and support JSONL/CSV export plus `ops prune`;
+  `/api/metrics` returns JSON or Prometheus text, and logs can be emitted as structured JSON.
 - **Qzone moments** — source can be the persona's own interests (default; no group-log collection),
   group observations, or persona-first with a light group touch. Scheduled runs only produce a
   draft by default; you review or edit it in the console before publishing.
@@ -148,6 +161,10 @@ OneBot WebSocket
   -> session-bound tools
   -> OneBot HTTP
 ```
+
+Host-side outbound fetches all go through `src/llm/safe-fetch.js`: HTTPS GETs and media downloads
+prefer HTTP/2 and fall back to HTTP/1.1; SSRF/DNS pinning, per-hop redirects, credential stripping,
+body caps and timeouts are enforced there.
 
 A message is acknowledged only after the turn was handled successfully. When a model call fails or
 the process restarts, the unsent batch remains pending and is retried automatically. When a send
@@ -432,12 +449,15 @@ node src/ops.js help                     # all subcommands
 node src/ops.js audit                    # service + code + data health check (read-only)
 node src/ops.js audit-host               # host health check (read-only)
 node src/ops.js scan                     # undefined-call scan
-node src/ops.js backup --confirm         # stop/start the service, archive data, keep the last 4
+node src/ops.js backup --confirm         # stop/start the service, encrypt the archive, keep the last 4
+node src/ops.js restore --from ~/qq-agent/backups/qq-agent-data-XXXX.tar.gz.enc --dry-run
+node src/ops.js prune --days=90 --dry-run # only acked messages; preview first
 node src/ops.js install-timers --print   # show the four systemd user timers (backup / process-guard / health / audit-prune)
 node src/ops.js console --open           # open an SSH tunnel and the console
 ```
 
-Every subcommand accepts `--help`. Destructive commands require `--confirm` and support `--dry-run`
+`/api/metrics` requires the console token (`manage.sh token`) and supports JSON or
+`?format=prometheus`. Every subcommand accepts `--help`. Destructive commands require `--confirm` and support `--dry-run`
 and `--print` previews. Paths and credentials are read from environment variables (`QQ_AGENT_*`,
 `SSH*`); no real addresses or secrets are stored in the repository. Environment variables, common
 examples and remote execution are documented in [docs/OPS.md](docs/OPS.md).

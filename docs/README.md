@@ -9,7 +9,7 @@
 | [LINUX.md](LINUX.md) | Linux 全栈部署与运维手册：隔离边界、依赖、安装（一键 `install.sh` / 交互式 `deploy-all.sh`）、控制台、数据与备份、OneBot 连接故障排查 |
 | [DOCKER.md](DOCKER.md) | Docker / Compose 部署：只装 Docker 的机器、首次启动、升级回滚、从裸机迁移、容器模式限制 |
 | [BAOTA.md](BAOTA.md) | 宝塔 / aaPanel 面板部署：面板与 systemd 的分工、非 root 服务用户、端口与反向代理、常见报错 |
-| [OPS.md](OPS.md) | `src/ops.js` 运维入口（体检 / 扫描 / 备份 / 部署 / 看门狗 / 健康巡检 / 隧道）的环境变量与示例 |
+| [OPS.md](OPS.md) | `src/ops.js` 运维入口（体检 / 扫描 / 加密备份与恢复演练 / 消息清理 / 部署 / 看门狗 / 健康巡检 / 指标 / 隧道）的环境变量与示例 |
 | [CONFIG-EXAMPLES.md](CONFIG-EXAMPLES.md) | 常用配置片段：思考模式、兜底模型、视觉、主动发言、表情包、节奏、拟人化表达、QQ 空间来源与周期提醒 |
 | [HUMANIZE.md](HUMANIZE.md) | 拟人化表达：运行时实现（气泡整形、角色声音、few-shot、诚实边界）、客观指标、盲评量表与调参顺序 |
 | [MCP.md](MCP.md) | MCP：客户端配置（stdio server、工具挂载）、只读资源服务（人物记忆/梗库/提醒）、安全边界与运维接口 |

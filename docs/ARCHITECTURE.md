@@ -30,6 +30,13 @@ inside the plugin's own directory, sends through the normal send queue). This is
 what keeps third-party code away from the configuration file and the protocol
 client, and it removes the "unhandled exception in a plugin kills the bot" case.
 
+All host-side outbound HTTP (web search, media downloads, plugin HTTP) goes
+through `src/llm/safe-fetch.js`. HTTPS GETs and media downloads try HTTP/2
+first and fall back to HTTP/1.1 when the server or connection cannot use it;
+DNS pinning, private-address blocking, per-hop redirect checks, credential
+stripping, body/decompression caps and timeouts apply to both transports. POST
+stays on HTTP/1.1 so a request that already reached the peer is never replayed.
+
 ## Module Boundaries
 
 | Area | Main modules | Responsibility |
@@ -41,6 +48,7 @@ client, and it removes the "unhandled exception in a plugin kills the bot" case.
 | Prompt and tools | `src/llm/prompt.js`, `src/tools/` | Persona context and tools restricted to the current chat |
 | Persona runtime | `src/personas.js`, `src/llm/bubble-shape.js`, `roles/voice-profiles.json`, `roles/dialogs/` | Card voice profiles, few-shot examples and bubble shaping (code/URL/emoticon-safe) for persona replies only |
 | Delivery | `src/onebot/sender.js` | Per-chat serialization, rate limits, message splitting and outbox completion |
+| Outbound network | `src/llm/safe-fetch.js` | HTTP/2-first HTTPS GET/media with HTTP/1.1 fallback, DNS pinning, SSRF checks, per-hop redirects, credential stripping and body/timeout caps |
 | Model access | `src/llm/llm.js`, `src/core/providers.js`, `src/core/provider-presets.js` | Chat Completions, retries, provider credentials, usage and per-channel thinking presets |
 | Sticker system | `src/onebot/sticker-manager.js`, `src/onebot/stickers.js` | QQ favourites sync, notes, tiered lookup, auto-collect and local asset storage |
 | Memory | `src/memory/`, `src/identity/` | Member impressions, handoff state and cross-chat identity index |
