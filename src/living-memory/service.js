@@ -155,6 +155,59 @@ export class LivingMemoryService {
     return { entries, vectorError, mode };
   }
 
+  /**
+   * Rebuild local vectors without changing a memory card's semantic timestamp.
+   * It is used by the external-service migration and is deliberately opt-in:
+   * normal startup never turns an Embedding provider into an unbounded job.
+   */
+  async reindexVectors({ limit = 100000, batchSize = 8, timeoutMs = 0, force = false, onProgress = null } = {}) {
+    const report = { configured: this.embedder.ready(), candidates: 0, attempted: 0, ready: 0, failed: 0 };
+    if (!this.embedder.ready()) return { ...report, reason: 'Embedding 未配置' };
+    const items = this.store.vectorWork({ model: this.embeddingConfig.model, limit, force });
+    report.candidates = items.length;
+    const size = clampInt(batchSize, 1, 64, 8);
+    const effectiveTimeoutMs = clampInt(timeoutMs, 0, 120000, 0);
+    const notify = () => {
+      if (typeof onProgress === 'function') onProgress({ ...report });
+    };
+    const saveReady = (memory, vector) => {
+      this.store.setVectorState(memory.id, {
+        status: 'ready', model: this.embeddingConfig.model, vector, preserveUpdatedAt: true
+      });
+      report.ready += 1;
+    };
+    const saveError = (memory, error) => {
+      this.store.setVectorState(memory.id, {
+        status: 'error', error: String(error?.message || error), model: this.embeddingConfig.model, preserveUpdatedAt: true
+      });
+      report.failed += 1;
+    };
+
+    for (let offset = 0; offset < items.length; offset += size) {
+      const batch = items.slice(offset, offset + size);
+      report.attempted += batch.length;
+      const text = batch.map((memory) => embeddingText(memory));
+      try {
+        const vectors = await this.embedder.embed(text, { timeoutMs: effectiveTimeoutMs });
+        if (vectors.length !== batch.length) throw new Error('Embedding 返回数量不匹配');
+        batch.forEach((memory, index) => saveReady(memory, vectors[index]));
+      } catch (batchError) {
+        // A malformed single card must not make the rest of an import permanently unvectorizable.
+        this.log.warn?.('[living-memory] 批量向量回填失败，改为逐条尝试：', batchError?.message || batchError);
+        for (const memory of batch) {
+          try {
+            const [vector] = await this.embedder.embed(embeddingText(memory), { timeoutMs: effectiveTimeoutMs });
+            saveReady(memory, vector);
+          } catch (error) {
+            saveError(memory, error);
+          }
+        }
+      }
+      notify();
+    }
+    return report;
+  }
+
   archiveMemory(id) {
     return this.store.archiveMemory(id);
   }

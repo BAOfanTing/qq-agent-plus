@@ -288,14 +288,43 @@ export class LivingMemoryStore {
       .filter((item) => item.id && item.vector?.length === vectorDimensions);
   }
 
-  setVectorState(id, { status, error = '', model = '', vector = null } = {}) {
+  vectorWork({ model = '', limit = 100000, force = false } = {}) {
+    const embeddingModel = asText(model, 200);
+    if (!embeddingModel) return [];
+    const values = [];
+    const staleClause = force
+      ? ''
+      : ` AND (
+        vector_status != 'ready'
+        OR embedding_model != ?
+        OR vector_blob IS NULL
+        OR vector_dimensions <= 0
+      )`;
+    if (!force) values.push(embeddingModel);
+    const rows = this.db.prepare(`
+      SELECT * FROM memories
+      WHERE status = 'active'
+      ${staleClause}
+      ORDER BY updated_at ASC, id ASC
+      LIMIT ?
+    `).all(...values, clampInt(limit, 1, 100000, 100000));
+    return rows.map(rowToMemory);
+  }
+
+  setVectorState(id, { status, error = '', model = '', vector = null, preserveUpdatedAt = false } = {}) {
     const nextStatus = ['pending', 'ready', 'stale', 'error', 'none'].includes(status) ? status : 'error';
     const packed = nextStatus === 'ready' ? packVector(vector) : null;
     const dimensions = packed ? Math.floor(packed.length / 4) : 0;
     const storedStatus = packed ? nextStatus : (nextStatus === 'ready' ? 'error' : nextStatus);
     const vectorError = packed ? '' : (nextStatus === 'ready' ? '向量数据无效' : asText(error, 600));
-    this.db.prepare('UPDATE memories SET vector_status = ?, vector_error = ?, embedding_model = ?, vector_blob = ?, vector_dimensions = ?, updated_at = ? WHERE id = ?')
-      .run(storedStatus, vectorError, asText(model, 200), packed, dimensions, now(), asText(id, 100));
+    const updatedClause = preserveUpdatedAt ? '' : ', updated_at = ?';
+    const values = [storedStatus, vectorError, asText(model, 200), packed, dimensions];
+    if (!preserveUpdatedAt) values.push(now());
+    values.push(asText(id, 100));
+    this.db.prepare(`UPDATE memories
+      SET vector_status = ?, vector_error = ?, embedding_model = ?, vector_blob = ?, vector_dimensions = ?${updatedClause}
+      WHERE id = ?`)
+      .run(...values);
     return this.getMemory(id);
   }
 

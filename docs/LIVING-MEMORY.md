@@ -35,3 +35,27 @@ LIVING_MEMORY_VECTOR_SCAN_LIMIT=20000
 `LIVING_MEMORY_EMBEDDING_DIMENSIONS=0` 时，会从首次成功响应推断维度。实时语义分支超过 `LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS` 时，系统保留关键词结果并标记为降级，不让 QQ 回复因检索超时。
 
 外部 Embedding 模式下，记忆摘要和正文会发送给配置的 Embedding 提供商。私聊、全局记忆和敏感信息策略由长期记忆设置控制。
+
+## 从旧外置服务迁移
+
+早期试验版可能把卡片和来源回合放在独立的 `living-memory` 服务中，并把向量放在 Qdrant。内置版提供可重复执行的迁移脚本：它只追加不存在的卡片/回合 ID，保留卡片的创建与更新时间，绝不覆盖已在内置库中修改过的数据。
+
+先停掉旧 Agent 与旧记忆服务，确保旧 SQLite 的 `-wal` 文件不再变化；然后先预演：
+
+```bash
+node scripts/migrate-living-memory.mjs \
+  --from /path/to/legacy/living-memory.sqlite \
+  --to /data/living-memory/living-memory.sqlite \
+  --dry-run
+```
+
+确认统计无误后执行，并使用当前进程的 `LIVING_MEMORY_EMBEDDING_*` 环境变量重建本地向量：
+
+```bash
+node scripts/migrate-living-memory.mjs \
+  --from /path/to/legacy/living-memory.sqlite \
+  --to /data/living-memory/living-memory.sqlite \
+  --reembed --confirm
+```
+
+迁移不会复制 Qdrant 向量：它们是外部索引的实现细节，且可能与当前 Embedding 模型或维度不兼容。回填失败的卡片仍保留并可关键词检索；脚本可以安全重跑，只会继续导入缺失记录和重试未就绪的向量。
