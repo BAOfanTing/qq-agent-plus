@@ -33,8 +33,14 @@ jobs:
       # Docker 镜像 Debian 12 是 5.1.9，CI 是 ubuntu-latest 的发行版包。
       - name: 安装 ffmpeg（GIF 帧条 / 音频转码用例依赖）
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          set -e
+          # runner 的 apt 镜像偶尔会卡在 update；先直接装（镜像自带包索引），
+          # 失败再 update。每一步都有硬超时，不能把 test job 挂到几十分钟。
+          APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          if ! timeout 180 sudo apt-get install -y -qq "${APT_OPTS[@]}" ffmpeg; then
+            timeout 300 sudo apt-get update -qq "${APT_OPTS[@]}"
+            timeout 180 sudo apt-get install -y -qq "${APT_OPTS[@]}" ffmpeg
+          fi
           ffmpeg -version | head -n 1
 
       - name: 语法检查（src / scripts / test / ui，递归）
