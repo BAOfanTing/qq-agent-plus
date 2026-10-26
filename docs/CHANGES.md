@@ -97,7 +97,50 @@ HTML 里的 markdown 星号）。
 并加了一条端到端用例：起这个示例插件、调它的工具、断言内网地址被**宿主侧**的网络守卫拦下 ——
 这既证明示例可用，也证明"插件拿不到裸 fetch 能力"。
 
-## 0. 部署机更新测试的墙钟抖动修复（v0.9.8 起）
+## 0. 0.9.9：测试基线、生活层、插件信任与语音/记忆修复
+
+**测试与发布可信度**
+
+- Windows 基线改为“只允许显式 skip、不允许 fail”，`test/baseline-failures.json` 清空，新增 `npm run test:unit:win` 与 windows CI job。
+- 新增 Playwright 真浏览器冒烟（登录、13 个页签、设置保存、窄屏溢出、插件审批），CI 与 release 都跑。
+- 官方插件增加打包 → 临时安装 → 启用 → 调用 → 卸载的冒烟检查，并进 CI。
+
+**插件系统**
+
+- 插件升级先算 manifest diff；权限面变化必须带 `expectedDiffHash` 确认，授权绑定 manifest 哈希，升级后按变化范围重置批准与写开关。
+- 新增 `ops plugins uninstall <id> [--purge-data]`；资源上限补 `concurrency`、`diskMb`、`totalMemoryMb`；修复注册表把并发/磁盘上限静默丢掉的问题。
+- `plugin-dev` 增加 `--approve-all` 与 `--http-mock`；新增 v2 类型、JSON Schema、`plugin-validate`；市场详情补信任信息与发布者/撤回只读视图。
+- 插件可声明 `feed` 能力，通过 `cap.feed.publish` 向生活层提交候选；不能发消息、不能调模型。
+
+**生活层**
+
+- 新增 B 站公开接口觅食、兴趣画像、候选队列、每日领取上限与 `life_feed_next` / `life_feed_feedback` 工具；默认关闭，复用现有主动发言的安静时段/预算/发送队列。
+
+**运维与可观测性**
+
+- 新装默认监听 127.0.0.1，`--publish` 才对外开放；存量部署保持原地址。
+- 备份默认 AES-256-GCM 加密，支持 restore、dry-run、错误密钥拒绝与 `--drill` 演练；可选用 `--include-stack-creds`。
+- 消息接口改为游标分页（默认 500、上限 2000），新增 JSONL/CSV 导出与 `ops prune`；保留期默认 0。
+- `/api/metrics` 增加进程/HTTP/event-loop、LLM 调用失败重试与今日成本、outbox/入站队列、OneBot 发送失败、插件状态；支持 Prometheus；控制台日志走结构化 logger。
+
+**语音与记忆（0.9.9 修复）**
+
+- 新增小米 MiMo TTS：token-plan `/v1/chat/completions`、导演指令、`send_voice` 的 `emotion` 参数；合成失败自动回落文字。
+- 音色按服务记住（`tts.voices`），MiMo ↔ 豆包切换不再把上一家的音色发过去；切到无内置模型的预设会清空旧模型名。
+- #54 上下文条数/字数对齐到 500 条 / 100000 字符，控制台补字符上限输入框。
+- #55 记忆整理强制保留控制台手写的 `manual` 条目，重读当前状态，整理中途的删除/编辑不会被旧快照复活；手工条目满 20 条时跳过整理，不静默截断。
+- #56 表情提示词改用 `localNote` 优先，引号全半角归一；找不到表情不再刷异常面板。
+- #57 表情同步改为连续 3 次未返回才剪枝，`hidden` 不再永久保留，满 500 条窗口不剪枝。
+- #58 `finish` 与动作可同批：执行前重排到最后，前置失败/部分发送失败会挡住 finish，finish 成功后同批后续工具不再执行。
+- #59 DeepSeek 搜索接入官方 `/v1/tools/search`（结构化 title/url/summary），404/405 回退旧 Responses。
+- #14 新增 `memory.privateSharedContext`（默认关）：打开后读取侧合并私聊历史与最多 3 份交接，消息标 `[与 <QQ>]`；写入/发送目标/群聊不变。
+- #45 IOPS 问题在 0.9.5 已修；本版继续保留 `sessionPersistMs`、`usage-today` 与可配 `sqliteSynchronous`。
+
+**已知限制**
+
+- #52 safe-fetch 仍只走 HTTP/1.1；Cloudflare 按 HTTP 版本挑战的站点（e926/e621 等）需要后续单独设计 HTTP/2 或媒体中转能力。
+
+## 0.1 部署机更新测试的墙钟抖动修复（v0.9.8 起）
 
 0.9.7 在慢机器上仍可能卡在更新器的 testing 阶段：`qq-humanize.test.mjs` 用墙钟断言“关闭人类化后 <100ms”，
 而部署机满载跑完整套件时一次普通调度就会到 158ms。本版只改测试，不改产品行为：
