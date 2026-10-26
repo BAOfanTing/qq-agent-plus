@@ -134,6 +134,8 @@ docker run -d --name qq-agent \
 | `QQ_AGENT_ONEBOT_ACCESS_TOKEN` / `QQ_AGENT_ONEBOT_HTTP_TOKEN` | OneBot 令牌 |
 | `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD` | SnowLuma WebUI 初始密码（与 deploy-all 的 `.env` 同名） |
 | `QQ_AGENT_API_BASE_URL` / `QQ_AGENT_API_KEY` / `QQ_AGENT_API_MODEL` | 可选的模型初始配置 |
+| `LIVING_MEMORY_EMBEDDING_BASE_URL` / `LIVING_MEMORY_EMBEDDING_API_KEY` / `LIVING_MEMORY_EMBEDDING_MODEL` | 可选的长期记忆 Embedding；数据与向量保存在同一 `/data/living-memory/` SQLite 文件 |
+| `LIVING_MEMORY_EMBEDDING_DIMENSIONS` / `LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS` / `LIVING_MEMORY_VECTOR_SCAN_LIMIT` | Embedding 维度、实时语义检索时限和每次扫描的向量上限 |
 | `SNOWLUMA_INTERNAL_URL` | 服务端探测协议端 WebUI 的地址（compose 网络内） |
 | `QQ_AGENT_NOVNC_URL` | 服务端探测 noVNC 的地址（compose 网络内） |
 | `QQ_AGENT_RUNTIME_MODE` | 全新配置的首次运行模式；默认 `active`，设 `observe` 先观察 |
@@ -247,8 +249,8 @@ QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:<上一个版本> docker compos
 4. 用户拉取：
 
 ```bash
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.11
-docker pull <CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.11
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.12
+docker pull <CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.12
 ```
 
 腾讯云 TCR 同理，把 `CN_REGISTRY` 换成 `ccr.ccs.tencentyun.com`。
@@ -260,7 +262,7 @@ docker pull <CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.11
 ### Compose 使用国内镜像
 
 ```bash
-QQ_AGENT_IMAGE=<CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.11 \
+QQ_AGENT_IMAGE=<CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.12 \
 SNOWLUMA_IMAGE=docker.m.daocloud.io/motricseven7/snowluma:v1.14.22 \
 docker compose up -d
 ```
@@ -308,7 +310,7 @@ ffmpeg 层有构建缓存，后续版本主要重新传应用层；首次推送�
 
 | 服务 | 默认 | 来源 |
 | --- | --- | --- |
-| `agent` | `crpi-.../wangxinhong/qq-agent-plus:0.9.11` | 阿里云 ACR（国内可直连） |
+| `agent` | `crpi-.../wangxinhong/qq-agent-plus:0.9.12` | 阿里云 ACR（国内可直连） |
 | `snowluma` | `docker.m.daocloud.io/motricseven7/snowluma:v1.14.22` | 镜像站（官方在 Docker Hub） |
 
 compose 默认已经走国内可访问的地址；Docker Hub 在国内通常不可直连，GHCR 也可能很慢。

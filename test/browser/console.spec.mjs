@@ -25,14 +25,14 @@ test('?token= 自动登录后把 Token 从地址栏移除', async ({ page }) => 
   await expect.poll(() => new URL(page.url()).searchParams.get('token')).toBeNull();
 });
 
-test('14 个页签逐一切换，且没有 console error / pageerror', async ({ page }) => {
+test('15 个页签逐一切换，且没有 console error / pageerror', async ({ page }) => {
   const errors = collectPageErrors(page);
   await login(page);
   await page.goto('/');
   await expect(page.locator('#view-overview')).toHaveClass(/active/);
 
   const tabs = await tabNames(page);
-  expect(tabs).toHaveLength(14);
+  expect(tabs).toHaveLength(15);
 
   for (const tab of tabs) {
     await switchTo(page, tab);
@@ -84,6 +84,18 @@ test('人物记忆：控制台按关键词检索记忆', async ({ page }) => {
   await page.fill('#gm-search-query', '面馆');
   await page.click('#gm-search-btn');
   await expect(page.locator('#gm-search-results')).toContainText('面馆');
+});
+
+test('长期记忆页：策略控件、召回测试与管理区可渲染', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'living-memory');
+  await expect(page.locator('#living-memory-page h2')).toHaveText('长期记忆');
+  await expect(page.locator('#lm-enabled')).toBeChecked();
+  await expect(page.locator('#lm-shadow-semantic')).toBeAttached();
+  await expect(page.locator('#lm-turn-retention')).toHaveValue('7');
+  await expect(page.locator('#lm-test')).toHaveText('测试召回');
+  await expect(page.locator('#lm-status-filter')).toBeAttached();
 });
 
 test('语音服务切换：豆包/MiMo 各自恢复上次保存的音色', async ({ page }) => {
@@ -222,12 +234,12 @@ test('插件审批：待批请求能在插件详情里点「批准一次」', as
   expect(settings.grants?.approvals?.write?.usesLeft ?? 0).toBeGreaterThan(0);
 });
 
-test('窄屏 390×844：14 个页签都没有横向溢出', async ({ page }) => {
+test('窄屏 390×844：15 个页签都没有横向溢出', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page);
   await page.goto('/');
   const tabs = await tabNames(page);
-  expect(tabs).toHaveLength(14);
+  expect(tabs).toHaveLength(15);
 
   for (const tab of tabs) {
     await switchTo(page, tab);

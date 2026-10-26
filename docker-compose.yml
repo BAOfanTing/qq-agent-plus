@@ -57,9 +57,9 @@ services:
 
   agent:
     # 默认用阿里云 ACR 的公开镜像（国内可直连）；海外/其他仓库设：
-    #   QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:0.9.11
+    #   QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:0.9.12
     # 不要默认 latest：首次发布前 latest 不存在，docker compose 会拉取失败。
-    image: ${QQ_AGENT_IMAGE:-crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.11}
+    image: ${QQ_AGENT_IMAGE:-crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.12}
     container_name: ${QQ_AGENT_CONTAINER:-qq-agent}
     restart: unless-stopped
     logging:
@@ -105,6 +105,13 @@ services:
       # 留空＝首次启动自动生成并写进 data/config.json；
       # 访问信息写入 /data/console-access.txt（日志不打印令牌）。
       QQ_AGENT_CONSOLE_TOKEN: ${QQ_AGENT_CONSOLE_TOKEN:-}
+      # 长期记忆默认关闭；启用后数据写入同一 ./data/living-memory/ 目录。
+      # 配置 OpenAI 兼容 Embedding 后才启用语义检索；密钥不会进入控制台或 config.json。
+      LIVING_MEMORY_EMBEDDING_BASE_URL: ${LIVING_MEMORY_EMBEDDING_BASE_URL:-}
+      LIVING_MEMORY_EMBEDDING_API_KEY: ${LIVING_MEMORY_EMBEDDING_API_KEY:-}
+      LIVING_MEMORY_EMBEDDING_MODEL: ${LIVING_MEMORY_EMBEDDING_MODEL:-}
+      LIVING_MEMORY_EMBEDDING_DIMENSIONS: ${LIVING_MEMORY_EMBEDDING_DIMENSIONS:-0}
+      LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS: ${LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS:-1200}
       # 兼容旧配置：服务端探测的回退地址（新部署用 SNOWLUMA_INTERNAL_URL）。
       # 浏览器里的链接由控制台按当前访问地址拼，不读这个变量。
       SNOWLUMA_WEBUI_URL: ${SNOWLUMA_WEBUI_URL:-http://127.0.0.1:5099}

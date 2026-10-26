@@ -18,6 +18,7 @@ import { saveConfig } from './settings-save.js';
 function renderExperimentalSettingsSectionImpl(c) {
   const enabled = c.identityPilot?.enabled === true;
   const incident = c.incidentPilot || {};
+  const livingMemory = c.livingMemory || {};
   return `
     <section class="experimental-settings">
       <h3 id="settings-experiments">实验功能</h3>
@@ -58,6 +59,16 @@ function renderExperimentalSettingsSectionImpl(c) {
           </span>
         </div>
         <div class="control-key-row">
+          <span><strong>长期语义记忆</strong><small id="living-memory-state">${livingMemory.enabled === true ? '已启用' : '已停用'} · ${livingMemory.graduated === true ? '已固化' : '实验中'} · 默认影子模式</small></span>
+          <span class="settings-actions" style="margin:0">
+            <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-living-memory-enabled" ${livingMemory.enabled === true ? 'checked' : ''} /><span>启用</span></label>
+            <button type="button" class="btn btn-small ${livingMemory.graduated === true ? '' : 'btn-primary'}"
+              id="launch-living-memory-feature" ${livingMemory.graduated === true ? 'disabled' : ''}>
+              ${livingMemory.graduated === true ? '已固化' : '固化上线'}
+            </button>
+          </span>
+        </div>
+        <div class="control-key-row">
           <span><strong>群游戏</strong><small id="experiment-groupgame-state">${c.groupGame?.enabled === true ? '已启用' : '已停用'} · 实验中</small></span>
           <span class="settings-actions" style="margin:0">
             <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-game-enabled" ${c.groupGame?.enabled === true ? 'checked' : ''} /><span>启用</span></label>
@@ -77,7 +88,9 @@ async function launchExperimentalFeature(feature) {
       ? $('#launch-auto-friend-feature')
       : feature === 'incidents'
         ? $('#launch-incident-feature')
-        : $('#launch-slang-feature');
+        : feature === 'living-memory'
+          ? $('#launch-living-memory-feature')
+          : $('#launch-slang-feature');
   const result = $('#experiment-launch-result');
   let ownerUin = feature === 'slang'
     ? state.config?.slangPilot?.ownerUin
@@ -104,7 +117,9 @@ async function launchExperimentalFeature(feature) {
       ? '固化上线自动好友添加？Agent 可提交好友候选，管理员批准后会立即发送申请；收到的好友申请仍需管理员审批。发送结果未知时不会自动重试。'
       : feature === 'incidents'
         ? '固化上线异常处理基础设施？上线后会记录异常、向管理员告警，并允许逐群控制自动、阻塞或继续。结果未知的旧写入不会自动重试。'
-        : '固化上线黑话语料库？上线后会启用本地发现和审批流程，并显示独立页面。';
+        : feature === 'living-memory'
+          ? '固化上线长期语义记忆？上线后会显示独立管理页，并以影子模式开始收集与召回；不会立刻把记忆注入 QQ 回复。'
+          : '固化上线黑话语料库？上线后会启用本地发现和审批流程，并显示独立页面。';
   if (!await askForConfirmation(message)) return;
   if (button) button.disabled = true;
   if (result) result.textContent = '正在上线…';
@@ -124,7 +139,9 @@ async function launchExperimentalFeature(feature) {
           ? '自动好友添加已固化上线'
           : feature === 'incidents'
             ? '异常处理基础设施已固化上线'
-            : '黑话语料库已固化上线';
+            : feature === 'living-memory'
+              ? '长期语义记忆已固化上线（影子模式）'
+              : '黑话语料库已固化上线';
     }
     refreshStatus();
   } catch (error) {

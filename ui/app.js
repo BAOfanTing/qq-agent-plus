@@ -44,6 +44,7 @@ import {
   renderIdentityFeaturePageImpl, renderIncidentFeaturePageImpl
 } from './pages/features.js';
 import { loadMemoryView, renderMemoryList } from './pages/memory.js';
+import { loadLivingMemoryPage } from './pages/living-memory.js';
 import { loadPluginsPage, refreshPendingBadge } from './pages/plugins.js';
 import { loadSkillsPage } from './pages/skills.js';
 import { renderExperimentalSettingsSectionImpl } from './pages/moments.js';
@@ -278,6 +279,7 @@ function switchTab(name) {
   if (name === 'sessions') loadSessions();
   if (name === 'chats') loadChats();
   if (name === 'memory') loadMemoryView();
+  if (name === 'living-memory') loadLivingMemoryPage({ force: true });
   if (name === 'identity') loadIdentityFeaturePage();
   if (name === 'friends') loadFriendFeaturePage();
   if (name === 'slang') loadSlangFeaturePage();
@@ -1000,6 +1002,14 @@ function connectSSE() {
     } else {
       loadMemoryView();
     }
+  });
+  es.addEventListener('living-memory-update', (event) => {
+    if (state.tab !== 'living-memory') return;
+    // 每条消息都会产生 recall 事件；把它也当成整页刷新会让页面在聊天时不停重绘、丢焦点。
+    let phase = '';
+    try { phase = JSON.parse(event.data)?.phase || ''; } catch { /* 忽略坏帧 */ }
+    if (phase === 'recall' || phase === 'recall-error') return;
+    loadLivingMemoryPage({ force: true });
   });
   es.addEventListener('onebot-status', () => {
     refreshStatus();

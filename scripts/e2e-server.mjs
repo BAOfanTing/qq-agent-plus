@@ -84,6 +84,8 @@ function buildConfig() {
   cfg.reminders = { ...cfg.reminders, enabled: false };
   cfg.mcp = { enabled: false, servers: [] };
   cfg.skills = { enabled: true, enabledIds: ['chat-summary'], perChat: {} };
+  // 长期记忆页默认藏在实验功能后面；e2e 显式转正，顺带覆盖这个新页签。
+  cfg.livingMemory = { ...cfg.livingMemory, enabled: true, graduated: true, mode: 'shadow' };
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,

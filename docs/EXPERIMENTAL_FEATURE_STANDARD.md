@@ -69,6 +69,7 @@ For the current modules:
 | Automatic friend handling | retired 2026-09-25（整体退役，见 docs/KNOWN-ISSUES.md） | retired | `friends` / 好友管理（仅入站审批） |
 | Slang research | retired | retired | 黑话资产并入观测页 |
 | Incident handling | `incidentPilot.enabled` | `incidentPilot.graduated` | `incidents` / 异常处理 |
+| Long-term semantic memory | `livingMemory.enabled` | `livingMemory.graduated` | `living-memory` / 长期记忆 |
 | Group games | `groupGame.enabled`（默认关） | —（无固化开关） | `settings` / 设置页的「实验功能」开关与「群游戏」分区 |
 
 ## 4. API And Persistence

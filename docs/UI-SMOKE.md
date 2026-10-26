@@ -3,7 +3,7 @@
 ## 自动化到哪一层（2026-10 更新）
 
 - **真浏览器**：`npm run test:browser`（Playwright + 真 Chromium，CI 有独立 `browser` job）。
-  起真实控制台服务，覆盖：登录（错/对/`?token=`）、13 个页签切换 + console error/pageerror、
+  起真实控制台服务，覆盖：登录（错/对/`?token=`）、15 个页签切换 + console error/pageerror、
   设置保存、好友保存、插件待批审批、390×844 窄屏横向溢出。
 - **vm / happy-dom**：`test/render-test.mjs`、`test/scroll-test.mjs`、`test/usage-e2e.mjs`、
   `test/ui-smoke.test.mjs`、`test/ui-module-graph.test.mjs`、`test/ui-real-modules.test.mjs`、
@@ -72,6 +72,7 @@
 - [ ] 「设置 → 记忆」的每人上限/保留期能保存；人物记忆页顶部显示总条数、索引条数与大小
 - [ ] 顶部「技能」页能看到 3 个内置技能；总开关/按会话覆盖保存后立即生效，「重新扫描」不报错
 - [ ] 人物记忆页搜索框能按关键词找回记忆，结果显示相关度且不显示来源会话
+- [ ] 长期记忆页（实验功能转正后可见）：开关/模式/私聊/全局/影子语义召回都能保存；召回测试能显示注入文本；归档后卡片显示「已归档」并可恢复；删除需二次确认
 - [ ] **页面顶部有「全局管理员 QQ」面板**（`renderSettings` 的 after 钩子），
       填一个非法值（如 `abc`）保存 → 就地提示「必须为 5 到 15 位数字」，不发请求
 - [ ] **「设置 → 实验功能」里看不到已转正/退役的控件**

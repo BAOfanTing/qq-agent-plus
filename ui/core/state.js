@@ -44,7 +44,19 @@ const state = {
   // 切页签会导致记忆页 DOM 重建，状态若只存在按钮/文本节点里就会丢失，
   // 用户切回来时看不出整理是在跑还是已经结束了。
   consolidating: {},      // chatKey -> { startedAt }
-  consolidateResult: {}   // chatKey -> { note, at, failed? }
+  consolidateResult: {},   // chatKey -> { note, at, failed? }
+  livingMemory: {
+    status: null,
+    selectedScope: '',
+    query: '',
+    selectedMemoryId: '',
+    detail: null,
+    recallResult: null,
+    list: null,
+    graph: null,
+    statusFilter: '',
+    pageError: ''
+  }
 };
 
 // ── 跨文件共享的可变单元 ──

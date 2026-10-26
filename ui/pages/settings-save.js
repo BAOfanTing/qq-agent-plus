@@ -198,6 +198,10 @@ async function saveConfig({ quiet = false } = {}) {
       ...(c.incidentPilot || {}),
       enabled: chk('#cfg-incident-pilot-enabled', c.incidentPilot?.enabled === true)
     };
+    patch.livingMemory = {
+      ...(c.livingMemory || {}),
+      enabled: chk('#cfg-living-memory-enabled', c.livingMemory?.enabled === true)
+    };
     // 群游戏在本页只保留生命周期开关；详细配置与「正在进行的局」在「设置 → 群游戏」。
     // 两个页面各写一半 patch 段容易漏字段，所以这里只写 enabled 一个字段。
     patch.groupGame = {
