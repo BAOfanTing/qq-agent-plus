@@ -74,6 +74,19 @@ QQ Agent Plus 是面向 Linux 服务器的 QQ 群聊 Agent。它连接外部 One
 用法见[运维工具](docs/OPS.md)。本地回归测试位于 [test/local/](test/local/README.md)。
 衍生关系与第三方版权说明见 [NOTICE](NOTICE.md)。
 
+## 界面
+
+以下截图使用匿名演示数据，展示当前版本的总览、消息存档、语音回复与插件页：
+
+<p align="center">
+  <img src="docs/assets/console-overview.png" alt="总览：机器人、协议端与主机状态" width="49%">
+  <img src="docs/assets/console-demo.png" alt="消息存档：分群长期归档" width="49%">
+</p>
+<p align="center">
+  <img src="docs/assets/console-voice.png" alt="语音回复：MiMo 音色与导演指令" width="49%">
+  <img src="docs/assets/console-plugins.png" alt="插件：运行状态、权限与来源" width="49%">
+</p>
+
 ## 示例
 
 运维命令随程序提供（`src/ops.js`），只读命令不修改业务数据。

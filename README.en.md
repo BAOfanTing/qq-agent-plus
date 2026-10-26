@@ -109,6 +109,20 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
 Configuration examples are in [docs/CONFIG-EXAMPLES.md](docs/CONFIG-EXAMPLES.md). Operations
 commands are collected in [src/ops.js](src/ops.js) and documented in [docs/OPS.md](docs/OPS.md).
 
+## Screenshots
+
+The screenshots below use anonymised demo data and show the current overview, message archive,
+voice-reply settings and plugin page:
+
+<p align="center">
+  <img src="docs/assets/console-overview.png" alt="Overview: bot, protocol side and host status" width="49%">
+  <img src="docs/assets/console-demo.png" alt="Message archive: per-chat long-term history" width="49%">
+</p>
+<p align="center">
+  <img src="docs/assets/console-voice.png" alt="Voice replies: MiMo voice and director instruction" width="49%">
+  <img src="docs/assets/console-plugins.png" alt="Plugins: runtime state, permissions and source" width="49%">
+</p>
+
 ## Demo
 
 Operations commands ship with the application (`src/ops.js`); read-only commands do not modify
