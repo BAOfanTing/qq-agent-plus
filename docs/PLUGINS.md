@@ -263,6 +263,10 @@ v1 插件原样可用，加载时 `apiVersion` 字段在 1 与 2 之间都算兼
 
 - `httpDomains`（v2）：声明后，`cap.http.request` 与 `cap.media.download` 只允许这些主机及其子域；
   v1 不加白名单时沿用"公网但禁内网"的默认守卫。
+- HTTPS **GET / 媒体下载优先走 HTTP/2**（ALPN），服务端不支持或连接层失败时自动回落 HTTP/1.1；
+  两条路都保留 DNS 固定、内网拦截、逐跳重定向校验、凭据剥离、体积上限与超时。Cloudflare 对
+  HTTP/1.1 按版本/指纹挑战的站点（e926/e621 等）因此可以正常访问。POST 为了不重复写入仍只走
+  HTTP/1.1，不自动重试。
 - `cap.http.request` 的 v2 参数：`method` 只允许 GET / POST；POST 可带 `headers` 与 `body`（≤64KB）。
   **非 GET 请求不跟随重定向**；GET 带 Cookie/Authorization 时同源重定向保留、跨源（含换端口或
   https→http）自动剥掉凭据 —— 否则一次 302 就能把登录态交给白名单里的另一台主机。

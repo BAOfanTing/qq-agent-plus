@@ -4,7 +4,8 @@
 // - 禁止 localhost / .local / 私有 IP / 环回 / 链路本地 / CGNAT 等内网地址；
 // - 域名先做 DNS 解析并检查全部解析结果；解析后固定到已校验的 IP 发请求（防 DNS rebinding）；
 // - 手动跟随重定向，每一跳重新校验；
-// - 响应体限量读取，避免超大响应拖垮进程。
+// - 响应体限量读取，避免超大响应拖垮进程；
+// - HTTPS GET/媒体下载优先 HTTP/2，连接层失败回落 HTTP/1.1（POST 不自动回落，避免重复写入）。
 //
 // 例外开关：security.allowPrivateImageHosts = true 时，图片下载跳过内网检查
 // （仅供本地测试/自建图床使用，默认关闭）。
@@ -12,6 +13,7 @@ import dns from 'node:dns';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
+import http2 from 'node:http2';
 import { StringDecoder } from 'node:string_decoder';
 import zlib from 'node:zlib';
 import { getConfig } from '../core/config.js';
@@ -197,11 +199,17 @@ export function readBounded(res, maxBytes, asText) {
       }
     });
     res.on('error', (err) => finish(reject, err));
+    // HTTP/2 的 RST_STREAM(NO_ERROR) 只会触发 close，不会触发 error；HTTP/1.1 的
+    // 提前断连也可能只走到 close。没有这条，读体会永远等不到 settle（只能等超时）。
+    res.on('close', () => {
+      if (!settled) finish(reject, new Error('响应在读取完成前关闭'));
+    });
   });
 }
 
-// 使用已校验的 IP 发起请求（保留 Host/SNI），从根上消除 DNS rebinding。
-function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, headers, method = 'GET', body = null, wantSetCookies = false } = {}) {  return new Promise((resolve, reject) => {
+// 使用已校验的 IP 发起 HTTP/1.1 请求（保留 Host/SNI），从根上消除 DNS rebinding。
+function requestHttp1(url, ip, { asBinary = false, maxBytes = 50000, signal, headers, method = 'GET', body = null, wantSetCookies = false } = {}) {
+  return new Promise((resolve, reject) => {
     const mod = url.protocol === 'https:' ? https : http;
     const port = url.port || (url.protocol === 'https:' ? 443 : 80);
     const verb = String(method || 'GET').toUpperCase();
@@ -230,7 +238,10 @@ function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, head
         ...(payload ? { 'content-length': payload.length } : {}),
         ...extraHeaders
       },
-      servername: url.protocol === 'https:' ? url.hostname : undefined,
+      // RFC 6066 不允许把 IP 字面量当 SNI；空字符串让 TLS 不发 SNI，证书仍按 IP SAN 校验。
+      servername: url.protocol !== 'https:'
+        ? undefined
+        : net.isIP(url.hostname.replace(/^\[|\]$/g, '')) ? '' : url.hostname,
       rejectUnauthorized: url.protocol === 'https:',
       signal,
       timeout: 20000
@@ -257,6 +268,171 @@ function requestOnce(url, ip, { asBinary = false, maxBytes = 50000, signal, head
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+// ── HTTP/2 ───────────────────────────────────────────────────────────────
+//
+// Cloudflare 会对 HTTP/1.1 请求按版本/指纹挑战（e926/e621 等站点的 API 与图床都是
+// HTTP/1.1 403、HTTP/2 200）。这里在 HTTPS GET 上先走 HTTP/2，连接/协议层失败再回落
+// HTTP/1.1；两条路都继续使用已经校验并固定的 IP，DNS、重定向、凭据与体积规则不变。
+//
+// 为什么 POST 不自动回落：h2 请求可能已经到达对端，再发一次 h1 会造成重复写入。
+// 插件的写请求继续只走 HTTP/1.1；读请求（GET）才享受 h2 优先与安全重试。
+const HTTP2_TIMEOUT_MS = 20000;
+const HTTP2_FALLBACK_CODE = 'E_HTTP2_FALLBACK';
+const H2_HOP_BY_HOP = new Set([
+  'host', 'content-length', 'transfer-encoding', 'connection', 'keep-alive',
+  'proxy-connection', 'upgrade', 'http2-settings', 'te'
+]);
+
+class Http2UnavailableError extends Error {
+  constructor(cause) {
+    super(`HTTP/2 不可用：${cause?.message ?? cause}`);
+    this.name = 'Http2UnavailableError';
+    this.code = HTTP2_FALLBACK_CODE;
+    this.cause = cause;
+  }
+}
+
+function firstHeader(value) {
+  return Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+}
+
+function setCookieValues(value) {
+  if (value === undefined || value === null) return [];
+  return (Array.isArray(value) ? value : [value]).map(String);
+}
+
+function h2RequestHeaders(url, headers, payload, verb) {
+  const extraHeaders = {};
+  for (const [key, value] of Object.entries(headers && typeof headers === 'object' ? headers : {})) {
+    const name = String(key).toLowerCase();
+    // host 由 :authority 承担；连接级头在 h2 里非法；content-length 由下面按 payload 重算。
+    if (H2_HOP_BY_HOP.has(name) || name.startsWith(':')) continue;
+    if (/[\r\n]/.test(String(key)) || /[\r\n]/.test(String(value))) continue;
+    extraHeaders[name] = String(value);
+  }
+  return {
+    ':method': verb,
+    ':path': `${url.pathname || '/'}${url.search || ''}`,
+    ':scheme': 'https',
+    ':authority': url.host,
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) qq-agent/1.0',
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8,image/avif,image/webp,image/*;q=0.8',
+    'accept-language': 'zh-CN,zh;q=0.9',
+    ...(payload ? { 'content-length': String(payload.length) } : {}),
+    ...extraHeaders
+  };
+}
+
+function requestHttp2(url, ip, { asBinary = false, maxBytes = 50000, signal, headers, method = 'GET', body = null, wantSetCookies = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const port = url.port || 443;
+    const verb = String(method || 'GET').toUpperCase();
+    const payload = body === null || body === undefined || verb === 'GET' || verb === 'HEAD'
+      ? null
+      : Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8');
+    const hostname = url.hostname.replace(/^\[|\]$/g, '');
+    let session = null;
+    let stream = null;
+    let settled = false;
+    let gotResponse = false;
+
+    const cleanup = () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+      try { stream?.close(); } catch { /* ignore */ }
+      try { session?.close(); } catch { /* ignore */ }
+      try { session?.destroy(); } catch { /* ignore */ }
+    };
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const unavailable = (error) => fail(new Http2UnavailableError(error));
+    const onAbort = () => fail(signal?.reason ?? new Error('请求已取消'));
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      session = http2.connect(url.origin, {
+        host: ip,
+        port,
+        // RFC 6066 不允许把 IP 字面量当 SNI；空字符串让 TLS 不发 SNI，证书仍按 IP SAN 校验。
+        servername: net.isIP(hostname) ? '' : hostname,
+        rejectUnauthorized: true,
+        // 抓取客户端不使用 server push；关掉可以避免恶意源占满 reserved stream。
+        settings: { enablePush: false }
+      });
+    } catch (error) {
+      unavailable(error);
+      return;
+    }
+    session.setTimeout(HTTP2_TIMEOUT_MS, () => fail(new Error(`请求超时：${url.hostname}`)));
+    session.once('error', (error) => (gotResponse ? fail(error) : unavailable(error)));
+    session.once('close', () => {
+      if (settled) return;
+      const error = new Error(`HTTP/2 连接已关闭：${url.hostname}`);
+      if (gotResponse) fail(error);
+      else unavailable(error);
+    });
+
+    try {
+      stream = session.request(h2RequestHeaders(url, headers, payload, verb));
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    stream.setTimeout(HTTP2_TIMEOUT_MS, () => fail(new Error(`请求超时：${url.hostname}`)));
+    stream.once('error', (error) => (gotResponse ? fail(error) : unavailable(error)));
+    stream.once('response', (responseHeaders) => {
+      gotResponse = true;
+      const statusCode = Number(responseHeaders[':status']) || 0;
+      const meta = {
+        contentType: firstHeader(responseHeaders['content-type']),
+        contentEncoding: firstHeader(responseHeaders['content-encoding'])
+      };
+      if ([301, 302, 303, 307, 308].includes(statusCode)) {
+        stream.close(http2.constants.NGHTTP2_CANCEL);
+        settle({ statusCode, redirect: firstHeader(responseHeaders.location) });
+        return;
+      }
+      readBounded(stream, maxBytes, !asBinary)
+        .then(({ body: responseBody, truncated }) => settle({
+          statusCode,
+          body: responseBody,
+          truncated,
+          ...meta,
+          ...(wantSetCookies ? { setCookies: setCookieValues(responseHeaders['set-cookie']) } : {})
+        }))
+        .catch(fail);
+    });
+    if (payload) stream.end(payload);
+    else stream.end();
+  });
+}
+
+async function requestOnce(url, ip, options = {}) {
+  const verb = String(options.method || 'GET').toUpperCase();
+  if (url.protocol === 'https:' && verb === 'GET') {
+    try {
+      return await requestHttp2(url, ip, options);
+    } catch (error) {
+      // 只在响应前连接/流失败时回落；已经拿到响应、被取消或超时都不能重试。
+      if (error?.code !== HTTP2_FALLBACK_CODE || options.signal?.aborted) throw error;
+    }
+  }
+  return requestHttp1(url, ip, options);
 }
 
 const MAX_REDIRECTS = 5;

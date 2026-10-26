@@ -97,6 +97,24 @@ HTML 里的 markdown 星号）。
 并加了一条端到端用例：起这个示例插件、调它的工具、断言内网地址被**宿主侧**的网络守卫拦下 ——
 这既证明示例可用，也证明"插件拿不到裸 fetch 能力"。
 
+## 0. 0.9.10：safe-fetch 支持 HTTP/2（#52）
+
+**背景**
+
+e926/e621 这类站点在机房 IP 下对 HTTP/1.1 返回 Cloudflare 挑战页（403 `Just a moment...`），同一 IP、同一 UA 改用 HTTP/2 即 200；`cap.http.request` 与 `cap.media.download` 都走 `safe-fetch`，插件没有第二条宿主通路。
+
+**改动**
+
+- HTTPS GET 与媒体下载优先建立 HTTP/2 连接（ALPN）；服务端不支持 h2 或连接/流在响应前失败时，自动回落 HTTP/1.1。POST 仍只走 HTTP/1.1，避免 h2 已到达对端后重发造成重复写入。
+- 两条传输都继续使用 `resolveSafeHost` 校验并固定的 IP（`http2.connect` 的 `host` 是已校验 IP，`:authority`/SNI 仍是原域名），保留内网拦截、逐跳重定向校验、跨源凭据剥离、响应体上限、解压上限与超时。
+- 关闭 HTTP/2 server push；新增读体在 `end` 前 `close` 时立即失败，避免 RST_STREAM(NO_ERROR) 只能等超时。
+- 新增 h2/回落/重定向/凭据/体积/Set-Cookie/取消/IP 固定回归用例；真实 e926 API 与图床在服务器上实测通过。
+
+**升级影响**
+
+- 无配置迁移；HTTP/1.1 站点不受影响，h2-only 或 Cloudflare 按版本挑战的站点可直接使用插件读取与媒体下载。
+- 每次 HTTPS GET 目前建立独立 h2 session（不跨请求复用），换取不共享会话状态；后续如有性能需要再做池化。
+
 ## 0. 0.9.9：测试基线、生活层、插件信任与语音/记忆修复
 
 **测试与发布可信度**
@@ -136,9 +154,9 @@ HTML 里的 markdown 星号）。
 - #14 新增 `memory.privateSharedContext`（默认关）：打开后读取侧合并私聊历史与最多 3 份交接，消息标 `[与 <QQ>]`；写入/发送目标/群聊不变。
 - #45 IOPS 问题在 0.9.5 已修；本版继续保留 `sessionPersistMs`、`usage-today` 与可配 `sqliteSynchronous`。
 
-**已知限制**
+**已知限制（0.9.10 已修复）**
 
-- #52 safe-fetch 仍只走 HTTP/1.1；Cloudflare 按 HTTP 版本挑战的站点（e926/e621 等）需要后续单独设计 HTTP/2 或媒体中转能力。
+- #52 safe-fetch 仍只走 HTTP/1.1；Cloudflare 按 HTTP 版本挑战的站点（e926/e621 等）需要 HTTP/2 或媒体中转能力。0.9.10 已补上 HTTP/2 优先与 HTTP/1.1 回落。
 
 ## 0.1 部署机更新测试的墙钟抖动修复（v0.9.8 起）
 
