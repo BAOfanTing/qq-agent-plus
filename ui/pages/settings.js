@@ -765,7 +765,15 @@ function renderMemorySettingsSection(c) {
       <label for="cfg-mem-hideprivate">群聊里隐藏「私聊来源」的印象</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-mem-private-shared" ${mem.privateSharedContext === true ? 'checked' : ''} />
       <label for="cfg-mem-private-shared">所有私聊共用最近消息与交接（默认关）</label></div>
-    <div class="hint">打开后，机器人跟不同好友聊天时会看到彼此的最近私聊内容（消息会标「与 &lt;QQ&gt;」），更像同一个“人”；代价是不同好友的上下文会混在一起、更费 token，也可能把 A 的话带到 B 的对话里。写入和发送目标不变，群聊不受影响。</div>`;
+    <div class="hint">打开后，机器人跟不同好友聊天时会看到彼此的最近私聊内容（消息会标「与 &lt;QQ&gt;」），更像同一个“人”；代价是不同好友的上下文会混在一起、更费 token，也可能把 A 的话带到 B 的对话里。写入和发送目标不变，群聊不受影响。</div>
+    <div class="field-row" style="align-items:start">
+      <div class="field"><label for="cfg-mem-max-per-person">每人最多保留印象（条）</label>
+        <input type="number" id="cfg-mem-max-per-person" min="5" max="200" value="${esc(mem.maxImpressionsPerPerson ?? 50)}" />
+        <div class="hint">5–200，默认 50；控制台手写的印象永远保留，不会被这个上限删掉。</div></div>
+      <div class="field"><label for="cfg-mem-retention-days">自动印象保留（天）</label>
+        <input type="number" id="cfg-mem-retention-days" min="0" max="3650" value="${esc(mem.impressionRetentionDays ?? 0)}" />
+        <div class="hint">0 = 不按时间过期（默认）；可设 1–3650 天。手写印象不受影响。</div></div>
+    </div>`;
 }
 
 function renderTimeControlSection(c) {

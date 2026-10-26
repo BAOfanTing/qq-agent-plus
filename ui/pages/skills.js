@@ -1,0 +1,323 @@
+// 技能页：只读 Markdown 流程 + 工具白名单。
+// 独立页面，不复用设置页的分区容器；开关和按会话覆盖即时写 /api/skills/state。
+import { api } from '../core/api.js';
+import { $, esc } from '../core/dom.js';
+import { iconSvg } from '../core/icons.js';
+
+const skillsState = {
+  enabled: false,
+  enabledIds: [],
+  perChat: {},
+  skills: [],
+  errors: [],
+  chats: [],
+  selectedId: '',
+  selectedChat: '',
+  detail: null,
+  detailError: '',
+  loadingDetail: false
+};
+
+function skillsChatLabel(key) {
+  const chat = skillsState.chats.find((item) => item.key === key);
+  if (chat?.chatName) return `${chat.chatName}（${key}）`;
+  if (String(key).startsWith('group:')) return `群 ${String(key).slice(6)}`;
+  if (String(key).startsWith('private:')) return `私聊 ${String(key).slice(8)}`;
+  return String(key);
+}
+
+function skillsStatus(text, error = false) {
+  const node = $('#skills-status');
+  if (!node) return;
+  node.textContent = text;
+  node.style.color = error ? 'var(--danger, #c0392b)' : '';
+}
+
+function skillsIsGlobal(id) {
+  return skillsState.enabledIds.includes(id);
+}
+
+function skillsHasOverride(id) {
+  return Object.values(skillsState.perChat).some((ids) => Array.isArray(ids) && ids.includes(id));
+}
+
+function skillsSelected() {
+  return skillsState.skills.find((skill) => skill.id === skillsState.selectedId) || null;
+}
+
+function skillsEnabledCount() {
+  return skillsState.skills.filter((skill) => skillsIsGlobal(skill.id)).length;
+}
+
+function skillsRenderKpis() {
+  const box = $('#skills-kpis');
+  if (!box) return;
+  const overrides = Object.keys(skillsState.perChat).length;
+  box.innerHTML = `
+    <div class="skills-kpi"><span>已加载</span><strong>${skillsState.skills.length}</strong><small>个技能</small></div>
+    <div class="skills-kpi"><span>全局启用</span><strong>${skillsEnabledCount()}</strong><small>个技能</small></div>
+    <div class="skills-kpi"><span>按会话覆盖</span><strong>${overrides}</strong><small>个会话</small></div>`;
+}
+
+function skillsRenderList() {
+  const box = $('#skills-list');
+  if (!box) return;
+  if (!skillsState.skills.length) {
+    box.innerHTML = '<div class="skills-empty">没有找到技能。把技能目录放到 <code>skills/&lt;id&gt;/</code> 或 <code>data/skills/&lt;id&gt;/</code>，再点右上角「重新扫描」。</div>';
+    return;
+  }
+  box.innerHTML = skillsState.skills.map((skill) => {
+    const on = skillsIsGlobal(skill.id);
+    const override = skillsHasOverride(skill.id);
+    const state = on ? '全局启用' : override ? '按会话启用' : '未启用';
+    return `<button type="button" class="skill-card ${skill.id === skillsState.selectedId ? 'is-on' : ''}" data-skill-open="${esc(skill.id)}">
+      <span class="skill-avatar">${iconSvg('sparkles', { size: 18 })}</span>
+      <span class="skill-card-main">
+        <span class="skill-card-title"><b>${esc(skill.name)}</b><em>v${esc(skill.version)}</em></span>
+        <span class="skill-card-desc">${esc(skill.description || '（没有说明）')}</span>
+        <span class="skill-card-meta">${skill.allowedTools.length} 个工具 · <i class="${on || override ? 'is-on' : ''}">${state}</i></span>
+      </span>
+    </button>`;
+  }).join('');
+}
+
+function skillsRenderDetail() {
+  const box = $('#skills-detail');
+  if (!box) return;
+  const skill = skillsSelected();
+  if (!skill) {
+    box.innerHTML = '<div class="skills-detail-empty">选择左侧技能，查看它的工作流程和工具范围。</div>';
+    return;
+  }
+  if (skillsState.loadingDetail) {
+    box.innerHTML = '<div class="skills-detail-empty">正在读取技能说明…</div>';
+    return;
+  }
+  if (skillsState.detailError) {
+    box.innerHTML = `<div class="skills-detail-empty is-error">技能说明读取失败：${esc(skillsState.detailError)}</div>`;
+    return;
+  }
+  const detail = skillsState.detail && skillsState.detail.id === skill.id ? skillsState.detail : skill;
+  const on = skillsIsGlobal(skill.id);
+  const chatKeys = skillsState.chats.map((chat) => chat.key);
+  const selectedChat = chatKeys.includes(skillsState.selectedChat) ? skillsState.selectedChat : (chatKeys[0] || '');
+  const override = Array.isArray(skillsState.perChat[selectedChat]) ? skillsState.perChat[selectedChat] : null;
+  const checkedInChat = override ? override.includes(skill.id) : on;
+  const tools = (skill.allowedTools || []).map((tool) => `<span class="skills-chip">${esc(tool)}</span>`).join('');
+  const triggers = (skill.triggers || []).map((trigger) => `<span class="skills-chip is-soft">${esc(trigger)}</span>`).join('');
+  box.innerHTML = `
+    <div class="skills-detail-head">
+      <div>
+        <span class="skills-eyebrow">技能 · ${esc(skill.id)}</span>
+        <h3>${esc(skill.name)} <span class="skills-version">v${esc(skill.version)}</span></h3>
+        <p>${esc(skill.description || '（没有说明）')}</p>
+      </div>
+      <label class="skills-switch">
+        <input type="checkbox" data-skill-global="${esc(skill.id)}" ${on ? 'checked' : ''} />
+        <span>${on ? '全局启用' : '全局停用'}</span>
+      </label>
+    </div>
+    <div class="skills-detail-grid">
+      <div class="skills-detail-block"><h4>允许工具</h4><div class="skills-chips">${tools || '<span class="skills-chip is-soft">仅 finish</span>'}</div></div>
+      <div class="skills-detail-block"><h4>触发词</h4><div class="skills-chips">${triggers || '<span class="skills-muted">没有预设触发词</span>'}</div></div>
+      <div class="skills-detail-block"><h4>来源</h4><p class="skills-muted">${detail.source === 'user' ? 'data/skills（用户目录）' : '内置 skills 目录'}</p></div>
+    </div>
+    <section class="skills-doc-block">
+      <h4>工作流程</h4>
+      <pre class="skills-doc">${esc(detail.instructions || '（没有 SKILL.md 内容）')}</pre>
+    </section>
+    <section class="skills-chat-block">
+      <h4>按会话启用</h4>
+      <p class="skills-muted">全局=${on ? '启用' : '停用'}；下面可以给单个群/私聊覆盖。</p>
+      ${chatKeys.length ? `
+        <div class="skills-chat-controls">
+          <select id="skill-chat-select" aria-label="选择会话">${chatKeys.map((key) => `<option value="${esc(key)}" ${key === selectedChat ? 'selected' : ''}>${esc(skillsChatLabel(key))}</option>`).join('')}</select>
+          <label class="checkbox-row"><input type="checkbox" id="skill-chat-enabled" ${checkedInChat ? 'checked' : ''} /> <span>这个会话启用</span></label>
+          <button class="btn btn-small btn-primary" id="skill-chat-save" type="button">保存这个会话</button>
+          <button class="btn btn-small" id="skill-chat-follow" type="button" ${override ? '' : 'disabled'}>恢复跟随全局</button>
+        </div>
+        <p class="skills-muted">${override ? '这个会话有单独覆盖。' : '当前跟随全局；勾选并保存后为这个会话建立覆盖。'}</p>` : '<p class="skills-muted">还没有可配置的群或私聊。</p>'}
+    </section>`;
+}
+
+function skillsRender() {
+  const count = $('#skills-count');
+  if (count) count.textContent = `${skillsState.skills.length} 个`;
+  const master = $('#skills-enabled');
+  if (master) master.checked = skillsState.enabled === true;
+  skillsStatus(skillsState.enabled
+    ? `技能包已启用 · ${skillsEnabledCount()} 个全局启用`
+    : '技能包未启用；关闭时不会注册 skill_list / skill_use。');
+  const errors = $('#skills-errors');
+  if (errors) {
+    errors.innerHTML = skillsState.errors.length
+      ? `<div class="skills-error">有 ${skillsState.errors.length} 个技能目录没有加载：${skillsState.errors.map((item) => `${esc(item.id || '(未命名)')}：${esc(item.error)}`).join('；')}</div>`
+      : '';
+  }
+  skillsRenderKpis();
+  skillsRenderList();
+  skillsRenderDetail();
+}
+
+async function skillsLoadDetail(id) {
+  if (!id) return;
+  skillsState.loadingDetail = true;
+  skillsState.detailError = '';
+  skillsRenderDetail();
+  try {
+    const result = await api(`/api/skills/${encodeURIComponent(id)}`);
+    if (skillsState.selectedId !== id) return;
+    skillsState.detail = result?.skill || null;
+  } catch (error) {
+    if (skillsState.selectedId === id) skillsState.detailError = String(error?.message || error);
+  } finally {
+    skillsState.loadingDetail = false;
+    skillsRenderDetail();
+  }
+}
+
+async function skillsSaveState(next = {}) {
+  try {
+    const result = await api('/api/skills/state', {
+      method: 'POST',
+      body: JSON.stringify({
+        enabled: next.enabled ?? skillsState.enabled,
+        enabledIds: next.enabledIds ?? skillsState.enabledIds,
+        perChat: next.perChat ?? skillsState.perChat
+      })
+    });
+    skillsState.enabled = result.enabled === true;
+    skillsState.enabledIds = Array.isArray(result.enabledIds) ? result.enabledIds : [];
+    skillsState.perChat = result.perChat && typeof result.perChat === 'object' ? result.perChat : {};
+    skillsStatus('已保存；下一轮会话生效。');
+    skillsRender();
+  } catch (error) {
+    skillsStatus(`保存失败：${error?.message || error}`, true);
+  }
+}
+
+async function skillsLoad() {
+  try {
+    const [data, chats] = await Promise.all([
+      api('/api/skills'),
+      api('/api/chats').catch(() => ({ chats: [] }))
+    ]);
+    skillsState.enabled = data.enabled === true;
+    skillsState.enabledIds = Array.isArray(data.enabledIds) ? data.enabledIds : [];
+    skillsState.perChat = data.perChat && typeof data.perChat === 'object' ? data.perChat : {};
+    skillsState.skills = Array.isArray(data.skills) ? data.skills : [];
+    skillsState.errors = Array.isArray(data.errors) ? data.errors : [];
+    skillsState.chats = Array.isArray(chats.chats) ? chats.chats : [];
+    if (!skillsState.skills.some((skill) => skill.id === skillsState.selectedId)) {
+      const first = skillsState.skills.find((skill) => skillsIsGlobal(skill.id)) || skillsState.skills[0];
+      skillsState.selectedId = first?.id || '';
+    }
+    skillsRender();
+    if (skillsState.selectedId) void skillsLoadDetail(skillsState.selectedId);
+  } catch (error) {
+    skillsStatus(`读取失败：${error?.message || error}`, true);
+    skillsRenderDetail();
+  }
+}
+
+function skillsBind(root) {
+  if (root.dataset.bound === '1') return;
+  root.dataset.bound = '1';
+  root.addEventListener('change', (event) => {
+    if (event.target?.id === 'skills-enabled') {
+      void skillsSaveState({ enabled: event.target.checked });
+      return;
+    }
+    const global = event.target?.closest?.('[data-skill-global]');
+    if (global) {
+      const id = global.dataset.skillGlobal;
+      const set = new Set(skillsState.enabledIds);
+      if (global.checked) set.add(id); else set.delete(id);
+      void skillsSaveState({ enabledIds: [...set] });
+      return;
+    }
+    if (event.target?.id === 'skill-chat-select') {
+      skillsState.selectedChat = event.target.value;
+      skillsRenderDetail();
+    }
+  });
+  root.addEventListener('click', async (event) => {
+    const open = event.target?.closest?.('[data-skill-open]');
+    if (open) {
+      skillsState.selectedId = open.dataset.skillOpen;
+      skillsState.detail = null;
+      skillsRenderList();
+      skillsRenderDetail();
+      void skillsLoadDetail(skillsState.selectedId);
+      return;
+    }
+    if (event.target?.closest?.('#skills-reload')) {
+      try {
+        const result = await api('/api/skills/reload', { method: 'POST', body: '{}' });
+        skillsState.skills = Array.isArray(result.skills) ? result.skills : [];
+        skillsState.errors = Array.isArray(result.errors) ? result.errors : [];
+        if (!skillsState.skills.some((skill) => skill.id === skillsState.selectedId)) {
+          skillsState.selectedId = skillsState.skills[0]?.id || '';
+          skillsState.detail = null;
+        }
+        skillsStatus(`已重新扫描：${skillsState.skills.length} 个技能。`);
+        skillsRender();
+        if (skillsState.selectedId) void skillsLoadDetail(skillsState.selectedId);
+      } catch (error) {
+        skillsStatus(`扫描失败：${error?.message || error}`, true);
+      }
+      return;
+    }
+    if (event.target?.closest?.('#skill-chat-save')) {
+      const chatKey = $('#skill-chat-select')?.value || skillsState.selectedChat;
+      if (!chatKey) return;
+      const enabled = $('#skill-chat-enabled')?.checked === true;
+      const current = Array.isArray(skillsState.perChat[chatKey]) ? [...skillsState.perChat[chatKey]] : [...skillsState.enabledIds];
+      const next = enabled ? [...new Set([...current, skillsState.selectedId])] : current.filter((id) => id !== skillsState.selectedId);
+      await skillsSaveState({ perChat: { ...skillsState.perChat, [chatKey]: next } });
+      return;
+    }
+    if (event.target?.closest?.('#skill-chat-follow')) {
+      const chatKey = $('#skill-chat-select')?.value || skillsState.selectedChat;
+      if (!chatKey) return;
+      const perChat = { ...skillsState.perChat };
+      delete perChat[chatKey];
+      await skillsSaveState({ perChat });
+    }
+  });
+}
+
+function loadSkillsPage() {
+  const box = $('#skills-page');
+  if (!box) return;
+  if (box.dataset.ready !== '1') {
+    box.innerHTML = `
+      <div class="pane-head skills-head">
+        <div>
+          <span class="skills-eyebrow">方法 · 流程</span>
+          <h2>技能</h2>
+          <p class="skills-claim">让机器人按一套方法做事：只读 Markdown 流程 + 工具白名单，不执行第三方代码。
+            启用后模型会先选择技能，再在允许的工具范围内完成当前任务。</p>
+        </div>
+        <div class="skills-master">
+          <label class="skills-switch"><input type="checkbox" id="skills-enabled" /> <span>启用技能包</span></label>
+          <button class="btn btn-small" id="skills-reload" type="button">${iconSvg('refresh', { size: 14 })}重新扫描</button>
+          <div class="skills-master-status" id="skills-status"></div>
+        </div>
+      </div>
+      <div class="skills-kpis" id="skills-kpis"></div>
+      <div class="skills-errors" id="skills-errors"></div>
+      <div class="skills-layout">
+        <section class="skills-list-pane">
+          <div class="skills-list-head"><span>已加载</span><span id="skills-count"></span></div>
+          <div id="skills-list" class="skills-list"></div>
+        </section>
+        <section id="skills-detail" class="skills-detail"></section>
+      </div>`;
+    box.dataset.ready = '1';
+  }
+  skillsBind(box);
+  void skillsLoad();
+}
+
+export { loadSkillsPage };

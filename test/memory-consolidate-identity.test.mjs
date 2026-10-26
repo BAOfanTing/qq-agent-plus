@@ -191,13 +191,13 @@ test('整理期间控制台改手工印象：旧内容不复活、新内容保�
   runner.store.close();
 });
 
-test('手工印象达到存储上限 20 条时跳过整理，不截断用户内容（issue #55 复审）', async (t) => {
+test('手工印象达到存储上限 50 条时跳过整理，不截断用户内容（issue #55 复审）', async (t) => {
   const oldFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = oldFetch; });
-  const twenty = Array.from({ length: 20 }, (_, i) => ({
+  const fifty = Array.from({ length: 50 }, (_, i) => ({
     content: `手写第 ${i + 1} 条`, createdAt: 2000 + i, lastObservedAt: 2000 + i, origin: 'manual'
   }));
-  writeMemberFile('791', '小美', twenty, ['group:6'], 2000);
+  writeMemberFile('791', '小美', fifty, ['group:6'], 2000);
   const runner = makeRunner(['6']);
   seedChat(runner.store, 'group:6', [['791', '小美', 4]]);
   globalThis.fetch = async () => Response.json({
@@ -207,7 +207,7 @@ test('手工印象达到存储上限 20 条时跳过整理，不截断用户内�
 
   await runner.runner.consolidateMemoryForChat('group:6');
   const impressions = runner.memory.getMember('group:6', '791').impressions;
-  assert.equal(impressions.length, 20, '不能因为 replace 的 20 条硬上限静默丢掉尾部手工条目');
-  assert.equal(impressions.filter((e) => e.origin === 'manual').length, 20);
+  assert.equal(impressions.length, 50, '不能因为 replace 的存储上限静默丢掉尾部手工条目');
+  assert.equal(impressions.filter((e) => e.origin === 'manual').length, 50);
   runner.store.close();
 });

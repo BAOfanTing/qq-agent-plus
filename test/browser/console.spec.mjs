@@ -25,14 +25,14 @@ test('?token= 自动登录后把 Token 从地址栏移除', async ({ page }) => 
   await expect.poll(() => new URL(page.url()).searchParams.get('token')).toBeNull();
 });
 
-test('13 个页签逐一切换，且没有 console error / pageerror', async ({ page }) => {
+test('14 个页签逐一切换，且没有 console error / pageerror', async ({ page }) => {
   const errors = collectPageErrors(page);
   await login(page);
   await page.goto('/');
   await expect(page.locator('#view-overview')).toHaveClass(/active/);
 
   const tabs = await tabNames(page);
-  expect(tabs).toHaveLength(13);
+  expect(tabs).toHaveLength(14);
 
   for (const tab of tabs) {
     await switchTo(page, tab);
@@ -59,6 +59,31 @@ test('设置保存：改发送频率后落盘，再还原', async ({ page }) => 
   await input.fill('80');
   await page.click('#save-cfg-btn');
   await expect.poll(read).toBe(80);
+});
+
+test('技能页：渲染内置技能并可全局启停', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'skills');
+  await expect(page.locator('#skills-page')).toBeVisible();
+  await expect(page.locator('#skills-list')).toContainText('群聊总结');
+
+  const toggle = page.locator('#skills-enabled');
+  const readEnabled = async () => (await (await page.request.get('/api/skills')).json()).enabled;
+  await expect.poll(readEnabled).toBe(true);
+  await toggle.click();
+  await expect.poll(readEnabled).toBe(false);
+  await toggle.click();
+  await expect.poll(readEnabled).toBe(true);
+});
+
+test('人物记忆：控制台按关键词检索记忆', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'people-memory');
+  await page.fill('#gm-search-query', '面馆');
+  await page.click('#gm-search-btn');
+  await expect(page.locator('#gm-search-results')).toContainText('面馆');
 });
 
 test('语音服务切换：豆包/MiMo 各自恢复上次保存的音色', async ({ page }) => {
@@ -197,12 +222,12 @@ test('插件审批：待批请求能在插件详情里点「批准一次」', as
   expect(settings.grants?.approvals?.write?.usesLeft ?? 0).toBeGreaterThan(0);
 });
 
-test('窄屏 390×844：13 个页签都没有横向溢出', async ({ page }) => {
+test('窄屏 390×844：14 个页签都没有横向溢出', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await login(page);
   await page.goto('/');
   const tabs = await tabNames(page);
-  expect(tabs).toHaveLength(13);
+  expect(tabs).toHaveLength(14);
 
   for (const tab of tabs) {
     await switchTo(page, tab);

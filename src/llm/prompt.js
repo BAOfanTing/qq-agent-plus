@@ -17,6 +17,7 @@ import { visionEnabled, stickerVisionEnabled } from './vision-scan.js';
 // 与 orchestrator 摘 send_voice 的条件同源（enabled && baseUrl 都齐才算能用）：
 // 只看 enabled 会在"勾了启用但没填地址"时教一个不存在的工具（2026-10-07 审计 P0）
 import { ttsConfigured } from './tts-openai.js';
+import { getSkillRegistry } from '../skills/registry.js';
 import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
 // 滑条换算放在独立模块（零依赖），避免 config.js ↔ prompt.js 循环依赖。
 // 这里 re-export 是为了让已经从 prompt.js 引用的代码不受影响。
@@ -1185,6 +1186,18 @@ export function buildUserPrompt(ctx) {
   }
   const memText = ctx.memory.formatForPrompt(ctx.chatKey, { userIds: [...relevantUserIds] });
   if (memText) parts.push(`【记忆】\n${memText}`);
+
+  // 技能只给"有哪几套方法"，具体流程由 skill_use 返回；不把整份 SKILL.md 常驻提示词。
+  try {
+    const skills = getConfig().skills?.enabled === true
+      ? getSkillRegistry().enabledForChat(ctx.chatKey)
+      : [];
+    if (skills.length) {
+      const lines = skills.slice(0, 8).map((skill) =>
+        `- ${sanitizeUserText(skill.name)}（${skill.id}）：${sanitizeUserText(skill.description)}`);
+      parts.push(`【可用技能】\n${lines.join('\n')}\n用户要求按流程/按方法做事时，先 skill_list 确认，再 skill_use 选一个；**在 skill_use 之前不要调用技能里的其他工具**。技能只收窄工具，不改变安全规则。`);
+    }
+  } catch { /* 技能目录读失败不影响聊天 */ }
 
   // 成员备注：不再单独成段——备注名已经直接替换了消息里的显示名
   // （formatEntry/triggerLabels 都优先用备注），单独列一遍是重复信息。

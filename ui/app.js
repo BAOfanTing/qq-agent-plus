@@ -46,6 +46,7 @@ import {
 import { loadMemoryView, renderMemoryList } from './pages/memory.js';
 import { loadLivingMemoryPage } from './pages/living-memory.js';
 import { loadPluginsPage, refreshPendingBadge } from './pages/plugins.js';
+import { loadSkillsPage } from './pages/skills.js';
 import { renderExperimentalSettingsSectionImpl } from './pages/moments.js';
 import { loadSessionDetail, loadSessions } from './pages/sessions.js';
 import {
@@ -284,6 +285,7 @@ function switchTab(name) {
   if (name === 'slang') loadSlangFeaturePage();
   if (name === 'incidents') loadIncidentFeaturePage();
   if (name === 'assets') loadAssetObservatory();
+  if (name === 'skills') loadSkillsPage();
   if (name === 'plugins') loadPluginsPage({ force: true });
   void refreshPendingBadge();
   if (name === 'usage') loadUsageView({ force: true });

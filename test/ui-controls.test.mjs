@@ -69,6 +69,9 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   // 默认勾选状态与保存端 fallback 必须同口径：群聊默认开、私聊默认关
   assert.match(chat, /id="cfg-pro-group"[^\n]*groupEnabled !== false/);
   assert.match(chat, /id="cfg-pro-private"[^\n]*privateEnabled === true/);
+  assert.match(chat, /群聊（独立节奏，按群白名单）/);
+  assert.match(chat, /私聊（独立节奏，按私聊白名单）/);
+  assert.match(chat, /各自独立计时、独立按概率判定/);
   for (const key of ['replyGuardEnabled', 'pokeReplyEnabled']) {
     assert.ok(save.includes(`${key}:`), `保存端缺少 ${key}`);
   }

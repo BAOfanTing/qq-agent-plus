@@ -157,6 +157,38 @@ function archive(src, rel) {
   } catch (error) { console.warn('[memory] 归档旧人物记忆失败:', error?.message ?? error); }
 }
 
+const DEFAULT_MAX_IMPRESSIONS = 50;
+const DEFAULT_RETENTION_DAYS = 0;
+
+export function memoryLimits() {
+  const cfg = getConfig().memory || {};
+  const max = Math.max(5, Math.min(200, Math.round(Number(cfg.maxImpressionsPerPerson) || DEFAULT_MAX_IMPRESSIONS)));
+  const days = Math.max(0, Math.min(3650, Math.round(Number(cfg.impressionRetentionDays ?? DEFAULT_RETENTION_DAYS) || 0)));
+  return { max, days };
+}
+
+function trimMember(member, now = Date.now(), limits = memoryLimits()) {
+  const before = member.impressions?.length || 0;
+  const retentionMs = limits.days > 0 ? limits.days * 86400000 : 0;
+  const keep = (member.impressions || []).filter((entry) => {
+    if (normalizeOrigin(entry.origin) === 'manual') return true;
+    const observed = Number(entry.lastObservedAt) || Number(entry.createdAt) || 0;
+    return !(retentionMs > 0 && observed > 0 && now - observed > retentionMs);
+  });
+  if (keep.length > limits.max) {
+    const manual = keep.filter((entry) => normalizeOrigin(entry.origin) === 'manual');
+    const auto = keep
+      .filter((entry) => normalizeOrigin(entry.origin) !== 'manual')
+      .sort((a, b) => (Number(b.lastObservedAt || b.createdAt) || 0) - (Number(a.lastObservedAt || a.createdAt) || 0));
+    member.impressions = [...manual, ...auto.slice(0, Math.max(0, limits.max - manual.length))]
+      .sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+  } else {
+    member.impressions = keep;
+  }
+  if (member.impressions.length !== before) member.updatedAt = now;
+  return member.impressions.length !== before;
+}
+
 export class GlobalPersonMemoryStore {
   constructor({ onLegacyState = null } = {}) {
     this.people = null;
@@ -242,6 +274,22 @@ export class GlobalPersonMemoryStore {
     this.people = map;
     return map;
   }
+  /** 清理过期/超量的自动印象；manual 永远保留。返回实际删除条数。 */
+  pruneExpired({ now = Date.now() } = {}) {
+    const map = this.#ensure();
+    const limits = memoryLimits();
+    let removed = 0;
+    let touched = 0;
+    for (const member of map.values()) {
+      const before = member.impressions?.length || 0;
+      if (!trimMember(member, now, limits)) continue;
+      removed += Math.max(0, before - member.impressions.length);
+      touched += 1;
+      this.#persist(member);
+    }
+    return { removed, touched, limits };
+  }
+
   listSourceChats() {
     const out = new Set();
     for (const member of this.#ensure().values()) for (const key of member.sourceChatKeys) out.add(key);
@@ -253,6 +301,29 @@ export class GlobalPersonMemoryStore {
       .filter((m) => m.impressions.length && (!source || m.sourceChatKeys.includes(source)))
       .map((m) => structuredClone(m))
       .sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  stats() {
+    const limits = memoryLimits();
+    let entries = 0;
+    let manual = 0;
+    let oldest = 0;
+    let newest = 0;
+    let bytes = 0;
+    let people = 0;
+    for (const member of this.#ensure().values()) {
+      if (!member.impressions?.length) continue;
+      people += 1;
+      bytes += Buffer.byteLength(JSON.stringify(member));
+      for (const entry of member.impressions) {
+        entries += 1;
+        if (normalizeOrigin(entry.origin) === 'manual') manual += 1;
+        const at = Number(entry.createdAt) || 0;
+        if (at > 0 && (!oldest || at < oldest)) oldest = at;
+        if (at > newest) newest = at;
+      }
+    }
+    return { people, entries, manual, oldestAt: oldest, newestAt: newest, bytes, limits };
   }
   get(userId) {
     const uid = String(userId || '').trim();
@@ -294,6 +365,7 @@ export class GlobalPersonMemoryStore {
     member.name = String(name || member.name || member.userId || '');
     member.sourceChatKeys = sourceKeys([...member.sourceChatKeys, chatKey]);
     member.updatedAt = now;
+    trimMember(member, now);
     this.#persist(member); map.set(memberKey(member.userId, member.name), member);
     return structuredClone(entry);
   }
@@ -324,7 +396,7 @@ export class GlobalPersonMemoryStore {
     const finalName = clean(name, 60) || old.name || uid;
     const now = Date.now();
     const incoming = (Array.isArray(contents) ? contents : [contents])
-      .map((x) => clean(x)).filter(Boolean).slice(0, 20);
+      .map((x) => clean(x)).filter(Boolean).slice(0, memoryLimits().max);
     const hadSource = old.sourceChatKeys.includes(String(chatKey || '').trim());
     let member;
     if (old.impressions.length && !hadSource) {
@@ -399,6 +471,7 @@ export class GlobalPersonMemoryStore {
       try { fs.rmSync(globalMemberFile(candidate.userId, candidate.name), { force: true }); } catch { /* 有意忽略：删残留文件失败仅造成文件残留，数据已先留快照可回滚 */ }
       map.delete(key);
     }
+    trimMember(member, now);
     this.#persist(member); map.set(uid, member);
     return structuredClone(member);
   }

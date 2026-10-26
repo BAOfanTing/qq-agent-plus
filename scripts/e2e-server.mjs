@@ -83,6 +83,7 @@ function buildConfig() {
   cfg.adminBriefing = { ...cfg.adminBriefing, enabled: false };
   cfg.reminders = { ...cfg.reminders, enabled: false };
   cfg.mcp = { enabled: false, servers: [] };
+  cfg.skills = { enabled: true, enabledIds: ['chat-summary'], perChat: {} };
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,
@@ -109,6 +110,7 @@ requestPendingApproval(dataDir, {
 const { createApp } = await import('../src/console/app.js');
 const app = createApp({ log: (...args) => { if (process.env.E2E_VERBOSE) console.log(...args); } });
 const port = await app.start();
+app.memory.append(`group:${E2E_GROUP}`, 'memberImpression', '昨天中午去新开的面馆排队半小时，汤有点咸', { userId: '2001', target: '演示群友' });
 console.log(`E2E_READY http://127.0.0.1:${port} data=${dataDir}`);
 
 let stopping = false;

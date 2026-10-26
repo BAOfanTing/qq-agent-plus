@@ -3,8 +3,9 @@ import path from 'node:path';
 import { DATA_DIR, getConfig, updateConfig } from '../core/config.js';
 import { todayKey, sanitizeUserText, ZONE_OFFSET_MS } from '../core/util.js';
 import { cappedByTokenSaver, tokenSaverCapsOf } from '../core/token-saver.js';
-import { GlobalPersonMemoryStore, relationshipLabel } from './global-person-memory-store.js';
-import { memoryVisibilityOf, visibleImpressions } from '../core/memory-visibility.js';
+import { GlobalPersonMemoryStore, relationshipLabel, memoryLimits } from './global-person-memory-store.js';
+import { memoryVisibilityOf, visibleImpressions, impressionVisible } from '../core/memory-visibility.js';
+import { MemorySearchIndex, tokenizeText } from './memory-search.js';
 import { resolvePersona } from '../personas.js';
 
 const MEMORY_DIR = path.join(DATA_DIR, 'memory');
@@ -72,7 +73,72 @@ export function setMemberNote(userId, note) {
 }
 
 export class MemoryStore {
-  constructor() { this.people = new GlobalPersonMemoryStore({ onLegacyState: migrateLegacyHandoff }); }
+  constructor() {
+    this.people = new GlobalPersonMemoryStore({ onLegacyState: migrateLegacyHandoff });
+    this.searchIndex = new MemorySearchIndex({ dataDir: DATA_DIR });
+    this.lastPruneAt = 0;
+    this.maybePrune();
+  }
+
+  /** 每天最多跑一次自动清理；manual 条目不会被删。 */
+  maybePrune(now = Date.now()) {
+    if (now - this.lastPruneAt < 86400000) return null;
+    this.lastPruneAt = now;
+    try { return this.people.pruneExpired({ now }); } catch { return null; }
+  }
+
+  search(chatKey, query, { limit = 8, userId = '' } = {}) {
+    const text = String(query || '').trim();
+    if (!text) return { query: '', results: [], total: 0 };
+    const members = this.members();
+    const visibility = memoryVisibilityOf();
+    let results = [];
+    let indexFailed = false;
+    try {
+      results = this.searchIndex.search({ members, query: text, chatKey, visibility, userId, limit });
+    } catch { indexFailed = true; results = []; }
+    // SQLite 不可用/索引损坏时仍能按二元组做一次小范围兜底，不让功能整体失效。
+    if (!results.length && (indexFailed || !this.searchIndex.available || this.searchIndex.error)) {
+      const terms = new Set(tokenizeText(text));
+      const scored = [];
+      for (const member of members) {
+        for (const entry of member.impressions || []) {
+          if (userId && String(member.userId) !== String(userId)) continue;
+          if (!impressionVisible(entry, chatKey, visibility)) continue;
+          const body = `${member.name || ''} ${entry.content || ''}`;
+          const docTokens = new Set(tokenizeText(body));
+          let overlap = 0;
+          for (const term of terms) if (docTokens.has(term)) overlap += 1;
+          if (!overlap) continue;
+          scored.push({
+            userId: String(member.userId || ''),
+            target: String(member.name || member.userId || '某人'),
+            content: String(entry.content || ''),
+            createdAt: Number(entry.createdAt) || 0,
+            lastObservedAt: Number(entry.lastObservedAt) || Number(entry.createdAt) || 0,
+            origin: String(entry.origin || ''),
+            sourceChatKeys: entry.sourceChatKeys || [],
+            score: overlap / Math.max(1, terms.size),
+            coverage: overlap / Math.max(1, terms.size)
+          });
+        }
+      }
+      results = scored.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Number(limit) || 8));
+    }
+    return { query: text, results, total: results.length, index: this.searchIndex.stats() };
+  }
+
+  stats() {
+    const base = this.people.stats();
+    let index;
+    try { index = this.searchIndex.stats(this.people.members()); }
+    catch (error) { index = { available: false, error: String(error?.message || error), docs: 0, bytes: 0 }; }
+    return { ...base, index };
+  }
+
+  close() {
+    this.searchIndex.close();
+  }
   listChats() {
     const out = new Set(this.people.listSourceChats());
     try {
@@ -180,13 +246,24 @@ export class MemoryStore {
     // origin 默认 model（机器人自己记的）；控制台手动新增的传 'manual'
     return this.people.append(chatKey, userId, target || userId, content, Date.now(), String(extra.origin || '').trim() || 'model');
   }
-  members(chatKey = '') { return this.people.members(chatKey); }
+  members(chatKey = '') {
+    this.maybePrune();
+    const limits = memoryLimits();
+    if (!limits.days) return this.people.members(chatKey);
+    const cutoff = Date.now() - limits.days * 86400000;
+    return this.people.members(chatKey).map((member) => ({
+      ...member,
+      impressions: member.impressions.filter((entry) => entry.origin === 'manual'
+        || !(Number(entry.lastObservedAt || entry.createdAt) || 0)
+        || (Number(entry.lastObservedAt || entry.createdAt) || 0) >= cutoff)
+    })).filter((member) => member.impressions.length);
+  }
   getMember(chatKey, userId) { return this.people.get(userId); }
   noteInteraction(userId, opts = {}) { return this.people.noteInteraction(userId, opts); }
   query(chatKey, category = '') {
     if (category && category !== 'memberImpression') return { [category]: [] };
     const memberImpression = [];
-    for (const member of this.people.members(chatKey)) for (const e of member.impressions) memberImpression.push({ userId: member.userId, target: member.name || member.userId || '某人', content: e.content, createdAt: e.createdAt, lastObservedAt: e.lastObservedAt, origin: e.origin || '', sourceChatKeys: e.sourceChatKeys });
+    for (const member of this.members(chatKey)) for (const e of member.impressions) memberImpression.push({ userId: member.userId, target: member.name || member.userId || '某人', content: e.content, createdAt: e.createdAt, lastObservedAt: e.lastObservedAt, origin: e.origin || '', sourceChatKeys: e.sourceChatKeys });
     memberImpression.sort((a, b) => (b.lastObservedAt || b.createdAt) - (a.lastObservedAt || a.createdAt));
     return { memberImpression };
   }
@@ -246,7 +323,16 @@ export class MemoryStore {
     const relationshipOn = cfg.humanize?.enabled === true && cfg.humanize?.relationship?.enabled !== false
       && !(cfg.humanize?.respectPersonaCard !== false
         && resolvePersona(cfg, chatKey)?.behaviorProfile === 'card');
-    const raw = userIds ? [...new Set([...userIds].map(String))].map((id) => this.people.get(id)).filter((m) => m.impressions.length) : this.people.members(chatKey).slice(0, 15);
+    const limits = memoryLimits();
+    const cutoff = limits.days ? Date.now() - limits.days * 86400000 : 0;
+    const keepEntry = (entry) => !cutoff || entry.origin === 'manual' || !(Number(entry.lastObservedAt || entry.createdAt) || 0) || (Number(entry.lastObservedAt || entry.createdAt) || 0) >= cutoff;
+    const raw = userIds
+      ? [...new Set([...userIds].map(String))]
+        .map((id) => this.people.get(id))
+        .filter((m) => m.impressions.length)
+        .map((m) => ({ ...m, impressions: m.impressions.filter(keepEntry) }))
+        .filter((m) => m.impressions.length)
+      : this.members(chatKey).slice(0, 15);
     // #13：按 memory.visibility 策略过滤到「对这个 chatKey 可见」的印象（默认策略下与历史逐字一致）
     const vis = memoryVisibilityOf(getConfig());
     const picked = [];

@@ -12,6 +12,7 @@ import { createMetrics } from './metrics.js';
 import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCredentialResolve, asrCredentialSlot, asrCredentialSlotOf, asrCredentials, asrEndpointHost, asrKeyHost, asrKeySlots, asrKeySource, asrLocalBin, asrLocalModel, asrSecretId, asrSecretKey, ASR_PROVIDERS, conversationConfigForChat, findWhisperBinSync, getConfig, identityPilotEnabled, imageGenAvailable, imageGenKeyHosts, imageGenKeyOwnedBy, imageGenKeyResolve, incidentPilotEnabled, slangPilotEnabled, updateConfig, onTimeControlChange, pinImageGenKeyHost, DATA_DIR, ROOT } from '../core/config.js';
 import { tokenSaverEffective } from '../core/token-saver.js';
 import { redactText } from '../core/redact.js';
+import { getSkillRegistry } from '../skills/registry.js';
 import { catchupReplyWindowMs, catchupLogLine, isFreshForReply } from '../core/catchup-policy.js';
 import { budgetStatus } from '../core/budget.js';
 import { sanitizeConfigSecrets } from '../core/secret-keys.js';
@@ -846,7 +847,8 @@ export function createApp({
       { name: '异常台账', run: () => incidentPilot?.pruneResolvedIncidents() },
       { name: '运行台账', run: () => store.pruneRuns() },
       { name: '发送台账', run: () => store.pruneOutbox() },
-      { name: '会话留档', run: () => sessions.pruneSessions() }
+      { name: '会话留档', run: () => sessions.pruneSessions() },
+      { name: '人物记忆', run: () => memory.maybePrune(Date.now()) }
     ];
   }
   async function sendIdentityAdminText(ownerUin, text, signal) {
@@ -3676,6 +3678,118 @@ export function createApp({
     }
   });
 
+  router.add('GET', '/api/skills', async (req, res) => {
+    const registry = getSkillRegistry();
+    const cfg = getConfig().skills || {};
+    const known = new Set(registry.list().map((skill) => skill.id));
+    const enabledIds = new Set((Array.isArray(cfg.enabledIds) ? cfg.enabledIds : [])
+      .map((id) => String(id || '').trim()).filter((id) => known.has(id)));
+    const staleEnabledIds = (Array.isArray(cfg.enabledIds) ? cfg.enabledIds : [])
+      .map((id) => String(id || '').trim()).filter((id) => id && !known.has(id));
+    const perChat = cfg.perChat && typeof cfg.perChat === 'object' ? cfg.perChat : {};
+    return json(res, 200, {
+      ok: true,
+      enabled: cfg.enabled === true,
+      enabledIds: [...enabledIds],
+      staleEnabledIds,
+      perChat,
+      skills: registry.list().map((skill) => ({
+        ...skill,
+        enabled: enabledIds.has(skill.id),
+        perChat: Object.fromEntries(Object.entries(perChat)
+          .filter(([, ids]) => Array.isArray(ids) && ids.includes(skill.id))
+          .map(([chatKey]) => [chatKey, true]))
+      })),
+      errors: registry.errors
+    });
+  });
+  router.add('GET', '/api/skills/:id', async (req, res, params) => {
+    const registry = getSkillRegistry();
+    const skill = registry.get(params.id);
+    if (!skill) return json(res, 404, { ok: false, error: '技能不存在' });
+    const cfg = getConfig().skills || {};
+    const perChat = cfg.perChat && typeof cfg.perChat === 'object' ? cfg.perChat : {};
+    return json(res, 200, {
+      ok: true,
+      skill: {
+        ...skill,
+        instructions: skill.instructions,
+        enabled: (Array.isArray(cfg.enabledIds) ? cfg.enabledIds : []).includes(skill.id),
+        perChat: Object.fromEntries(Object.entries(perChat)
+          .filter(([, ids]) => Array.isArray(ids) && ids.includes(skill.id))
+          .map(([chatKey]) => [chatKey, true]))
+      }
+    });
+  });
+
+  router.add('POST', '/api/skills/reload', async (req, res) => {
+    const registry = getSkillRegistry();
+    registry.reload();
+    auditWrite('skills.reload', 'skills', { req, skills: registry.list().length, errors: registry.errors.length });
+    return json(res, 200, { ok: true, skills: registry.list(), errors: registry.errors });
+  });
+  router.add('POST', '/api/skills/state', async (req, res) => {
+    try {
+      const body = await readBody(req);
+      const registry = getSkillRegistry();
+      const known = new Set(registry.list().map((skill) => skill.id));
+      const enabled = body.enabled === true;
+      const enabledIds = [];
+      const seen = new Set();
+      for (const raw of Array.isArray(body.enabledIds) ? body.enabledIds : []) {
+        const id = String(raw || '').trim();
+        if (!id || seen.has(id)) continue;
+        // 技能目录被删除/manifest 变坏时，配置里可能还留着 id。这里丢掉而不是 400，
+        // 否则 UI 没有对应的勾选框可取消，整页会永远保存失败。
+        if (!known.has(id)) continue;
+        seen.add(id);
+        enabledIds.push(id);
+      }
+      const perChat = {};
+      if (body.perChat && typeof body.perChat === 'object' && !Array.isArray(body.perChat)) {
+        for (const [chatKey, ids] of Object.entries(body.perChat)) {
+          if (!/^(group|private):\d+$/.test(chatKey) || !Array.isArray(ids)) continue;
+          const list = [];
+          for (const raw of ids) {
+            const id = String(raw || '').trim();
+            if (!id || !known.has(id)) continue;
+            if (!list.includes(id)) list.push(id);
+          }
+          perChat[chatKey] = list;
+        }
+      }
+      updateConfig({ skills: { enabled, enabledIds, perChat: { __replace__: perChat } } });
+      auditWrite('skills.state', 'skills', { req, enabled, count: enabledIds.length, perChat: Object.keys(perChat).length });
+      emit('skills-update', { enabled, enabledIds, perChat });
+      return json(res, 200, { ok: true, enabled, enabledIds, perChat });
+    } catch (error) {
+      return json(res, 400, { ok: false, error: String(error?.message || error) });
+    }
+  });
+
+  router.add('GET', '/api/memory/search', async (req, res, params, url) => {
+    const query = String(url.searchParams.get('query') || '').trim().slice(0, 120);
+    if (!query) return json(res, 400, { ok: false, error: 'query 不能为空' });
+    const chatKey = String(url.searchParams.get('chatKey') || '').trim();
+    if (chatKey && !/^(group|private):\d+$/.test(chatKey)) {
+      return json(res, 400, { ok: false, error: 'chatKey 格式错误' });
+    }
+    const limit = Math.max(1, Math.min(20, Number(url.searchParams.get('limit')) || 8));
+    try {
+      const found = memory.search(chatKey, query, { limit });
+      return json(res, 200, {
+        ok: true,
+        query,
+        chatKey,
+        total: found.total,
+        mode: found.index?.available ? 'fts5' : 'fallback',
+        results: (found.results || []).map(({ sourceChatKeys: _sources, ...entry }) => entry)
+      });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: String(error?.message || error) });
+    }
+  });
+
   router.add('GET', '/api/memory-files', async (req, res) => {
     const files = memory.listChats().map((chatKey) => {
       const members = memory.members(chatKey);
@@ -3720,7 +3834,7 @@ export function createApp({
     const busy = orchestrator.consolidating;
     for (const f of files) f.consolidating = busy.has(f.chatKey);
     files.sort((a, b) => b.updatedAt - a.updatedAt);
-    return json(res, 200, { files, consolidating: [...busy] });
+    return json(res, 200, { files, consolidating: [...busy], stats: memory.stats() });
   });
   router.add('POST', '/api/memory-files/consolidate', async (req, res) => {
     try {
@@ -6092,6 +6206,7 @@ export function createApp({
       server.close(done);
       server.closeIdleConnections?.();
     });
+    memory.close();
     store.close();
   }
 

@@ -112,6 +112,8 @@
   的私聊白名单挑人，`deny.private` 仍然优先；规则与平时回复私聊一致，不另建名单。
   被选中的私聊同样要满足：没有未读、安静超过 `idleThresholdMs`、当前允许运行。
   控制台「群聊 / 私聊」两个复选框分别对应这两项；两个都不勾时不会主动开话题。
+  群聊和私聊**各自独立计时、独立掷骰、独立记录上次判定**：一个范围这次开了话题或摇到不发言，
+  不会占用另一个范围的机会。
 - `followUpEnabled`：发言后无人回应时补一句（约 10 分钟后给一次机会）。与控制台同名的复选框对应。
 - `selfWakeEnabled`：允许模型用 `schedule_wake` 给自己安排稍后的主动发言；关掉后该工具会从工具列表里摘掉。
 - 这两项**独立于 `enabled`**，默认 `true`（与引入开关之前的行为一致）。想让它完全不主动开口，
@@ -348,7 +350,9 @@
     "visibility": {
       "mode": "global",
       "hidePrivateInGroup": false
-    }
+    },
+    "maxImpressionsPerPerson": 50,
+    "impressionRetentionDays": 0
   }
 }
 ```
@@ -367,6 +371,29 @@
 - 控制台的人物记忆页不受影响：你始终能看到全部印象与来源；「来源」不交给模型
   （`memory_query` 返回前会剥掉 `sourceChatKeys`）。
 - 记忆整理的其他字段（冷却时间、发现新人的门槛、专用模型）都在同一设置页里，逐个有提示。
+- `maxImpressionsPerPerson`（默认 50，范围 5–200）：每人最多保留多少条印象；手写 `manual` 条目永远不被这个上限删掉。
+- `impressionRetentionDays`（默认 0，范围 0–3650）：自动印象保留天数；0 = 不按时间过期。默认不设过期，
+  升级老库时不会把历史印象直接清掉。
+
+## skills：技能包（可选，默认关）
+
+```json
+{
+  "skills": {
+    "enabled": true,
+    "enabledIds": ["chat-summary"],
+    "perChat": {
+      "group:123456": ["video-digest"]
+    }
+  }
+}
+```
+
+- `enabled`：总开关；关闭时不加载 `skills/`、不注册 `skill_list` / `skill_use`。
+- `enabledIds`：全局启用的技能 id。
+- `perChat`：按会话覆盖；键是 `group:<群号>` / `private:<QQ>`，值是该会话可用的技能 id 列表。
+- 技能是只读 Markdown + 工具白名单，不能执行代码；给技能的工具只能**收窄**本轮工具，不能新增。
+- 控制台顶部「技能」页可以开关、按会话覆盖、重新扫描目录；格式见 [SKILLS.md](SKILLS.md)。
 
 ## livingMemory：长期向量记忆（实验性，默认关闭）
 
