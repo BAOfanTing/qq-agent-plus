@@ -102,7 +102,7 @@ HTML 里的 markdown 星号）。
 **技能包（Skill Pack）**
 
 - 新增 `src/skills/` 与 `skills/`：只读 `skill.json` + `SKILL.md`，不执行第三方代码。
-- 默认关闭；控制台「设置 → 技能」可全局/按会话启用，支持重新扫描 `skills/` 与 `data/skills/`。
+- 默认关闭；控制台顶部「技能」页可全局/按会话启用，支持重新扫描 `skills/` 与 `data/skills/`。
 - 新增 `skill_list` / `skill_use` 工具；`skill_use` 后本轮工具收窄到技能声明的 `allowedTools`，
   `finish` / `skill_list` / `skill_use` 始终允许。未声明工具会被宿主拒绝，且不触发 finish 屏障。
 - 内置 `chat-summary`、`video-digest`、`comment-analysis` 三个示例；技能清单校验 id、大小、工具名、semver。

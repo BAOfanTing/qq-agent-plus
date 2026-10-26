@@ -26,7 +26,6 @@ import {
 } from './moments.js';
 import { renderPersonaSection } from './persona.js';
 import { renderLifeFeedSection } from './life-feed.js';
-import { renderSkillsSection } from './skills.js';
 import { hydratePlatformGates, hydratePlatformVoiceSelect, renderPlatformSection } from './platform.js';
 import { bindSnowlumaActions, hydrateSnowlumaPanel } from './snowluma.js';
 import { applyIcons } from '../core/icons.js';
@@ -56,7 +55,6 @@ const SECTION_SEARCH_TERMS = {
   moments: '每日 动态 说说 日报 早报',
   'qzone-interactions': '动态 互动 点赞 评论 空间',
   reminders: '提醒 定时',
-  skills: '技能 Skill 方法 流程 工作流 工具白名单',
   groupGame: '群游戏 游戏 数字炸弹 狼人杀 卧底',
   'time-control': '时间 控制 时段 峰谷 活跃',
   experiments: '实验 功能 试点',
@@ -105,7 +103,7 @@ function renderSettingsSidebar() {
   const menu = [
     ['对话与人格', [['persona', '人设'], ['chat', '聊天设置'], ['messageTypes', '消息类型'], ['allow', '聊天白名单'], ['memory', '记忆']]],
     ['模型与服务', [['api', '模型 API'], ['search', '搜索服务'], ['asr', '语音转文字'], ['token-saver', 'Token 节省']]],
-    ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['life-feed', '见闻'], ['skills', '技能'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
+    ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['life-feed', '见闻'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
     ['平台', [['platform', '平台能力'], ['onebot', 'OneBot'], ['mcp', 'MCP'], ['knowledge', '知识库'], ['memes', '梗库'], ['moderation', '群管理']]],
     ['系统', [['appearance', '外观'], ['desktop', '系统']]]
   ];
@@ -338,7 +336,6 @@ function renderSettingsSection(c) {
     reminders: () => renderRemindersSection(c),
     'qzone-interactions': () => renderQzoneInteractionSection(c),
     'life-feed': () => renderLifeFeedSection(c),
-    skills: () => renderSkillsSection(c),
     'time-control': () => renderTimeControlSection(c),
     'token-saver': () => renderTokenSaverSection(c),
     persona: () => renderPersonaSection(c),

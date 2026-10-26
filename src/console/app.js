@@ -3739,6 +3739,29 @@ export function createApp({
     }
   });
 
+  router.add('GET', '/api/memory/search', async (req, res, params, url) => {
+    const query = String(url.searchParams.get('query') || '').trim().slice(0, 120);
+    if (!query) return json(res, 400, { ok: false, error: 'query 不能为空' });
+    const chatKey = String(url.searchParams.get('chatKey') || '').trim();
+    if (chatKey && !/^(group|private):\d+$/.test(chatKey)) {
+      return json(res, 400, { ok: false, error: 'chatKey 格式错误' });
+    }
+    const limit = Math.max(1, Math.min(20, Number(url.searchParams.get('limit')) || 8));
+    try {
+      const found = memory.search(chatKey, query, { limit });
+      return json(res, 200, {
+        ok: true,
+        query,
+        chatKey,
+        total: found.total,
+        mode: found.index?.available ? 'fts5' : 'fallback',
+        results: (found.results || []).map(({ sourceChatKeys: _sources, ...entry }) => entry)
+      });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: String(error?.message || error) });
+    }
+  });
+
   router.add('GET', '/api/memory-files', async (req, res) => {
     const files = memory.listChats().map((chatKey) => {
       const members = memory.members(chatKey);

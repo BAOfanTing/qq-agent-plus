@@ -1,4 +1,4 @@
-// 设置 → 技能包：只读 Markdown 流程 + 工具白名单。
+// 技能页：只读 Markdown 流程 + 工具白名单。
 // 这里没有"保存整份设置"：开关和按群覆盖都即时写 /api/skills/state，避免与设置页的大保存互相覆盖。
 import { api } from '../core/api.js';
 import { $, esc } from '../core/dom.js';
@@ -212,4 +212,17 @@ function renderSkillsSection() {
     </div>`;
 }
 
-export { renderSkillsSection };
+function loadSkillsPage() {
+  const box = $('#skills-page');
+  if (!box) return;
+  if (box.dataset.ready !== '1') {
+    box.innerHTML = renderSkillsSection();
+    box.dataset.ready = '1';
+  }
+  const root = document.getElementById('settings-skills');
+  if (!root) return;
+  skillsBind(root);
+  void skillsLoad();
+}
+
+export { loadSkillsPage, renderSkillsSection };

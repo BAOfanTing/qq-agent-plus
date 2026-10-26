@@ -31,6 +31,12 @@ import { saveMemberNote } from './pages/memory.js';
       #global-memory-items { overflow:auto; min-height:0; }
       .gm-head { display:flex; gap:8px; align-items:center; padding:10px 12px; border-bottom:1px solid var(--border, rgba(128,128,128,.2)); }
       .gm-head strong { flex:1; }
+      .gm-search { display:flex; gap:6px; padding:8px 12px; align-items:center; border-bottom:1px solid var(--border, rgba(128,128,128,.15)); }
+      .gm-search input { flex:1; min-width:0; }
+      .gm-search-results { padding:0 12px; }
+      .gm-search-result { padding:10px 0; border-bottom:1px solid var(--border, rgba(128,128,128,.12)); }
+      .gm-search-result p { margin:5px 0; white-space:pre-wrap; line-height:1.5; }
+      .gm-search-result small { opacity:.65; }
       /* 2026-10-09 复核：--border-color / --hover-bg 是写错的名字（全仓无定义）→ 永远走兜底的
          死灰色、不跟主题；改成真实 token（--border / --hover），兜底保留给脱离控制台的场景。 */
       .gm-person { display:block; width:100%; border:0; border-bottom:1px solid var(--border, rgba(128,128,128,.15)); background:transparent; color:inherit; text-align:left; padding:11px 12px; cursor:pointer; }
@@ -361,6 +367,49 @@ import { saveMemberNote } from './pages/memory.js';
     if (!view?.classList.contains('active')) return;
     loadGlobalMemory(false);
   }
+
+  async function searchMemory() {
+    const input = document.getElementById('gm-search-query');
+    const box = document.getElementById('gm-search-results');
+    const button = document.getElementById('gm-search-btn');
+    if (!input || !box || !button) return;
+    const query = String(input.value || '').trim();
+    if (!query) {
+      box.innerHTML = '<div class="gm-empty">输入关键词或短句再搜索。</div>';
+      return;
+    }
+    const person = people.find((item) => item.key === selectedKey);
+    const chatKey = person ? sourceFor(person) : '';
+    button.disabled = true;
+    box.innerHTML = '<div class="gm-empty">正在检索…</div>';
+    try {
+      const params = new URLSearchParams({ query, limit: '8' });
+      if (chatKey) params.set('chatKey', chatKey);
+      const result = await api(`/api/memory/search?${params}`);
+      const rows = Array.isArray(result?.results) ? result.results : [];
+      box.innerHTML = rows.length ? rows.map((entry) => `
+        <div class="gm-search-result">
+          <strong>${esc(entry.target || entry.userId || '某人')}</strong>
+          <p>${esc(entry.content || '')}</p>
+          <small>${esc(fmtTime(entry.lastObservedAt || entry.createdAt))} · 相关度 ${Number(entry.score || 0).toFixed(2)}${entry.origin === 'manual' ? ' · 手写' : ''}</small>
+        </div>`).join('') : '<div class="gm-empty">没有找到相关记忆；换一个更具体的关键词/人名再试。</div>';
+    } catch (error) {
+      box.innerHTML = `<div class="gm-empty">检索失败：${esc(error?.message || error)}</div>`;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  document.getElementById('gm-search-btn')?.addEventListener('click', searchMemory);
+  document.getElementById('gm-search-query')?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); void searchMemory(); }
+  });
+  document.getElementById('gm-search-clear')?.addEventListener('click', () => {
+    const input = document.getElementById('gm-search-query');
+    const box = document.getElementById('gm-search-results');
+    if (input) input.value = '';
+    if (box) box.innerHTML = '';
+  });
 
   document.getElementById('gm-refresh')?.addEventListener('click', () => loadGlobalMemory(true));
 
