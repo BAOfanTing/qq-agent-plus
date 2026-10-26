@@ -3694,6 +3694,25 @@ export function createApp({
       errors: registry.errors
     });
   });
+  router.add('GET', '/api/skills/:id', async (req, res, params) => {
+    const registry = getSkillRegistry();
+    const skill = registry.get(params.id);
+    if (!skill) return json(res, 404, { ok: false, error: '技能不存在' });
+    const cfg = getConfig().skills || {};
+    const perChat = cfg.perChat && typeof cfg.perChat === 'object' ? cfg.perChat : {};
+    return json(res, 200, {
+      ok: true,
+      skill: {
+        ...skill,
+        instructions: skill.instructions,
+        enabled: (Array.isArray(cfg.enabledIds) ? cfg.enabledIds : []).includes(skill.id),
+        perChat: Object.fromEntries(Object.entries(perChat)
+          .filter(([, ids]) => Array.isArray(ids) && ids.includes(skill.id))
+          .map(([chatKey]) => [chatKey, true]))
+      }
+    });
+  });
+
   router.add('POST', '/api/skills/reload', async (req, res) => {
     const registry = getSkillRegistry();
     registry.reload();

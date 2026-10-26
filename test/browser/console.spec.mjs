@@ -68,7 +68,7 @@ test('技能页：渲染内置技能并可全局启停', async ({ page }) => {
   await expect(page.locator('#skills-page')).toBeVisible();
   await expect(page.locator('#skills-list')).toContainText('群聊总结');
 
-  const toggle = page.locator('#cfg-skills-enabled');
+  const toggle = page.locator('#skills-enabled');
   const readEnabled = async () => (await (await page.request.get('/api/skills')).json()).enabled;
   await expect.poll(readEnabled).toBe(true);
   await toggle.click();
