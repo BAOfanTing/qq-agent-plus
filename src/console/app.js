@@ -13,6 +13,7 @@ import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCreden
 import { tokenSaverEffective } from '../core/token-saver.js';
 import { redactText } from '../core/redact.js';
 import { getSkillRegistry } from '../skills/registry.js';
+import { listMarketSkills, previewMarketSkill, installMarketSkill, uninstallMarketSkill, marketIndexUrl } from '../skills/market.js';
 import { catchupReplyWindowMs, catchupLogLine, isFreshForReply } from '../core/catchup-policy.js';
 import { budgetStatus } from '../core/budget.js';
 import { sanitizeConfigSecrets } from '../core/secret-keys.js';
@@ -3712,6 +3713,43 @@ export function createApp({
       errors: registry.errors
     });
   });
+  router.add('GET', '/api/skills/market', async (req, res, params, url) => {
+    try {
+      const result = await listMarketSkills({ force: url.searchParams.get('refresh') === '1' });
+      return json(res, 200, { ...result, indexUrl: marketIndexUrl() });
+    } catch (error) {
+      return json(res, 502, { ok: false, error: String(error?.message ?? error), indexUrl: marketIndexUrl() });
+    }
+  });
+  router.add('GET', '/api/skills/market/preview', async (req, res, params, url) => {
+    const id = String(url.searchParams.get('id') || '').trim();
+    if (!id) return json(res, 400, { ok: false, error: '缺少技能 id' });
+    try { return json(res, 200, await previewMarketSkill(id)); }
+    catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('POST', '/api/skills/market/install', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const result = await installMarketSkill({
+        id: body.id,
+        expectedSha256: body.expectedSha256,
+        confirm: body.confirm === true
+      });
+      auditWrite('skills.market.install', `skill:${result.skill?.id || body.id}`, { req, version: result.skill?.version || '', updated: result.updated === true });
+      emit('skills-update', { phase: 'market-install', id: result.skill?.id || body.id });
+      return json(res, 200, result);
+    } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('POST', '/api/skills/market/uninstall', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const result = await uninstallMarketSkill({ id: body.id, confirm: body.confirm === true });
+      auditWrite('skills.market.uninstall', `skill:${result.id}`, { req });
+      emit('skills-update', { phase: 'market-uninstall', id: result.id });
+      return json(res, 200, result);
+    } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+  });
+
   router.add('GET', '/api/skills/:id', async (req, res, params) => {
     const registry = getSkillRegistry();
     const skill = registry.get(params.id);

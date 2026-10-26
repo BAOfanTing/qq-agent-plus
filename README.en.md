@@ -101,7 +101,13 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
 - **Skill packs** — read-only Markdown workflows plus a tool allowlist; no third-party code is executed.
   When asked to follow a method, the model calls `skill_list` and then `skill_use`; only the tools allowed
   by that skill remain available for the turn. Off by default, enable per chat. Built-ins: chat summary,
-  video digest, comment analysis. See [SKILLS](docs/SKILLS.md).
+  video digest, comment analysis. The Skills page also has a Market sub-tab: it previews a skill's
+  SKILL.md, tool allowlist and per-file sha256, installs into `data/skills/`, and can uninstall user
+  skills (built-ins are protected). See [SKILLS](docs/SKILLS.md).
+- **Long-term semantic memory (experimental, off by default)** — per-scope memory cards plus local
+  vectors in SQLite; shadow mode audits keyword recall without touching replies, and active mode injects
+  scope-filtered memories as untrusted background. Source turns are kept 7 days and deleted with the
+  memory. See [LIVING-MEMORY](docs/LIVING-MEMORY.md).
 - **Long-term memory & retrieval** — beyond people impressions and session handoffs, `memory_query`
   searches keywords and short phrases with SQLite FTS5 and Chinese bigrams. Defaults: 50 impressions per person, manual
   entries never pruned, no time-based expiry by default (0–3650 days configurable). See [MEMORY](docs/MEMORY.md).

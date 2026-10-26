@@ -69,12 +69,34 @@ test('技能页：渲染内置技能并可全局启停', async ({ page }) => {
   await expect(page.locator('#skills-list')).toContainText('群聊总结');
 
   const toggle = page.locator('#skills-enabled');
+  await expect(toggle).toHaveCSS('width', '44px');
   const readEnabled = async () => (await (await page.request.get('/api/skills')).json()).enabled;
   await expect.poll(readEnabled).toBe(true);
   await toggle.click();
   await expect.poll(readEnabled).toBe(false);
   await toggle.click();
   await expect.poll(readEnabled).toBe(true);
+});
+
+test('技能市场：预览、安装、已安装列表与卸载', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'skills');
+  await page.click('[data-skills-view="market"]');
+  await expect(page.locator('#skills-market-view')).toContainText('出行规划');
+
+  await page.click('[data-market-open="trip-planner"]');
+  await expect(page.locator('.skills-market-preview')).toContainText('文件与校验');
+  await page.click('[data-market-install="trip-planner"]');
+  await page.click('[data-confirm-accept]');
+
+  await page.click('[data-skills-view="installed"]');
+  await expect(page.locator('#skills-list')).toContainText('出行规划');
+  await page.click('[data-skill-open="trip-planner"]');
+  await expect(page.locator('#skills-detail')).toContainText('出行规划');
+  await page.click('[data-skill-uninstall="trip-planner"]');
+  await page.click('[data-confirm-accept]');
+  await expect(page.locator('#skills-list')).not.toContainText('出行规划');
 });
 
 test('人物记忆：控制台按关键词检索记忆', async ({ page }) => {

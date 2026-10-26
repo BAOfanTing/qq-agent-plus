@@ -851,7 +851,11 @@ export const DEFAULT_CONFIG = {
   skills: {
     enabled: false,
     enabledIds: [],
-    perChat: {}
+    perChat: {},
+    // 官方技能索引；留空 = 不显示市场。索引只提供元数据与文件哈希，安装时逐文件校验。
+    indexUrl: 'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/skills/market.json',
+    // 自建/局域网索引只在管理员显式打开时允许；默认仍然只访问公网地址。
+    allowPrivateIndex: false
   },
   // 省 Token 模式：只给"可控项"夹上限（上下文档位条数、单次运行轮数与预算、
   // 交接/印象注入字符数、提示词里的表情清单条数），不改写上面那些用户填的值。
@@ -1307,6 +1311,11 @@ function migrateConfig(parsed) {
     }
   }
   out.skills.perChat = skillPerChat;
+  if (typeof out.skills.indexUrl === 'string') {
+    const url = out.skills.indexUrl.trim();
+    out.skills.indexUrl = /^https?:\/\//i.test(url) ? url.slice(0, 500) : '';
+  }
+  out.skills.allowPrivateIndex = out.skills.allowPrivateIndex === true;
   // 记忆容量/保留期：夹在可解释范围内；手写条目不受影响。
   if (isPlainObject(out.memory)) {
     const max = Math.round(Number(out.memory.maxImpressionsPerPerson));

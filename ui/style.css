@@ -6489,16 +6489,17 @@ html[data-glass] .plugin-related-item {
 .skills-claim { max-width: 70ch; margin: 0; color: var(--muted); font-size: var(--fs-sm); line-height: 1.7; }
 .skills-master { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; max-width: 320px; }
 .skills-switch { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; color: var(--text); font-size: var(--fs-sm); }
-.skills-switch input { width: auto; }
+.skills-switch > input[type='checkbox'] { margin: 0; }
+.skills-switch > span { line-height: 1.3; }
 .skills-master-status { color: var(--faint); font-size: var(--fs-2xs); line-height: 1.5; text-align: right; }
 .skills-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-.skills-kpi { padding: 10px 13px; border: 1px solid var(--border); border-radius: var(--r-md); background: color-mix(in srgb, var(--bg-2) 82%, transparent); }
+.skills-kpi { padding: 10px 13px; border: 1px solid var(--border); border-radius: var(--r-md); background: color-mix(in srgb, var(--bg-2) 82%, transparent); box-shadow: var(--shadow-card); }
 .skills-kpi span, .skills-kpi small { display: block; color: var(--muted); font-size: var(--fs-2xs); }
 .skills-kpi strong { display: block; margin: 2px 0 1px; font-family: var(--mono); font-size: var(--fs-xl); color: var(--text); }
 .skills-errors:empty { display: none; }
 .skills-error { margin-bottom: 12px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--danger, #c0392b) 35%, var(--border)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--danger, #c0392b) 8%, transparent); color: var(--danger, #c0392b); font-size: var(--fs-sm); line-height: 1.5; }
 .skills-layout { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 16px; align-items: start; }
-.skills-list-pane, .skills-detail { min-width: 0; border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--bg-2) 80%, transparent); overflow: hidden; }
+.skills-list-pane, .skills-detail { min-width: 0; border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--bg-2) 80%, transparent); box-shadow: var(--shadow-card); overflow: hidden; }
 .skills-list-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 13px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: var(--fs-sm); }
 .skills-list-head span:last-child { color: var(--faint); font-family: var(--mono); font-size: var(--fs-2xs); }
 .skills-list { max-height: calc(100vh - 330px); overflow: auto; padding: 7px; }
@@ -6529,6 +6530,12 @@ html[data-glass] .plugin-related-item {
 .skills-doc-block { margin-top: 4px; }
 .skills-doc { max-height: 260px; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); font-family: var(--mono); font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; }
 .skills-chat-block { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+[data-glass] .skills-kpi, [data-glass] .skills-list-pane, [data-glass] .skills-detail {
+  background: var(--glass-fill);
+  border-color: var(--glass-edge);
+  backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%));
+  -webkit-backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%));
+}
 .skills-chat-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 9px 0; }
 .skills-chat-controls select { min-width: 220px; }
 .skills-empty, .skills-detail-empty { padding: 24px 14px; color: var(--muted); font-size: var(--fs-sm); line-height: 1.6; }
@@ -6545,4 +6552,43 @@ html[data-glass] .plugin-related-item {
 @media (max-width: 520px) {
   .skills-kpis { grid-template-columns: 1fr; }
   .skills-chat-controls select { min-width: 0; width: 100%; }
+}
+
+/* ── 技能市场：索引卡、信任预览、已安装/市场子页签 ─────────────────────── */
+.skills-subtabs { display: inline-flex; gap: 3px; margin: 0 0 16px; padding: 3px; border: 1px solid var(--border); border-radius: var(--r-pill); background: color-mix(in srgb, var(--bg-2) 72%, transparent); }
+.skills-subtab { padding: 6px 14px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--muted); font-size: var(--fs-sm); cursor: pointer; transition: background-color var(--dur-interaction) var(--ease-in-out), color var(--dur-interaction) var(--ease-in-out); }
+.skills-subtab:hover { color: var(--text); }
+.skills-subtab.is-on { background: var(--accent); color: #fff; }
+.skills-subtab em { margin-left: 4px; font-family: var(--mono); font-size: var(--fs-2xs); font-style: normal; opacity: .75; }
+.skills-detail-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.skills-market-head, .skills-market-preview-head, .skills-market-card-top, .skills-market-actions, .skills-market-meta { display: flex; align-items: center; gap: 9px; }
+.skills-market-head, .skills-market-preview-head { justify-content: space-between; align-items: flex-start; gap: 14px; }
+.skills-market-head h3, .skills-market-preview-head h3 { margin: 0 0 4px; font-size: var(--fs-xl); }
+.skills-market-head p, .skills-market-preview-head p { margin: 0; color: var(--muted); font-size: var(--fs-sm); line-height: 1.55; }
+.skills-market-head .skills-market-actions { align-items: center; }
+.skills-market-head input[type='search'] { min-width: 220px; }
+.skills-market-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 14px; }
+.skills-market-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--bg-2) 82%, transparent); box-shadow: var(--shadow-card); }
+.skills-market-card.is-installed { border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); }
+.skills-market-card-top { align-items: flex-start; }
+.skills-market-card-top > div { flex: 1; min-width: 0; }
+.skills-market-card-top b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-md); }
+.skills-market-card-top small, .skills-market-meta { color: var(--faint); font-size: var(--fs-2xs); }
+.skills-market-card p { flex: 1; margin: 0; color: var(--muted); font-size: var(--fs-sm); line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.skills-market-badge { flex: 0 0 auto; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--r-pill); color: var(--muted); font-size: var(--fs-2xs); }
+.skills-market-card.is-installed .skills-market-badge { border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); color: var(--accent); }
+.skills-market-meta { gap: 10px; }
+.skills-market-hash { font-family: var(--mono); color: var(--faint); }
+.skills-market-actions { justify-content: flex-end; }
+.skills-market-link { color: var(--accent); font-size: var(--fs-sm); text-decoration: none; }
+.skills-market-link:hover { text-decoration: underline; }
+.skills-market-note, .skills-market-error { margin: 0 0 12px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--orange, #b7791f) 32%, var(--border)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--orange, #b7791f) 7%, transparent); color: var(--muted); font-size: var(--fs-sm); line-height: 1.55; }
+.skills-market-error { color: var(--danger, #c0392b); border-color: color-mix(in srgb, var(--danger, #c0392b) 32%, var(--border)); }
+.skills-market-preview { margin-top: 18px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--bg-2) 82%, transparent); box-shadow: var(--shadow-card); }
+.skills-market-preview.is-error { color: var(--danger, #c0392b); }
+[data-glass] .skills-market-card, [data-glass] .skills-market-preview { background: var(--glass-fill); border-color: var(--glass-edge); backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%)); -webkit-backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%)); }
+@media (max-width: 720px) {
+  .skills-market-head, .skills-market-preview-head, .skills-market-card-top { flex-direction: column; align-items: stretch; }
+  .skills-market-head input[type='search'] { min-width: 0; width: 100%; }
+  .skills-market-grid { grid-template-columns: 1fr; }
 }

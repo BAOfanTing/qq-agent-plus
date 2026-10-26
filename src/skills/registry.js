@@ -212,6 +212,15 @@ export function skillGateMessage(activeSkill, pendingSkillUse, name, args = null
   return '';
 }
 
+export function skillUserDir() {
+  return USER_DIR;
+}
+
+/** 市场安装前先在临时目录跑同一套 manifest 校验。 */
+export function validateSkillDir(dir) {
+  return normalizeManifest(readJson(path.join(dir, 'skill.json')), dir);
+}
+
 export const SKILL_LIMITS = Object.freeze({
   maxSkills: MAX_SKILLS,
   maxInstructionsBytes: MAX_INSTRUCTIONS_BYTES,

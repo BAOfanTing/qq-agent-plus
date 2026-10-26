@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // 浏览器冒烟用的真实服务：临时数据目录 + 固定端口 + 一个无网络的测试插件。
 // Playwright 的 webServer 负责启动/停止它；测试进程通过 test/browser/constants.mjs 共享端口与令牌。
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { E2E_GROUP, E2E_PLUGIN_ID, E2E_PORT, E2E_TOKEN } from '../test/browser/constants.mjs';
@@ -69,6 +71,46 @@ process.stdin.on('data', (chunk) => {
 `);
 }
 
+async function startMarketFixture() {
+  const source = path.resolve(import.meta.dirname, '../examples/skills/trip-planner');
+  const texts = {};
+  for (const name of ['skill.json', 'SKILL.md']) texts[name] = fs.readFileSync(path.join(source, name), 'utf8');
+  const hashes = Object.fromEntries(Object.entries(texts).map(([name, text]) => [name, crypto.createHash('sha256').update(text).digest('hex')]));
+  const payload = {
+    version: 1,
+    name: '浏览器测试技能索引',
+    updatedAt: '2026-10-26',
+    skills: [{
+      id: 'trip-planner',
+      name: '出行规划',
+      description: '浏览器冒烟用的可安装技能。',
+      version: '1.0.0',
+      author: 'e2e',
+      category: '测试',
+      allowedTools: ['web_search', 'send_message'],
+      triggers: ['规划行程'],
+      files: Object.fromEntries(Object.entries(hashes).map(([name, sha256]) => [name, { path: `/files/${name}`, sha256, bytes: Buffer.byteLength(texts[name]) }]))
+    }]
+  };
+  const server = http.createServer((req, res) => {
+    if (req.url === '/index.json') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
+      return;
+    }
+    const name = String(req.url || '').replace('/files/', '');
+    if (texts[name]) {
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(texts[name]);
+      return;
+    }
+    res.writeHead(404);
+    res.end('not found');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { server, port: server.address().port };
+}
+
 function buildConfig() {
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.server = { ...cfg.server, host: '127.0.0.1', port: E2E_PORT, token: E2E_TOKEN, strictPort: true };
@@ -99,7 +141,14 @@ function buildConfig() {
 }
 
 writeFixturePlugin();
-updateConfig(buildConfig());
+const marketFixture = await startMarketFixture();
+const bootConfig = buildConfig();
+bootConfig.skills = {
+  ...bootConfig.skills,
+  indexUrl: `http://127.0.0.1:${marketFixture.port}/index.json`,
+  allowPrivateIndex: true
+};
+updateConfig(bootConfig);
 requestPendingApproval(dataDir, {
   pluginId: E2E_PLUGIN_ID,
   pluginName: '浏览器测试插件',
@@ -121,6 +170,7 @@ async function shutdown(signal) {
   stopping = true;
   if (process.env.E2E_VERBOSE) console.log(`[e2e] ${signal}，正在停止`);
   try { await app.stop(); } catch (error) { console.error(`[e2e] stop 失败：${error?.message || error}`); }
+  try { await new Promise((resolve) => marketFixture.server.close(resolve)); } catch { /* 忽略 */ }
   try { fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch { /* 忽略 */ }
   process.exit(0);
 }

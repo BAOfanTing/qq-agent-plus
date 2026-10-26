@@ -61,6 +61,20 @@ skills/<id>/
 | `video-digest` | 视频读懂 | `bilibili__search`、`bilibili__video`、`bilibili__read`、`web_fetch`、`send_message` | 优先用 B 站插件读元数据/字幕/评论；非 B 站链接退回 `web_fetch` |
 | `comment-analysis` | 评论分析 | 同上 | 用 B 站插件拿评论样本，非 B 站页面才 `web_fetch` |
 
+## 技能市场
+
+控制台「技能」页的「技能市场」子页从索引读取可安装技能：
+
+- 索引是 JSON（默认 `https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/skills/market.json`），
+  条目给出 `id`、名称、版本、作者、描述、允许工具、触发词和文件列表；
+- 每个文件必须带 `sha256`，安装时逐文件下载校验；单文件 ≤128KB、整包 ≤512KB、最多 8 个文件；
+- 安装先写临时目录，跑同一套 manifest 校验后再换入 `data/skills/<id>/`；失败会回滚；
+- 内置技能不能被市场覆盖或卸载，用户技能可随时卸载（只删 `data/skills/<id>`）；
+- 索引 30 分钟内走缓存；拉取失败时回退 7 天内的本地缓存，并在页面标明；
+- `skills.allowPrivateIndex` 默认关闭；自建/局域网索引需要显式打开，市场默认只访问公网地址。
+
+随仓库提供两个示例：`examples/skills/trip-planner` 与 `examples/skills/recipe-helper`。
+
 ## 限制
 
 - 技能只能“建议模型怎么做”，不能保证模型每一步都照做；

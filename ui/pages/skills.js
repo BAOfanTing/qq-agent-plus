@@ -2,6 +2,7 @@
 // 独立页面，不复用设置页的分区容器；开关和按会话覆盖即时写 /api/skills/state。
 import { api } from '../core/api.js';
 import { $, esc } from '../core/dom.js';
+import { askForConfirmation } from '../core/dom-util.js';
 import { iconSvg } from '../core/icons.js';
 
 const skillsState = {
@@ -15,7 +16,15 @@ const skillsState = {
   selectedChat: '',
   detail: null,
   detailError: '',
-  loadingDetail: false
+  loadingDetail: false,
+  view: 'installed',
+  market: null,
+  marketError: '',
+  marketLoading: false,
+  marketQuery: '',
+  marketPreview: null,
+  marketPreviewId: '',
+  marketPreviewError: ''
 };
 
 function skillsChatLabel(key) {
@@ -112,10 +121,13 @@ function skillsRenderDetail() {
         <h3>${esc(skill.name)} <span class="skills-version">v${esc(skill.version)}</span></h3>
         <p>${esc(skill.description || '（没有说明）')}</p>
       </div>
-      <label class="skills-switch">
-        <input type="checkbox" data-skill-global="${esc(skill.id)}" ${on ? 'checked' : ''} />
-        <span>${on ? '全局启用' : '全局停用'}</span>
-      </label>
+      <div class="skills-detail-actions">
+        <label class="skills-switch">
+          <input type="checkbox" class="sw" data-skill-global="${esc(skill.id)}" ${on ? 'checked' : ''} />
+          <span>${on ? '已全局启用' : '全局停用'}</span>
+        </label>
+        ${skill.source === 'user' ? `<button type="button" class="btn btn-small btn-danger" data-skill-uninstall="${esc(skill.id)}">卸载</button>` : ''}
+      </div>
     </div>
     <div class="skills-detail-grid">
       <div class="skills-detail-block"><h4>允许工具</h4><div class="skills-chips">${tools || '<span class="skills-chip is-soft">仅 finish</span>'}</div></div>
@@ -140,9 +152,172 @@ function skillsRenderDetail() {
     </section>`;
 }
 
+function skillsMarketEntry(id) {
+  return (skillsState.market?.skills || []).find((item) => item.id === id) || null;
+}
+
+function skillsMarketInstallLabel(entry) {
+  if (entry.builtin) return '内置';
+  if (entry.installed && entry.updateAvailable) return '更新';
+  if (entry.installed) return '重新安装';
+  return '安装';
+}
+
+function skillsMarketCard(entry) {
+  const tools = (entry.allowedTools || []).length;
+  const stateText = entry.builtin ? '内置技能' : entry.installed ? (entry.updateAvailable ? '有更新' : '已安装') : '可安装';
+  return `<article class="skills-market-card ${entry.installed ? 'is-installed' : ''}">
+    <div class="skills-market-card-top"><span class="skill-avatar">${iconSvg('sparkles', { size: 16 })}</span><div><b>${esc(entry.name)}</b><small>${esc(entry.author || '未署名')} · ${esc(entry.category || '其他')}</small></div><span class="skills-market-badge">${esc(stateText)}</span></div>
+    <p>${esc(entry.description || '（没有说明）')}</p>
+    <div class="skills-market-meta"><span>v${esc(entry.version)}</span><span>${tools} 个工具</span><span class="skills-market-hash" title="${esc(entry.sha256)}">${esc(String(entry.sha256 || '').slice(0, 10))}</span></div>
+    <div class="skills-market-actions">
+      <button type="button" class="btn btn-small" data-market-open="${esc(entry.id)}">查看</button>
+      <button type="button" class="btn btn-small ${entry.installed ? '' : 'btn-primary'}" data-market-install="${esc(entry.id)}" ${entry.builtin ? 'disabled' : ''}>${skillsMarketInstallLabel(entry)}</button>
+    </div>
+  </article>`;
+}
+
+function skillsMarketPreviewHtml() {
+  if (!skillsState.marketPreviewId) return '';
+  if (skillsState.marketPreviewError) return `<div class="skills-market-preview is-error">读取技能详情失败：${esc(skillsState.marketPreviewError)}</div>`;
+  const preview = skillsState.marketPreview;
+  if (!preview) return '<div class="skills-market-preview">正在下载并校验技能文件…</div>';
+  const entry = skillsMarketEntry(preview.entry.id) || preview.entry;
+  const tools = (preview.manifest.allowedTools || []).map((tool) => `<span class="skills-chip">${esc(tool)}</span>`).join('');
+  const homepage = preview.entry.homepage ? `<a class="skills-market-link" href="${esc(preview.entry.homepage)}" target="_blank" rel="noopener noreferrer">主页</a>` : '';
+  return `<section class="skills-market-preview">
+    <div class="skills-market-preview-head"><div><span class="skills-eyebrow">市场详情 · ${esc(preview.entry.id)}</span><h3>${esc(preview.manifest.name)} <span class="skills-version">v${esc(preview.manifest.version)}</span></h3><p>${esc(preview.manifest.description || '')}</p></div><div class="skills-market-actions">${homepage}<button type="button" class="btn btn-small btn-primary" data-market-install="${esc(preview.entry.id)}" ${entry.builtin ? 'disabled' : ''}>${skillsMarketInstallLabel(entry)}</button>${entry.installed && entry.installedSource === 'user' ? `<button type="button" class="btn btn-small btn-danger" data-market-uninstall="${esc(preview.entry.id)}">卸载</button>` : ''}</div></div>
+    <div class="skills-detail-grid"><div class="skills-detail-block"><h4>允许工具</h4><div class="skills-chips">${tools || '<span class="skills-chip is-soft">仅 finish</span>'}</div></div><div class="skills-detail-block"><h4>文件与校验</h4><p class="skills-muted">${Object.entries(preview.entry.files).map(([name, meta]) => `${esc(name)} · ${Number(meta.bytes) || 0}B`).join('<br>')}</p></div><div class="skills-detail-block"><h4>来源</h4><p class="skills-muted">${esc(preview.entry.author || '未署名')}<br><span class="skills-market-hash">${esc(String(preview.entry.sha256 || '').slice(0, 16))}</span></p></div></div>
+    <section class="skills-doc-block"><h4>安装前预览（SKILL.md）</h4><pre class="skills-doc">${esc(preview.instructions || '（没有正文）')}</pre></section>
+  </section>`;
+}
+
+function skillsRenderMarket() {
+  const box = $('#skills-market-view');
+  if (!box) return;
+  if (skillsState.marketLoading && !skillsState.market) {
+    box.innerHTML = '<div class="skills-empty">正在读取技能索引…</div>';
+    return;
+  }
+  if (!skillsState.market && skillsState.marketError) {
+    box.innerHTML = `<div class="skills-market-error">${esc(skillsState.marketError)}<div class="skills-market-actions"><button type="button" class="btn btn-small" data-market-refresh>重试</button></div></div>`;
+    return;
+  }
+  const data = skillsState.market;
+  if (!data) { box.innerHTML = ''; return; }
+  const query = skillsState.marketQuery.trim().toLowerCase();
+  const list = (data.skills || []).filter((entry) => !query
+    || `${entry.name} ${entry.id} ${entry.description} ${entry.author} ${entry.category}`.toLowerCase().includes(query));
+  const index = data.index || {};
+  const when = index.fetchedAt ? new Date(index.fetchedAt).toLocaleString('zh-CN', { hour12: false }) : '';
+  box.innerHTML = `<div class="skills-market-head"><div><h3>技能市场</h3><p>${esc(index.name || '技能索引')}${index.stale ? ' · 使用本地缓存' : ''}${when ? ` · ${esc(when)}` : ''}</p></div><div class="skills-market-actions"><input type="search" id="skills-market-search" value="${esc(skillsState.marketQuery)}" placeholder="搜索技能、作者或分类" aria-label="搜索技能市场" /><button type="button" class="btn btn-small" data-market-refresh>${iconSvg('refresh', { size: 14 })}刷新索引</button></div></div>
+    ${index.stale && index.error ? `<div class="skills-market-note">索引暂时不可用，正在使用缓存：${esc(index.error)}</div>` : ''}
+    ${skillsState.marketError ? `<div class="skills-market-note">${esc(skillsState.marketError)}</div>` : ''}
+    <div class="skills-market-grid">${list.map(skillsMarketCard).join('') || '<div class="skills-empty">没有匹配的技能。</div>'}</div>
+    ${skillsMarketPreviewHtml()}`;
+}
+
+async function skillsLoadMarket(force = false) {
+  skillsState.marketLoading = true;
+  skillsState.marketError = '';
+  if (skillsState.view === 'market') skillsRenderMarket();
+  try {
+    const result = await api(`/api/skills/market${force ? '?refresh=1' : ''}`);
+    skillsState.market = result;
+    skillsState.marketError = '';
+  } catch (error) {
+    skillsState.marketError = `技能市场暂时不可用：${error?.message || error}`;
+  } finally {
+    skillsState.marketLoading = false;
+    if (skillsState.view === 'market') skillsRenderMarket();
+  }
+}
+
+async function skillsLoadMarketPreview(id) {
+  skillsState.marketPreviewId = id;
+  skillsState.marketPreview = null;
+  skillsState.marketPreviewError = '';
+  skillsRenderMarket();
+  try {
+    const result = await api(`/api/skills/market/preview?id=${encodeURIComponent(id)}`);
+    if (skillsState.marketPreviewId === id) skillsState.marketPreview = result;
+  } catch (error) {
+    if (skillsState.marketPreviewId === id) skillsState.marketPreviewError = String(error?.message || error);
+  } finally {
+    if (skillsState.marketPreviewId === id) skillsRenderMarket();
+  }
+}
+
+async function skillsInstallMarket(id) {
+  const entry = skillsMarketEntry(id);
+  if (!entry) return;
+  const tools = (entry.allowedTools || []).join('、') || '（无额外工具）';
+  const ok = await askForConfirmation(`安装技能「${entry.name}」v${entry.version}？允许工具：${tools}。来源：${entry.homepage || entry.author || '未知'}。技能只读 Markdown、不执行代码；安装后可在技能页随时卸载。`);
+  if (!ok) return;
+  try {
+    await api('/api/skills/market/install', {
+      method: 'POST',
+      body: JSON.stringify({ id, expectedSha256: entry.sha256, confirm: true })
+    });
+    skillsStatus(`已安装技能「${entry.name}」；默认未启用，可在已安装列表里打开。`);
+    skillsState.market = null;
+    skillsState.marketPreview = null;
+    skillsState.marketPreviewId = '';
+    await skillsLoad();
+    await skillsLoadMarket(true);
+  } catch (error) {
+    skillsStatus(`安装失败：${error?.message || error}`, true);
+    skillsRenderMarket();
+  }
+}
+
+async function skillsUninstallMarket(id) {
+  const entry = skillsMarketEntry(id);
+  const skill = skillsState.skills.find((item) => item.id === id);
+  const name = entry?.name || skill?.name || id;
+  if (!await askForConfirmation(`卸载技能「${name}」？只会删除 data/skills/${id}；内置技能不能卸载。`)) return;
+  try {
+    await api('/api/skills/market/uninstall', { method: 'POST', body: JSON.stringify({ id, confirm: true }) });
+    skillsStatus(`已卸载技能「${name}」。`);
+    skillsState.market = null;
+    skillsState.marketPreview = null;
+    skillsState.marketPreviewId = '';
+    skillsState.selectedId = '';
+    skillsState.detail = null;
+    await skillsLoad();
+    await skillsLoadMarket(true);
+  } catch (error) {
+    skillsStatus(`卸载失败：${error?.message || error}`, true);
+    skillsRenderMarket();
+  }
+}
+
+function skillsSwitchView(view) {
+  skillsState.view = view === 'market' ? 'market' : 'installed';
+  const installed = $('#skills-installed-view');
+  const market = $('#skills-market-view');
+  if (installed) installed.hidden = skillsState.view !== 'installed';
+  if (market) market.hidden = skillsState.view !== 'market';
+  document.querySelectorAll('[data-skills-view]').forEach((button) => {
+    const on = button.dataset.skillsView === skillsState.view;
+    button.classList.toggle('is-on', on);
+    button.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  if (skillsState.view === 'market') {
+    skillsRenderMarket();
+    if (!skillsState.market && !skillsState.marketLoading) void skillsLoadMarket(false);
+  } else {
+    skillsRenderKpis();
+    skillsRenderList();
+    skillsRenderDetail();
+  }
+}
+
 function skillsRender() {
   const count = $('#skills-count');
   if (count) count.textContent = `${skillsState.skills.length} 个`;
+  const marketCount = $('#skills-market-count');
+  if (marketCount) marketCount.textContent = skillsState.market ? `${skillsState.market.skills.length}` : '';
   const master = $('#skills-enabled');
   if (master) master.checked = skillsState.enabled === true;
   skillsStatus(skillsState.enabled
@@ -153,6 +328,10 @@ function skillsRender() {
     errors.innerHTML = skillsState.errors.length
       ? `<div class="skills-error">有 ${skillsState.errors.length} 个技能目录没有加载：${skillsState.errors.map((item) => `${esc(item.id || '(未命名)')}：${esc(item.error)}`).join('；')}</div>`
       : '';
+  }
+  if (skillsState.view === 'market') {
+    skillsSwitchView('market');
+    return;
   }
   skillsRenderKpis();
   skillsRenderList();
@@ -241,7 +420,34 @@ function skillsBind(root) {
       skillsRenderDetail();
     }
   });
+  root.addEventListener('input', (event) => {
+    if (event.target?.id !== 'skills-market-search') return;
+    skillsState.marketQuery = String(event.target.value || '');
+    const box = $('#skills-market-view');
+    if (box) {
+      // 只重绘市场区，避免搜索框自己丢焦点。
+      const caret = event.target.selectionStart;
+      skillsRenderMarket();
+      const next = $('#skills-market-search');
+      if (next) { next.focus(); try { next.setSelectionRange(caret, caret); } catch { /* 忽略 */ } }
+    }
+  });
   root.addEventListener('click', async (event) => {
+    const view = event.target?.closest?.('[data-skills-view]');
+    if (view) { skillsSwitchView(view.dataset.skillsView); return; }
+    if (event.target?.closest?.('[data-market-refresh]')) {
+      skillsState.market = null;
+      void skillsLoadMarket(true);
+      return;
+    }
+    const marketOpen = event.target?.closest?.('[data-market-open]');
+    if (marketOpen) { void skillsLoadMarketPreview(marketOpen.dataset.marketOpen); return; }
+    const marketInstall = event.target?.closest?.('[data-market-install]');
+    if (marketInstall) { void skillsInstallMarket(marketInstall.dataset.marketInstall); return; }
+    const marketUninstall = event.target?.closest?.('[data-market-uninstall]');
+    if (marketUninstall) { void skillsUninstallMarket(marketUninstall.dataset.marketUninstall); return; }
+    const skillUninstall = event.target?.closest?.('[data-skill-uninstall]');
+    if (skillUninstall) { void skillsUninstallMarket(skillUninstall.dataset.skillUninstall); return; }
     const open = event.target?.closest?.('[data-skill-open]');
     if (open) {
       skillsState.selectedId = open.dataset.skillOpen;
@@ -300,20 +506,27 @@ function loadSkillsPage() {
             启用后模型会先选择技能，再在允许的工具范围内完成当前任务。</p>
         </div>
         <div class="skills-master">
-          <label class="skills-switch"><input type="checkbox" id="skills-enabled" /> <span>启用技能包</span></label>
+          <label class="skills-switch"><input type="checkbox" class="sw" id="skills-enabled" /> <span>启用技能包</span></label>
           <button class="btn btn-small" id="skills-reload" type="button">${iconSvg('refresh', { size: 14 })}重新扫描</button>
           <div class="skills-master-status" id="skills-status"></div>
         </div>
       </div>
-      <div class="skills-kpis" id="skills-kpis"></div>
-      <div class="skills-errors" id="skills-errors"></div>
-      <div class="skills-layout">
-        <section class="skills-list-pane">
-          <div class="skills-list-head"><span>已加载</span><span id="skills-count"></span></div>
-          <div id="skills-list" class="skills-list"></div>
-        </section>
-        <section id="skills-detail" class="skills-detail"></section>
-      </div>`;
+      <div class="skills-subtabs" role="tablist" aria-label="技能页面">
+        <button type="button" class="skills-subtab is-on" role="tab" aria-selected="true" data-skills-view="installed">已安装</button>
+        <button type="button" class="skills-subtab" role="tab" aria-selected="false" data-skills-view="market">技能市场 <em id="skills-market-count"></em></button>
+      </div>
+      <div id="skills-installed-view">
+        <div class="skills-kpis" id="skills-kpis"></div>
+        <div class="skills-errors" id="skills-errors"></div>
+        <div class="skills-layout">
+          <section class="skills-list-pane">
+            <div class="skills-list-head"><span>已加载</span><span id="skills-count"></span></div>
+            <div id="skills-list" class="skills-list"></div>
+          </section>
+          <section id="skills-detail" class="skills-detail"></section>
+        </div>
+      </div>
+      <div id="skills-market-view" class="skills-market" hidden></div>`;
     box.dataset.ready = '1';
   }
   skillsBind(box);
