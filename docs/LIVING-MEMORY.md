@@ -40,7 +40,7 @@ LIVING_MEMORY_VECTOR_SCAN_LIMIT=20000
 
 早期试验版可能把卡片和来源回合放在独立的 `living-memory` 服务中，并把向量放在 Qdrant。内置版提供可重复执行的迁移脚本：它只追加不存在的卡片/回合 ID，保留卡片的创建与更新时间，绝不覆盖已在内置库中修改过的数据。
 
-先停掉旧 Agent 与旧记忆服务，确保旧 SQLite 的 `-wal` 文件不再变化；然后先预演：
+先停掉旧 Agent 与旧记忆服务，确保旧 SQLite 的 `-wal` 文件不再变化，并对该目录做一份本机快照；迁移脚本会以只查询方式打开这份**可写快照**（WAL SQLite 即使只读查询也可能需要创建共享内存侧文件）。然后先预演：
 
 ```bash
 node scripts/migrate-living-memory.mjs \

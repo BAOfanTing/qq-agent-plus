@@ -55,7 +55,11 @@ function quickCheck(db, label) {
 
 function readLegacySnapshot(sourceFile) {
   const file = absoluteFile(sourceFile, '旧长期记忆数据库');
-  const db = new DatabaseSync(file, { readOnly: true });
+  // A legacy database normally keeps `journal_mode=WAL`. SQLite needs to open
+  // its shared-memory sidecar even for a SELECT, so `readOnly:true` fails for
+  // a stopped legacy store mounted read-only. Open an operator-made snapshot
+  // read/write instead, then make the connection query-only before inspection.
+  const db = new DatabaseSync(file);
   try {
     db.exec('PRAGMA query_only = ON;');
     quickCheck(db, '旧长期记忆数据库');
