@@ -54,6 +54,7 @@ const state = {
     recallResult: null,
     list: null,
     graph: null,
+    statusFilter: '',
     pageError: ''
   }
 };

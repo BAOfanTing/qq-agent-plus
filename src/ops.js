@@ -974,13 +974,20 @@ async function auditServer(args) {
       ngLine(`stickers.json 读取失败: ${error && error.message ? error.message : error}`);
     }
   } else skipLine(`缺 stickers.json（${stickersFile}）`);
-  for (const name of ['messages.sqlite', 'incident-pilot.sqlite', 'identity-pilot.sqlite', 'relationship-pilot.sqlite']) {
+  for (const name of [
+    'messages.sqlite',
+    'incident-pilot.sqlite',
+    'identity-pilot.sqlite',
+    'relationship-pilot.sqlite',
+    path.join('memory', 'search.sqlite'),
+    path.join('living-memory', 'living-memory.sqlite')
+  ]) {
     const file = path.join(cfg.dataDir, name);
     if (!exists(file)) {
       noteLine(`（缺 ${name}）`);
       continue;
     }
-    noteLine(`${name.padEnd(26)} integrity=${sqliteIntegrity(file)}`);
+    noteLine(`${name.padEnd(34)} integrity=${sqliteIntegrity(file)}`);
   }
   const sessionsDir = path.join(cfg.dataDir, 'sessions');
   let sessionCount = 0;
@@ -1453,6 +1460,26 @@ function locateDataRoot(dir) {
   return null;
 }
 
+/** 数据目录里的 SQLite 不只在顶层：人物记忆索引、长期语义记忆都在子目录。 */
+function listSqliteFiles(root, maxDepth = 3) {
+  const found = [];
+  const walk = (dir, depth) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name.endsWith('-wal') || entry.name.endsWith('-shm')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < maxDepth) walk(full, depth + 1);
+      } else if (entry.isFile() && entry.name.endsWith('.sqlite')) {
+        found.push(full);
+      }
+    }
+  };
+  walk(root, 0);
+  return found;
+}
+
 /** 恢复演练：解密 -> 校验路径 -> 解到临时目录 -> SQLite integrity_check。不碰生产数据。 */
 async function runBackupDrill({ cfg, from = null, keyFile = '', noEncrypt = false } = {}) {
   const source = from
@@ -1479,11 +1506,12 @@ async function runBackupDrill({ cfg, from = null, keyFile = '', noEncrypt = fals
     if (!extracted.ok) { ngLine(`解包失败：${(extracted.stderr || '').trim().split('\n')[0] || extracted.code}`); return 1; }
     const dataRoot = locateDataRoot(extractDir);
     if (!dataRoot) { ngLine('归档里没有 config.json，不像 QQ Agent 数据目录'); return 1; }
-    const databases = fs.readdirSync(dataRoot).filter((name) => name.endsWith('.sqlite'));
-    for (const name of databases) {
+    const databases = listSqliteFiles(dataRoot);
+    for (const file of databases) {
+      const name = path.relative(dataRoot, file);
       let db = null;
       try {
-        db = openDatabase(path.join(dataRoot, name), { readOnly: true });
+        db = openDatabase(file, { readOnly: true });
         const row = db.prepare('PRAGMA integrity_check').get();
         const verdict = row ? Object.values(row)[0] : '';
         if (verdict !== 'ok') { ngLine(`${name}: integrity_check=${verdict || '未知'}`); return 1; }

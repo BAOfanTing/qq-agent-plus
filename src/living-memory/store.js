@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openDatabase } from '../core/sqlite.js';
 import {
   asText, clamp, clampInt, lexicalScore, now, parseJson, stableJson, uuid
 } from './util.js';
 
 const MEMORY_TYPES = new Set(['episode', 'fact', 'profile', 'preference', 'commitment', 'project', 'rule']);
 const MEMORY_STATUSES = new Set(['active', 'archived', 'superseded']);
+const MAX_TURNS = 5000;
+const MAX_TURN_PAYLOAD_CHARS = 16000;
 
 function jsonArray(value, limit = 64, itemMax = 160) {
   if (!Array.isArray(value)) return [];
@@ -15,6 +17,15 @@ function jsonArray(value, limit = 64, itemMax = 160) {
 
 function jsonObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function normalizeDuplicateText(value) {
+  return String(value || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '').slice(0, 400);
+}
+
+function cappedJson(value, max = MAX_TURN_PAYLOAD_CHARS) {
+  const text = stableJson(value);
+  return text.length <= max ? text : stableJson({ truncated: true, chars: text.length });
 }
 
 function rowToMemory(row) {
@@ -70,11 +81,14 @@ function unpackVector(value) {
 }
 
 export class LivingMemoryStore {
-  constructor({ file }) {
+  constructor({ file, turnRetentionDays = 7 } = {}) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     this.file = file;
-    this.db = new DatabaseSync(file);
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+    this.turnRetentionDays = Math.max(1, Math.min(365, Math.round(Number(turnRetentionDays) || 7)));
+    // 统一走 src/core/sqlite.js：缺 node:sqlite 时由它在真正打开时给人话错误，
+    // 而不是让整个进程在模块加载期抛裸栈。
+    this.db = openDatabase(file);
+    this.db.exec('PRAGMA journal_mode = WAL;');
     this.#migrate();
   }
 
@@ -118,16 +132,7 @@ export class LivingMemoryStore {
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_turns_scope_created ON turns(scope_key, created_at DESC);
-      CREATE TABLE IF NOT EXISTS operations (
-        id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL,
-        status TEXT NOT NULL,
-        payload_json TEXT NOT NULL,
-        error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_operations_status_created ON operations(status, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_turns_created ON turns(created_at);
     `);
     const columns = new Set(this.db.prepare('PRAGMA table_info(memories)').all().map((row) => String(row.name || '')));
     if (!columns.has('vector_blob')) this.db.exec('ALTER TABLE memories ADD COLUMN vector_blob BLOB');
@@ -159,14 +164,16 @@ export class LivingMemoryStore {
     if (!scopeList([memory.scopeKey]).length) throw new Error('scopeKey 必须是 group:<QQ号>、private:<QQ号> 或 owner-global');
     if (!memory.summary || !memory.content) throw new Error('记忆摘要与正文不能为空');
     const previous = this.getMemory(memory.id);
+    const previousVector = previous?.vectorStatus === 'ready' ? this.getVectorRow(memory.id) : null;
     const createdAt = previous?.createdAt || time;
     const archivedAt = memory.status === 'archived' ? (previous?.archivedAt || time) : 0;
     const data = {
       ...memory,
-      vectorStatus: previous?.vectorStatus === 'ready' ? 'stale' : 'pending',
-      vectorError: '',
-      vectorBlob: null,
-      vectorDimensions: 0,
+      // 编辑已有记忆时先保留旧向量：Embedding 失败也不会把它降级成只能关键词检索。
+      vectorStatus: previousVector ? 'ready' : 'pending',
+      vectorError: previousVector ? '正在重新向量化，暂时沿用旧向量' : '',
+      vectorBlob: previousVector?.blob ?? null,
+      vectorDimensions: previousVector?.dimensions ?? 0,
       createdAt,
       updatedAt: time,
       archivedAt,
@@ -202,6 +209,36 @@ export class LivingMemoryStore {
     return rowToMemory(this.db.prepare('SELECT * FROM memories WHERE id = ?').get(asText(id, 100)));
   }
 
+  getVectorRow(id) {
+    const row = this.db.prepare('SELECT vector_blob AS blob, vector_dimensions AS dimensions FROM memories WHERE id = ?')
+      .get(asText(id, 100));
+    return row ? { blob: row.blob ?? null, dimensions: Number(row.dimensions) || 0 } : null;
+  }
+
+  /** 同一 scope + 类型下，摘要或正文归一化后完全相同的卡片视为重复。 */
+  findDuplicate({ scopeKey, type = '', summary = '', content = '' } = {}) {
+    const targetSummary = normalizeDuplicateText(summary);
+    const targetContent = normalizeDuplicateText(content);
+    if (!targetSummary && !targetContent) return null;
+    const rows = this.db.prepare(`
+      SELECT * FROM memories
+      WHERE scope_key = ? AND status = 'active' AND type = ?
+      ORDER BY updated_at DESC LIMIT 200
+    `).all(asText(scopeKey, 80), MEMORY_TYPES.has(type) ? type : 'episode');
+    for (const row of rows) {
+      const memory = rowToMemory(row);
+      if (targetSummary && normalizeDuplicateText(memory.summary) === targetSummary) return memory;
+      if (targetContent && normalizeDuplicateText(memory.content) === targetContent) return memory;
+    }
+    return null;
+  }
+
+  markVectorError(id, error = '') {
+    this.db.prepare('UPDATE memories SET vector_error = ? WHERE id = ?')
+      .run(asText(error, 600), asText(id, 100));
+    return this.getMemory(id);
+  }
+
   getMemories(ids) {
     const list = [...new Set((Array.isArray(ids) ? ids : []).map((id) => asText(id, 100)).filter(Boolean))];
     if (!list.length) return [];
@@ -231,7 +268,7 @@ export class LivingMemoryStore {
     return { total, entries: rows.map(rowToMemory) };
   }
 
-  lexicalCandidates({ scopeKeys, query, limit = 120 }) {
+  lexicalCandidates({ scopeKeys, query, limit = 800 }) {
     const scopes = scopeList(scopeKeys);
     if (!scopes.length) return [];
     const time = now();
@@ -242,7 +279,7 @@ export class LivingMemoryStore {
         AND (expires_at = 0 OR expires_at > ?)
       ORDER BY updated_at DESC
       LIMIT ?
-    `).all(...scopes, time, clampInt(limit, 1, 500, 120)).map(rowToMemory);
+    `).all(...scopes, time, clampInt(limit, 1, 2000, 800)).map(rowToMemory);
     return rows.map((memory) => ({ memory, score: lexicalScore(query, `${memory.summary}\n${memory.content}\n${memory.tags.join(' ')}\n${memory.entities.join(' ')}`) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score);
@@ -267,7 +304,7 @@ export class LivingMemoryStore {
     return Boolean(row?.present);
   }
 
-  vectorCandidates({ scopeKeys, model = '', dimensions = 0, limit = 12000 } = {}) {
+  vectorCandidates({ scopeKeys, model = '', dimensions = 0, limit = 5000 } = {}) {
     const scopes = scopeList(scopeKeys);
     const embeddingModel = asText(model, 200);
     const vectorDimensions = clampInt(dimensions, 1, 8192, 0);
@@ -283,7 +320,7 @@ export class LivingMemoryStore {
         AND (expires_at = 0 OR expires_at > ?)
       ORDER BY updated_at DESC
       LIMIT ?
-    `).all(...scopes, embeddingModel, vectorDimensions, now(), clampInt(limit, 1, 20000, 12000));
+    `).all(...scopes, embeddingModel, vectorDimensions, now(), clampInt(limit, 1, 20000, 5000));
     return rows.map((row) => ({ id: String(row.id || ''), vector: unpackVector(row.vector_blob) }))
       .filter((item) => item.id && item.vector?.length === vectorDimensions);
   }
@@ -303,6 +340,12 @@ export class LivingMemoryStore {
     const memory = this.getMemory(id);
     if (!memory) return null;
     this.db.prepare('DELETE FROM memories WHERE id = ?').run(memory.id);
+    // 来源回合是这条记忆的原始聊天文本；记忆删了就不该继续留在库里。
+    const turnIds = Array.isArray(memory.source?.turnIds) ? memory.source.turnIds : [];
+    const valid = turnIds.map((item) => asText(item, 100)).filter(Boolean);
+    if (valid.length) {
+      this.db.prepare(`DELETE FROM turns WHERE id IN (${valid.map(() => '?').join(', ')})`).run(...valid);
+    }
     return memory;
   }
 
@@ -311,6 +354,14 @@ export class LivingMemoryStore {
     if (!memory) return null;
     this.db.prepare("UPDATE memories SET status = 'archived', archived_at = ?, updated_at = ? WHERE id = ?")
       .run(now(), now(), memory.id);
+    return this.getMemory(memory.id);
+  }
+
+  unarchiveMemory(id) {
+    const memory = this.getMemory(id);
+    if (!memory) return null;
+    this.db.prepare("UPDATE memories SET status = 'active', archived_at = 0, updated_at = ? WHERE id = ?")
+      .run(now(), memory.id);
     return this.getMemory(memory.id);
   }
 
@@ -325,7 +376,7 @@ export class LivingMemoryStore {
       createdAt: now()
     };
     this.db.prepare('INSERT INTO turns (id, scope_key, session_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(row.id, row.scopeKey, row.sessionId, stableJson(row.payload), row.createdAt);
+      .run(row.id, row.scopeKey, row.sessionId, cappedJson(row.payload), row.createdAt);
     return { ...row };
   }
 
@@ -334,7 +385,17 @@ export class LivingMemoryStore {
     const rows = this.db.prepare("SELECT id FROM memories WHERE expires_at > 0 AND expires_at <= ? AND status = 'active'").all(time);
     this.db.prepare("UPDATE memories SET status = 'archived', archived_at = ?, updated_at = ? WHERE expires_at > 0 AND expires_at <= ? AND status = 'active'")
       .run(time, time, time);
-    return rows.map((row) => row.id);
+    const cutoff = time - this.turnRetentionDays * 86400000;
+    let turnsRemoved = Number(this.db.prepare('DELETE FROM turns WHERE created_at < ?').run(cutoff).changes) || 0;
+    const totalTurns = Number(this.db.prepare('SELECT COUNT(*) AS count FROM turns').get()?.count) || 0;
+    if (totalTurns > MAX_TURNS) {
+      turnsRemoved += Number(this.db.prepare(`
+        DELETE FROM turns WHERE id IN (
+          SELECT id FROM turns ORDER BY created_at ASC LIMIT ?
+        )
+      `).run(totalTurns - MAX_TURNS).changes) || 0;
+    }
+    return { archived: rows.map((row) => row.id), turnsRemoved };
   }
 
   graph({ scopeKeys, memoryId = '', limit = 160 } = {}) {
@@ -375,6 +436,6 @@ export class LivingMemoryStore {
     const turns = Number(this.db.prepare('SELECT COUNT(*) AS count FROM turns').get()?.count) || 0;
     const scopes = this.db.prepare('SELECT scope_key AS scopeKey, COUNT(*) AS count FROM memories GROUP BY scope_key ORDER BY count DESC LIMIT 100')
       .all().map((row) => ({ scopeKey: row.scopeKey, count: Number(row.count) || 0 }));
-    return { total, active, vectorReady, turns, scopes };
+    return { total, active, vectorReady, turns, scopes, scopeCount: scopes.length, turnRetentionDays: this.turnRetentionDays };
   }
 }

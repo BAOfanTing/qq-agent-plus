@@ -405,13 +405,16 @@
     "allowPrivate": false,
     "allowGlobal": false,
     "maxRecallItems": 6,
-    "recallTimeoutMs": 1800
+    "recallTimeoutMs": 1800,
+    "shadowSemantic": false,
+    "turnRetentionDays": 7
   }
 }
 ```
 
 - 数据和向量都保存在 Agent 数据目录的 `living-memory/living-memory.sqlite`，不需要额外容器或向量数据库。
-- `shadow` 会收集和审计召回但不改变回复；确认质量后才切换 `active`。
+- `shadow` 会收集和审计关键词召回但不改变回复；确认质量后才切换 `active`。`shadowSemantic=true` 会让影子模式也调用 Embedding（更贵、更慢，只建议短时验证）。
+- `turnRetentionDays` 控制来源回合保留天数（默认 7）；删除记忆会同时删除它引用的来源文本。
 - 语义检索需要进程环境中的 `LIVING_MEMORY_EMBEDDING_BASE_URL`、`LIVING_MEMORY_EMBEDDING_API_KEY` 和 `LIVING_MEMORY_EMBEDDING_MODEL`；未配置时自动退回关键词检索。完整说明见 [LIVING-MEMORY.md](LIVING-MEMORY.md)。
 
 ## memberNotes：群友称呼（备注/代号，可选）

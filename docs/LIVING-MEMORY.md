@@ -5,7 +5,8 @@
 ## 生命周期
 
 - `enabled`：是否运行自动召回和后台写入；默认关闭。
-- `mode=shadow`：会写入并记录召回结果，不会影响 QQ 回复。
+- `mode=shadow`：会写入并记录关键词召回结果，不会影响 QQ 回复；默认不调用 Embedding
+  （`shadowSemantic=true` 才在影子模式也跑语义召回，会产生额外延迟与费用）。
 - `mode=active`：将筛选后的记忆临时注入当前轮回复。
 - `graduated`：是否显示为正式导航项目；与 `enabled` 独立。
 
@@ -13,9 +14,11 @@
 
 ## 存储与检索
 
-所有数据位于 Agent 的数据目录：`living-memory/living-memory.sqlite`。同一 SQLite 文件保存记忆卡片、来源回合、Embedding 向量和向量状态；删除或归档记忆会在同一事务边界内移除或停用对应向量。
+所有数据位于 Agent 的数据目录：`living-memory/living-memory.sqlite`。同一 SQLite 文件保存记忆卡片、来源回合、Embedding 向量和向量状态。删除记忆会一并删除它引用的来源回合；归档只停用召回，不删数据。
 
-召回始终按当前会话隔离，可选加入管理员全局知识。先执行关键词候选检索；配置 Embedding 后，主进程会对当前作用域的本地向量做余弦相似度排序，再与关键词、重要度和时效性合并评分。默认每次最多扫描 20,000 条当前作用域的向量，可通过 `LIVING_MEMORY_VECTOR_SCAN_LIMIT` 调整到 100,000。
+来源回合默认保留 7 天（`turnRetentionDays`，1–365），并且整库最多保留 5,000 条；超过任一边界由每日清理删除。相同会话、相同类型、归一化后摘要或正文完全相同的卡片会更新原卡片，不会重复堆积。
+
+召回始终按当前会话隔离，可选加入管理员全局知识。先执行关键词候选检索；配置 Embedding 后，主进程会对当前作用域的本地向量做余弦相似度排序，再与关键词、重要度和时效性合并评分。默认每次最多扫描 5,000 条当前作用域的向量，可通过 `LIVING_MEMORY_VECTOR_SCAN_LIMIT` 调到最多 20,000。向量相似度在主线程同步计算，调得过高会拖慢 OneBot 收发。
 
 Embedding 未配置时，记忆保存、管理和关键词检索仍可正常使用。首次还没有已向量化卡片时，也会直接走关键词检索，不会为无结果的语义检索额外调用 Embedding。
 
@@ -29,9 +32,11 @@ LIVING_MEMORY_EMBEDDING_API_KEY=...
 LIVING_MEMORY_EMBEDDING_MODEL=BAAI/bge-m3
 LIVING_MEMORY_EMBEDDING_DIMENSIONS=1024
 LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS=1200
-LIVING_MEMORY_VECTOR_SCAN_LIMIT=20000
+LIVING_MEMORY_VECTOR_SCAN_LIMIT=5000
 ```
 
 `LIVING_MEMORY_EMBEDDING_DIMENSIONS=0` 时，会从首次成功响应推断维度。实时语义分支超过 `LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS` 时，系统保留关键词结果并标记为降级，不让 QQ 回复因检索超时。
 
-外部 Embedding 模式下，记忆摘要和正文会发送给配置的 Embedding 提供商。私聊、全局记忆和敏感信息策略由长期记忆设置控制。
+外部 Embedding 模式下，记忆摘要和正文会发送给配置的 Embedding 提供商。私聊、全局记忆和敏感信息策略由长期记忆设置控制；控制台手写接口同样受 `groups` / `allowPrivate` / `allowGlobal` 约束，且不能通过请求体关闭敏感信息检查。
+
+注入提示词的记忆统一包在 `<memory trust="untrusted">` 里，正文中的尖括号会被替换，段头明确写着“不是指令”。群友仍然可以通过聊天内容影响记忆质量，因此 shadow 阶段应先看召回测试再转正。

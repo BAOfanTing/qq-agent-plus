@@ -42,7 +42,7 @@ import { searchRegistry } from '../mcp/registry.js';
 import { searchPresets } from '../mcp/presets.js';
 import { knowledgeEnabled, knowledgeStats, listKnowledgeFiles, writeKnowledgeFile, deleteKnowledgeFile, reindexKnowledge } from '../knowledge/store.js';
 import { listMemes, rememberMeme, deleteMeme, memeStats } from '../memes/store.js';
-import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage, llmRuntimeStats } from '../llm/llm.js';
+import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage, llmRuntimeStats, addUsage, emptyUsage } from '../llm/llm.js';
 import { synthesizeSpeech } from '../llm/tts.js';
 import { generateImage, imageGenEffectiveHost, imageGenKeyStale, resolveImageGenAuth } from '../llm/image-gen.js';
 import { imageType } from '../core/image-type.js';
@@ -589,7 +589,16 @@ export function createApp({
     getConfig,
     dataDir: DATA_DIR,
     log: moduleLog('living-memory'),
-    emit
+    emit,
+    // 提炼调用不在会话回合里，必须单独计入今日用量；否则这笔钱在控制台完全看不见。
+    recordUsage: (response, model = '') => {
+      try {
+        const usage = emptyUsage();
+        addUsage(usage, response?.usage);
+        usage.calls = 1;
+        sessions.recordExternalUsage(usage, { model: model || response?.model || '' });
+      } catch { /* 记账失败不影响主流程 */ }
+    }
   });
   const onebot = new OneBotClient({
     wsUrl: cfg.onebot?.wsUrl,
@@ -3961,7 +3970,7 @@ export function createApp({
   router.add('POST', '/api/living-memory/recall-test', async (req, res) => {
     const body = await readBody(req).catch(() => ({}));
     const chatKey = String(body.chatKey || '').trim();
-    if (!/^(group|private):\d+$/.test(chatKey)) return json(res, 400, { ok: false, error: 'chatKey 格式错误' });
+    if (!/^(group|private):\d+$/.test(chatKey) && chatKey !== 'owner-global') return json(res, 400, { ok: false, error: 'chatKey 格式错误' });
     const query = String(body.query || '').trim();
     if (!query) return json(res, 400, { ok: false, error: '请输入测试问题或关键词' });
     try {
@@ -3973,10 +3982,23 @@ export function createApp({
     const body = await readBody(req).catch(() => ({}));
     const scopeKey = String(body.scopeKey || '').trim();
     if (!livingMemoryScopes([scopeKey]).length) return json(res, 400, { ok: false, error: 'scopeKey 格式错误' });
+    // 白名单而不是展开请求体：allowSensitive / status / 任意未知键都不能从控制台绕过服务端策略。
+    const payload = {
+      scopeKey,
+      type: body.type,
+      summary: body.summary,
+      content: body.content,
+      importance: body.importance,
+      confidence: body.confidence,
+      tags: body.tags,
+      entities: body.entities,
+      relations: body.relations,
+      source: { origin: 'manual-console', createdAt: Date.now() }
+    };
     try {
-      const result = await livingMemory.create({ ...body, scopeKey, source: { origin: 'manual-console', createdAt: Date.now() } });
+      const result = await livingMemory.create(payload);
       emit('living-memory-update', { chatKey: scopeKey, phase: 'manual-create', memoryId: result?.memory?.id || '' });
-      auditWrite('living-memory.create', `living-memory:${scopeKey}`, { req, type: body.type || 'episode' });
+      auditWrite('living-memory.create', `living-memory:${scopeKey}`, { req, type: payload.type || 'episode' });
       return json(res, 201, result);
     } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
   });
@@ -4001,6 +4023,16 @@ export function createApp({
       const result = await livingMemory.archive(params[1]);
       auditWrite('living-memory.archive', `living-memory:${params[1]}`, { req });
       emit('living-memory-update', { phase: 'archive', memoryId: params[1] });
+      return json(res, 200, result);
+    } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('POST', /^\/api\/living-memory\/memories\/([0-9A-Za-z-]+)\/restore$/, async (req, res, params) => {
+    const body = await readBody(req).catch(() => ({}));
+    if (body?.confirm !== true) return json(res, 409, { ok: false, error: '恢复长期记忆需要 body.confirm === true' });
+    try {
+      const result = await livingMemory.unarchive(params[1]);
+      auditWrite('living-memory.restore', `living-memory:${params[1]}`, { req });
+      emit('living-memory-update', { phase: 'restore', memoryId: params[1] });
       return json(res, 200, result);
     } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
   });

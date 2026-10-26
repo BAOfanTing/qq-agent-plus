@@ -1003,8 +1003,13 @@ function connectSSE() {
       loadMemoryView();
     }
   });
-  es.addEventListener('living-memory-update', () => {
-    if (state.tab === 'living-memory') loadLivingMemoryPage({ force: true });
+  es.addEventListener('living-memory-update', (event) => {
+    if (state.tab !== 'living-memory') return;
+    // 每条消息都会产生 recall 事件；把它也当成整页刷新会让页面在聊天时不停重绘、丢焦点。
+    let phase = '';
+    try { phase = JSON.parse(event.data)?.phase || ''; } catch { /* 忽略坏帧 */ }
+    if (phase === 'recall' || phase === 'recall-error') return;
+    loadLivingMemoryPage({ force: true });
   });
   es.addEventListener('onebot-status', () => {
     refreshStatus();

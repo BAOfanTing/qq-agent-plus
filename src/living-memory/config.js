@@ -15,40 +15,54 @@ export const LIVING_MEMORY_DEFAULTS = Object.freeze({
   autoCapture: true,
   captureMinMessages: 6,
   captureIdleMs: 90000,
+  // shadow 阶段只审计关键词召回；语义召回要等转正或手动“召回测试”时才付 Embedding 延迟与费用。
+  shadowSemantic: false,
   allowPrivate: false,
   allowGlobal: false,
+  turnRetentionDays: 7,
   groups: []
 });
 
+/** 只接受已知字段：旧实验配置里的 serviceUrl 等键不能原样写回 config.json。 */
 export function normalizeLivingMemoryConfig(raw = {}) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  // 早期试验版本把外部 HTTP 服务地址写进配置；内置版不再使用该字段，迁移时静默丢弃。
-  const { serviceUrl: _legacyServiceUrl, ...current } = source;
-  const groups = [...new Set((Array.isArray(raw?.groups) ? raw.groups : [])
+  const groups = [...new Set((Array.isArray(source.groups) ? source.groups : [])
     .map((id) => String(id || '').trim()).filter((id) => /^\d{1,15}$/.test(id)))].slice(0, 5000);
   return {
-    ...LIVING_MEMORY_DEFAULTS,
-    ...current,
-    enabled: raw?.enabled === true,
-    graduated: raw?.graduated === true,
-    mode: raw?.mode === 'active' ? 'active' : 'shadow',
-    recallTimeoutMs: clampInt(raw?.recallTimeoutMs, 300, 5000, LIVING_MEMORY_DEFAULTS.recallTimeoutMs),
-    maxInjectChars: clampInt(raw?.maxInjectChars, 300, 8000, LIVING_MEMORY_DEFAULTS.maxInjectChars),
-    maxRecallItems: clampInt(raw?.maxRecallItems, 1, 16, LIVING_MEMORY_DEFAULTS.maxRecallItems),
-    autoCapture: raw?.autoCapture !== false,
-    captureMinMessages: clampInt(raw?.captureMinMessages, 2, 60, LIVING_MEMORY_DEFAULTS.captureMinMessages),
-    captureIdleMs: clampInt(raw?.captureIdleMs, 10_000, 30 * 60_000, LIVING_MEMORY_DEFAULTS.captureIdleMs),
-    allowPrivate: raw?.allowPrivate === true,
-    allowGlobal: raw?.allowGlobal === true,
+    enabled: source.enabled === true,
+    graduated: source.graduated === true,
+    mode: source.mode === 'active' ? 'active' : 'shadow',
+    recallTimeoutMs: clampInt(source.recallTimeoutMs, 300, 5000, LIVING_MEMORY_DEFAULTS.recallTimeoutMs),
+    maxInjectChars: clampInt(source.maxInjectChars, 300, 8000, LIVING_MEMORY_DEFAULTS.maxInjectChars),
+    maxRecallItems: clampInt(source.maxRecallItems, 1, 16, LIVING_MEMORY_DEFAULTS.maxRecallItems),
+    autoCapture: source.autoCapture !== false,
+    captureMinMessages: clampInt(source.captureMinMessages, 2, 60, LIVING_MEMORY_DEFAULTS.captureMinMessages),
+    captureIdleMs: clampInt(source.captureIdleMs, 10_000, 30 * 60_000, LIVING_MEMORY_DEFAULTS.captureIdleMs),
+    shadowSemantic: source.shadowSemantic === true,
+    allowPrivate: source.allowPrivate === true,
+    allowGlobal: source.allowGlobal === true,
+    turnRetentionDays: clampInt(source.turnRetentionDays, 1, 365, LIVING_MEMORY_DEFAULTS.turnRetentionDays),
     groups
   };
 }
 
-export function livingMemoryApplies(config, chatKey) {
+/**
+ * 一个 scope 是否在运营者声明的范围内。写接口与召回测试共用这一处判断，
+ * 避免 API 只校验格式、却让手动写记忆绕过 groups/allowPrivate/allowGlobal。
+ */
+export function livingMemoryScopeAllowed(config, scopeKey) {
   const cfg = normalizeLivingMemoryConfig(config);
   if (cfg.enabled !== true) return false;
-  const text = String(chatKey || '');
-  if (text.startsWith('private:') && !cfg.allowPrivate) return false;
-  if (text.startsWith('group:') && cfg.groups.length) return cfg.groups.includes(text.slice('group:'.length));
-  return text.startsWith('group:') || text.startsWith('private:');
+  const text = String(scopeKey || '');
+  if (text === 'owner-global') return cfg.allowGlobal === true;
+  if (text.startsWith('private:')) return cfg.allowPrivate === true && /^private:\d+$/.test(text);
+  if (text.startsWith('group:')) {
+    if (!/^group:\d+$/.test(text)) return false;
+    return !cfg.groups.length || cfg.groups.includes(text.slice('group:'.length));
+  }
+  return false;
+}
+
+export function livingMemoryApplies(config, chatKey) {
+  return livingMemoryScopeAllowed(config, chatKey);
 }

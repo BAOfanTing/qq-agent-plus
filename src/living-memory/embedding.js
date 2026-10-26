@@ -33,7 +33,9 @@ export function readLivingMemoryEmbeddingConfig(env = process.env) {
     dimensions: clampInt(env?.LIVING_MEMORY_EMBEDDING_DIMENSIONS, 0, 8192, 0),
     timeoutMs: clampInt(env?.LIVING_MEMORY_EMBEDDING_TIMEOUT_MS, 1000, 120000, 30000),
     recallTimeoutMs: clampInt(env?.LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS, 200, 5000, 1200),
-    vectorScanLimit: clampInt(env?.LIVING_MEMORY_VECTOR_SCAN_LIMIT, 1000, 100000, 20000)
+    // 向量相似度是主线程上的同步 JS 计算；2 万条 1024 维向量会占几十 MB 并卡住
+    // OneBot 收发。默认 5000，环境变量最多放到 20000（够一个中大型群，仍可控）。
+    vectorScanLimit: clampInt(env?.LIVING_MEMORY_VECTOR_SCAN_LIMIT, 500, 20000, 5000)
   };
 }
 

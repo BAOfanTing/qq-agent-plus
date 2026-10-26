@@ -47,16 +47,19 @@ function cardHtml(memory, { selected = false } = {}) {
   const vector = memory.vectorStatus === 'ready' ? '已向量化'
     : memory.vectorStatus === 'none' ? '仅关键词'
       : memory.vectorStatus === 'error' ? '向量失败' : '待处理';
-  return `<article class="lm-card ${selected ? 'selected' : ''}" data-lm-memory="${esc(memory.id)}">
+  const archived = memory.status === 'archived';
+  return `<article class="lm-card ${selected ? 'selected' : ''} ${archived ? 'is-archived' : ''}" data-lm-memory="${esc(memory.id)}">
     <button type="button" class="lm-card-main" data-lm-open="${esc(memory.id)}">
-      <div class="lm-card-top"><span class="lm-type">${esc(TYPE_LABELS[memory.type] || memory.type || '记忆')}</span><span>重要度 ${Number(memory.importance || 0).toFixed(1)}</span></div>
+      <div class="lm-card-top"><span class="lm-type">${esc(TYPE_LABELS[memory.type] || memory.type || '记忆')}</span><span>${archived ? '已归档' : `重要度 ${Number(memory.importance || 0).toFixed(1)}`}</span></div>
       <strong>${esc(memory.summary || memory.content || '未命名记忆')}</strong>
       <p>${esc(memory.content || '')}</p>
       <div class="lm-card-meta"><span>${esc(vector)}</span><span>${esc(shortDate(memory.updatedAt))}</span></div>
       ${tags ? `<div class="lm-tags">${tags}</div>` : ''}
     </button>
     <div class="lm-card-actions">
-      <button type="button" class="btn btn-small" data-lm-archive="${esc(memory.id)}">归档</button>
+      ${archived
+        ? `<button type="button" class="btn btn-small" data-lm-restore="${esc(memory.id)}">恢复</button>`
+        : `<button type="button" class="btn btn-small" data-lm-archive="${esc(memory.id)}">归档</button>`}
       <button type="button" class="btn btn-small btn-danger" data-lm-delete="${esc(memory.id)}">删除</button>
     </div>
   </article>`;
@@ -92,7 +95,7 @@ function detailHtml(memory) {
   const entities = (memory.entities || []).map((entity) => `<span>${esc(entity)}</span>`).join('');
   const tags = (memory.tags || []).map((tag) => `<span>${esc(tag)}</span>`).join('');
   const source = memory.source || {};
-  return `<div class="lm-detail-head"><div><span class="lm-type">${esc(TYPE_LABELS[memory.type] || memory.type)}</span><h3>${esc(memory.summary)}</h3></div>${statePill(memory.status === 'active', memory.status === 'active' ? '活跃' : memory.status)}</div>
+  return `<div class="lm-detail-head"><div><span class="lm-type">${esc(TYPE_LABELS[memory.type] || memory.type)}</span><h3>${esc(memory.summary)}</h3></div>${statePill(memory.status === 'active', memory.status === 'active' ? '活跃' : '已归档')}</div>
     <section class="lm-detail-section"><h4>记忆正文</h4><p>${esc(memory.content)}</p></section>
     <div class="lm-facts"><div><small>重要度</small><strong>${Number(memory.importance || 0).toFixed(1)}</strong></div><div><small>置信度</small><strong>${Math.round((Number(memory.confidence) || 0) * 100)}%</strong></div><div><small>向量状态</small><strong>${esc(memory.vectorStatus || '-')}</strong></div><div><small>最后更新</small><strong>${esc(shortDate(memory.updatedAt))}</strong></div></div>
     <section class="lm-detail-section"><h4>标签</h4><div class="lm-tags">${tags || '<span>无</span>'}</div></section>
@@ -132,11 +135,13 @@ function renderPage({ chats, status, list, graph }) {
         <label class="checkbox-row"><input id="lm-enabled" type="checkbox" ${cfg.enabled === true ? 'checked' : ''} /><span>启用长期记忆</span></label>
         <label class="checkbox-row"><input id="lm-private" type="checkbox" ${cfg.allowPrivate === true ? 'checked' : ''} /><span>允许私聊自动记忆</span></label>
         <label class="checkbox-row"><input id="lm-global" type="checkbox" ${cfg.allowGlobal === true ? 'checked' : ''} /><span>允许管理员全局知识</span></label>
+        <label class="checkbox-row"><input id="lm-shadow-semantic" type="checkbox" ${cfg.shadowSemantic === true ? 'checked' : ''} /><span>影子模式也跑语义召回（会调用 Embedding）</span></label>
         <label>运行模式<select id="lm-mode"><option value="shadow" ${cfg.mode !== 'active' ? 'selected' : ''}>影子：不注入回复</option><option value="active" ${cfg.mode === 'active' ? 'selected' : ''}>注入：回复前召回</option></select></label>
         <label>每次注入上限（字符）<input id="lm-max-chars" type="number" min="300" max="8000" value="${Number(cfg.maxInjectChars) || 2400}" /></label>
         <label>每轮最多召回<input id="lm-max-items" type="number" min="1" max="16" value="${Number(cfg.maxRecallItems) || 6}" /></label>
         <label>召回等待上限（毫秒）<input id="lm-recall-timeout" type="number" min="300" max="5000" step="100" value="${Number(cfg.recallTimeoutMs) || 1800}" /></label>
         <label>自动总结阈值（回合）<input id="lm-capture-min" type="number" min="2" max="60" value="${Number(cfg.captureMinMessages) || 6}" /></label>
+        <label>来源回合保留（天）<input id="lm-turn-retention" type="number" min="1" max="365" value="${Number(cfg.turnRetentionDays) || 7}" /></label>
         <label>启用的群号（留空＝所有群）<input id="lm-groups" value="${esc((cfg.groups || []).join(','))}" placeholder="123456, 234567" /></label>
       </div><div class="lm-action-row"><button type="button" class="btn btn-primary" id="lm-save-config">保存长期记忆设置</button><span class="muted">向量模型地址与密钥由进程环境管理，不在网页中显示。</span></div>
     </section>
@@ -144,7 +149,7 @@ function renderPage({ chats, status, list, graph }) {
       <div class="lm-test-bar"><select id="lm-scope">${scopeOptions || '<option value="">暂无会话</option>'}</select><input id="lm-query" value="${esc(state.livingMemory.query || '')}" placeholder="输入问题或关键词，例如：之前讨论过 NAS 向量记忆吗？" /><button type="button" class="btn btn-primary" id="lm-test">测试召回</button></div>
       <div id="lm-recall-result">${renderRecall(state.livingMemory.recallResult)}</div>
     </section>
-    <section class="lm-two-col"><div class="lm-panel"><div class="lm-panel-head"><div><h3>记忆管理</h3><p>${scope ? esc(scopeTitle(scope, chats)) : '先选择一个会话'}</p></div><span class="muted">${Number(list?.total || 0)} 条</span></div>
+    <section class="lm-two-col"><div class="lm-panel"><div class="lm-panel-head"><div><h3>记忆管理</h3><p>${scope ? esc(scopeTitle(scope, chats)) : '先选择一个会话'}</p></div><div class="lm-list-tools"><select id="lm-status-filter"><option value="" ${!state.livingMemory.statusFilter ? 'selected' : ''}>全部状态</option><option value="active" ${state.livingMemory.statusFilter === 'active' ? 'selected' : ''}>仅活跃</option><option value="archived" ${state.livingMemory.statusFilter === 'archived' ? 'selected' : ''}>仅已归档</option></select><span class="muted">${Number(list?.total || 0)} 条</span></div></div>
       <details class="lm-create"><summary>手动新建记忆</summary><div class="lm-form-grid"><label>类型<select id="lm-new-type">${Object.entries(TYPE_LABELS).map(([key, label]) => `<option value="${key}">${label}</option>`).join('')}</select></label><label>重要度<input id="lm-new-importance" type="number" min="0" max="10" step="0.1" value="5" /></label></div><label>摘要<input id="lm-new-summary" maxlength="260" placeholder="一句话概括这条长期记忆" /></label><label>正文<textarea id="lm-new-content" rows="4" maxlength="1600" placeholder="保存有长期价值、可验证的信息；不要输入密码、Token 或敏感资料。"></textarea></label><label>标签（逗号分隔）<input id="lm-new-tags" placeholder="项目, NAS, 约定" /></label><button type="button" class="btn btn-small btn-primary" id="lm-create">创建记忆</button></details>
       <div class="lm-list">${entries.length ? entries.map((memory) => cardHtml(memory, { selected: memory.id === state.livingMemory.selectedMemoryId })).join('') : '<div class="empty-hint">这个会话还没有长期记忆。启用影子模式后，让机器人完成若干轮有价值的对话即可自动提炼。</div>'}</div>
     </div><aside class="lm-panel lm-detail"><div class="lm-panel-head"><div><h3>记忆详情</h3><p>可追溯、可归档、可删除</p></div></div>${detailHtml(state.livingMemory.detail)}</aside></section>
@@ -159,6 +164,8 @@ function renderRecall(result) {
   const rows = (result.entries || []).map((entry) => `<article class="lm-recall-row"><div><strong>${esc(entry.summary)}</strong><p>${esc(entry.content)}</p></div><div><span>综合 ${Number(entry.retrieval?.score || 0).toFixed(3)}</span><small>语义 ${Number(entry.retrieval?.semantic || 0).toFixed(3)} · 关键词 ${Number(entry.retrieval?.lexical || 0)}</small></div></article>`).join('');
   return `<div class="lm-recall-note"><strong>${esc(recallModeLabel(result.mode))}</strong>${result.vectorError ? ` · 向量降级：${esc(result.vectorError)}` : ''}</div>${rows || '<div class="empty-hint">没有匹配记忆。</div>'}<details class="lm-injected"><summary>本轮会注入的上下文</summary><pre>${esc(result.injectedText || '影子模式或没有内容')}</pre></details>`;
 }
+
+let livingMemoryDelegationBound = false;
 
 function parseGroups(value) {
   return [...new Set(String(value || '').split(/[,，\s]+/).map((item) => item.trim()).filter((item) => /^\d{1,15}$/.test(item)))];
@@ -184,6 +191,8 @@ function bindPage() {
         mode: $('#lm-mode')?.value === 'active' ? 'active' : 'shadow',
         allowPrivate: $('#lm-private')?.checked === true,
         allowGlobal: $('#lm-global')?.checked === true,
+        shadowSemantic: $('#lm-shadow-semantic')?.checked === true,
+        turnRetentionDays: Number($('#lm-turn-retention')?.value),
         maxInjectChars: Number($('#lm-max-chars')?.value),
         maxRecallItems: Number($('#lm-max-items')?.value),
         recallTimeoutMs: Number($('#lm-recall-timeout')?.value),
@@ -228,9 +237,18 @@ function bindPage() {
     finally { button.disabled = false; await loadLivingMemoryPage({ force: true }); }
   });
   $('#lm-graph-refresh')?.addEventListener('click', () => { state.livingMemory.graph = null; void loadLivingMemoryPage({ force: true }); });
+  $('#lm-status-filter')?.addEventListener('change', (event) => {
+    state.livingMemory.statusFilter = event.target.value;
+    state.livingMemory.list = null;
+    void loadLivingMemoryPage({ force: true });
+  });
+  // 容器是稳定节点，每次渲染都重挂 click 会让一次删除发 N 次请求；只绑一次。
+  if (livingMemoryDelegationBound) return;
+  livingMemoryDelegationBound = true;
   $('#living-memory-page')?.addEventListener('click', async (event) => {
     const open = event.target.closest('[data-lm-open]');
     const archive = event.target.closest('[data-lm-archive]');
+    const restore = event.target.closest('[data-lm-restore]');
     const remove = event.target.closest('[data-lm-delete]');
     try {
       if (open) {
@@ -242,6 +260,11 @@ function bindPage() {
       }
       if (archive && await askForConfirmation('归档这条长期记忆？归档后它不会再参与自动召回。')) {
         await api(`/api/living-memory/memories/${encodeURIComponent(archive.dataset.lmArchive)}/archive`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
+        state.livingMemory.list = null; state.livingMemory.detail = null; state.livingMemory.selectedMemoryId = '';
+        await loadLivingMemoryPage({ force: true });
+      }
+      if (restore && await askForConfirmation('恢复这条长期记忆？恢复后会重新参与自动召回。')) {
+        await api(`/api/living-memory/memories/${encodeURIComponent(restore.dataset.lmRestore)}/restore`, { method: 'POST', body: JSON.stringify({ confirm: true }) });
         state.livingMemory.list = null; state.livingMemory.detail = null; state.livingMemory.selectedMemoryId = '';
         await loadLivingMemoryPage({ force: true });
       }
@@ -270,7 +293,7 @@ async function loadLivingMemoryPage() {
     }
     const scope = selectedScope();
     const [list, graph] = scope ? await Promise.all([
-      api(`/api/living-memory/memories?scopeKey=${encodeURIComponent(scope)}&limit=100`),
+      api(`/api/living-memory/memories?scopeKey=${encodeURIComponent(scope)}&limit=100&status=${encodeURIComponent(state.livingMemory.statusFilter || '')}`),
       api(`/api/living-memory/graph?scopeKey=${encodeURIComponent(scope)}&limit=160`)
     ]) : [{ entries: [], total: 0 }, { nodes: [], edges: [] }];
     state.livingMemory.status = status;

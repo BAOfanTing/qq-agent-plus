@@ -61,9 +61,27 @@ test('living-memory routes use the Agent data directory without an external serv
   assert.equal(fs.existsSync(path.join(root, 'living-memory', 'living-memory.sqlite')), false);
 
   const configure = await request(port, '/api/config', {
-    method: 'POST', body: { livingMemory: { enabled: true, graduated: true, mode: 'shadow' } }
+    method: 'POST',
+    body: { livingMemory: { enabled: true, graduated: true, mode: 'shadow', allowGlobal: true, groups: ['100'] } }
   });
   assert.equal(configure.status, 200, configure.text);
+
+  const privateWrite = await request(port, '/api/living-memory/memories', {
+    method: 'POST',
+    body: { scopeKey: 'private:200', type: 'fact', summary: '私聊', content: '未开 allowPrivate 不应写入' }
+  });
+  assert.equal(privateWrite.status, 400, privateWrite.text);
+  const otherGroup = await request(port, '/api/living-memory/memories', {
+    method: 'POST',
+    body: { scopeKey: 'group:200', type: 'fact', summary: '别的群', content: '不在 groups 白名单' }
+  });
+  assert.equal(otherGroup.status, 400, otherGroup.text);
+  const bypass = await request(port, '/api/living-memory/memories', {
+    method: 'POST',
+    body: { scopeKey: 'group:100', type: 'fact', summary: '密码 abc', content: 'allowSensitive 不能从控制台绕过', allowSensitive: true }
+  });
+  assert.equal(bypass.status, 400, bypass.text);
+  assert.match(bypass.body?.error || '', /拒绝保存/);
 
   const created = await request(port, '/api/living-memory/memories', {
     method: 'POST',
@@ -77,4 +95,23 @@ test('living-memory routes use the Agent data directory without an external serv
   assert.equal(listed.status, 200, listed.text);
   assert.equal(listed.body?.total, 1);
   assert.equal(listed.body?.entries?.[0]?.summary, '内置长期记忆');
+
+  const archived = await request(port, `/api/living-memory/memories/${created.body.memory.id}/archive`, {
+    method: 'POST', body: { confirm: true }
+  });
+  assert.equal(archived.status, 200, archived.text);
+  const restored = await request(port, `/api/living-memory/memories/${created.body.memory.id}/restore`, {
+    method: 'POST', body: { confirm: true }
+  });
+  assert.equal(restored.status, 200, restored.text);
+  assert.equal(restored.body?.memory?.status, 'active');
+
+  const recallTest = await request(port, '/api/living-memory/recall-test', {
+    method: 'POST', body: { chatKey: 'owner-global', query: '长期记忆' }
+  });
+  assert.equal(recallTest.status, 200, recallTest.text);
+  assert.equal(Array.isArray(recallTest.body?.entries), true);
+
+  const deleteWithoutConfirm = await request(port, `/api/living-memory/memories/${created.body.memory.id}`, { method: 'DELETE' });
+  assert.equal(deleteWithoutConfirm.status, 409, deleteWithoutConfirm.text);
 });

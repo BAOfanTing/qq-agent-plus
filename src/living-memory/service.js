@@ -34,9 +34,9 @@ function boundedDeadlineMs(value) {
 }
 
 export class LivingMemoryService {
-  constructor({ file, embeddingConfig = null, store = null, embedder = null, log = console } = {}) {
+  constructor({ file, embeddingConfig = null, store = null, embedder = null, log = console, turnRetentionDays = 7 } = {}) {
     this.embeddingConfig = embeddingConfig || readLivingMemoryEmbeddingConfig();
-    this.store = store || new LivingMemoryStore({ file });
+    this.store = store || new LivingMemoryStore({ file, turnRetentionDays });
     this.embedder = embedder || new Embedder(this.embeddingConfig);
     this.log = log;
   }
@@ -55,14 +55,28 @@ export class LivingMemoryService {
   }
 
   async upsertMemory(raw) {
-    const rejected = raw?.allowSensitive === true ? '' : redactionReason(`${raw?.summary || ''}\n${raw?.content || ''}`);
+    // 服务层自己始终做敏感信息检查；allowSensitive 只用于内部迁移，不能从控制台传进来。
+    const redactionText = [
+      raw?.summary || '', raw?.content || '',
+      ...(Array.isArray(raw?.tags) ? raw.tags : []),
+      ...(Array.isArray(raw?.entities) ? raw.entities : [])
+    ].join('\n');
+    const rejected = redactionReason(redactionText);
     if (rejected) throw new Error(`拒绝保存：${rejected}`);
-    const memory = this.store.upsertMemory(raw, { id: raw?.id });
-    if (!this.embedder.ready() || memory.status !== 'active') {
-      return this.store.setVectorState(memory.id, {
-        status: this.embedder.ready() ? 'stale' : 'none',
-        model: this.embeddingConfig.model
-      });
+    const duplicate = raw?.id ? null : this.store.findDuplicate({
+      scopeKey: raw?.scopeKey,
+      type: raw?.type,
+      summary: raw?.summary,
+      content: raw?.content
+    });
+    const memory = this.store.upsertMemory(raw, { id: raw?.id || duplicate?.id || '' });
+    if (!this.embedder.ready()) {
+      // 没有配置 Embedding 时标成“仅关键词”；编辑已有向量记忆则保留旧向量。
+      if (memory.vectorStatus === 'ready' && memory.vectorDimensions > 0) return memory;
+      return this.store.setVectorState(memory.id, { status: 'none' });
+    }
+    if (memory.status !== 'active') {
+      return this.store.setVectorState(memory.id, { status: 'stale', model: this.embeddingConfig.model });
     }
     try {
       const [vector] = await this.embedder.embed(embeddingText(memory));
@@ -72,6 +86,11 @@ export class LivingMemoryService {
         vector
       });
     } catch (error) {
+      // 编辑时 store 已保留旧向量；这里只记错误，不把旧向量清掉。
+      if (memory.vectorStatus === 'ready' && memory.vectorDimensions > 0) {
+        this.log.warn?.('[living-memory] 重新向量化失败，继续沿用旧向量：', error?.message || error);
+        return this.store.markVectorError(memory.id, `重新向量化失败：${error?.message || error}`);
+      }
       this.log.warn?.('[living-memory] 向量化失败，已保留关键词可检索记忆：', error?.message || error);
       return this.store.setVectorState(memory.id, {
         status: 'error',
@@ -81,14 +100,14 @@ export class LivingMemoryService {
     }
   }
 
-  async recall({ scopeKeys, query, limit = 6, deadlineMs = 0 } = {}) {
+  async recall({ scopeKeys, query, limit = 6, deadlineMs = 0, semantic = true } = {}) {
     const maxItems = clampInt(limit, 1, 20, 6);
-    const lexical = this.store.lexicalCandidates({ scopeKeys, query, limit: 160 });
+    const lexical = this.store.lexicalCandidates({ scopeKeys, query, limit: 800 });
     const ranked = new Map();
     for (const item of lexical) ranked.set(item.memory.id, { memory: item.memory, lexical: item.score, semantic: 0 });
 
     let vectorError = '';
-    let semanticAvailable = this.embedder.ready() && this.store.hasReadyVectors({
+    let semanticAvailable = semantic && this.embedder.ready() && this.store.hasReadyVectors({
       scopeKeys,
       model: this.embeddingConfig.model
     });
@@ -147,7 +166,7 @@ export class LivingMemoryService {
       };
     }).sort((a, b) => b.retrieval.score - a.retrieval.score || b.updatedAt - a.updatedAt).slice(0, maxItems);
 
-    const mode = !this.embedder.ready()
+    const mode = !semantic || !this.embedder.ready()
       ? 'lexical'
       : !semanticAvailable
         ? 'lexical-pending-vectors'
@@ -159,6 +178,10 @@ export class LivingMemoryService {
     return this.store.archiveMemory(id);
   }
 
+  unarchiveMemory(id) {
+    return this.store.unarchiveMemory(id);
+  }
+
   removeMemory(id) {
     return this.store.removeMemory(id);
   }
@@ -168,7 +191,7 @@ export class LivingMemoryService {
   }
 
   prune() {
-    return { archived: this.store.pruneExpired().length };
+    return this.store.pruneExpired();
   }
 
   close() {
