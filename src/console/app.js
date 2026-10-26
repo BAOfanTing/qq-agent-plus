@@ -4764,6 +4764,8 @@ export function createApp({
       const keyInput = String(ttsBody.apiKeyInput ?? '').trim();
       delete ttsBody.apiKeyInput;
       delete ttsBody.keys;
+      // voices 映射由服务端维护：客户端只送当前 voice，不能整份覆盖别家的记忆。
+      delete ttsBody.voices;
       // Key 归属 = UI 选中那家（service），地址反查只作兜底。之前只按地址认：
       // 「自定义/自建」的地址不在预设表里 → 落到 provider 字符串 'openai'，
       // 运行时又读不到 keys['openai']（2026-09-29 审查 P0）
@@ -4771,6 +4773,12 @@ export function createApp({
       delete ttsBody.service;
       const svc = ttsServiceOfBaseUrl(ttsBody.baseUrl || cfgNow.tts?.baseUrl || '');
       const targetId = svc?.id || uiService || String(ttsBody.provider || cfgNow.tts?.provider || 'openai');
+      // 每家上次用的音色：客户端切预设时只送当前这一家的 voice，服务端按 targetId 记住；
+      // 切回来时 UI 从 voices[这家] 恢复，不会把上一家的音色（如 MiMo 的 Chloe）发给豆包。
+      const nextTtsVoices = { ...(cfgNow.tts?.voices || {}) };
+      const submittedVoice = String(ttsBody.voice ?? '').trim();
+      if (submittedVoice) nextTtsVoices[targetId] = submittedVoice;
+      ttsBody.voices = nextTtsVoices;
       const nextTtsKeys = keyInput && keyInput !== '******'
         ? { ...(cfgNow.tts?.keys || {}), [targetId]: keyInput }
         : { ...(cfgNow.tts?.keys || {}) };

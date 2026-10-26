@@ -536,7 +536,7 @@ async function bindTtsControls() {
       setWarn('#tts-appid-warn', 'AppID 已填：豆包将改走「AppID + Access Token」鉴权 —— 此时下面的 API Key 栏要填 Access Token，不是控制台密钥；留空 AppID 则走 X-Api-Key（控制台密钥）。');
     }
   };
-  const renderFor = (service, { resetModel = false } = {}) => {
+  const renderFor = (service, { resetModel = false, restoreVoice = false } = {}) => {
     if (!service) return;
     const models = service.models || [];
     fillModelPick(models.map((m) => m.id));
@@ -555,7 +555,20 @@ async function bindTtsControls() {
     if (voiceInput) {
       const cur = String(voiceInput.value || '').trim();
       const values = entries.map((v) => voiceValueFor(service, model, v.id));
-      if (!cur && values.length) {
+      if (restoreVoice) {
+        // 切换服务预设时按"这家上次用的音色"恢复；没有记忆才退到第一个候选。
+        // 否则从 MiMo 切到豆包会把 Chloe 原样发过去（2026-10-26 用户反馈）。
+        const remembered = String((state.config?.tts?.voices || {})[service.id] || '').trim();
+        if (remembered) {
+          voiceInput.value = remembered;
+          if (remembered !== cur) voiceNote = `已恢复「${service.label}」上次保存的音色。`;
+        } else if (values.length && (!cur || !values.includes(cur))) {
+          voiceInput.value = values[0];
+          voiceNote = `「${service.label}」还没保存过音色，已先选第一个候选；确认后保存。`;
+        } else if (!cur && values.length) {
+          voiceInput.value = values[0];
+        }
+      } else if (!cur && values.length) {
         voiceInput.value = values[0];      // 空着就填一个默认，省得用户面对空框
       } else if (cur && values.length && !values.includes(cur)) {
         // 不在候选里：**任何时候都不擅自改值** —— 官方投放音色（ICL_uranus_*）与自己复刻的音色（S_ 开头）
@@ -597,7 +610,7 @@ async function bindTtsControls() {
       const appidNode = q('#cfg-tts-appid');
       if (appidNode && /^\d{5,15}$/.test(String(appidNode.value || '').trim())) appidNode.value = '';
     }
-    renderFor(picked, { resetModel: true });
+    renderFor(picked, { resetModel: true, restoreVoice: true });
   });
   modelInput?.addEventListener('input', () => fillVoicePick(currentService(), String(modelInput.value || '').trim()));
   modelPick?.addEventListener('change', () => {

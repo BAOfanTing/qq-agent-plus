@@ -151,4 +151,50 @@ test('TTS 单槽 Key 的归属：切到没存过 Key 的服务会清掉它，切
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.notEqual(String(live().tts.apiKeyService || ''), 'doubao',
     '客户端送的归属钉不能生效（否则能把别家的旧 Key 改绑给当前这家）');
+
+  // ③ 音色按服务记住：切到另一家再切回来，原音色不能被上一家的覆盖
+  res = await request('/api/config', {
+    method: 'POST',
+    body: {
+      tts: {
+        enabled: true, provider: 'doubao',
+        baseUrl: 'https://openspeech.bytedance.com/api/v3/tts/unidirectional',
+        voice: 'ICL_TEST_DOUBAO'
+      }
+    }
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(live().tts.voices.doubao, 'ICL_TEST_DOUBAO');
+
+  res = await request('/api/config', {
+    method: 'POST',
+    body: {
+      tts: {
+        enabled: true, provider: 'mimo',
+        baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+        model: 'mimo-v2.5-tts', voice: 'Chloe'
+      }
+    }
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(live().tts.voices.doubao, 'ICL_TEST_DOUBAO', '切到 MiMo 不能冲掉豆包的音色记忆');
+  assert.equal(live().tts.voices.mimo, 'Chloe');
+
+  res = await request('/api/config', {
+    method: 'POST',
+    body: {
+      tts: {
+        enabled: true, provider: 'doubao',
+        baseUrl: 'https://openspeech.bytedance.com/api/v3/tts/unidirectional',
+        voice: live().tts.voices.doubao
+      }
+    }
+  });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(live().tts.voice, 'ICL_TEST_DOUBAO', '切回豆包要恢复它自己的音色，不是 MiMo 的 Chloe');
+  assert.equal(live().tts.voices.doubao, 'ICL_TEST_DOUBAO');
+  assert.equal(live().tts.voices.mimo, 'Chloe');
+  const view = await request('/api/config');
+  assert.equal(view.body.tts.voices.doubao, 'ICL_TEST_DOUBAO', 'voices 要下发给控制台用于切换恢复');
+  assert.equal(view.body.tts.voices.mimo, 'Chloe');
 });

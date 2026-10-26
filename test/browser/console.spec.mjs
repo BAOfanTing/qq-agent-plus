@@ -61,6 +61,38 @@ test('设置保存：改发送频率后落盘，再还原', async ({ page }) => 
   await expect.poll(read).toBe(80);
 });
 
+test('语音服务切换：豆包/MiMo 各自恢复上次保存的音色', async ({ page }) => {
+  await login(page);
+  const setTts = async (data) => {
+    const response = await page.request.post('/api/config', { data: { tts: { enabled: true, ...data } } });
+    expect(response.ok(), await response.text()).toBeTruthy();
+  };
+  await setTts({
+    provider: 'doubao',
+    baseUrl: 'https://openspeech.bytedance.com/api/v3/tts/unidirectional',
+    voice: 'ICL_E2E_DOUBAO'
+  });
+  await setTts({
+    provider: 'mimo',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+    model: 'mimo-v2.5-tts',
+    voice: 'Chloe'
+  });
+
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="asr"]');
+  const service = page.locator('#cfg-tts-service');
+  await expect(service.locator('option[value="mimo"]')).toHaveCount(1);
+  await expect(service).toHaveValue('mimo');
+  await expect(page.locator('#cfg-tts-voice')).toHaveValue('Chloe');
+
+  await service.selectOption('doubao');
+  await expect(page.locator('#cfg-tts-voice')).toHaveValue('ICL_E2E_DOUBAO');
+  await service.selectOption('mimo');
+  await expect(page.locator('#cfg-tts-voice')).toHaveValue('Chloe');
+});
+
 test('生活层设置页可渲染、可保存，窄屏无横向溢出', async ({ page }) => {
   await login(page);
   await page.goto('/');
