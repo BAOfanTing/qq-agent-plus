@@ -9,7 +9,6 @@
 // 同一会话（群/私聊）同时最多一个运行；运行期间新消息只写 JSON（未读），不叠加触发。
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import {
   DATA_DIR,
@@ -39,11 +38,6 @@ const REMINDER_NOTE_BODY_MAX = 400;
 // 主动唤醒被"接不了"（会话在跑 / 并发满 / 没配模型）时的重试间隔：
 // 不设这个的话模型自安排的唤醒会在那些时刻被静默丢掉（2026-09-29 审查 P2）。
 const WAKE_RETRY_MS = 60 * 1000;
-function readProactiveLastAttempt() {
-  try {
-    return Number(JSON.parse(fs.readFileSync(PROACTIVE_STATE_FILE, 'utf8')).lastAttemptAt) || 0;
-  } catch { return 0; }
-}
 /**
  * "我说了话但没人接" 的补话判定（纯函数，便于单测）。
  * 只给一次机会：20 分钟内不重复安排；有人刚说话/已有安排/不在发言时段都不安排。
@@ -61,16 +55,6 @@ export function followUpPlan({
   if (!windowActive) return { schedule: false, reason: '不在可主动发言的时段' };
   if (now - Number(lastFollowUpAt || 0) < 20 * 60 * 1000) return { schedule: false, reason: '20 分钟内已经给过机会' };
   return { schedule: true, minutes: 10 + Math.floor(random() * 3), reason: '发言后没人接话' };
-}
-
-function writeProactiveLastAttempt(ts) {
-  try {
-    // 原子写：tmp 写完再 rename（与 config/sessions 同一口径），避免半个 JSON 落盘让
-    // 下次读取静默回退成"从没开过话题"（2026-10-12 审查）。
-    const tmp = `${PROACTIVE_STATE_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ lastAttemptAt: Number(ts) || Date.now() }), { mode: 0o600 });
-    fs.renameSync(tmp, PROACTIVE_STATE_FILE);
-  } catch { /* 写不进去也不影响正常发言 */ }
 }
 
 function activeHoursMinuteOf(value, end = false) {
@@ -123,6 +107,7 @@ import { visibleImpressions, memoryVisibilityOf } from './memory-visibility.js';
 import { knowledgeEnabled } from '../knowledge/store.js';
 import { buildReminderNote, reminderNoteCost } from './reminders.js';
 import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey, sanitizeUserText } from './util.js';
+import { readProactiveAttempts, writeProactiveAttempt } from './proactive-state.js';
 import { buildSystemPrompt, buildUserPrompt, isAtMe, resolveContextTier } from '../llm/prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
@@ -548,7 +533,8 @@ export class Orchestrator {
     this.pendingRolls = new Map();
     this.paused = getConfig().runtime?.paused === true;
     this.pauseReason = null;
-    this.proactiveTimer = null;
+    this.proactiveTimers = new Map();   // scope(group/private) -> timer：两个范围各自排程
+    this.proactiveEpoch = 0;            // 重启循环时 +1：旧 tick 不能再排新 timer
     this.proactiveSuppressions = new Set();
     // 模型自己安排的「稍后主动发言」：chatKey -> { at, note, timer }
     this.scheduledWakes = new Map();
@@ -2896,7 +2882,15 @@ export class Orchestrator {
 
   startProactiveLoop() {
     this.stopProactiveLoop();
-    const tick = async () => {
+    const epoch = ++this.proactiveEpoch;
+    const scopeLabel = (scope) => (scope === 'private' ? '私聊' : '群聊');
+    const schedule = (scope, delay) => {
+      if (epoch !== this.proactiveEpoch) return;   // 这一轮已被 stop/restart 作废
+      const timer = setTimeout(() => { tick(scope).catch(() => {}); }, delay);
+      timer.unref?.();
+      this.proactiveTimers.set(scope, timer);
+    };
+    const tick = async (scope) => {
       const cfg = getConfig();
       const nowTick = Date.now();
       const window = proactiveWindowState(cfg.proactive?.activeHours, nowTick);
@@ -2907,59 +2901,56 @@ export class Orchestrator {
           Math.max(120000, Number(cfg.proactive?.checkIntervalMaxMs) || 5400000)
         )
         : Math.max(60000, window.nextActiveAt - nowTick + 1000);
-      this.proactiveTimer = setTimeout(() => { tick().catch(() => {}); }, next);
-      this.proactiveTimer.unref?.();
+      schedule(scope, next);
       if (this.aborted || this.paused || cfg.proactive?.enabled !== true) return;
       if (!window.active) return;
-      // 两个范围都没勾：主开关开着也不会有候选，别在每个间隔空扫一遍
       const scopes = proactiveScopes(cfg);
-      if (!scopes.groups && !scopes.private) {
-        log.info('[proactive] 跳过：群聊与私聊都没有勾选');
-        return;
-      }
-      // 距上次判定不足一个间隔（例如刚重启过）就跳过：重启不额外换来一次开话题的机会
+      if (scope === 'group' ? !scopes.groups : !scopes.private) return;
+      // 距该范围上次判定不足一个间隔就跳过：重启/另一个范围判定都不额外换来一次机会
       const minGapMs = Math.max(60000, Number(cfg.proactive?.checkIntervalMinMs) || 1800000);
-      if (nowTick - readProactiveLastAttempt() < minGapMs * 0.8) {
-        log.info('[proactive] 跳过：距上次判定不足一个间隔');
+      const attempts = readProactiveAttempts(PROACTIVE_STATE_FILE);
+      if (nowTick - attempts[scope] < minGapMs * 0.8) {
+        log.info(`[proactive] 跳过（${scopeLabel(scope)}）：距上次判定不足一个间隔`);
         return;
       }
       if (this.proactiveSuppressions.size > 0) {
-        log.info('[proactive] 跳过：有后台任务在跑');
+        log.info(`[proactive] 跳过（${scopeLabel(scope)}）：有后台任务在跑`);
         return;
       }
       if (this.runningChats.size >= Math.max(1, Number(cfg.maxConcurrentRuns) || 2)) {
-        log.info('[proactive] 跳过：并发任务已满');
+        log.info(`[proactive] 跳过（${scopeLabel(scope)}）：并发任务已满`);
         return;
       }
       if (this.random() > proactiveProbability(cfg.proactive?.probability)) {
-        log.info('[proactive] 跳过：这次摇到了不发言');
-        // 摇了不发言也算把这一轮用掉
-        writeProactiveLastAttempt(nowTick);
+        // 摇了不发言也算把这个范围这一轮用掉；另一个范围的机会不受影响
+        log.info(`[proactive] 跳过（${scopeLabel(scope)}）：这次摇到了不发言`);
+        writeProactiveAttempt(PROACTIVE_STATE_FILE, scope, nowTick);
         return;
       }
-      // 按勾选范围挑一个"安静且允许"的会话（群聊 / 私聊）
-      const candidates = this.#proactiveCandidates(cfg);
+      // 只在该范围里挑一个"安静且允许"的会话
+      const candidates = this.#proactiveCandidates(cfg, scope);
       if (!candidates.length) {
         // 选中的会话都正热闹、或都在忙：这不算消耗，45 分钟后再看，别白瞎一个间隔
-        log.info('[proactive] 跳过：没有安静下来的会话，45 分钟后再看');
-        clearTimeout(this.proactiveTimer);
-        this.proactiveTimer = setTimeout(() => { tick().catch(() => {}); }, 45 * 60 * 1000);
-        this.proactiveTimer.unref?.();
+        log.info(`[proactive] 跳过（${scopeLabel(scope)}）：没有安静下来的会话，45 分钟后再看`);
+        clearTimeout(this.proactiveTimers.get(scope));
+        schedule(scope, 45 * 60 * 1000);
         return;
       }
-      // 真要开口了，才把这一轮用掉（本间隔内不再判定）
-      writeProactiveLastAttempt(nowTick);
+      // 真要开口了，才把该范围这一轮用掉（另一个范围仍有自己的机会）
+      writeProactiveAttempt(PROACTIVE_STATE_FILE, scope, nowTick);
       const chatKey = candidates[Math.floor(this.random() * candidates.length)];
-      log.info('[proactive] 主动开话题 → ' + chatKey);
+      log.info(`[proactive] 主动开话题（${scopeLabel(scope)}） → ${chatKey}`);
       this.wake(chatKey, { proactive: true }).catch((error) => log.error('[orchestrator] proactive 出错:', error));
     };
-    this.proactiveTimer = setTimeout(() => { tick().catch(() => {}); }, 15000);
-    this.proactiveTimer.unref?.();
+    const scopes = proactiveScopes(getConfig());
+    if (scopes.groups) schedule('group', 15000);
+    if (scopes.private) schedule('private', 15000);
   }
 
-  #proactiveCandidates(cfg) {
+  #proactiveCandidates(cfg, scope) {
+    const prefix = scope === 'private' ? 'private:' : 'group:';
     return proactiveCandidates({
-      chatKeys: this.store.listChats(),
+      chatKeys: this.store.listChats().filter((key) => String(key).startsWith(prefix)),
       cfg,
       metaOf: (chatKey) => this.store.getChatMeta(chatKey),
       canWake: (chatKey) => canRun(chatKey),
@@ -3537,8 +3528,9 @@ export class Orchestrator {
   }
 
   stopProactiveLoop() {
-    clearTimeout(this.proactiveTimer);
-    this.proactiveTimer = null;
+    this.proactiveEpoch = (this.proactiveEpoch || 0) + 1;
+    for (const timer of this.proactiveTimers.values()) clearTimeout(timer);
+    this.proactiveTimers.clear();
   }
 
   // ── 控制接口 ───────────────────────────────────────────────────────────

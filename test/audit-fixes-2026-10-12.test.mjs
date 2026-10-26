@@ -252,7 +252,9 @@ test('P3 锚点：stagedWake 白名单作废 / abortAll 停提醒循环与唤醒
   const o = src('src/core/orchestrator.js');
   assert.match(o, /if \(!item\.paced && !chatAllowed\(chatKey\)\)/, 'stagedWake 到点要先判 allow 白名单');
   assert.match(o, /this\.stopReminderLoop\(\);\s*\n\s*if \(this\.scheduledWakeTicker\) clearInterval/, 'abortAll 要停提醒循环与唤醒 ticker');
-  assert.ok(o.includes('const tmp = `${PROACTIVE_STATE_FILE}.${process.pid}.tmp`'), '主动开话题时间戳要原子写');
+  assert.match(o, /writeProactiveAttempt\(PROACTIVE_STATE_FILE, scope, nowTick\)/, '群聊/私聊各自落盘判定时间');
+  const state = src('src/core/proactive-state.js');
+  assert.match(state, /renameSync\(tmp, file\)/, '主动开话题时间戳要原子写');
 });
 
 test('P3 锚点：更新器 busy 文案 / no-update 带原因 / codeload 摘要入日志', () => {
