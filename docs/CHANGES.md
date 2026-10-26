@@ -116,7 +116,7 @@ HTML 里的 markdown 星号）。
 
 - 新增 `src/skills/market.js` 与 `skills/market.json`：官方索引列出可安装技能，安装前可预览 SKILL.md、允许工具、来源与 sha256。
 - 安装逐文件下载并校验哈希（单文件 ≤128KB、整包 ≤512KB、最多 8 个文件），写入 `data/skills/<id>/` 后再原子换入；内置技能不能被市场覆盖或卸载。
-- 索引默认官方地址，可配置；`allowPrivateIndex` 默认关闭（自建/局域网索引需显式打开）。索引失败时回退 7 天内的本地缓存。
+- 索引默认官方地址，可配置；raw GitHub 超时自动换 GitHub Contents API（索引与文件同一套后备），失败回退 7 天内的本地缓存。`allowPrivateIndex` 默认关闭（自建/局域网索引需显式打开）。
 - 技能页改为主题内子页签（已安装/技能市场），主开关、详情开关与会话开关统一走液态玻璃的胶囊开关；市场支持搜索、刷新、安装/更新、卸载。
 - 随仓库提供两个示例技能：`examples/skills/trip-planner`、`examples/skills/recipe-helper`。
 

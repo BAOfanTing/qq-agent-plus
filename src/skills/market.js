@@ -5,7 +5,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getConfig } from '../core/config.js';
-import { safeFetchRequest, safeFetchBinary } from '../llm/safe-fetch.js';
+import { safeFetchRequest } from '../llm/safe-fetch.js';
+import { createIndexTextFetcher } from '../plugins/index-fetch.js';
 import { getSkillRegistry, skillUserDir, validateSkillDir } from './registry.js';
 
 const MAX_INDEX_BYTES = 256 * 1024;
@@ -49,6 +50,19 @@ function compareVersions(left, right) {
   if (!a.pre) return 1;
   if (!b.pre) return -1;
   return a.pre.localeCompare(b.pre);
+}
+
+function textFetcher(maxBytes) {
+  const allowPrivate = getConfig().skills?.allowPrivateIndex === true;
+  return createIndexTextFetcher({
+    fetchImpl: (url, options = {}) => safeFetchRequest(url, {
+      maxBytes: options.maxBytes ?? maxBytes,
+      signal: options.signal,
+      headers: options.headers,
+      allowPrivate
+    }),
+    maxBytes
+  });
 }
 
 function resolveFileUrl(indexUrl, value) {
@@ -152,8 +166,7 @@ export async function loadMarketIndex({ force = false } = {}) {
     return { index: fileCache.index, fetchedAt: fileCache.at, stale: false, url };
   }
   try {
-    const allowPrivate = getConfig().skills?.allowPrivateIndex === true;
-    const response = await safeFetchRequest(url, { maxBytes: MAX_INDEX_BYTES, allowPrivate });
+    const response = await textFetcher(MAX_INDEX_BYTES)(url);
     if (response.statusCode !== 200) throw new Error(`索引 HTTP ${response.statusCode}`);
     if (response.truncated) throw new Error('索引超过 256KB 上限');
     const raw = JSON.parse(response.body);
@@ -201,23 +214,24 @@ function findEntry(index, id) {
   return entry;
 }
 
-async function downloadFile(file, allowPrivate = false) {
-  const result = await safeFetchBinary(file.url, MAX_FILE_BYTES, undefined, { allowPrivate });
-  if (result.buffer.length > MAX_FILE_BYTES) throw new Error('技能文件超过 128KB 上限');
-  const digest = crypto.createHash('sha256').update(result.buffer).digest('hex');
+async function downloadFile(file, fetcher) {
+  const result = await fetcher(file.url);
+  if (result.statusCode !== 200) throw new Error(`技能文件 HTTP ${result.statusCode}`);
+  if (result.truncated) throw new Error('技能文件超过 128KB 上限');
+  const text = String(result.body || '');
+  const digest = crypto.createHash('sha256').update(text, 'utf8').digest('hex');
   if (digest !== file.sha256) throw new Error('文件哈希不匹配，已拒绝安装');
-  const text = result.buffer.toString('utf8');
   if (!text.trim()) throw new Error('技能文件为空');
   if (text.includes('\0')) throw new Error('技能文件含 NUL 字符');
   return text;
 }
 
-async function downloadPackage(entry, allowPrivate = false) {
+async function downloadPackage(entry, fetcher) {
   const names = Object.keys(entry.files);
   let total = 0;
   const files = {};
   for (const name of names) {
-    const text = await downloadFile(entry.files[name], allowPrivate);
+    const text = await downloadFile(entry.files[name], fetcher);
     total += Buffer.byteLength(text, 'utf8');
     if (total > MAX_TOTAL_BYTES) throw new Error('技能包总大小超过 512KB 上限');
     files[name] = text;
@@ -239,7 +253,7 @@ function removeQuietly(target) {
 export async function previewMarketSkill(id) {
   const { index, url, fetchedAt, stale } = await loadMarketIndex();
   const entry = findEntry(index, id);
-  const files = await downloadPackage(entry, getConfig().skills?.allowPrivateIndex === true);
+  const files = await downloadPackage(entry, textFetcher(MAX_FILE_BYTES));
   const manifest = JSON.parse(files['skill.json']);
   const instructionsName = String(manifest.instructions || 'SKILL.md').trim();
   return {
@@ -266,7 +280,7 @@ export async function installMarketSkill({ id, expectedSha256 = '', confirm = fa
   const registry = getSkillRegistry();
   const current = registry.get(entry.id);
   if (current?.source === 'builtin') throw new Error('这是内置技能，不能从市场覆盖');
-  const files = await downloadPackage(entry, getConfig().skills?.allowPrivateIndex === true);
+  const files = await downloadPackage(entry, textFetcher(MAX_FILE_BYTES));
   const userDir = skillUserDir();
   fs.mkdirSync(userDir, { recursive: true, mode: 0o700 });
   const temp = path.join(userDir, `.tmp-${entry.id}-${process.pid}-${Date.now()}`);

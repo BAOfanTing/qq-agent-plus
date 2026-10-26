@@ -70,7 +70,7 @@ skills/<id>/
 - 每个文件必须带 `sha256`，安装时逐文件下载校验；单文件 ≤128KB、整包 ≤512KB、最多 8 个文件；
 - 安装先写临时目录，跑同一套 manifest 校验后再换入 `data/skills/<id>/`；失败会回滚；
 - 内置技能不能被市场覆盖或卸载，用户技能可随时卸载（只删 `data/skills/<id>`）；
-- 索引 30 分钟内走缓存；拉取失败时回退 7 天内的本地缓存，并在页面标明；
+- 索引 30 分钟内走缓存；raw.githubusercontent.com 超时会自动改走 GitHub Contents API（索引和文件都走同一条后备），失败时回退 7 天内的本地缓存并在页面标明；
 - `skills.allowPrivateIndex` 默认关闭；自建/局域网索引需要显式打开，市场默认只访问公网地址。
 
 随仓库提供两个示例：`examples/skills/trip-planner` 与 `examples/skills/recipe-helper`。
