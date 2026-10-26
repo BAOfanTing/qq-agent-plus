@@ -108,6 +108,10 @@ HTML 里的 markdown 星号）。
 - **存储与运维收口**：SQLite 走统一适配层；健康检查与备份演练覆盖 `memory/search.sqlite` 和 `living-memory/living-memory.sqlite`。
 - **控制台修复**：长期记忆页的删除/归档监听只绑一次；召回事件不再触发整页重绘；补状态筛选、归档恢复和来源回合保留天数。
 
+**性能**
+
+- 修复用量统计缓存 key 含 `Date.now()` 窗口终点导致永不命中（issue #61）：签名只看 range、会话文件集合和稳定起点；`24h` 滚动窗口按 TTL 分桶。命中时返回缓存对应的窗口，避免行数据与标签错位。
+
 **技能市场与技能页**
 
 - 新增 `src/skills/market.js` 与 `skills/market.json`：官方索引列出可安装技能，安装前可预览 SKILL.md、允许工具、来源与 sha256。

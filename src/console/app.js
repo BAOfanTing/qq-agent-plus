@@ -6581,17 +6581,30 @@ export function sessionsDirSignature() {
   }
 }
 
+/**
+ * 用量缓存的稳定 key。`end` 是 Date.now()，绝不能进 key —— 否则每次请求都是新 key，
+ * TTL 缓存永远不命中（issue #61）。today/days/all 的 start 固定；24h 是滚动窗口，
+ * 按 TTL 分桶，最多滞后一个 TTL。
+ */
+export function usageCacheSignature(range, win = resolveRange(range)) {
+  const bucketStart = win?.mode === '24h'
+    ? Math.floor(Number(win.start) / USAGE_CACHE_TTL_MS)
+    : Number(win?.start) || 0;
+  return `${sessionsDirSignature()}@${String(range)}@${win?.mode || ''}@${bucketStart}`;
+}
+
 function collectUsageRows({ range }) {
   const win = resolveRange(range);
   // 命中缓存就直接返回（注意 rows 会被调用方改写字段，所以必须给副本）
   // 窗口也进签名：TTL 跨过午夜时，同一个文件名集合下 today/7 天的起点已经变了，
   // 不能再命中前一天算好的 rows（否则今日花费会把昨天整天算进来）。
-  const sig = sessionsDirSignature() + '@' + String(range) + '@' + String(win?.start ?? '') + '-' + String(win?.end ?? '');
+  const sig = usageCacheSignature(range, win);
   const hit = usageRowsCache.get(sig);
   if (hit && (Date.now() - hit.at) < USAGE_CACHE_TTL_MS) {
     return {
       rows: hit.rows.slice(),
-      win: win || hit.win,
+      // 返回缓存对应的窗口：rows 是按它筛的，返回当前 win 会让标签和行列不同步。
+      win: hit.win || win,
       searchCount: hit.searchCount || 0,
       toolCounts: { ...(hit.toolCounts || {}) }
     };
