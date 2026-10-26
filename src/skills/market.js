@@ -214,8 +214,8 @@ function findEntry(index, id) {
   return entry;
 }
 
-async function downloadFile(file, fetcher) {
-  const result = await fetcher(file.url);
+async function downloadFile(file, fetchFn) {
+  const result = await fetchFn(file.url);
   if (result.statusCode !== 200) throw new Error(`技能文件 HTTP ${result.statusCode}`);
   if (result.truncated) throw new Error('技能文件超过 128KB 上限');
   const text = String(result.body || '');
@@ -226,12 +226,12 @@ async function downloadFile(file, fetcher) {
   return text;
 }
 
-async function downloadPackage(entry, fetcher) {
+async function downloadPackage(entry, fetchFn) {
   const names = Object.keys(entry.files);
   let total = 0;
   const files = {};
   for (const name of names) {
-    const text = await downloadFile(entry.files[name], fetcher);
+    const text = await downloadFile(entry.files[name], fetchFn);
     total += Buffer.byteLength(text, 'utf8');
     if (total > MAX_TOTAL_BYTES) throw new Error('技能包总大小超过 512KB 上限');
     files[name] = text;
