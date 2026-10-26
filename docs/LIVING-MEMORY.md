@@ -59,3 +59,5 @@ node scripts/migrate-living-memory.mjs \
 ```
 
 迁移不会复制 Qdrant 向量：它们是外部索引的实现细节，且可能与当前 Embedding 模型或维度不兼容。回填失败的卡片仍保留并可关键词检索；脚本可以安全重跑，只会继续导入缺失记录和重试未就绪的向量。
+
+Docker 部署可参考 [`deploy/docker-compose.living-memory-builtin.yml`](../deploy/docker-compose.living-memory-builtin.yml)。该模板只启动 Agent 容器；Embedding 配置通过部署环境变量注入，不需要服务令牌、Qdrant 或 `living-memory` sidecar。
