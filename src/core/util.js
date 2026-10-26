@@ -178,6 +178,11 @@ export function isSelfSender(senderId, selfId) {
  *   写了空格也会被吃掉；函数自己把这一步做完，输出对 sanitizeUserText 幂等，
  *   live 与历史两条链路渲染出的字节才完全相同。
  */
+/** 跨私聊展示时去掉引用块里的 #消息id：那个 id 只在原会话有效。 */
+export function stripQuoteMessageId(text) {
+  return String(text ?? '').replace(/\[引用#-?\d+·/g, '[引用');
+}
+
 export function formatQuoteRef(reply) {
   return buildQuoteRef(reply);
 }

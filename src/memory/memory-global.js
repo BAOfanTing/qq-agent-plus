@@ -160,11 +160,19 @@ export class MemoryStore {
     }
     const entries = this.privateHandoffs(chatKey, 3);
     if (!entries.length) return '';
-    return entries.map(({ chatKey: key, handoff }) => {
-      if (String(key) === String(chatKey)) return this.renderHandoff(handoff, '【上次会话交接】', totalCap);
+    const current = entries.find(({ chatKey: key }) => String(key) === String(chatKey));
+    const others = entries.filter(({ chatKey: key }) => String(key) !== String(chatKey));
+    // 一份总预算要分给所有交接：不能先给当前会话 full cap 再 slice，否则另外几份会被整段切掉。
+    const share = Math.max(100, Math.floor(totalCap / Math.max(1, others.length + (current ? 1 : 0))));
+    const otherCap = Math.min(1200, share);
+    const currentCap = current ? Math.max(100, totalCap - otherCap * others.length) : 0;
+    const chunks = [];
+    if (current) chunks.push(this.renderHandoff(current.handoff, '【上次会话交接】', currentCap));
+    for (const { chatKey: key, handoff } of others) {
       const peer = String(key).split(':')[1] || '另一位好友';
-      return this.renderHandoff(handoff, `【上次会话交接 · 与 ${peer}】`, Math.min(1200, totalCap));
-    }).join('\n\n').slice(0, totalCap);
+      chunks.push(this.renderHandoff(handoff, `【上次会话交接 · 与 ${peer}】`, otherCap));
+    }
+    return chunks.join('\n\n').slice(0, totalCap);
   }
   append(chatKey, category, content, extra = {}) {    if (category !== 'memberImpression') return null;
     const userId = String(extra.userId || '').trim(); const target = clean(extra.target, 60);

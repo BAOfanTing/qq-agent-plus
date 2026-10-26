@@ -152,7 +152,7 @@ async function stickerLookupHint(ctx, key) {
   }
 }
 
-import { normalizeMessageList, safeSlice, sanitizeUserText, textWithQuote, unquoteJsonString } from '../core/util.js';
+import { normalizeMessageList, safeSlice, sanitizeUserText, textWithQuote, unquoteJsonString, stripQuoteMessageId } from '../core/util.js';
 import { displayNameOf } from '../core/display-name.js';
 import { setMemberNote } from '../memory/memory-global.js';
 import { repairUnescapedStringQuotes } from '../core/json-repair.js';
@@ -2056,9 +2056,15 @@ export function buildToolDefs() {
         const offset = Math.max(0, Number(args.offset) || 0);
         const sharedPrivate = getConfig().memory?.privateSharedContext === true
           && String(ctx.chatKey || '').startsWith('private:');
+        const pastCount = Math.max(0, Number(ctx.session.pastStateCount) || 0);
+        // shared-private 的 pastState 不包含 leased 触发消息；pastStateCount 却把触发数加上了，
+        // 直接用会多跳过 N 条（复审 P2）。
+        const offsetBase = sharedPrivate
+          ? Math.max(0, pastCount - Math.max(0, Number(ctx.triggerEntries?.length) || 0))
+          : pastCount;
         const messages = ctx.store.recent(ctx.chatKey, {
           limit,
-          offset: offset + (ctx.session.pastStateCount || 0),
+          offset: offset + offsetBase,
           scope: sharedPrivate ? 'private' : 'chat',
           // 共享私聊时与【过去状态】同口径：只翻已处理的历史，不把别的好友的未读带进来
           readOnly: sharedPrivate
@@ -2076,7 +2082,7 @@ export function buildToolDefs() {
               time: new Date(m.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
               sender: m.self ? '我' : displayNameOf(m.senderId, m.senderName),
               // 与【过去状态】同一套渲染：正文缺引用块时补上（回复 + 合并转发卡片那类记录）
-              text: cross ? `[与 ${peer}] ${textWithQuote(m)}` : textWithQuote(m)
+              text: cross ? `[与 ${peer}] ${stripQuoteMessageId(m.text)}` : textWithQuote(m)
             };
           })
         });

@@ -4771,8 +4771,14 @@ export function createApp({
       // 运行时又读不到 keys['openai']（2026-09-29 审查 P0）
       const uiService = ttsServiceById(String(ttsBody.service || '').trim())?.id || '';
       delete ttsBody.service;
-      const svc = ttsServiceOfBaseUrl(ttsBody.baseUrl || cfgNow.tts?.baseUrl || '');
-      const targetId = svc?.id || uiService || String(ttsBody.provider || cfgNow.tts?.provider || 'openai');
+      // 显式送了 baseUrl（哪怕是空串）就按本次的算：切到「自定义」时前端会清空地址，
+      // 用 `ttsBody.baseUrl || 旧地址` 会把这一单错误归到上一家（voice/Key 都会存错）。
+      const baseForLookup = Object.hasOwn(ttsBody, 'baseUrl')
+        ? String(ttsBody.baseUrl || '').trim()
+        : String(cfgNow.tts?.baseUrl || '').trim();
+      const svc = ttsServiceOfBaseUrl(baseForLookup);
+      // UI 选中的预设优先于地址反查：自定义网关可能填了和某家预设相同的地址。
+      const targetId = uiService || svc?.id || String(ttsBody.provider || cfgNow.tts?.provider || 'openai');
       // 每家上次用的音色：客户端切预设时只送当前这一家的 voice，服务端按 targetId 记住；
       // 切回来时 UI 从 voices[这家] 恢复，不会把上一家的音色（如 MiMo 的 Chloe）发给豆包。
       const nextTtsVoices = { ...(cfgNow.tts?.voices || {}) };

@@ -95,10 +95,15 @@ test('私聊共享上下文：合并最近私聊交接，当前会话优先，�
   assert.match(merged, /【上次会话交接 · 与 2】/);
   assert.ok(merged.indexOf('A 的交接') < merged.indexOf('B 的交接'), '当前会话的交接排在最前');
 
+  // 当前会话的交接很长时，也不能把别的私聊整段挤掉（总预算要分给每一份）
+  memory.setHandoff('private:1', { summary: 'A'.repeat(3000) });
+  const longCurrent = memory.formatHandoffForPrompt('private:1');
+  assert.match(longCurrent, /B 的交接/, '当前会话很长时，别的私聊交接也要留出预算');
+
   cfg.memory.privateSharedContext = false;
   setRuntimeConfig(cfg);
   const isolated = memory.formatHandoffForPrompt('private:1');
-  assert.match(isolated, /A 的交接/);
+  assert.match(isolated, /A{100}/);
   assert.doesNotMatch(isolated, /B 的交接/);
   assert.doesNotMatch(isolated, /与 2/);
 });

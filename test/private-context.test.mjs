@@ -16,7 +16,7 @@ const { buildToolDefs, executeTool } = await import('../src/tools/tools.js');
 function seed() {
   const store = new ChatStore(0);
   store.appendIncoming('private:1', { mid: 11, ts: 1000, senderId: '1', senderName: 'A', text: '和 A 说的话' });
-  store.appendIncoming('private:2', { mid: 22, ts: 2000, senderId: '2', senderName: 'B', text: '和 B 说的话' });
+  store.appendIncoming('private:2', { mid: 22, ts: 2000, senderId: '2', senderName: 'B', text: '[引用#22·B：原话] 和 B 说的话' });
   store.appendIncoming('private:1', { mid: 12, ts: 3000, senderId: '1', senderName: 'A', text: 'A 又说了一句' });
   store.drainUnread('private:1');
   store.drainUnread('private:2');
@@ -39,7 +39,7 @@ test('store.recent(scope=private) 跨私聊按时间读取，默认仍只读当�
   assert.equal(only[0].chatKey, 'private:1');
 
   const all = store.recent('private:1', { limit: 10, scope: 'private' });
-  assert.deepEqual(all.map((m) => m.text), ['和 A 说的话', '和 B 说的话', 'A 又说了一句']);
+  assert.deepEqual(all.map((m) => m.text), ['和 A 说的话', '[引用#22·B：原话] 和 B 说的话', 'A 又说了一句']);
   assert.deepEqual(all.map((m) => m.chatKey), ['private:1', 'private:2', 'private:1']);
   store.close();
 });
@@ -50,8 +50,12 @@ test('私聊共享上下文：历史带 [与 <QQ>] 标签，别的会话 mid 不
   const state = buildPastState(store, 'private:1');
   assert.match(state.text, /和 B 说的话/);
   assert.match(state.text, /\[与 2\]/);
-  assert.doesNotMatch(state.text, /#22/);
+  assert.doesNotMatch(state.text, /#22/, '别的私聊的 mid 不能出现在引用块里');
   assert.match(state.text, /#11/);
+
+  // 本地 id 冲突：当前会话的 excludeIds 不能误伤别的私聊同号消息
+  const withExclude = buildPastState(store, 'private:1', { excludeIds: [2] });
+  assert.match(withExclude.text, /和 B 说的话/);
 
   const tool = buildToolDefs().find((d) => d.name === 'get_recent_messages');
   const result = await executeTool([tool], {

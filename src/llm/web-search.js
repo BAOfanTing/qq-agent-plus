@@ -531,7 +531,7 @@ async function deepSeekToolsSearch({ query, cfg, apiKey, signal }) {
     .map((item) => ({
       title: String(item?.title || item?.url || '搜索结果').trim(),
       url: String(item?.url || '').trim(),
-      snippet: String(item?.summary || item?.content || '').replace(/\s+/g, ' ').trim().slice(0, 500)
+      snippet: String(item?.summary || item?.snippet || item?.content || '').replace(/\s+/g, ' ').trim().slice(0, 500)
     }))
     .filter((item) => item.url)
     .slice(0, maxResults);

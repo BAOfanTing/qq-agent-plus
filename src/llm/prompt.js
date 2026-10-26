@@ -26,7 +26,7 @@ import {
   tierToSlider as _tierToSlider
 } from '../core/tier-slider.js';
 export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider };
-import { formatFullTime, formatShortTime, quotePrefixFor, safeSlice, sanitizeUserText, resolveSelfName } from '../core/util.js';
+import { formatFullTime, formatShortTime, quotePrefixFor, safeSlice, sanitizeUserText, resolveSelfName, stripQuoteMessageId } from '../core/util.js';
 import { displayNameOf } from '../core/display-name.js';
 import { voiceForPersona } from '../personas.js';
 import { buildStickerContext, buildStickerStrategyHint } from '../onebot/stickers.js';
@@ -947,7 +947,7 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
     limit: maxLimit + exclude.size,
     readOnly: true,
     scope: sharedPrivate ? 'private' : 'chat'
-  }).filter((m) => !exclude.has(m.id));
+  }).filter((m) => (sharedPrivate && String(m.chatKey || '') !== String(chatKey)) ? true : !exclude.has(m.id));
   // 引擎发的游戏私聊（身份/查验结果/行动回执）不进模型上下文：模型在私聊里不该是上帝视角
   // （2026-09-29 审查 P2；标记由群游戏管理器在发送时登记、ingest 落库时打上 eventKind='game-secret'）
   messages = messages.filter((m) => m.eventKind !== 'game-secret');
@@ -957,7 +957,7 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
     messages = messages.map((m) => {
       if (String(m.chatKey || '') === String(chatKey)) return m;
       const peer = String(m.chatKey || '').split(':')[1] || '另一位好友';
-      return { ...m, mid: null, text: `[与 ${peer}] ${m.text}` };
+      return { ...m, mid: null, reply: null, text: `[与 ${peer}] ${stripQuoteMessageId(m.text)}` };
     });
   }
   // 屏蔽名单兜底过滤：屏蔽生效前已存档的历史消息，也不能再进提示词。

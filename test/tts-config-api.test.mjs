@@ -79,6 +79,20 @@ test('自建网关的 Key 存进 keys.custom，运行时也按 custom 取；/api
   });
   assert.match(calls[0].url, /^https:\/\/my-gw\.example\/v1\/audio\/speech$/);
   assert.equal(calls[0].auth, 'Bearer sk-selfhosted');
+
+  // 4) 切到自定义且地址为空：不能把这次保存归到上一家（voice/Key 都会存错）
+  const emptyCustom = await request('/api/config', {
+    method: 'POST',
+    body: {
+      tts: {
+        enabled: true, service: 'custom', provider: 'openai', baseUrl: '',
+        model: 'custom-model', voice: 'custom-voice', apiKeyInput: 'sk-custom-empty'
+      }
+    }
+  });
+  assert.equal(emptyCustom.status, 200, JSON.stringify(emptyCustom.body));
+  assert.equal(getConfig().tts.voices.custom, 'custom-voice');
+  assert.equal(getConfig().tts.keys.custom, 'sk-custom-empty');
 });
 
 test('TTS 单槽 Key 的归属：切到没存过 Key 的服务会清掉它，切回来能用自己那把（2026-10-03）', async (t) => {
