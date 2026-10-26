@@ -111,8 +111,8 @@ commands are collected in [src/ops.js](src/ops.js) and documented in [docs/OPS.m
 
 ## Screenshots
 
-The screenshots below use anonymised demo data and show the current overview, message archive,
-voice-reply settings and plugin page:
+The screenshots below use the current default light + liquid-glass theme and anonymised demo data,
+and show the overview, message archive, voice-reply settings and plugin page:
 
 <p align="center">
   <img src="docs/assets/console-overview.png" alt="Overview: bot, protocol side and host status" width="49%">

@@ -76,7 +76,7 @@ QQ Agent Plus 是面向 Linux 服务器的 QQ 群聊 Agent。它连接外部 One
 
 ## 界面
 
-以下截图使用匿名演示数据，展示当前版本的总览、消息存档、语音回复与插件页：
+以下截图使用当前默认的 light + liquid glass 主题和匿名演示数据，展示总览、消息存档、语音回复与插件页：
 
 <p align="center">
   <img src="docs/assets/console-overview.png" alt="总览：机器人、协议端与主机状态" width="49%">
