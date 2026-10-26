@@ -562,9 +562,9 @@ export function addUsage(target, usage) {
 /** 兼容各供应商返回缓存命中 Token 的字段差异。 */
 export function cachedTokensOfUsage(usage = {}) {
   return Number(
-    usage.prompt_tokens_details?.cached_tokens
-    ?? usage.prompt_cache_hit_tokens
-    ?? usage.cached_tokens
+    usage?.prompt_tokens_details?.cached_tokens
+    ?? usage?.prompt_cache_hit_tokens
+    ?? usage?.cached_tokens
     ?? 0
   ) || 0;
 }
