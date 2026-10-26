@@ -91,6 +91,36 @@ test('语音服务切换：豆包/MiMo 各自恢复上次保存的音色', async
   await expect(page.locator('#cfg-tts-voice')).toHaveValue('ICL_E2E_DOUBAO');
   await service.selectOption('mimo');
   await expect(page.locator('#cfg-tts-voice')).toHaveValue('Chloe');
+
+  // 自定义/自建没有内置模型：不能把 MiMo 的模型名原样留在框里
+  await service.selectOption('custom');
+  await expect(page.locator('#cfg-tts-model')).toHaveValue('');
+});
+
+test('图片生成切换预设：没有内置模型的预设不能沿用上一家的模型名', async ({ page }) => {
+  await login(page);
+  const saved = await page.request.post('/api/config', {
+    data: {
+      imageGen: {
+        enabled: true,
+        baseUrl: 'https://api.siliconflow.cn/v1',
+        model: 'Qwen/Qwen-Image'
+      }
+    }
+  });
+  expect(saved.ok(), await saved.text()).toBeTruthy();
+
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="asr"]');
+  const service = page.locator('#cfg-img-service');
+  await expect(service.locator('option[value="modelscope"]')).toHaveCount(1);
+  await expect(page.locator('#cfg-img-model')).toHaveValue('Qwen/Qwen-Image');
+
+  await service.selectOption('modelscope');
+  await expect(page.locator('#cfg-img-model')).toHaveValue('', { timeout: 3000 });
+  await service.selectOption('siliconflow');
+  await expect(page.locator('#cfg-img-model')).toHaveValue('Tongyi-MAI/Z-Image-Turbo');
 });
 
 test('生活层设置页可渲染、可保存，窄屏无横向溢出', async ({ page }) => {

@@ -315,7 +315,16 @@ async function bindImageGenPreset() {
     if (s.baseUrl) { if (baseInput) baseInput.value = s.baseUrl; }
     else if (baseInput && match(baseInput.value)) baseInput.value = '';
     const defModel = s.models?.[0]?.id || '';
-    if (modelInput && defModel && (resetModel || !String(modelInput.value || '').trim())) modelInput.value = defModel;
+    if (modelInput) {
+      const curModel = String(modelInput.value || '').trim();
+      if (defModel && (resetModel || !curModel)) {
+        modelInput.value = defModel;
+      } else if (resetModel && !defModel) {
+        // 魔搭/自定义这类没有内置模型的预设：必须清掉上一家的模型名，
+        // 否则会把「Qwen/...」原样发给只认自己模型 id 的下一家（与 TTS 音色串用同型）。
+        modelInput.value = '';
+      }
+    }
     if (hint) hint.textContent = s.note || '';
     const needsKey = Array.isArray(s.creds) && s.creds.length > 0;
     if (keyInput) {
@@ -543,8 +552,9 @@ async function bindTtsControls() {
     if (resetModel || !String(modelInput?.value || '').trim()) {
       if (modelInput && models[0]?.id) modelInput.value = models[0].id;
       // 换家后别把上一家的模型名留在框里（火山/豆包不用模型名，留着会被当参数发出去）。
-      // 「自定义/自建」相反：模型名必填，清了它保存出去就是必报错（2026-09-29 审查 P1）
-      if (modelInput && !models.length && service?.id !== 'custom') modelInput.value = '';
+      // 「自定义/自建」也一样：MiMo 的模型名发给自建网关只会 404；清空后占位符会提示必填
+      //（2026-09-29 曾为了"必填"故意保留，结果就是跨服务串用，2026-10-26 复审改掉）。
+      if (modelInput && !models.length) modelInput.value = '';
     }
     if (modelInput) modelInput.placeholder = (models.length || service?.id === 'custom') ? 'FunAudioLLM/CosyVoice2-0.5B' : '（这家不需要模型名）';
     const model = String(modelInput?.value || '').trim();
