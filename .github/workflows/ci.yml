@@ -33,15 +33,16 @@ jobs:
       # Docker 镜像 Debian 12 是 5.1.9，CI 是 ubuntu-latest 的发行版包。
       - name: 安装 ffmpeg（GIF 帧条 / 音频转码用例依赖）
         run: |
-          set -e
-          # runner 的 apt 镜像偶尔会卡在 update；先直接装（镜像自带包索引），
-          # 失败再 update。每一步都有硬超时，不能把 test job 挂到几十分钟。
-          APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          # runner 的 apt 源偶尔会卡住（2026-10-26 实测 test job 在 update 上挂了 20 分钟）。
+          # 先直接装；失败再 update；仍失败就显式警告并继续 —— 缺 ffmpeg 的用例会按
+          # 既有 skip 逻辑标记 skipped，不能因为镜像源问题让整个 CI 红掉。
+          APT_OPTS=(-o Acquire::ForceIPv4=true -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
           if ! timeout 180 sudo apt-get install -y -qq "${APT_OPTS[@]}" ffmpeg; then
-            timeout 300 sudo apt-get update -qq "${APT_OPTS[@]}"
-            timeout 180 sudo apt-get install -y -qq "${APT_OPTS[@]}" ffmpeg
+            if ! timeout 240 sudo apt-get update -qq "${APT_OPTS[@]}" || ! timeout 180 sudo apt-get install -y -qq "${APT_OPTS[@]}" ffmpeg; then
+              echo "::warning::ffmpeg 安装失败（apt 源不可达），相关用例将跳过"
+            fi
           fi
-          ffmpeg -version | head -n 1
+          ffmpeg -version | head -n 1 || echo "ffmpeg unavailable; dependent tests will be skipped"
 
       - name: 语法检查（src / scripts / test / ui，递归）
         run: |
