@@ -61,6 +61,23 @@ test('设置保存：改发送频率后落盘，再还原', async ({ page }) => 
   await expect.poll(read).toBe(80);
 });
 
+test('设置 → 技能：渲染内置技能并可全局启停', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="skills"]');
+  await expect(page.locator('#settings-skills')).toBeVisible();
+  await expect(page.locator('#skills-list')).toContainText('群聊总结');
+
+  const toggle = page.locator('#cfg-skills-enabled');
+  const readEnabled = async () => (await (await page.request.get('/api/skills')).json()).enabled;
+  await expect.poll(readEnabled).toBe(true);
+  await toggle.click();
+  await expect.poll(readEnabled).toBe(false);
+  await toggle.click();
+  await expect.poll(readEnabled).toBe(true);
+});
+
 test('语音服务切换：豆包/MiMo 各自恢复上次保存的音色', async ({ page }) => {
   await login(page);
   const setTts = async (data) => {

@@ -244,6 +244,7 @@
           <strong>人物记忆</strong>
           <button class="btn btn-small" type="button" id="gm-refresh">刷新</button>
         </div>
+        <div class="gm-status" id="gm-memory-stats" style="padding:6px 12px 0"></div>
         <!-- 按 QQ 直接设备注：名单里只有"进过记忆库的人"（说过话的），
              没说过话的群友在这里补一个入口，否则备注就永远写不上。 -->
         <!-- 新建印象：长期印象按 QQ 全局存，但每条都要挂在某个来源会话上 —— 没有来源会话就写不进去。
@@ -261,7 +262,7 @@
             <button class="btn btn-small" type="button" id="gm-newimp-save">保存</button>
             <span class="gm-status" id="gm-newimp-status"></span>
           </div>
-          <div class="gm-status">保存会「整体替换」这个 QQ 的长期印象 —— 写入前会先读一次服务端现值，机器人刚记下的印象不会被覆盖掉。每位最多 20 条、每条 300 字以内，超出的部分不会写进去（会提示你）。想让机器人自己从聊天记录补，可以把设置 → 记忆里「发现新人的最少发言条数」调小后再整理。</div>
+          <div class="gm-status">保存会「整体替换」这个 QQ 的长期印象 —— 写入前会先读一次服务端现值，机器人刚记下的印象不会被覆盖掉。每位默认最多 50 条、每条 300 字以内，超出的部分不会写进去（会提示你）。想让机器人自己从聊天记录补，可以把设置 → 记忆里「发现新人的最少发言条数」调小后再整理。</div>
         </details>
         <details class="gm-anynote">
           <summary>按 QQ 设备注（只改称呼，不会建印象）</summary>
@@ -421,6 +422,7 @@
   <!-- 设置域（第二轮拆出；app.js 的 loadSettings/bindSettingsEvents/saveConfig 链全靠它们） -->
   <script type="module" src="/pages/settings-appearance.js"></script>
   <script type="module" src="/pages/life-feed.js"></script>
+  <script type="module" src="/pages/skills.js"></script>
   <script type="module" src="/pages/settings.js"></script>
   <script type="module" src="/pages/settings-voice.js"></script>
   <script type="module" src="/pages/settings-extensions.js"></script>

@@ -130,6 +130,12 @@ import { saveMemberNote } from './pages/memory.js';
     // /api/memory-files 仍是兼容入口；每个 detail 返回的是 GlobalPersonMemoryStore
     // 在该 sourceChatKey 可见的人物。这里只按 QQ 合并，sourceChatKeys 仅保留来源。
     const summary = await api('/api/memory-files');
+    const stats = summary.stats;
+    const statsNode = document.getElementById('gm-memory-stats');
+    if (statsNode && stats) {
+      const kb = Math.max(0, Math.round((Number(stats.index?.bytes) || 0) / 1024));
+      statsNode.textContent = `共 ${stats.entries} 条印象 · ${stats.people} 人 · 手写 ${stats.manual} 条 · 检索索引 ${stats.index?.docs || 0} 条 / ${kb} KB · 自动印象保留 ${stats.limits?.days ? `${stats.limits.days} 天` : '不过期'} · 每人上限 ${stats.limits?.max ?? 50} 条（手写不删）`;
+    }
     const files = Array.isArray(summary.files) ? summary.files : [];
     const sourceFiles = files.filter((file) => Number(file.impressionCount) > 0);
     const details = await mapLimit(sourceFiles, 6, async (file) => {
@@ -466,11 +472,11 @@ import { saveMemberNote } from './pages/memory.js';
         method: 'PUT',
         body: JSON.stringify({ name: '', note, impressions: merged })
       });
-      // 服务端会截到上限（每位最多 20 条）且**截的是尾部**（新加的行排在最后）：不回读就会
+      // 服务端会截到上限（每位默认最多 50 条）且**截的是尾部**（新加的行排在最后）：不回读就会
       // "输入框清空了 + 提示已保存"，用户以为写进去了（2026-10-14 复审 P2）。
       const kept = Array.isArray(result?.member?.impressions) ? result.member.impressions.length : merged.length;
       if (kept < merged.length) {
-        if (status) status.textContent = `只写进去 ${kept} 条（服务端上限 20 条）：这次要加的排在末尾被截掉了，先删几条旧的再试；输入框里还留着`;
+        if (status) status.textContent = `只写进去 ${kept} 条（服务端上限 50 条）：这次要加的排在末尾被截掉了，先删几条旧的再试；输入框里还留着`;
         return;
       }
       if (status) status.textContent = `已保存：${qq}（来源 ${chatKey}）`;

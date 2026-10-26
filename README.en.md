@@ -88,7 +88,7 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   60 seconds apart, failures and idempotent skips refund their approval and quota, and every write is
   audited host-side. Upgrades diff the manifest first; any permission-surface change must be
   confirmed, grants are bound to the manifest hash, and approvals/switches are reset by scope after
-  an upgrade. The console's Plugins page installs from the official index (12 plugins, all
+  an upgrade. The console's Plugins page installs from the official index (13 plugins, all
   zero-dependency, including Bilibili: search / understand a video / download and merge into the
   chat / interactions with per-call approval), from a local package, or from your own index.
   **Writing one** is documented in [docs/PLUGINS.md](docs/PLUGINS.md) (scaffold → debug against the
@@ -96,6 +96,13 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   the [index repository](https://github.com/sakurawwwxh/qq-agent-plugins) PR flow. The console's
   Plugins → Publish pane lists both, with the commands. Plugins are third-party code — read the
   declared capabilities on the detail page before installing.
+- **Skill packs** — read-only Markdown workflows plus a tool allowlist; no third-party code is executed.
+  When asked to follow a method, the model calls `skill_list` and then `skill_use`; only the tools allowed
+  by that skill remain available for the turn. Off by default, enable per chat. Built-ins: chat summary,
+  video digest, comment analysis. See [SKILLS](docs/SKILLS.md).
+- **Long-term memory & retrieval** — beyond people impressions and session handoffs, `memory_query`
+  searches keywords and short phrases with SQLite FTS5 and Chinese bigrams. Defaults: 50 impressions per person, manual
+  entries never pruned, no time-based expiry by default (0–3650 days configurable). See [MEMORY](docs/MEMORY.md).
 - **Operations & observability** — backups are AES-256-GCM encrypted by default, with restore and
   drill support; message APIs use cursor pagination and support JSONL/CSV export plus `ops prune`;
   `/api/metrics` returns JSON or Prometheus text, and logs can be emitted as structured JSON.
@@ -193,9 +200,9 @@ For container-only deployments:
 
 ```bash
 # GHCR
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.10
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.11
 # China (Aliyun ACR, public, amd64/arm64)
-docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.10
+docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.11
 
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus

@@ -4281,7 +4281,7 @@ try {
     const putFresh = posts.find((p) => p.method === 'PUT');
     const freshOk = JSON.stringify(putFresh?.body?.impressions) === JSON.stringify(['爱钓鱼', '刚记的', '刚加的']);
 
-    // ⑤ 服务端截断（每位最多 20 条，截的是尾部 → 新加的排最后）：要说清没写进去，
+    // ⑤ 服务端截断（每位默认最多 50 条，截的是尾部 → 新加的排最后）：要说清没写进去，
     //    并且**输入框保留内容**（原来无条件清空，用户以为写进去了）
     textInput.value = '第二十一条';
     sandbox.fetch = async (url, options = {}) => {

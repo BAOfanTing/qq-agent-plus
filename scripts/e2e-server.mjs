@@ -83,6 +83,7 @@ function buildConfig() {
   cfg.adminBriefing = { ...cfg.adminBriefing, enabled: false };
   cfg.reminders = { ...cfg.reminders, enabled: false };
   cfg.mcp = { enabled: false, servers: [] };
+  cfg.skills = { enabled: true, enabledIds: ['chat-summary'], perChat: {} };
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,

@@ -51,7 +51,8 @@ stays on HTTP/1.1 so a request that already reached the peer is never replayed.
 | Outbound network | `src/llm/safe-fetch.js` | HTTP/2-first HTTPS GET/media with HTTP/1.1 fallback, DNS pinning, SSRF checks, per-hop redirects, credential stripping and body/timeout caps |
 | Model access | `src/llm/llm.js`, `src/core/providers.js`, `src/core/provider-presets.js` | Chat Completions, retries, provider credentials, usage and per-channel thinking presets |
 | Sticker system | `src/onebot/sticker-manager.js`, `src/onebot/stickers.js` | QQ favourites sync, notes, tiered lookup, auto-collect and local asset storage |
-| Memory | `src/memory/`, `src/identity/` | Member impressions, handoff state and cross-chat identity index |
+| Memory | `src/memory/`, `src/identity/` | Member impressions, handoff state, cross-chat identity index and SQLite FTS5/bigram retrieval with capacity and retention limits |
+| Skills | `src/skills/` | Read-only Markdown workflows, manifest validation, per-chat enablement and tool-allowlist narrowing (`skill_list` / `skill_use`) |
 | Plugins | `src/plugins/` | Manifest validation (v1/v2), one child process per plugin (NDJSON protocol), host-side capabilities, AES-256-GCM secrets, settings schema, object-bound write approvals, quotas and write audit, index fetching, sha256-anchored install/replace/rollback, revocation |
 | MCP resources | `src/mcp/resource-server.js` | Read-only stdio MCP server exposing people memory, memes and pending reminders (sanitised, no config/credentials) |
 | Pilots (observability) | `src/pilots/` | Incident panel, relationship shadow evaluation, slang assets, multimodal-context pilot |

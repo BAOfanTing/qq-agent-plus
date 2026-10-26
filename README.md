@@ -62,11 +62,16 @@ QQ Agent Plus 是面向 Linux 服务器的 QQ 群聊 Agent。它连接外部 One
   统一渲染，作者不写界面代码；凭据 AES-256-GCM 加密落盘、不回显）；会改变外部账号数据的写操作走
   **信任模型**：动作开关默认关、每次执行要管理员批准具体目标、当天有配额、同插件两次写至少隔 60 秒、
   失败与幂等跳过自动退还，全部写操作留审计。升级前先对比 manifest，权限面变化必须确认；授权绑定
-  manifest 哈希，升级后按变化范围重置批准与开关。控制台「插件」页可一键安装（官方索引 12 个，全部零依赖，
+  manifest 哈希，升级后按变化范围重置批准与开关。控制台「插件」页可一键安装（官方索引 13 个，全部零依赖，
   含 B 站插件：搜索/看懂视频/下载合流发群/互动，写操作需逐次批准），也支持本地包与自己挂的索引；
   **自己写一个**见[插件文档](docs/PLUGINS.md)（生成骨架 → 真机调试 → 打包自测，三条命令），
   上架到官方索引走[索引仓库](https://github.com/sakurawwwxh/qq-agent-plugins)的 PR 流程 —— 控制台
   「插件 → 发布插件」页把这两件事和命令都列在了一处。插件是第三方代码，装之前请在详情页看清它声明的权限。
+- **技能包**：只读 Markdown 流程 + 工具白名单，不执行第三方代码。用户要求按流程总结/分析时，模型先
+  `skill_list` 再 `skill_use`；本轮只能调用技能允许的工具。默认关闭，可按群启用，内置群聊总结、视频读懂、
+  评论分析三个示例。见[技能文档](docs/SKILLS.md)。
+- **长期记忆与检索**：人物印象和会话交接之外，`memory_query` 支持关键词/短句检索（FTS5 + 中文二元组）；
+  默认每人最多 50 条、手写条目不删、默认不按时间过期（可配 0–3650 天）。见[记忆文档](docs/MEMORY.md)。
 - **运维与可观测性**：备份默认 AES-256-GCM 加密，支持 `restore` 与演练；消息接口改为游标分页，
   支持 JSONL/CSV 导出与 `ops prune`；`/api/metrics` 提供 JSON 与 Prometheus 文本，日志可切结构化 JSON。
 
@@ -151,9 +156,9 @@ HTTP/1.1；SSRF/DNS 固定、逐跳重定向、凭据剥离、响应体与超时
 
 ```bash
 # 海外 / GitHub 可达
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.10
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.11
 # 国内（阿里云 ACR，公开，amd64/arm64）
-docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.10
+docker pull crpi-xejkraqtqkngfp11.cn-guangzhou.personal.cr.aliyuncs.com/wangxinhong/qq-agent-plus:0.9.11
 
 git clone https://github.com/sakurawwwxh/qq-agent-plus.git
 cd qq-agent-plus

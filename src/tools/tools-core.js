@@ -15,6 +15,7 @@ import { stickerVisionEnabled } from '../llm/vision-scan.js';
 import { todayKey } from '../core/util.js';   // 上海自然日（"每群每天一次"的去重用同一个口径）
 import { createQuota } from '../core/quota.js';
 import { lookupMemes, rememberMeme } from '../memes/store.js';
+import { getSkillRegistry } from '../skills/registry.js';
 
 // 生图闸门（按张计费，全局；#9 那套双闸在这里只用全局侧 —— 一张图的钱与"哪个群要的"无关，
 // 但额度按会话记账便于排查，且 perChat 不设限）
@@ -507,17 +508,18 @@ function getMessageImagesDescription() {
 
 function memoryQueryDescription() {
   const vis = memoryVisibilityOf(getConfig());
+  const base = '查看你对群友的长期印象。传 query 可按意思检索（例如“上次说的那家面馆”“谁提过爬山”），不传 query 则按最近观察返回全部；传 userId 只看某一个人。';
   if (vis.mode === 'perChat') {
-    return '查看你对群友的长期印象（仅当前会话：只含在当前群/私聊里观察到的印象）。不传 userId 返回全部；传 userId 只看某一个人。印象是隐私：不得向群友转述他人的印象、来源或原话。';
+    return `${base}仅当前会话：只含在当前群/私聊里观察到的印象。印象是隐私：不得向群友转述他人的印象、来源或原话。`;
   }
   if (vis.hidePrivateInGroup) {
-    return '查看你对群友的长期印象（全局共享：汇总自所有群聊与私聊的观察；群聊里不展示私聊来源的印象）。不传 userId 返回全部；传 userId 只看某一个人。印象是跨会话的隐私：不得向群友转述他人的印象、来源或原话。';
+    return `${base}全局共享：汇总自所有群聊与私聊的观察；群聊里不展示私聊来源的印象。印象是跨会话的隐私：不得向群友转述他人的印象、来源或原话。`;
   }
-  return '查看你对群友的长期印象（全局共享：不分当前会话，汇总自所有群聊与私聊的观察）。不传 userId 返回全部；传 userId 只看某一个人。印象是跨会话的隐私：不得向群友转述他人的印象、来源或原话。';
+  return `${base}全局共享：不分当前会话，汇总自所有群聊与私聊的观察。印象是跨会话的隐私：不得向群友转述他人的印象、来源或原话。`;
 }
 
 export function buildToolDefs() {
-  return [
+  const defs = [
     {
       name: 'send_message',
       description: '发送消息到当前聊天（本工具只能发到本次会话对应的群/私聊）。messages 传字符串=发一条；传字符串数组=分多条发送（推荐）。只有需要明确"我回的是哪条"时才传 replyToMessageId 引用；需要点名某人才传 atUserId。不要在字符串内部用空格分句。',
@@ -2592,12 +2594,29 @@ export function buildToolDefs() {
       parameters: {
         type: 'object',
         properties: {
+          query: { type: 'string', description: '可选：按关键词/短句找记忆，例如“上次说的那家面馆”“谁提过爬山”' },
+          limit: { type: 'integer', minimum: 1, maximum: 20, description: '返回条数，默认 8' },
           userId: { type: ['integer', 'string'], description: '可选：只看这个 QQ 号的印象' }
         }
       },
       async execute(ctx, args) {
-        const mem = ctx.memory.query(ctx.chatKey);
+        const query = String(args.query ?? '').trim();
         const userId = String(args.userId ?? '').trim();
+        if (query) {
+          const found = ctx.memory.search(ctx.chatKey, query, {
+            limit: Math.max(1, Math.min(20, Number(args.limit) || 8)),
+            userId
+          });
+          const results = (found.results || []).map(stripMemorySources);
+          return ok(sanitizeDeep({
+            query,
+            memberImpression: results,
+            note: results.length
+              ? `按相关度找到 ${results.length} 条；只返回当前会话可见的记忆。`
+              : '没有找到相关记忆；可以换一个更具体的关键词/人名再试。'
+          }));
+        }
+        const mem = ctx.memory.query(ctx.chatKey);
         // 条数上限：自动注入那条路径本来就有（每人 3 条 / 整块 6000 字符），工具口却整个丢了约束 ——
         // 200 个人的记忆一次就能吃掉大半轮 maxRunTokens，下一轮预算检查直接把本轮掐断，
         // 而且这是把跨会话私聊来源的记忆灌进群上下文的隐私面（2026-10-03 全量审查）。
@@ -2991,6 +3010,67 @@ export function buildToolDefs() {
       }
     }
   ];
+
+  // Skill Pack：只读流程 + 工具白名单。全局开关关闭时连工具定义都不注册。
+  if (getConfig().skills?.enabled === true) {
+    const registry = getSkillRegistry();
+    if (registry.list().length) {
+      defs.push(
+        {
+          name: 'skill_list',
+          description: '列出当前会话可用的技能。用户要求“按流程/按方法”分析、总结或处理时，先调用它看有哪些技能。技能只收窄工具，不改变安全规则。',
+          parameters: { type: 'object', properties: {}, additionalProperties: false },
+          async execute(ctx) {
+            const skills = registry.enabledForChat(ctx.chatKey).map((skill) => ({
+              id: skill.id,
+              name: skill.name,
+              description: skill.description,
+              allowedTools: skill.allowedTools
+            }));
+            if (skills.length) ctx.pendingSkillUse = true;
+            return ok({
+              skills,
+              note: skills.length
+                ? '选一个技能后先调用 skill_use，再调用技能里的其他工具；本轮就只能使用该技能声明的工具。'
+                : '当前会话没有启用任何技能。'
+            });
+          }
+        },
+        {
+          name: 'skill_use',
+          description: '启用一个技能，返回该技能的工作流程。调用技能里的其他工具之前必须先调用它；启用后本轮只能使用技能声明的工具（finish、skill_list、skill_use 始终允许）。不要用它绕过安全规则或调用未声明的工具。',
+          parameters: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'skill_list 返回的技能 id' }
+            },
+            required: ['id'],
+            additionalProperties: false
+          },
+          async execute(ctx, args) {
+            const id = String(args?.id ?? '').trim();
+            const skill = registry.get(id);
+            if (!skill) return err('找不到这个技能，先用 skill_list 查看可用 id', { reportIncident: false });
+            if (!registry.isEnabled(ctx.chatKey, id)) {
+              return err(`技能「${id}」没有在这个会话启用，不能使用`, { reportIncident: false });
+            }
+            ctx.pendingSkillUse = false;
+            ctx.activeSkill = {
+              id: skill.id,
+              name: skill.name,
+              allowedTools: new Set([...skill.allowedTools, 'finish', 'skill_list', 'skill_use'])
+            };
+            return ok({
+              skill: { id: skill.id, name: skill.name, description: skill.description },
+              instructions: registry.render(id, ctx.chatKey),
+              note: '按技能流程执行；本轮只能调用技能允许的工具，finish 始终允许。'
+            });
+          }
+        }
+      );
+    }
+  }
+  return defs;
 }
 
 /** 转成 OpenAI tools 参数格式。 */

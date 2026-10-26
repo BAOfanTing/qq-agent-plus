@@ -1,0 +1,8 @@
+{
+  "id": "comment-analysis",
+  "name": "评论分析",
+  "version": "1.0.0",
+  "description": "把公开评论归成几类主要观点，区分事实、情绪和争议点，不伪造样本。",
+  "allowedTools": ["web_fetch", "send_message"],
+  "triggers": ["分析一下评论", "评论怎么看", "大家怎么评价"]
+}

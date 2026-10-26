@@ -1,0 +1,8 @@
+{
+  "id": "video-digest",
+  "name": "视频读懂",
+  "version": "1.0.0",
+  "description": "根据公开页面和已有信息，用几条短句讲清一个视频讲了什么、值不值得看。",
+  "allowedTools": ["web_fetch", "send_message"],
+  "triggers": ["这个视频讲了什么", "帮我看看这个视频", "视频总结"]
+}

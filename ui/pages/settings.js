@@ -26,6 +26,7 @@ import {
 } from './moments.js';
 import { renderPersonaSection } from './persona.js';
 import { renderLifeFeedSection } from './life-feed.js';
+import { renderSkillsSection } from './skills.js';
 import { hydratePlatformGates, hydratePlatformVoiceSelect, renderPlatformSection } from './platform.js';
 import { bindSnowlumaActions, hydrateSnowlumaPanel } from './snowluma.js';
 import { applyIcons } from '../core/icons.js';
@@ -55,6 +56,7 @@ const SECTION_SEARCH_TERMS = {
   moments: '每日 动态 说说 日报 早报',
   'qzone-interactions': '动态 互动 点赞 评论 空间',
   reminders: '提醒 定时',
+  skills: '技能 Skill 方法 流程 工作流 工具白名单',
   groupGame: '群游戏 游戏 数字炸弹 狼人杀 卧底',
   'time-control': '时间 控制 时段 峰谷 活跃',
   experiments: '实验 功能 试点',
@@ -103,7 +105,7 @@ function renderSettingsSidebar() {
   const menu = [
     ['对话与人格', [['persona', '人设'], ['chat', '聊天设置'], ['messageTypes', '消息类型'], ['allow', '聊天白名单'], ['memory', '记忆']]],
     ['模型与服务', [['api', '模型 API'], ['search', '搜索服务'], ['asr', '语音转文字'], ['token-saver', 'Token 节省']]],
-    ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['life-feed', '见闻'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
+    ['自动行为', [['moments', '每日动态'], ['qzone-interactions', '动态互动'], ['reminders', '定时提醒'], ['life-feed', '见闻'], ['skills', '技能'], ['groupGame', '群游戏'], ['time-control', '时间控制'], ['experiments', '实验功能']]],
     ['平台', [['platform', '平台能力'], ['onebot', 'OneBot'], ['mcp', 'MCP'], ['knowledge', '知识库'], ['memes', '梗库'], ['moderation', '群管理']]],
     ['系统', [['appearance', '外观'], ['desktop', '系统']]]
   ];
@@ -336,6 +338,7 @@ function renderSettingsSection(c) {
     reminders: () => renderRemindersSection(c),
     'qzone-interactions': () => renderQzoneInteractionSection(c),
     'life-feed': () => renderLifeFeedSection(c),
+    skills: () => renderSkillsSection(c),
     'time-control': () => renderTimeControlSection(c),
     'token-saver': () => renderTokenSaverSection(c),
     persona: () => renderPersonaSection(c),
@@ -765,7 +768,15 @@ function renderMemorySettingsSection(c) {
       <label for="cfg-mem-hideprivate">群聊里隐藏「私聊来源」的印象</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-mem-private-shared" ${mem.privateSharedContext === true ? 'checked' : ''} />
       <label for="cfg-mem-private-shared">所有私聊共用最近消息与交接（默认关）</label></div>
-    <div class="hint">打开后，机器人跟不同好友聊天时会看到彼此的最近私聊内容（消息会标「与 &lt;QQ&gt;」），更像同一个“人”；代价是不同好友的上下文会混在一起、更费 token，也可能把 A 的话带到 B 的对话里。写入和发送目标不变，群聊不受影响。</div>`;
+    <div class="hint">打开后，机器人跟不同好友聊天时会看到彼此的最近私聊内容（消息会标「与 &lt;QQ&gt;」），更像同一个“人”；代价是不同好友的上下文会混在一起、更费 token，也可能把 A 的话带到 B 的对话里。写入和发送目标不变，群聊不受影响。</div>
+    <div class="field-row" style="align-items:start">
+      <div class="field"><label for="cfg-mem-max-per-person">每人最多保留印象（条）</label>
+        <input type="number" id="cfg-mem-max-per-person" min="5" max="200" value="${esc(mem.maxImpressionsPerPerson ?? 50)}" />
+        <div class="hint">5–200，默认 50；控制台手写的印象永远保留，不会被这个上限删掉。</div></div>
+      <div class="field"><label for="cfg-mem-retention-days">自动印象保留（天）</label>
+        <input type="number" id="cfg-mem-retention-days" min="0" max="3650" value="${esc(mem.impressionRetentionDays ?? 0)}" />
+        <div class="hint">0 = 不按时间过期（默认）；可设 1–3650 天。手写印象不受影响。</div></div>
+    </div>`;
 }
 
 function renderTimeControlSection(c) {

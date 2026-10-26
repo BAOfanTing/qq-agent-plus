@@ -828,6 +828,12 @@ export const DEFAULT_CONFIG = {
     handoffEnabled: true,
     handoffTtlMinutes: 1440,
     handoffMaxChars: 4000,
+    // 每条人物印象最长 300 字；每人最多保留多少条、自动印象保留多少天。
+    // manual（控制台手写）永远不因这两项被删除；默认 0 天 = 不按时间过期（只受条数上限约束）。
+    // 不默认按时间删，是为了升级老库时不把几年前的历史印象当成“过期垃圾”直接清掉；
+    // 需要自动过期时由管理员显式设 1–3650 天。
+    maxImpressionsPerPerson: 50,
+    impressionRetentionDays: 0,
     useChatModel: true,                   // true = 整理模型跟随聊天模型；false = 使用下方专用模型
     provider: '',                         // 专用模型所属提供商 id（useChatModel=false 时生效）
     model: '',                            // 专用模型 id（useChatModel=false 时生效）
@@ -836,6 +842,13 @@ export const DEFAULT_CONFIG = {
     // 私聊上下文共享（issue #14）：默认关，保持每个私聊各自的历史/交接。
     // 打开后只在**读取**侧把最近私聊消息与交接合并；写入、发送目标、群聊都不变。
     privateSharedContext: false
+  },
+  // 技能包（Skill Pack）：只读 Markdown 流程 + 工具白名单，不执行第三方代码。
+  // enabled=false 时不注册 skill_list / skill_use，也不读技能目录。
+  skills: {
+    enabled: false,
+    enabledIds: [],
+    perChat: {}
   },
   // 省 Token 模式：只给"可控项"夹上限（上下文档位条数、单次运行轮数与预算、
   // 交接/印象注入字符数、提示词里的表情清单条数），不改写上面那些用户填的值。
@@ -1275,6 +1288,29 @@ function migrateConfig(parsed) {
   }
   out.providers = listOf(out.providers);
   out.customPersonas = listOf(out.customPersonas);
+  // 技能包：名单数组、按群覆盖键必须是规范 chatKey，值只收字符串 id。
+  if (!isPlainObject(out.skills)) out.skills = {};
+  out.skills.enabled = out.skills.enabled === true;
+  out.skills.enabledIds = listOf(out.skills.enabledIds)
+    .map((id) => String(id || '').trim())
+    .filter((id) => /^[a-z0-9][a-z0-9-]{1,63}$/.test(id));
+  const skillPerChat = {};
+  if (isPlainObject(out.skills.perChat)) {
+    for (const [key, ids] of Object.entries(out.skills.perChat)) {
+      if (!/^(group|private):\d+$/.test(key) || !Array.isArray(ids)) continue;
+      skillPerChat[key] = ids
+        .map((id) => String(id || '').trim())
+        .filter((id) => /^[a-z0-9][a-z0-9-]{1,63}$/.test(id));
+    }
+  }
+  out.skills.perChat = skillPerChat;
+  // 记忆容量/保留期：夹在可解释范围内；手写条目不受影响。
+  if (isPlainObject(out.memory)) {
+    const max = Math.round(Number(out.memory.maxImpressionsPerPerson));
+    if (Number.isFinite(max)) out.memory.maxImpressionsPerPerson = Math.max(5, Math.min(200, max));
+    const days = Math.round(Number(out.memory.impressionRetentionDays));
+    if (Number.isFinite(days)) out.memory.impressionRetentionDays = Math.max(0, Math.min(3650, days));
+  }
   // store 段缺失或形状坏掉时整段丢掉，交给默认值合并：补一个空对象会让后面的概率迁移
   // 以为"用户明确写了 0%"，把默认的全响应改成不响应。
   if (out.store !== undefined && !isPlainObject(out.store)) delete out.store;

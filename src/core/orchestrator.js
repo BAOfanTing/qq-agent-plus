@@ -127,6 +127,7 @@ import { buildSystemPrompt, buildUserPrompt, isAtMe, resolveContextTier } from '
 import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
 import { normalizeMid } from '../tools/tools-core.js';
+import { skillGateMessage } from '../skills/registry.js';
 import { visionEnabled } from '../llm/vision-scan.js';
 import { resolvePersona, voiceForPersona } from '../personas.js';
 import { currentProviders } from './providers.js';
@@ -2486,9 +2487,13 @@ export class Orchestrator {
         if (name === 'web_search' || name === 'web_fetch') webSearchCount += 1;
         session.webSearchCount = webSearchCount;
         markActivity(`正在调用 ${name}…`);
-        const blocked = finishBarrierBlock(name, { finished: finish, priorFailure });
+        // 技能白名单只收窄本轮工具；finish/skill_list/skill_use 在 skill_use 时已加入集合。
+        // send_message 永远放行：模型可能只是想“看看有哪些技能，然后正常回一句”；
+        // 不能因为列过一次技能就把正常回复也堵死。
+        const skillGate = skillGateMessage(ctx.activeSkill, ctx.pendingSkillUse, name);
+        const blocked = finishBarrierBlock(name, { finished: finish, priorFailure }) || skillGate;
         const result = blocked
-          ? { content: blocked, isError: true, reportIncident: false }
+          ? { content: blocked, isError: true, reportIncident: false, skillBlocked: Boolean(skillGate) }
           : await executeTool(toolDefs, ctx, name, argsRaw);
         if (
           result.isError
@@ -2547,7 +2552,9 @@ export class Orchestrator {
         }
         // 部分发送失败（sendTextBatch 有 failed 但至少一条成功）不算 isError，
         // 但同样不能把 finish 提交掉，否则失败的那几条永远没有下一轮补发（复审 P1）。
-        if (result.isError || result.partialFailure === true) priorFailure = true;
+        // 技能白名单拦截不是"工具坏了"：不让它把 finish 屏障也一起触发，否则模型被挡住一次
+        // 就再也收不了尾。真正的工具失败仍然照旧挡 finish。
+        if ((result.isError && result.skillBlocked !== true) || result.partialFailure === true) priorFailure = true;
         if (name === 'finish' && !result.isError) finish = true;
       }
       messages.push(...toolResults.map(({ role, tool_call_id, name, content }) => ({ role, tool_call_id, content, name })));
@@ -3355,10 +3362,11 @@ export class Orchestrator {
       .filter((e) => String(e?.origin || '') === 'manual')
       .map((e) => String(e?.content ?? '').trim())
       .filter(Boolean))];
-    // 存储层单次 replace 硬上限 20 条；手工条目已经占满时无法再塞自动条目，
-    // 宁可跳过本轮整理，也不能让 replace 把用户写的尾部静默截掉（复审 P2）。
-    if (manualContents.length >= 20) {
-      log.warn(`[memory] 整理 ${chatKey}/${mem.userId} 跳过：手工印象已有 ${manualContents.length} 条（存储上限 20），先人工清理再整理`);
+    // 存储层单次 replace 上限跟 memory.maxImpressionsPerPerson（默认 50）走；
+    // 手工条目已经占满时无法再塞自动条目，宁可跳过本轮整理，也不能让 replace 把用户写的尾部静默截掉（复审 P2）。
+    const manualLimit = Math.max(5, Math.min(200, Math.round(Number(getConfig().memory?.maxImpressionsPerPerson) || 50)));
+    if (manualContents.length >= manualLimit) {
+      log.warn(`[memory] 整理 ${chatKey}/${mem.userId} 跳过：手工印象已有 ${manualContents.length} 条（存储上限 ${manualLimit}），先人工清理再整理`);
       return null;
     }
     // 模型有时会把整理前看到的 "（记于 …）" 尾注一起抄回来；不归一化就会在手工条目旁边
@@ -3389,7 +3397,7 @@ export class Orchestrator {
       .map((e) => String(e?.content ?? '').trim())
       .filter((t) => t && !snapshotTexts.has(t) && !blockedManualKeys.has(impressionKey(t)));
     // 配额顺序：手工条目 > 整理期间新增 > 模型输出。手工条目超过 maxKeep 时也全保留
-    // （用户明确写下的内容比"每人最多 5 条"的软上限优先；存储层还有 20 条硬上限）。
+    // （用户明确写下的内容比"每人最多 5 条"的软上限优先；存储层上限见 memory.maxImpressionsPerPerson）。
     const fixed = [...manualContents];
     let mergedCount = 0;
     for (const text of appendedDuring) {

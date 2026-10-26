@@ -160,6 +160,8 @@ async function saveConfig({ quiet = false } = {}) {
       // 发现新人的门槛：这两项决定"聊天多但零印象"的人能不能进记忆
       discoverMinMessages: memThreshold(val('#cfg-mem-discover-min', c.memory?.discoverMinMessages ?? 20), c.memory?.discoverMinMessages, 500, 20),
       discoverMaxMembers: memThreshold(val('#cfg-mem-discover-max', c.memory?.discoverMaxMembers ?? 3), c.memory?.discoverMaxMembers, 20, 3),
+      maxImpressionsPerPerson: Math.max(5, Math.min(200, Number(val('#cfg-mem-max-per-person', c.memory?.maxImpressionsPerPerson ?? 50)) || 50)),
+      impressionRetentionDays: Math.max(0, Math.min(3650, Number(val('#cfg-mem-retention-days', c.memory?.impressionRetentionDays ?? 0)) || 0)),
       // #13 记忆可见性：默认 global + 不隐藏 = 历史行为
       visibility: {
         mode: val('#cfg-mem-visibility', c.memory?.visibility?.mode === 'perChat' ? 'perChat' : 'global'),
