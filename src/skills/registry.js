@@ -188,15 +188,22 @@ export function resetSkillRegistryForTests() {
 }
 
 /** 当前技能是否禁止调用某个工具；finish/skill_* 由 skill_use 写进 allowedTools。 */
-export function skillBlocksTool(activeSkill, name) {
+export function skillBlocksTool(activeSkill, name, args = null) {
   const allowed = activeSkill?.allowedTools;
-  return Boolean(allowed && typeof allowed.has === 'function' && !allowed.has(String(name || '')));
+  if (!allowed || typeof allowed.has !== 'function') return false;
+  const tool = String(name || '');
+  // 插件工具在 meta 挂载下都叫 plugin_call；技能写的是 bilibili__read 这类限定名。
+  // 这里按 args.tool 二次判断，避免一个技能只能写 plugin_call 就把所有插件都放开。
+  if (tool !== 'plugin_call') return !allowed.has(tool);
+  if (allowed.has('plugin_call')) return false;
+  const target = String(args?.tool || '').trim();
+  return !target || !allowed.has(target);
 }
 
 /** 统一的技能门提示；空串 = 放行。send_message/finish 在 pending 阶段仍可用。 */
-export function skillGateMessage(activeSkill, pendingSkillUse, name) {
+export function skillGateMessage(activeSkill, pendingSkillUse, name, args = null) {
   const tool = String(name || '');
-  if (skillBlocksTool(activeSkill, tool)) {
+  if (skillBlocksTool(activeSkill, tool, args)) {
     return `技能「${activeSkill.name}」本轮只允许：${[...activeSkill.allowedTools].join('、')}。`;
   }
   if (pendingSkillUse && !activeSkill && !['skill_list', 'skill_use', 'finish', 'send_message'].includes(tool)) {

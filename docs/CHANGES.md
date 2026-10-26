@@ -106,6 +106,9 @@ HTML 里的 markdown 星号）。
 - 新增 `skill_list` / `skill_use` 工具；`skill_use` 后本轮工具收窄到技能声明的 `allowedTools`，
   `finish` / `skill_list` / `skill_use` 始终允许。未声明工具会被宿主拒绝，且不触发 finish 屏障。
 - 内置 `chat-summary`、`video-digest`、`comment-analysis` 三个示例；技能清单校验 id、大小、工具名、semver。
+- `video-digest` / `comment-analysis` 改为优先调 B 站插件的 `bilibili__video` / `bilibili__read`
+  （meta 挂载下按 `plugin_call.args.tool` 校验限定名，写一个工具不会顺带放开同插件其他工具）；
+  非 B 站页面或未装插件时才退回 `web_fetch`。
 
 **主动开话题**
 

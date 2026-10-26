@@ -64,7 +64,7 @@ function runtimeBatch(defs, ctx, settings) {
     maxParallelReads: settings.maxParallelReads,
     execute: (call) => {
       const name = call?.function?.name ?? '';
-      const gate = skillGateMessage(ctx?.activeSkill, ctx?.pendingSkillUse, name);
+      const gate = skillGateMessage(ctx?.activeSkill, ctx?.pendingSkillUse, name, safeToolArgs(call?.function?.arguments));
       if (gate) {
         return { content: gate, isError: true, reportIncident: false, skillBlocked: true };
       }

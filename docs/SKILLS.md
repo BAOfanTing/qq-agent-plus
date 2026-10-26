@@ -28,6 +28,8 @@ skills/<id>/
 
 - `id`：小写字母/数字/连字符，2–64 位；
 - `allowedTools`：最多 40 个宿主工具名；`finish`、`skill_list`、`skill_use` 始终允许；
+  插件工具用限定名（如 `bilibili__read`）。meta 挂载下宿主会按 `plugin_call` 的 `args.tool` 二次校验，
+  写了限定名不会顺带放开同一插件的其他工具；
 - `triggers`：只用于控制台展示/人工选择，不会自动触发；
 - `SKILL.md`：≤64KB，只写流程、边界与输出格式。
 
@@ -56,8 +58,8 @@ skills/<id>/
 | id | 名称 | 允许工具 | 用途 |
 | --- | --- | --- | --- |
 | `chat-summary` | 群聊总结 | `get_recent_messages`、`send_message` | 结论 / 分歧 / 待办 |
-| `video-digest` | 视频读懂 | `web_fetch`、`send_message` | 主题 / 观点 / 适合谁看 |
-| `comment-analysis` | 评论分析 | `web_fetch`、`send_message` | 观点聚类 / 争议 / 样本边界 |
+| `video-digest` | 视频读懂 | `bilibili__search`、`bilibili__video`、`bilibili__read`、`web_fetch`、`send_message` | 优先用 B 站插件读元数据/字幕/评论；非 B 站链接退回 `web_fetch` |
+| `comment-analysis` | 评论分析 | 同上 | 用 B 站插件拿评论样本，非 B 站页面才 `web_fetch` |
 
 ## 限制
 

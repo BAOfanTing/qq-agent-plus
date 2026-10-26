@@ -2476,7 +2476,7 @@ export class Orchestrator {
         // 技能白名单只收窄本轮工具；finish/skill_list/skill_use 在 skill_use 时已加入集合。
         // send_message 永远放行：模型可能只是想“看看有哪些技能，然后正常回一句”；
         // 不能因为列过一次技能就把正常回复也堵死。
-        const skillGate = skillGateMessage(ctx.activeSkill, ctx.pendingSkillUse, name);
+        const skillGate = skillGateMessage(ctx.activeSkill, ctx.pendingSkillUse, name, safeParse(argsRaw));
         const blocked = finishBarrierBlock(name, { finished: finish, priorFailure }) || skillGate;
         const result = blocked
           ? { content: blocked, isError: true, reportIncident: false, skillBlocked: Boolean(skillGate) }

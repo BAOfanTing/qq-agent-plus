@@ -91,6 +91,29 @@ test('skill_list / skill_use 只注册在开启后，并收窄工具集合', asy
   assert.equal(blocked.isError, true, '未启用的技能不能切换');
 });
 
+test('技能通过 plugin_call 调插件工具时按限定名校验', async () => {
+  updateConfig({
+    ...structuredClone(DEFAULT_CONFIG),
+    skills: { enabled: true, enabledIds: ['video-digest'], perChat: { __replace__: {} } }
+  });
+  resetSkillRegistryForTests();
+  const defs = buildToolDefs();
+  const ctx = { chatKey: 'group:1', session: {} };
+  assert.equal((await executeTool(defs, ctx, 'skill_use', JSON.stringify({ id: 'video-digest' }))).isError, undefined);
+  const skill = ctx.activeSkill;
+  // 技能只需声明 bilibili__read；plugin_call 本身不必在白名单里。
+  assert.equal(skillBlocksTool(skill, 'plugin_call', { tool: 'bilibili__read', args: { url: 'BV1xx' } }), false);
+  assert.equal(skillBlocksTool(skill, 'plugin_call', { tool: 'bilibili__search' }), false);
+  assert.equal(skillBlocksTool(skill, 'plugin_call', { tool: 'bilibili__download' }), true);
+  assert.equal(skillBlocksTool(skill, 'plugin_call', {}), true);
+  assert.equal(skillBlocksTool(skill, 'plugin_call'), true);
+  assert.match(skillGateMessage(skill, false, 'plugin_call', { tool: 'bilibili__download' }), /本轮只允许/);
+  assert.equal(skillGateMessage(skill, false, 'plugin_call', { tool: 'bilibili__read' }), '');
+  // 直接调用（非 meta 挂载）仍按名字校验，未列出的插件工具被拦。
+  assert.equal(skillBlocksTool(skill, 'bilibili__read'), false);
+  assert.equal(skillBlocksTool(skill, 'bilibili__download'), true);
+});
+
 test('关闭技能包时不注册 skill 工具，也不加载用户技能', () => {
   updateConfig({ ...structuredClone(DEFAULT_CONFIG), skills: { enabled: false, enabledIds: [], perChat: { __replace__: {} } } });
   resetSkillRegistryForTests();
