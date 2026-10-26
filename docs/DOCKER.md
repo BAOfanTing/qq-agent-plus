@@ -249,8 +249,8 @@ QQ_AGENT_IMAGE=ghcr.io/sakurawwwxh/qq-agent-plus:<上一个版本> docker compos
 4. 用户拉取：
 
 ```bash
-docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.12
-docker pull <CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.12
+docker pull ghcr.io/sakurawwwxh/qq-agent-plus:0.9.11
+docker pull <CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.11
 ```
 
 腾讯云 TCR 同理，把 `CN_REGISTRY` 换成 `ccr.ccs.tencentyun.com`。
@@ -262,7 +262,7 @@ docker pull <CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.12
 ### Compose 使用国内镜像
 
 ```bash
-QQ_AGENT_IMAGE=<CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.12 \
+QQ_AGENT_IMAGE=<CN_REGISTRY>/<命名空间>/qq-agent-plus:0.9.11 \
 SNOWLUMA_IMAGE=docker.m.daocloud.io/motricseven7/snowluma:v1.14.22 \
 docker compose up -d
 ```
@@ -310,7 +310,7 @@ ffmpeg 层有构建缓存，后续版本主要重新传应用层；首次推送�
 
 | 服务 | 默认 | 来源 |
 | --- | --- | --- |
-| `agent` | `crpi-.../wangxinhong/qq-agent-plus:0.9.12` | 阿里云 ACR（国内可直连） |
+| `agent` | `crpi-.../wangxinhong/qq-agent-plus:0.9.11` | 阿里云 ACR（国内可直连） |
 | `snowluma` | `docker.m.daocloud.io/motricseven7/snowluma:v1.14.22` | 镜像站（官方在 Docker Hub） |
 
 compose 默认已经走国内可访问的地址；Docker Hub 在国内通常不可直连，GHCR 也可能很慢。
