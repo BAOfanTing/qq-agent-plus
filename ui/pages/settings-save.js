@@ -164,7 +164,8 @@ async function saveConfig({ quiet = false } = {}) {
       visibility: {
         mode: val('#cfg-mem-visibility', c.memory?.visibility?.mode === 'perChat' ? 'perChat' : 'global'),
         hidePrivateInGroup: chk('#cfg-mem-hideprivate', c.memory?.visibility?.hidePrivateInGroup === true)
-      }
+      },
+      privateSharedContext: chk('#cfg-mem-private-shared', c.memory?.privateSharedContext === true)
     };
   }
 

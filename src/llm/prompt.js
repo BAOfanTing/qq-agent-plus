@@ -942,10 +942,24 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
   const maxLimit = Math.min(PAST_STATE_MAX_MESSAGES, limit === null ? Math.max(1, Number(cfg.allCount) || 300) : Math.max(0, Number(limit) || 0));
   const exclude = new Set(excludeIds);
   if (maxLimit <= 0) return { text: '', count: 0, messages: [] };
-  let messages = store.recent(chatKey, { limit: maxLimit + exclude.size, readOnly: true }).filter((m) => !exclude.has(m.id));
+  const sharedPrivate = getConfig().memory?.privateSharedContext === true && String(chatKey || '').startsWith('private:');
+  let messages = store.recent(chatKey, {
+    limit: maxLimit + exclude.size,
+    readOnly: true,
+    scope: sharedPrivate ? 'private' : 'chat'
+  }).filter((m) => !exclude.has(m.id));
   // 引擎发的游戏私聊（身份/查验结果/行动回执）不进模型上下文：模型在私聊里不该是上帝视角
   // （2026-09-29 审查 P2；标记由群游戏管理器在发送时登记、ingest 落库时打上 eventKind='game-secret'）
   messages = messages.filter((m) => m.eventKind !== 'game-secret');
+  // 私聊共享上下文：别的私聊消息要标明"与谁"，并去掉只在原会话有效的 mid，
+  // 否则模型会拿别的会话的 #id 去引用/看图，永远查不到（issue #14）。
+  if (sharedPrivate) {
+    messages = messages.map((m) => {
+      if (String(m.chatKey || '') === String(chatKey)) return m;
+      const peer = String(m.chatKey || '').split(':')[1] || '另一位好友';
+      return { ...m, mid: null, text: `[与 ${peer}] ${m.text}` };
+    });
+  }
   // 屏蔽名单兜底过滤：屏蔽生效前已存档的历史消息，也不能再进提示词。
   // 入口拦截只管"新消息"，这里管"老库存"。机器人自己的发言（self）不过滤。
   const [pKind, pId] = String(chatKey || '').split(':');

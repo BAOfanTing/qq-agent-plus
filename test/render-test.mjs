@@ -1668,6 +1668,7 @@ try {
     vm.runInContext(`state.config = ${JSON.stringify({ ...cfg, memory: { ...(cfg.memory || {}), discoverMinMessages: 20, discoverMaxMembers: 3 } })};`, ctx);
     document.querySelector('#cfg-mem-discover-min').value = '8';
     document.querySelector('#cfg-mem-discover-max').value = '5';
+    document.querySelector('#cfg-mem-private-shared').checked = true;
     const before = sandbox.fetch;
     sandbox.fetch = async (url, options) => {
       if (String(url).includes('/api/config') && options?.method === 'POST') {
@@ -1679,7 +1680,9 @@ try {
     try { await ctx.saveConfig({ quiet: true }); } catch { /* 看 patch */ }
     sandbox.fetch = before;
     const memOk = posted?.memory?.discoverMinMessages === 8 && posted?.memory?.discoverMaxMembers === 5
-      && code.includes('id="cfg-mem-discover-min"') && code.includes('id="cfg-mem-discover-max"');
+      && posted?.memory?.privateSharedContext === true
+      && code.includes('id="cfg-mem-discover-min"') && code.includes('id="cfg-mem-discover-max"')
+      && code.includes('id="cfg-mem-private-shared"');
     memOk ? pass++ : fail++;
     console.log('  ' + (memOk ? 'OK   ' : 'FAIL ') + '设置页：记忆整理可设"发现新人的最少发言条数/单次最多发现几人"并落到 memory.*'
       + (memOk ? '' : ` -> ${JSON.stringify(posted?.memory)}`));

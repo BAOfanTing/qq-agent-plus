@@ -830,7 +830,10 @@ export const DEFAULT_CONFIG = {
     provider: '',                         // 专用模型所属提供商 id（useChatModel=false 时生效）
     model: '',                            // 专用模型 id（useChatModel=false 时生效）
     // 记忆可见性（#13）：默认与历史行为逐字一致（global + 不隐藏），切换必须显式操作
-    visibility: { mode: 'global', hidePrivateInGroup: false }
+    visibility: { mode: 'global', hidePrivateInGroup: false },
+    // 私聊上下文共享（issue #14）：默认关，保持每个私聊各自的历史/交接。
+    // 打开后只在**读取**侧把最近私聊消息与交接合并；写入、发送目标、群聊都不变。
+    privateSharedContext: false
   },
   // 省 Token 模式：只给"可控项"夹上限（上下文档位条数、单次运行轮数与预算、
   // 交接/印象注入字符数、提示词里的表情清单条数），不改写上面那些用户填的值。

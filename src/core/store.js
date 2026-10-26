@@ -11,7 +11,7 @@ function entry(row) {
   // reply 是历史里写入的 JSON 文本：一行坏数据不应该让整个会话读取抛错（threadEntry 同款护栏）
   if (row.reply) { try { reply = JSON.parse(row.reply); } catch { reply = null; } }
   return {
-    ...row, senderId: row.sender_id, senderName: row.sender_name,
+    ...row, chatKey: String(row.chat_key || ''), senderId: row.sender_id, senderName: row.sender_name,
     self: !!row.self, read: row.state === 'acked',
     reply,
     media: JSON.parse(row.media || '[]'),
@@ -1070,14 +1070,21 @@ export class ChatStore {
     };
   }
 
-  recent(chatKey, { limit = 80, offset = 0, includeSelf = true, readOnly = false, afterId = 0, beforeId = 0 } = {}) {
+  recent(chatKey, { limit = 80, offset = 0, includeSelf = true, readOnly = false, afterId = 0, beforeId = 0, scope = 'chat' } = {}) {
     // afterId：增量消费按 id **升序**取"游标之后最早的一批"；积压超过 limit 时下一轮继续，
     // 不能按 DESC 取最新 N 条再 reverse —— 那会把落在窗口外的最老消息静默跳过（游戏丢票）。
     // beforeId：控制台向上翻页，取"比这个 id 更老的最新 N 条"，仍按时间正序返回。
     // 非增量调用仍保持"最新 N 条、按时间正序返回"的既有语义。
+    // scope='private'：只给"私聊共享上下文"用，读所有 private:*，按 ts 排序（跨会话没有可比 id）。
     const after = Number(afterId) > 0 ? Number(afterId) : 0;
     const before = !after && Number(beforeId) > 0 ? Number(beforeId) : 0;
     const filters = `${includeSelf ? '' : 'AND self=0'} ${readOnly ? "AND state='acked'" : ''}`;
+    if (scope === 'private' && String(chatKey || '').startsWith('private:')) {
+      const rows = this.db.prepare(`SELECT * FROM messages WHERE chat_key LIKE 'private:%' ${filters}
+        ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`)
+        .all(Math.max(1, Number(limit) || 1), Math.max(0, Number(offset) || 0));
+      return rows.reverse().map(entry);
+    }
     if (after) {
       const rows = this.db.prepare(`SELECT * FROM messages WHERE chat_key=? ${filters}
         AND id > ? ORDER BY id ASC LIMIT ?`)

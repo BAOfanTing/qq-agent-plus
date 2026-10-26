@@ -761,7 +761,10 @@ function renderMemorySettingsSection(c) {
       <div class="hint">改成「仅本会话」后，模型在群里只看得到这个群里观察到的印象；控制台人物记忆页仍可查全部（来源不交给模型）。</div>
     </div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-mem-hideprivate" ${vis.hidePrivateInGroup ? 'checked' : ''} />
-      <label for="cfg-mem-hideprivate">群聊里隐藏「私聊来源」的印象</label></div>`;
+      <label for="cfg-mem-hideprivate">群聊里隐藏「私聊来源」的印象</label></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-mem-private-shared" ${mem.privateSharedContext === true ? 'checked' : ''} />
+      <label for="cfg-mem-private-shared">所有私聊共用最近消息与交接（默认关）</label></div>
+    <div class="hint">打开后，机器人跟不同好友聊天时会看到彼此的最近私聊内容（消息会标「与 &lt;QQ&gt;」），更像同一个“人”；代价是不同好友的上下文会混在一起、更费 token，也可能把 A 的话带到 B 的对话里。写入和发送目标不变，群聊不受影响。</div>`;
 }
 
 function renderTimeControlSection(c) {

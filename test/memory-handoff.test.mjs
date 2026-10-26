@@ -77,3 +77,28 @@ test('does not inject handoff when the feature is disabled', () => {
   assert.ok(memory.getHandoff('private:456'));
   assert.equal(memory.formatHandoffForPrompt('private:456'), '');
 });
+
+test('私聊共享上下文：合并最近私聊交接，当前会话优先，默认关仍隔离', () => {
+  const cfg = structuredClone(DEFAULT_CONFIG);
+  cfg.memory.handoffEnabled = true;
+  cfg.memory.handoffMaxChars = 4000;
+  cfg.memory.privateSharedContext = true;
+  setRuntimeConfig(cfg);
+  const memory = new MemoryStore();
+  memory.clearHandoff('private:456');
+  memory.setHandoff('private:1', { topic: '与 A 的话题', summary: 'A 的交接' });
+  memory.setHandoff('private:2', { topic: '与 B 的话题', summary: 'B 的交接' });
+
+  const merged = memory.formatHandoffForPrompt('private:1');
+  assert.match(merged, /A 的交接/);
+  assert.match(merged, /B 的交接/);
+  assert.match(merged, /【上次会话交接 · 与 2】/);
+  assert.ok(merged.indexOf('A 的交接') < merged.indexOf('B 的交接'), '当前会话的交接排在最前');
+
+  cfg.memory.privateSharedContext = false;
+  setRuntimeConfig(cfg);
+  const isolated = memory.formatHandoffForPrompt('private:1');
+  assert.match(isolated, /A 的交接/);
+  assert.doesNotMatch(isolated, /B 的交接/);
+  assert.doesNotMatch(isolated, /与 2/);
+});

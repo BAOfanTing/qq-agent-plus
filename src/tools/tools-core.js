@@ -2054,18 +2054,31 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         const limit = Math.min(100, Math.max(1, Number(args.limit) || 30));
         const offset = Math.max(0, Number(args.offset) || 0);
-        const messages = ctx.store.recent(ctx.chatKey, { limit, offset: offset + (ctx.session.pastStateCount || 0) })
+        const sharedPrivate = getConfig().memory?.privateSharedContext === true
+          && String(ctx.chatKey || '').startsWith('private:');
+        const messages = ctx.store.recent(ctx.chatKey, {
+          limit,
+          offset: offset + (ctx.session.pastStateCount || 0),
+          scope: sharedPrivate ? 'private' : 'chat',
+          // 共享私聊时与【过去状态】同口径：只翻已处理的历史，不把别的好友的未读带进来
+          readOnly: sharedPrivate
+        })
           // 引擎发的游戏私聊（身份/查验结果/行动回执）连翻页都不该看到：模型在私聊里不是上帝视角
           .filter((m) => m.eventKind !== 'game-secret');
         return ok({
           count: messages.length,
-          messages: messages.map((m) => ({
-            messageId: m.mid ?? undefined,
-            time: new Date(m.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-            sender: m.self ? '我' : displayNameOf(m.senderId, m.senderName),
-            // 与【过去状态】同一套渲染：正文缺引用块时补上（回复 + 合并转发卡片那类记录）
-            text: textWithQuote(m)
-          }))
+          messages: messages.map((m) => {
+            const cross = sharedPrivate && String(m.chatKey || '') !== String(ctx.chatKey);
+            const peer = cross ? (String(m.chatKey).split(':')[1] || '另一位好友') : '';
+            return {
+              // 别的私聊的 mid 在当前会话无效，不能给模型拿去引用/看图
+              messageId: cross ? undefined : (m.mid ?? undefined),
+              time: new Date(m.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+              sender: m.self ? '我' : displayNameOf(m.senderId, m.senderName),
+              // 与【过去状态】同一套渲染：正文缺引用块时补上（回复 + 合并转发卡片那类记录）
+              text: cross ? `[与 ${peer}] ${textWithQuote(m)}` : textWithQuote(m)
+            };
+          })
         });
       }
     },
