@@ -4,6 +4,8 @@
 # Float32 vectors are stored below the Agent's /data bind mount. Pair this file
 # with scripts/migrate-living-memory.mjs when replacing the retired sidecar.
 
+version: "3.8"
+
 services:
   agent:
     image: ${QQ_AGENT_IMAGE:?set the built-in QQ Agent image tag}
