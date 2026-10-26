@@ -2448,6 +2448,26 @@ export class Orchestrator {
         break;
       }
 
+      // finish 是终止标记，必须最后执行：模型偶尔会把它排在 send_message 前面，
+      // 若按原顺序执行，finish 先成功 → 外层的 !finish 立刻退出循环，后面的 send_message
+      // 即便被屏障拒绝也没有下一轮让模型补发，消息就静默丢了（复审 P1）。
+      if (toolCalls.length > 1) {
+        const ordered = [
+          ...toolCalls.filter((call) => call?.function?.name !== 'finish'),
+          ...toolCalls.filter((call) => call?.function?.name === 'finish')
+        ];
+        if (ordered.some((call, index) => call !== toolCalls[index])) {
+          toolCalls = ordered;
+          const lastAssistant = messages[messages.length - 1];
+          if (lastAssistant?.role === 'assistant') lastAssistant.tool_calls = toolCalls;
+          const live = this.sessions.current.get(session.id);
+          const liveLast = live?.messages?.[live.messages.length - 1];
+          if (liveLast?.role === 'assistant') liveLast.tool_calls = structuredClone(toolCalls);
+          this.sessions.update(session.id);
+          this.emit('session-update', session.id);
+        }
+      }
+
       const toolResults = [];
       const imageUserMessages = [];
       // 只在"同一批 tool_calls"内有效：上一批的失败不挡下一批（模型可能已经在新一批里修正了）。
@@ -2525,7 +2545,9 @@ export class Orchestrator {
         if (this.store.hasUncertainEffects(session.leaseId)) {
           throw new Error('Delivery uncertain; batch held for operator review');
         }
-        if (result.isError) priorFailure = true;
+        // 部分发送失败（sendTextBatch 有 failed 但至少一条成功）不算 isError，
+        // 但同样不能把 finish 提交掉，否则失败的那几条永远没有下一轮补发（复审 P1）。
+        if (result.isError || result.partialFailure === true) priorFailure = true;
         if (name === 'finish' && !result.isError) finish = true;
       }
       messages.push(...toolResults.map(({ role, tool_call_id, name, content }) => ({ role, tool_call_id, content, name })));
@@ -3320,17 +3342,42 @@ export class Orchestrator {
       return null;
     }
 
+    // 整理期间控制台可能改了记忆：写回前必须重读当前值，不能拿 await 之前的快照写回。
+    // 这样"整理中途删掉/改掉手工条目"不会被旧快照复活（复审 P2）。
+    const snapshotTexts = new Set(existing.map((e) => String(e?.content ?? '').trim()));
+    const currentRow = (this.memory.members(chatKey) || [])
+      .find((m) => String(m?.userId || '') === String(mem.userId || ''));
+    const currentImpressions = currentRow?.impressions || existing;
     // 控制台手写的（origin=manual）条目是用户的明确输入，模型无权改写/删除。
-    // 不依赖模型"听话"：写回前强制把原手工条目并进结果，且不占模型输出的配额。
+    // 不依赖模型"听话"：写回前强制把**当前**手工条目并进结果，且不占模型输出的配额。
     // replace 对正文逐字相同的条目会沿用旧 origin，所以 manual 来源不会丢（issue #55）。
-    const manualContents = [...new Set(existing
+    const manualContents = [...new Set(currentImpressions
       .filter((e) => String(e?.origin || '') === 'manual')
       .map((e) => String(e?.content ?? '').trim())
       .filter(Boolean))];
+    // 存储层单次 replace 硬上限 20 条；手工条目已经占满时无法再塞自动条目，
+    // 宁可跳过本轮整理，也不能让 replace 把用户写的尾部静默截掉（复审 P2）。
+    if (manualContents.length >= 20) {
+      log.warn(`[memory] 整理 ${chatKey}/${mem.userId} 跳过：手工印象已有 ${manualContents.length} 条（存储上限 20），先人工清理再整理`);
+      return null;
+    }
+    // 模型有时会把整理前看到的 "（记于 …）" 尾注一起抄回来；不归一化就会在手工条目旁边
+    // 多出一条"内容相同但来源是 consolidated"的副本（issue #55 的第 4 条）。
+    const impressionKey = (text) => String(text ?? '')
+      .replace(/（记于[^）]*）\s*$/, '')
+      .replace(/\(记于[^)]*\)\s*$/, '')
+      .trim();
+    const manualKeys = new Set(manualContents.map(impressionKey));
+    // 整理期间被删/改掉的手工条目：模型可能把旧正文抄回来，按旧 key 一并挡掉，避免复活。
+    const staleManualKeys = new Set(existing
+      .filter((e) => String(e?.origin || '') === 'manual')
+      .map((e) => impressionKey(String(e?.content ?? '').trim()))
+      .filter((key) => key && !manualKeys.has(key)));
+    const blockedManualKeys = new Set([...manualKeys, ...staleManualKeys]);
     const clean = raw
       .map((s) => String(s ?? '').trim())
       .filter(Boolean)
-      .filter((content) => !manualContents.includes(content))
+      .filter((content) => !blockedManualKeys.has(impressionKey(content)))
       .slice(0, maxKeep)
       .map((content) => safeSlice(content, 120));
 
@@ -3338,12 +3385,9 @@ export class Orchestrator {
     // 快照是上面 await 之前取的，模型跑完这一分钟里新写进去的印象会被 replaceMember 静默抹掉）。
     // 写回前重读一次当前值，把「快照里没有、现在有」的条目并回去；模型对已有条目的
     // 增删改照旧生效（那正是整理要做的事），只补它看不见的那部分。
-    const snapshotTexts = new Set(existing.map((e) => String(e?.content ?? '').trim()));
-    const currentRow = (this.memory.members(chatKey) || [])
-      .find((m) => String(m?.userId || '') === String(mem.userId || ''));
-    const appendedDuring = (currentRow?.impressions || [])
+    const appendedDuring = currentImpressions
       .map((e) => String(e?.content ?? '').trim())
-      .filter((t) => t && !snapshotTexts.has(t));
+      .filter((t) => t && !snapshotTexts.has(t) && !blockedManualKeys.has(impressionKey(t)));
     // 配额顺序：手工条目 > 整理期间新增 > 模型输出。手工条目超过 maxKeep 时也全保留
     // （用户明确写下的内容比"每人最多 5 条"的软上限优先；存储层还有 20 条硬上限）。
     const fixed = [...manualContents];

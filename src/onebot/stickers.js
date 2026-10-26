@@ -76,6 +76,9 @@ export function saveStickerStore(entries, file = STICKER_FILE) {
   fs.chmodSync(file, 0o600);
 }
 
+/** 同步窗口上限（sticker-manager 按这个数拉取）。 */
+export const STICKER_SYNC_LIMIT = 500;
+
 export function mergeStickerLibrary(existing, fetched) {
   const out = existing.map(normalizeStickerEntry).filter(Boolean);
   const byId = new Map(out.map((e) => [e.id, e]));
@@ -120,6 +123,9 @@ export function mergeStickerLibrary(existing, fetched) {
   }
   // 保护：这次一条都没拉到（接口失败/空列表）时不要剪枝——否则 QQ 一抖，本地库连备注一起被清空
   if (!fetchedIds.size) return out;
+  // 拉满同步窗口时无法判断后面还有没有：此时不做剪枝，避免把 500 条之后的收藏
+  // 连续 3 次"没看到"后误删。用户收藏确实少于 500 时才会真正清理。
+  if (Array.isArray(fetched) && fetched.length >= STICKER_SYNC_LIMIT) return out;
   // 这次没出现的 QQ 收藏可能是被删了，也可能只是协议端没带回来（分页/上限/响应不全）。
   // 一次就删会把备注/标签/使用计数一起静默丢掉，所以给 3 次同步的观察期：
   // 连续 3 次都没返回才真删；中途重新出现就清零（issue #57）。

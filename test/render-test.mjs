@@ -934,6 +934,7 @@ try {
     // 存量值 24 如实回显
     && /<input type="range" id="cfg-sticker-max"[^>]*min="1" max="60" step="0\.1"[^>]*value="24"/.test(chatHtml)
     && /<span class="slider-now" id="cfg-sticker-max-now">24<\/span>/.test(chatHtml)
+    && /<input type="number" id="cfg-pastchars"[^>]*min="100" max="100000"[^>]*value="24000"/.test(chatHtml)
     && !/<select id="cfg-sticker-max"/.test(chatHtml);
   openSwitchesOk ? pass++ : fail++;
   console.log('  ' + (openSwitchesOk ? 'OK   ' : 'FAIL ') + '设置页：主动开口三个开关 + 表情清单条数滑条');

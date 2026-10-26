@@ -42,6 +42,13 @@ it('同步剪枝：hidden 不再永久保留；重新出现会清零 missCount',
   assert.equal(back.hidden, true, '控制台删过的 hidden 语义保留');
 });
 
+it('同步剪枝：拉满 500 条窗口时不剪枝（可能还有下一页）', () => {
+  const existing = [local('old')];
+  const fullWindow = Array.from({ length: 500 }, (_, i) => fetched(`f-${i}`));
+  const merged = mergeStickerLibrary(existing, fullWindow);
+  assert.ok(merged.some((e) => e.id === 'old'), '满窗口无法判断完整性，先保留');
+});
+
 it('同步剪枝：一条都没拉到时不剪枝（接口抖动不清库）', () => {
   const merged = mergeStickerLibrary([local('a'), local('b')], []);
   assert.deepEqual(merged.map((e) => e.id), ['a', 'b']);

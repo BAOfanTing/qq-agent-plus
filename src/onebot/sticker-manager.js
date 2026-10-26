@@ -8,7 +8,7 @@ import { DATA_DIR, getConfig } from '../core/config.js';
 import { IMAGE_EXTENSIONS, imageType } from '../core/image-type.js';
 import { resolveSelfName } from '../core/util.js';
 import {
-  loadStickerStore, saveStickerStore, mergeStickerLibrary,
+  loadStickerStore, saveStickerStore, mergeStickerLibrary, STICKER_SYNC_LIMIT,
   findSticker, formatStickerList, applyStickerNote, markStickerUsed,
   normalizeStickerEntry
 } from './stickers.js';
@@ -126,7 +126,7 @@ export class StickerManager {
         // 同步窗口固定按上限拉，**不能**挂在 sticker.promptMaxStickers 上 ——
         // 那个设置只决定"系统提示里常驻几条"，改小它会让同步只拉到一小截，
         // 而 mergeStickerLibrary 会把没出现在这次响应里的 QQ 收藏剪掉（连同备注、使用计数）。
-        const count = 500;
+        const count = STICKER_SYNC_LIMIT;
         const data = await this.onebot.call('fetch_custom_face_detail', { count });
         const fetched = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : null);
         if (!fetched) throw new Error('fetch_custom_face_detail 返回 data 不是数组');
