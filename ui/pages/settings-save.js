@@ -653,7 +653,8 @@ async function saveConfig({ quiet = false } = {}) {
       deepseek: {
         ...(c.webSearch?.deepseek || {}),
         ...(enteredDsKey && enteredDsKey !== '******' ? { apiKey: enteredDsKey } : {}),
-        model: val('#cfg-ds-searchmodel', c.webSearch?.deepseek?.model || 'deepseek-v4-flash').trim() || 'deepseek-v4-flash'
+        model: val('#cfg-ds-searchmodel', c.webSearch?.deepseek?.model || 'deepseek-v4-flash').trim() || 'deepseek-v4-flash',
+        count: Math.min(50, Math.max(1, Number(val('#cfg-ds-searchcount', c.webSearch?.deepseek?.count ?? 10)) || 10))
       },
       zhipu: {
         ...(c.webSearch?.zhipu || {}),

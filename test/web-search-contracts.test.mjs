@@ -96,20 +96,28 @@ test('百度千帆：{messages, search_source, resource_type_filter} → referen
   await assert.rejects(() => baiduSearch('q'), /17/);
 });
 
-test('DeepSeek：Responses API（input + tools:[web_search]）→ output_text；兼容 output[].content[]', async () => {
-  setWebSearch({ provider: 'deepseek', deepseek: { apiKey: 'dk', model: 'deepseek-v4-flash' } });
-  const calls = stub(() => ({ ok: true, json: async () => ({ output_text: '答案' }) }));
+test('DeepSeek：Search API → 结构化 results；404 时回退旧 Responses 文本', async () => {
+  setWebSearch({ provider: 'deepseek', deepseek: { apiKey: 'dk', model: 'deepseek-v4-flash', count: 3 } });
+  const calls = stub(() => ({ ok: true, json: async () => ({
+    results: [{ title: '标题', url: 'https://example.com', summary: '摘要' }]
+  }) }));
   const r = await deepSeekSearch('q');
-  assert.equal(calls[0].url, 'https://api.deepseek.com/responses');
+  assert.equal(calls[0].url, 'https://api.deepseek.com/v1/tools/search');
   assert.equal(calls[0].headers.authorization, 'Bearer dk');
-  assert.equal(calls[0].body.model, 'deepseek-v4-flash');
-  assert.deepEqual(calls[0].body.tools, [{ type: 'web_search' }]);
-  assert.equal(calls[0].body.stream, false);
-  assert.match(calls[0].body.input, /q/);
-  assert.equal(r.results[0].snippet, '答案');
+  assert.equal(calls[0].body.query, 'q');
+  assert.equal(calls[0].body.count, 3);
+  assert.equal(calls[0].body.need_content, false);
+  assert.equal(r.results[0].snippet, '摘要');
 
-  stub(() => ({ ok: true, json: async () => ({ output: [{ type: 'message', content: [{ text: '分块' }, { text: '文本' }] }] }) }));
+  // 老账号没有 /v1/tools/search：404 后回退旧 Responses（仍兼容 output[].content[]）
+  let n = 0;
+  const fallback = stub(() => {
+    n += 1;
+    if (n === 1) return { ok: false, status: 404, text: async () => 'not found' };
+    return { ok: true, json: async () => ({ output: [{ type: 'message', content: [{ text: '分块' }, { text: '文本' }] }] }) };
+  });
   const alt = await deepSeekSearch('q');
+  assert.match(fallback[1].url, /\/responses$/);
   assert.equal(alt.results[0].snippet, '分块文本', 'output[].content[].text 拼接');
 });
 

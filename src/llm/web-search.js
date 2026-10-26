@@ -478,11 +478,12 @@ export async function webSearch(query, { meme = false } = {}) {
 }
 
 /**
- * DeepSeek 服务端原生搜索（Responses API，web_search 工具）。
- * 文档：https://api-docs.deepseek.com/zh-cn/guides/responses_api
- * 说明：搜索在 DeepSeek 服务端完成并注入上下文，客户端能拿到的是模型基于
- * 搜索结果生成的最终回答；URL/标题/摘要为黑盒，拿不到结构化来源。适合
- * “只要能搜到并总结”的场景；需要引用列表时请用 Bing / 其他搜索 API。
+ * DeepSeek 官方 Search API（2026-10-17 开放）优先，返回结构化 {title,url,summary}。
+ * 文档：https://api-docs.deepseek.com/guides/search
+ *
+ * 老配置里的 baseUrl 还是 `/responses`：这里会剥掉 `/responses` 再拼 `/v1/tools/search`，
+ * 不需要用户手改。只有新接口 404/405 或没有结果时，才回退到旧 Responses `web_search`
+ * （旧接口拿不到 URL，仅作兼容兜底）。
  */
 export function deepSeekSearch(query) {
   return withTimeWindow((signal) => deepSeekSearchRequest(query, signal));
@@ -492,9 +493,57 @@ async function deepSeekSearchRequest(query, signal) {
   const cfg = getConfig().webSearch?.deepseek ?? {};
   const apiKey = String(cfg.apiKey || process.env.DEEPSEEK_API_KEY || '').trim();
   if (!apiKey) throw new Error('DeepSeek 搜索需要 API Key（设置里填，或环境变量 DEEPSEEK_API_KEY）');
-  const baseUrl = String(cfg.baseUrl || 'https://api.deepseek.com/responses').replace(/\/+$/, '');
-  const model = String(cfg.model || 'deepseek-v4-flash');
+  try {
+    return await deepSeekToolsSearch({ query, cfg, apiKey, signal });
+  } catch (error) {
+    // 老账号/老地址可能还没开放 /v1/tools/*：只在这两种"接口不存在"的情况下退回旧接口。
+    // 401/429/网络错误原样抛出，不能把 Key 或额度问题伪装成"搜索没结果"。
+    if (!/HTTP (404|405)|没有返回结果/.test(String(error?.message || ''))) throw error;
+    return deepSeekResponsesSearch({ query, cfg, apiKey, signal });
+  }
+}
 
+async function deepSeekToolsSearch({ query, cfg, apiKey, signal }) {
+  const base = String(cfg.baseUrl || 'https://api.deepseek.com').trim().replace(/\/+$/, '').replace(/\/responses$/i, '');
+  const endpoint = /\/v1$/i.test(base) ? `${base}/tools/search` : `${base}/v1/tools/search`;
+  const maxResults = Math.min(10, Math.max(1, Number(getConfig().webSearch?.maxResults) || 6));
+  const count = Math.min(50, Math.max(1, Number(cfg.count) || maxResults));
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      query,
+      count,
+      ori_question: query,
+      need_content: cfg.needContent === true
+    }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(Math.max(10000, Number(cfg.timeoutMs) || 60000))])
+  });
+  if (!res.ok) {
+    const text = await readTextBounded(res, SEARCH_JSON_MAX_BYTES).catch(() => '');
+    throw new Error(`DeepSeek 搜索 HTTP ${res.status}：${text.slice(0, 300)}`);
+  }
+  const data = await readSearchJson(res, 'DeepSeek 搜索返回了无法解析的 JSON');
+  const results = (Array.isArray(data?.results) ? data.results : [])
+    .map((item) => ({
+      title: String(item?.title || item?.url || '搜索结果').trim(),
+      url: String(item?.url || '').trim(),
+      snippet: String(item?.summary || item?.content || '').replace(/\s+/g, ' ').trim().slice(0, 500)
+    }))
+    .filter((item) => item.url)
+    .slice(0, maxResults);
+  if (!results.length) throw new Error('DeepSeek Search 没有返回结果');
+  return { query, results };
+}
+
+/** 旧 Responses API 兜底：只返回一段总结，没有 URL（保留给未开放新接口的账号）。 */
+async function deepSeekResponsesSearch({ query, cfg, apiKey, signal }) {
+  const raw = String(cfg.baseUrl || 'https://api.deepseek.com/responses').trim().replace(/\/+$/, '');
+  const baseUrl = /\/responses$/i.test(raw) ? raw : `${raw}/responses`;
+  const model = String(cfg.model || 'deepseek-v4-flash');
   const res = await fetch(baseUrl, {
     method: 'POST',
     headers: {

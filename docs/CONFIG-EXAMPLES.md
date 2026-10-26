@@ -199,9 +199,12 @@
 
 - `provider` 可选：`bing`（默认，抓 `cn.bing.com` 页面，不需要 Key）、`deepseek`、`zhipu`、`bocha`、
   `baidu`、`metaso`、`doubao`、`tavily`、`aggregate`（控制台「设置 → 搜索」里选）。
-- 每家一套 `{ apiKey, baseUrl, count, timeoutMs }`（`deepseek` 用 `model` 代替 `count`；
-  `zhipu` 另有 `engine`、`tavily` 另有 `searchDepth`）；`apiKey` 留空时回退各自的环境变量：`DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `BOCHA_API_KEY` /
+- 每家一套 `{ apiKey, baseUrl, count, timeoutMs }`（`zhipu` 另有 `engine`、`tavily` 另有 `searchDepth`）；
+  `apiKey` 留空时回退各自的环境变量：`DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `BOCHA_API_KEY` /
   `BAIDU_SEARCH_API_KEY` / `METASO_API_KEY` / `DOUBAO_SEARCH_API_KEY` / `TAVILY_API_KEY`。
+- `deepseek`：优先走官方 **Search API** `POST {baseUrl}/v1/tools/search`，返回结构化 `title/url/summary`
+  （`count` 1–50，`needContent:true` 时额外取正文）；老配置里的 `/responses` 会被自动剥掉。
+  只有新接口返回 404/405 或没有结果时，才回退到旧 Responses `web_search`（旧接口拿不到 URL，`model` 只给这个兜底用）。
 - `tavily`：tavily.com 的搜索 API（2026-09 时点的公开口径：免费档 1000 次/月，专为 LLM 设计），另有 `searchDepth`（默认 `basic`）。
 - `aggregate`（聚合搜索）：并发跑 `sources` 里的多个源，URL 去重、每条结果带 `source` 标注；
   `sources` 顺序就是结果优先级，单个源失败不影响整体，全部失败才报错。

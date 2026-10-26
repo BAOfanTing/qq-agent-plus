@@ -112,8 +112,10 @@ export const DEFAULT_CONFIG = {
     provider: 'bing',
     deepseek: {
       apiKey: '',                     // 留空时回退环境变量 DEEPSEEK_API_KEY
-      baseUrl: 'https://api.deepseek.com/responses',
-      model: 'deepseek-v4-flash',     // Responses API 模型名：deepseek-v4-flash / deepseek-v4-pro
+      baseUrl: 'https://api.deepseek.com',  // 新 Search API 用 /v1/tools/search；老配置的 /responses 会被自动剥掉
+      model: 'deepseek-v4-flash',     // 仅旧 Responses 兜底用
+      count: 10,                      // 新 Search API 返回条数（1-50；展示上限仍受 maxResults 约束）
+      needContent: false,             // true = 每条额外返回 content（更费 token）
       timeoutMs: 60000
     },
     zhipu: {
