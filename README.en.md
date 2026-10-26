@@ -51,8 +51,10 @@ mode and its resolution are recorded in [CHANGES](docs/CHANGES.md).
   schedules with an IANA timezone, a quiet-hours window and jitter, and only the most recent
   missed occurrence is caught up. It is delivered in its own voice when the time comes.
 - **Proactive talk** — three independently switchable links (cold-topic opener / follow-up
-  nudge when nobody answers / model-scheduled wake-up), multiple active windows, interval
-  guard, skip-reason logging, catch-up for messages missed during restarts.
+  nudge when nobody answers / model-scheduled wake-up), multiple active windows. Group and
+  private proactive loops keep separate timers, rolls and last-attempt state, so one scope
+  cannot consume the other's chance. Interval guard, skip-reason logging, catch-up for messages
+  missed during restarts.
 - **Life feed** — optionally forages Bilibili's public API, ranks candidates by the persona's
   interests and recent group topics, and lets the bot choose what to share. Off by default; it
   reuses the existing proactive quiet hours, budget and send queue. See [LIFE-FEED](docs/LIFE-FEED.md).

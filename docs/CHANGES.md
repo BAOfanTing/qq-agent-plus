@@ -107,6 +107,13 @@ HTML 里的 markdown 星号）。
   `finish` / `skill_list` / `skill_use` 始终允许。未声明工具会被宿主拒绝，且不触发 finish 屏障。
 - 内置 `chat-summary`、`video-digest`、`comment-analysis` 三个示例；技能清单校验 id、大小、工具名、semver。
 
+**主动开话题**
+
+- 群聊与私聊各自独立排程、独立掷骰、独立记录上次判定：一个范围开了话题或摇到不发言，不会占用另一个范围的机会。
+- 两个范围错开 30 秒启动，重启/保存配置后不会同一秒成对开口；`abortAll` / 停循环会作废旧 tick。
+- 旧 `{lastAttemptAt:<数字>}` 状态迁移为两个范围共用，升级后不会额外多一次机会；状态文件仍原子写。
+- 控制台文案明确「群聊/私聊独立节奏」，配置示例同步。
+
 **长期记忆检索**
 
 - 人物印象新增 SQLite FTS5 索引（`data/memory/search.sqlite`），中文按单字 + 二元组切词；
