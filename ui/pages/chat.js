@@ -272,9 +272,9 @@ return `
     <div class="checkbox-row"><input type="checkbox" id="cfg-proactive" ${c.proactive.enabled ? 'checked' : ''} />
       <label for="cfg-proactive">会话安静时按概率发起话题</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-group" ${c.proactive?.groupEnabled !== false ? 'checked' : ''} />
-      <label for="cfg-pro-group">群聊（按群白名单）</label></div>
+      <label for="cfg-pro-group">群聊（独立节奏，按群白名单）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-private" ${c.proactive?.privateEnabled === true ? 'checked' : ''} />
-      <label for="cfg-pro-private">私聊（按私聊白名单）</label></div>
+      <label for="cfg-pro-private">私聊（独立节奏，按私聊白名单）</label></div>
     <div class="field pro-windows-field">
       <label>主动发言时段（仅在该时段内发起）</label>
       <div id="pro-windows" class="pro-windows">
@@ -297,6 +297,7 @@ return `
       <label for="cfg-pro-selfwake">允许模型给自己安排稍后的主动发言</label></div>
     <div class="hint">
       中间的「群聊 / 私聊」是范围：分别沿用「群白名单」与「私聊白名单」（deny 优先），两个都不勾就不主动开话题。
+      群聊和私聊各自独立计时、独立按概率判定：一边开了话题或摇到不发言，不会占用另一边的机会。
       后两条是补话与自安排唤醒，独立开关。完全不想让它主动开口，就把上面所有勾选都取消。
       私聊默认不勾：勾上后私聊白名单里的人（安静够久且没有未读时）也可能收到主动消息。
     </div>
