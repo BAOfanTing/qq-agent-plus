@@ -37,7 +37,9 @@ test('状态文件损坏/缺失按 0 处理，不抛错', (t) => {
 test('主动循环为群聊和私聊分别排程，候选也按范围过滤', () => {
   const source = fs.readFileSync(new URL('../src/core/orchestrator.js', import.meta.url), 'utf8');
   assert.match(source, /if \(scopes\.groups\) schedule\('group', 15000\)/);
-  assert.match(source, /if \(scopes\.private\) schedule\('private', 15000\)/);
-  assert.match(source, /#proactiveCandidates\(cfg, scope\)/);
+  assert.match(source, /if \(scopes\.private\) schedule\('private', 45000\)/,
+    '私聊错开 30 秒启动，避免重启后同一秒成对开口');
+  assert.match(source, /const candidates = this\.#proactiveCandidates\(cfg, scope\)/,
+    '调用点必须带 scope；只匹配方法定义会把“调用点漏传 scope”放过去');
   assert.match(source, /chatKeys: this\.store\.listChats\(\)\.filter\(\(key\) => String\(key\)\.startsWith\(prefix\)\)/);
 });

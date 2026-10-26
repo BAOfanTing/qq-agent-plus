@@ -2891,6 +2891,7 @@ export class Orchestrator {
       this.proactiveTimers.set(scope, timer);
     };
     const tick = async (scope) => {
+      if (epoch !== this.proactiveEpoch) return;   // stop/restart 后旧 tick 直接作废
       const cfg = getConfig();
       const nowTick = Date.now();
       const window = proactiveWindowState(cfg.proactive?.activeHours, nowTick);
@@ -2909,7 +2910,7 @@ export class Orchestrator {
       // 距该范围上次判定不足一个间隔就跳过：重启/另一个范围判定都不额外换来一次机会
       const minGapMs = Math.max(60000, Number(cfg.proactive?.checkIntervalMinMs) || 1800000);
       const attempts = readProactiveAttempts(PROACTIVE_STATE_FILE);
-      if (nowTick - attempts[scope] < minGapMs * 0.8) {
+      if (nowTick - attempts[scope] < minGapMs) {
         log.info(`[proactive] 跳过（${scopeLabel(scope)}）：距上次判定不足一个间隔`);
         return;
       }
@@ -2943,8 +2944,9 @@ export class Orchestrator {
       this.wake(chatKey, { proactive: true }).catch((error) => log.error('[orchestrator] proactive 出错:', error));
     };
     const scopes = proactiveScopes(getConfig());
+    // 两个范围错开启动，避免重启/保存配置后同一秒同时判定、同时开口。
     if (scopes.groups) schedule('group', 15000);
-    if (scopes.private) schedule('private', 15000);
+    if (scopes.private) schedule('private', 45000);
   }
 
   #proactiveCandidates(cfg, scope) {
