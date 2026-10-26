@@ -492,6 +492,7 @@ export class Orchestrator {
   constructor({
     store,
     memory,
+    livingMemory = null,
     stickers,
     sender,
     sessions,
@@ -508,6 +509,7 @@ export class Orchestrator {
   }) {
     this.store = store;
     this.memory = memory;
+    this.livingMemory = livingMemory;
     this.stickers = stickers;
     this.sender = sender;
     this.sessions = sessions;
@@ -1511,6 +1513,13 @@ export class Orchestrator {
       if (getConfig().platform?.readReceipts === true) this.#markBatchRead(chatKey, triggerEntries);
       const status = session.sent.length > 0 ? 'done' : 'noreply';
       this.sessions.finish(session.id, status);
+      // 写入走异步缓冲；总结、Embedding 或记忆服务失败绝不能拖慢/打断当前聊天回合。
+      this.livingMemory?.captureTurn?.({
+        chatKey,
+        sessionId: session.id,
+        triggerEntries,
+        sent: session.sent
+      });
       this.emit('session-end', { sessionId: session.id, chatKey, status,
         sent: session.sent.length, finishReason: session.finishReason, usage: session.usage });
       // 主动好友候选已整体退役（Issue #10，见 docs/KNOWN-ISSUES.md）：
@@ -2073,9 +2082,18 @@ export class Orchestrator {
     // 状态行放本轮 user 消息，不拼进 system prompt：system 前缀参与 cacheKey/线程续接判定，
     // 每半小时变一次会让前缀缓存和 lifecycle 线程反复失效。
     const personaStateLine = personaStatePrompt(persona);
+    // 长期语义记忆属于每轮临时上下文：放入 user 内容而非 system 前缀，避免检索结果变化让
+    // lifecycle 线程与前缀缓存失效。服务不可用时仅跳过召回，聊天主链路照常。
+    let livingRecall = { text: '', entries: [], mode: 'disabled' };
+    try {
+      livingRecall = await this.livingMemory?.recall?.({ chatKey, triggerEntries, signal }) || livingRecall;
+    } catch (error) {
+      log.warn(`[living-memory] ${chatKey} 召回异常，已跳过：`, error?.message ?? error);
+    }
     const triggerText = (triggerEntries || []).map((entry) => String(entry?.text || '')).join('\n');
     const humanLines = [
       personaStateLine,
+      livingRecall.text,
       memeDensityPrompt(cfg),
       memesForPrompt(chatKey, triggerText, { level: cfg?.humanize?.memeUse?.level })
     ].filter(Boolean).join('\n\n');
@@ -2179,6 +2197,11 @@ export class Orchestrator {
     // 同名模型在不同渠道是不同商品，用量与价格要分开统计。
     session.vendor = vendorOfConfig(cfg);
     session.chatName = chatName;
+    session.livingMemory = {
+      mode: livingRecall.mode || 'disabled',
+      recalled: Array.isArray(livingRecall.entries) ? livingRecall.entries.length : 0,
+      ids: (livingRecall.entries || []).map((entry) => String(entry?.id || '')).filter(Boolean).slice(0, 12)
+    };
     // 记录本次读了多长的上下文（排查提示词长度时很有用）
     if (tierInfo) {
       session.contextTier = tierInfo.tier;

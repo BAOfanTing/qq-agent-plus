@@ -16,6 +16,7 @@ const PATHS = {
   archive: '<rect x="3" y="4" width="18" height="4" rx="1.2"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/>',
   sliders: '<path d="M4 8h9M19 8h1"/><circle cx="15.5" cy="8" r="2.2"/><path d="M4 16h3M13 16h7"/><circle cx="9.5" cy="16" r="2.2"/>',
   database: '<ellipse cx="12" cy="6.5" rx="7.5" ry="3"/><path d="M4.5 6.5v11c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-11"/><path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/>',
+  brain: '<path d="M9 5.1A3.5 3.5 0 0 0 3.6 8a3.1 3.1 0 0 0 .5 5.7A3.7 3.7 0 0 0 8 19.5c1.5 0 2.8-.9 3.4-2.2"/><path d="M15 5.1A3.5 3.5 0 0 1 20.4 8a3.1 3.1 0 0 1-.5 5.7A3.7 3.7 0 0 1 16 19.5c-1.5 0-2.8-.9-3.4-2.2"/><path d="M12 4v16M8.2 8.5h3.8M12 12h3.8M8.2 15.5H12"/>',
   users: '<circle cx="9" cy="8" r="3.2"/><path d="M2.8 20a6.2 6.2 0 0 1 12.4 0"/><path d="M16.4 5.4a3.2 3.2 0 0 1 0 5.3"/><path d="M18.2 14.3A6.2 6.2 0 0 1 21.2 20"/>',
   idcard: '<rect x="2.5" y="5" width="19" height="14" rx="2.2"/><circle cx="8.2" cy="11" r="2"/><path d="M5 16.4a3.4 3.4 0 0 1 6.4 0"/><path d="M14 10h5M14 13.5h5"/>',
   userplus: '<circle cx="10" cy="8" r="3.3"/><path d="M3.2 20a6.8 6.8 0 0 1 13.6 0"/><path d="M18.6 7v6M15.6 10h6"/>',

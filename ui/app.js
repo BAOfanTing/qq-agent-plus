@@ -44,6 +44,7 @@ import {
   renderIdentityFeaturePageImpl, renderIncidentFeaturePageImpl
 } from './pages/features.js';
 import { loadMemoryView, renderMemoryList } from './pages/memory.js';
+import { loadLivingMemoryPage } from './pages/living-memory.js';
 import { loadPluginsPage, refreshPendingBadge } from './pages/plugins.js';
 import { renderExperimentalSettingsSectionImpl } from './pages/moments.js';
 import { loadSessionDetail, loadSessions } from './pages/sessions.js';
@@ -277,6 +278,7 @@ function switchTab(name) {
   if (name === 'sessions') loadSessions();
   if (name === 'chats') loadChats();
   if (name === 'memory') loadMemoryView();
+  if (name === 'living-memory') loadLivingMemoryPage({ force: true });
   if (name === 'identity') loadIdentityFeaturePage();
   if (name === 'friends') loadFriendFeaturePage();
   if (name === 'slang') loadSlangFeaturePage();
@@ -998,6 +1000,9 @@ function connectSSE() {
     } else {
       loadMemoryView();
     }
+  });
+  es.addEventListener('living-memory-update', () => {
+    if (state.tab === 'living-memory') loadLivingMemoryPage({ force: true });
   });
   es.addEventListener('onebot-status', () => {
     refreshStatus();

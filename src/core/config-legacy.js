@@ -15,6 +15,7 @@ import { DEFAULT_TIME_CONTROL, normalizeTimeControl } from './time-control.js';
 import { normalizeTokenSaverMode } from './token-saver.js';   // 零依赖模块，避免循环依赖
 import { normalizeMomentWindows } from '../features/moment-schedule.js';
 import { PLATFORM_GATE_KEYS } from './platform-gates.js';   // 零依赖模块：按群覆盖的键名校验
+import { LIVING_MEMORY_DEFAULTS, normalizeLivingMemoryConfig } from '../living-memory/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // 控制台把 updateConfig 的校验失败映射成 400：用显式标记，不靠匹配错误文案
@@ -837,6 +838,8 @@ export const DEFAULT_CONFIG = {
     // 打开后只在**读取**侧把最近私聊消息与交接合并；写入、发送目标、群聊都不变。
     privateSharedContext: false
   },
+  // 长期语义记忆：独立服务 + 向量库，默认关闭且先走 shadow，不改变既有 MemoryStore 行为。
+  livingMemory: structuredClone(LIVING_MEMORY_DEFAULTS),
   // 省 Token 模式：只给"可控项"夹上限（上下文档位条数、单次运行轮数与预算、
   // 交接/印象注入字符数、提示词里的表情清单条数），不改写上面那些用户填的值。
   // off = 完全按用户设置；balanced = 省；aggressive = 很省。见 src/core/token-saver.js
@@ -1892,6 +1895,7 @@ export function updateConfig(patch) {
   }
   next.tokenSaver = { ...(next.tokenSaver || {}), mode: normalizeTokenSaverMode(next.tokenSaver?.mode) };
   next.timeControl = normalizeTimeControl(next.timeControl);
+  next.livingMemory = normalizeLivingMemoryConfig(next.livingMemory);
   next.dailyMoments.scheduleWindows = normalizeMomentWindows(next.dailyMoments.scheduleWindows);
   if (!['observe', 'active'].includes(next.runtime?.mode)) throw invalidConfig('Invalid runtime mode');
   if (!['legacy', 'threaded', 'lifecycle'].includes(next.conversation?.mode)) {

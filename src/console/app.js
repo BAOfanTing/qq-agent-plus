@@ -23,6 +23,7 @@ import { faceNameOf } from '../onebot/face-catalog.js';
 import { readForwardMessages, readForwardNodesById, forwardResIdFromSegment } from '../onebot/forward-reader.js';
 import { ChatStore } from '../core/store.js';
 import { MemoryStore } from '../memory/memory.js';
+import { LivingMemoryRuntime } from '../living-memory/runtime.js';
 import { StickerManager } from '../onebot/sticker-manager.js';
 import { SendQueue } from '../onebot/sender.js';
 import { SessionRegistry, personaLabelOfPrompt } from '../core/sessions.js';
@@ -582,6 +583,13 @@ export function createApp({
       severity: 'error'
     });
   };
+  // 长期语义记忆是独立的实验模块：即使服务端未部署/未配置令牌，也只降级它自己，绝不影响聊天主链路。
+  const livingMemory = new LivingMemoryRuntime({
+    getConfig,
+    dataDir: DATA_DIR,
+    log: moduleLog('living-memory'),
+    emit
+  });
   const onebot = new OneBotClient({
     wsUrl: cfg.onebot?.wsUrl,
     httpUrl: cfg.onebot?.httpUrl,
@@ -687,6 +695,7 @@ export function createApp({
   const orchestrator = new Orchestrator({
     store,
     memory,
+    livingMemory,
     stickers,
     sender,
     sessions,
@@ -3807,6 +3816,93 @@ export function createApp({
     return json(res, 200, { ok: true });
   });
 
+  // ── 长期语义记忆（实验模块，数据与向量服务归 LivingMemoryRuntime 所有） ─────
+  const livingMemoryScopes = (values) => [...new Set((Array.isArray(values) ? values : [values])
+    .map((value) => String(value || '').trim())
+    .filter((value) => /^(group|private):\d+$/.test(value) || value === 'owner-global'))];
+  router.add('GET', '/api/living-memory/status', async (req, res) => {
+    try {
+      const status = await livingMemory.status();
+      return json(res, 200, { ok: true, config: getConfig().livingMemory || {}, status });
+    } catch (error) {
+      // 服务暂未部署/令牌未配不是控制台 500：页面要能显示配置并解释为什么不可用。
+      return json(res, 200, { ok: true, config: getConfig().livingMemory || {}, status: { ok: false, error: String(error?.message ?? error) } });
+    }
+  });
+  router.add('GET', '/api/living-memory/memories', async (req, res, params, url) => {
+    const scopes = livingMemoryScopes(url.searchParams.getAll('scopeKey'));
+    if (!scopes.length) return json(res, 400, { ok: false, error: '至少提供一个 scopeKey' });
+    try {
+      const result = await livingMemory.list({
+        scopeKeys: scopes,
+        status: url.searchParams.get('status') || '',
+        type: url.searchParams.get('type') || '',
+        query: url.searchParams.get('query') || '',
+        limit: Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 50)),
+        offset: Math.max(0, Number(url.searchParams.get('offset')) || 0)
+      });
+      return json(res, 200, result);
+    } catch (error) { return json(res, 502, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('POST', '/api/living-memory/recall-test', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const chatKey = String(body.chatKey || '').trim();
+    if (!/^(group|private):\d+$/.test(chatKey)) return json(res, 400, { ok: false, error: 'chatKey 格式错误' });
+    const query = String(body.query || '').trim();
+    if (!query) return json(res, 400, { ok: false, error: '请输入测试问题或关键词' });
+    try {
+      const result = await livingMemory.recallTest({ chatKey, query, limit: body.limit });
+      return json(res, 200, { ok: true, ...result });
+    } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('POST', '/api/living-memory/memories', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const scopeKey = String(body.scopeKey || '').trim();
+    if (!livingMemoryScopes([scopeKey]).length) return json(res, 400, { ok: false, error: 'scopeKey 格式错误' });
+    try {
+      const result = await livingMemory.create({ ...body, scopeKey, source: { origin: 'manual-console', createdAt: Date.now() } });
+      emit('living-memory-update', { chatKey: scopeKey, phase: 'manual-create', memoryId: result?.memory?.id || '' });
+      auditWrite('living-memory.create', `living-memory:${scopeKey}`, { req, type: body.type || 'episode' });
+      return json(res, 201, result);
+    } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('GET', /^\/api\/living-memory\/memories\/([0-9A-Za-z-]+)$/, async (req, res, params) => {
+    try { return json(res, 200, await livingMemory.get(params[1])); }
+    catch (error) { return json(res, 404, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('DELETE', /^\/api\/living-memory\/memories\/([0-9A-Za-z-]+)$/, async (req, res, params) => {
+    const body = await readBody(req).catch(() => ({}));
+    if (body?.confirm !== true) return json(res, 409, { ok: false, error: '删除长期记忆需要 body.confirm === true' });
+    try {
+      const result = await livingMemory.remove(params[1]);
+      auditWrite('living-memory.delete', `living-memory:${params[1]}`, { req });
+      emit('living-memory-update', { phase: 'delete', memoryId: params[1] });
+      return json(res, 200, result);
+    } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('POST', /^\/api\/living-memory\/memories\/([0-9A-Za-z-]+)\/archive$/, async (req, res, params) => {
+    const body = await readBody(req).catch(() => ({}));
+    if (body?.confirm !== true) return json(res, 409, { ok: false, error: '归档长期记忆需要 body.confirm === true' });
+    try {
+      const result = await livingMemory.archive(params[1]);
+      auditWrite('living-memory.archive', `living-memory:${params[1]}`, { req });
+      emit('living-memory-update', { phase: 'archive', memoryId: params[1] });
+      return json(res, 200, result);
+    } catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
+  });
+  router.add('GET', '/api/living-memory/graph', async (req, res, params, url) => {
+    const scopes = livingMemoryScopes(url.searchParams.getAll('scopeKey'));
+    if (!scopes.length) return json(res, 400, { ok: false, error: '至少提供一个 scopeKey' });
+    try {
+      const result = await livingMemory.graph({
+        scopeKeys: scopes,
+        memoryId: String(url.searchParams.get('memoryId') || ''),
+        limit: Math.min(500, Math.max(1, Number(url.searchParams.get('limit')) || 160))
+      });
+      return json(res, 200, result);
+    } catch (error) { return json(res, 502, { ok: false, error: String(error?.message ?? error) }); }
+  });
+
   router.add('GET', '/api/providers', async (req, res) => {
     const providers = currentProviders().map((p) => ({
       id: p.id,
@@ -5976,6 +6072,7 @@ export function createApp({
     slangPilot = null;
     await incidentPilot?.stop();
     incidentPilot = null;
+    livingMemory.stop();
     onebot.close();
     await orchestrator.abortAll();
     await Promise.allSettled([...ingress.values()]);
@@ -6003,6 +6100,7 @@ export function createApp({
     onebot,
     store,
     memory,
+    livingMemory,
     stickers,
     sender,
     sessions,

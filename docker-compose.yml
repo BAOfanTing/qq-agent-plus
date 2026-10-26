@@ -105,6 +105,13 @@ services:
       # 留空＝首次启动自动生成并写进 data/config.json；
       # 访问信息写入 /data/console-access.txt（日志不打印令牌）。
       QQ_AGENT_CONSOLE_TOKEN: ${QQ_AGENT_CONSOLE_TOKEN:-}
+      # 长期记忆默认关闭；启用后数据写入同一 ./data/living-memory/ 目录。
+      # 配置 OpenAI 兼容 Embedding 后才启用语义检索；密钥不会进入控制台或 config.json。
+      LIVING_MEMORY_EMBEDDING_BASE_URL: ${LIVING_MEMORY_EMBEDDING_BASE_URL:-}
+      LIVING_MEMORY_EMBEDDING_API_KEY: ${LIVING_MEMORY_EMBEDDING_API_KEY:-}
+      LIVING_MEMORY_EMBEDDING_MODEL: ${LIVING_MEMORY_EMBEDDING_MODEL:-}
+      LIVING_MEMORY_EMBEDDING_DIMENSIONS: ${LIVING_MEMORY_EMBEDDING_DIMENSIONS:-0}
+      LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS: ${LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS:-1200}
       # 兼容旧配置：服务端探测的回退地址（新部署用 SNOWLUMA_INTERNAL_URL）。
       # 浏览器里的链接由控制台按当前访问地址拼，不读这个变量。
       SNOWLUMA_WEBUI_URL: ${SNOWLUMA_WEBUI_URL:-http://127.0.0.1:5099}

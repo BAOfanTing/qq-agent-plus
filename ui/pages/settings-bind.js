@@ -300,21 +300,11 @@ function bindSettingsSaveAndSections() {
 
   if ((state.settingsSection || 'api') === 'experiments') {
     loadExperimentalFeatureStatuses();
-    [
-      ['#launch-identity-feature', 'identity'],
-      ['#launch-auto-friend-feature', 'auto-friend'],
-      ['#launch-slang-feature', 'slang'],
-      ['#launch-incident-feature', 'incidents']
-    ].forEach(([selector, feature]) => {
+    Object.entries({ '#launch-identity-feature': 'identity', '#launch-auto-friend-feature': 'auto-friend', '#launch-slang-feature': 'slang', '#launch-incident-feature': 'incidents', '#launch-living-memory-feature': 'living-memory' }).forEach(([selector, feature]) => {
       $(selector)?.addEventListener('click', () =>
         launchExperimentalFeature(feature).catch(() => {}));
     });
-    [
-      '#cfg-identity-pilot-enabled',
-      '#cfg-auto-friend-enabled',
-      '#cfg-slang-pilot-enabled',
-      '#cfg-incident-pilot-enabled'
-    ].forEach((selector) => {
+    ['#cfg-identity-pilot-enabled', '#cfg-auto-friend-enabled', '#cfg-slang-pilot-enabled', '#cfg-incident-pilot-enabled', '#cfg-living-memory-enabled'].forEach((selector) => {
       const toggle = $(selector);
       toggle?.addEventListener('change', async () => {
         if (selector === '#cfg-auto-friend-enabled' && toggle.checked) {
@@ -341,6 +331,7 @@ function bindSettingsSaveAndSections() {
             };
           }
         }
+        if (selector === '#cfg-living-memory-enabled') state.config.livingMemory = { ...(state.config.livingMemory || {}), enabled: toggle.checked === true };
         toggle.disabled = true;
         const result = $('#experiment-launch-result');
         if (result) result.textContent = '保存中…';

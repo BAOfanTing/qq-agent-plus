@@ -34,7 +34,8 @@ function graduatedFeatureState(c = state.config || {}) {
     // 「好友管理」页承载入站好友申请的审批（该功能不受退役影响），导航入口
     // 不随 friendProposal 的退役隐藏——只隐藏会把入站审批一起藏掉。
     slang: c.slangPilot?.graduated === true,
-    incidents: c.incidentPilot?.graduated === true
+    incidents: c.incidentPilot?.graduated === true,
+    'living-memory': c.livingMemory?.graduated === true
   };
 }
 
@@ -626,6 +627,16 @@ function experimentalFeatureLaunchPatch(c, feature, ownerUin = '') {
           || c.slangPilot?.ownerUin
           || ''
         ).trim()
+      }
+    };
+  }
+  if (feature === 'living-memory') {
+    return {
+      livingMemory: {
+        ...(c.livingMemory || {}),
+        enabled: true,
+        graduated: true,
+        mode: 'shadow'
       }
     };
   }

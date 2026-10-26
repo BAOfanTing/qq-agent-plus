@@ -15,6 +15,7 @@
 | [MCP.md](MCP.md) | MCP：客户端配置（stdio server、工具挂载）、只读资源服务（人物记忆/梗库/提醒）、安全边界与运维接口 |
 | [MODERATION.md](MODERATION.md) | 群管理动作：管理员门槛、禁言/踢人/撤回/设管理员 |
 | [KNOWLEDGE.md](KNOWLEDGE.md) | 轻量知识库：目录、切片、关键词检索与边界（不是完整 RAG） |
+| [LIVING-MEMORY.md](LIVING-MEMORY.md) | 长期向量记忆：主进程内 SQLite 存储、语义召回、Embedding 环境变量与隐私边界 |
 | [AUTO_UPDATE.md](AUTO_UPDATE.md) | Release 驱动的自动更新：判定规则、两条下载通道（git / API+源码包）、失败策略与状态字段 |
 
 ## 功能说明

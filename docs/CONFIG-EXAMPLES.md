@@ -368,6 +368,25 @@
   （`memory_query` 返回前会剥掉 `sourceChatKeys`）。
 - 记忆整理的其他字段（冷却时间、发现新人的门槛、专用模型）都在同一设置页里，逐个有提示。
 
+## livingMemory：长期向量记忆（实验性，默认关闭）
+
+```json
+{
+  "livingMemory": {
+    "enabled": false,
+    "mode": "shadow",
+    "allowPrivate": false,
+    "allowGlobal": false,
+    "maxRecallItems": 6,
+    "recallTimeoutMs": 1800
+  }
+}
+```
+
+- 数据和向量都保存在 Agent 数据目录的 `living-memory/living-memory.sqlite`，不需要额外容器或向量数据库。
+- `shadow` 会收集和审计召回但不改变回复；确认质量后才切换 `active`。
+- 语义检索需要进程环境中的 `LIVING_MEMORY_EMBEDDING_BASE_URL`、`LIVING_MEMORY_EMBEDDING_API_KEY` 和 `LIVING_MEMORY_EMBEDDING_MODEL`；未配置时自动退回关键词检索。完整说明见 [LIVING-MEMORY.md](LIVING-MEMORY.md)。
+
 ## memberNotes：群友称呼（备注/代号，可选）
 
 ```json

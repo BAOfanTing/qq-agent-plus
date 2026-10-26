@@ -134,6 +134,8 @@ docker run -d --name qq-agent \
 | `QQ_AGENT_ONEBOT_ACCESS_TOKEN` / `QQ_AGENT_ONEBOT_HTTP_TOKEN` | OneBot 令牌 |
 | `SNOWLUMA_WEBUI_BOOTSTRAP_PASSWORD` | SnowLuma WebUI 初始密码（与 deploy-all 的 `.env` 同名） |
 | `QQ_AGENT_API_BASE_URL` / `QQ_AGENT_API_KEY` / `QQ_AGENT_API_MODEL` | 可选的模型初始配置 |
+| `LIVING_MEMORY_EMBEDDING_BASE_URL` / `LIVING_MEMORY_EMBEDDING_API_KEY` / `LIVING_MEMORY_EMBEDDING_MODEL` | 可选的长期记忆 Embedding；数据与向量保存在同一 `/data/living-memory/` SQLite 文件 |
+| `LIVING_MEMORY_EMBEDDING_DIMENSIONS` / `LIVING_MEMORY_RECALL_VECTOR_TIMEOUT_MS` / `LIVING_MEMORY_VECTOR_SCAN_LIMIT` | Embedding 维度、实时语义检索时限和每次扫描的向量上限 |
 | `SNOWLUMA_INTERNAL_URL` | 服务端探测协议端 WebUI 的地址（compose 网络内） |
 | `QQ_AGENT_NOVNC_URL` | 服务端探测 noVNC 的地址（compose 网络内） |
 | `QQ_AGENT_RUNTIME_MODE` | 全新配置的首次运行模式；默认 `active`，设 `observe` 先观察 |
