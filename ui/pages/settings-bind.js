@@ -346,9 +346,7 @@ function bindSettingsSaveAndSections() {
           renderSettings();
         } catch (error) {
           toggle.checked = !toggle.checked;
-          if (selector === '#cfg-living-memory-enabled' && state.config?.livingMemory) {
-            state.config.livingMemory = { ...state.config.livingMemory, enabled: toggle.checked === true };
-          }
+          if (selector === '#cfg-living-memory-enabled' && state.config?.livingMemory) state.config.livingMemory = { ...state.config.livingMemory, enabled: toggle.checked === true };
           toggle.disabled = false;
           if (result) result.textContent = `保存失败：${error.message}`;
         }

@@ -409,9 +409,12 @@ function settingsHtml() {
 
 // ── 页面骨架 ────────────────────────────────────────────────────────────
 
-function graphHtml(graph = {}) {
-  const nodes = Array.isArray(graph.nodes) ? graph.nodes.slice(0, 60) : [];
-  const edges = Array.isArray(graph.edges) ? graph.edges.slice(0, 120) : [];
+function graphHtml(graph) {
+  // 首次加载时 /status 可能成功、list/graph 失败，此时 graph 还是 null；
+  // 默认参数只兜 undefined，不能兜 null，否则错误页会在 renderPage 里再抛一次。
+  const source = graph && typeof graph === 'object' ? graph : {};
+  const nodes = Array.isArray(source.nodes) ? source.nodes.slice(0, 60) : [];
+  const edges = Array.isArray(source.edges) ? source.edges.slice(0, 120) : [];
   if (!nodes.length) return '<div class="lm-empty">当前范围还没有可视化的实体关系。记忆里出现人名、项目名或联系方式后，图谱会自动长出来。</div>';
   const width = 760;
   const height = 340;
