@@ -6633,3 +6633,19 @@ html[data-glass] .plugin-related-item {
   .skills-market-sortbar { justify-content: space-between; }
   .skills-market-grid.is-list .skills-market-card { flex-wrap: wrap; }
 }
+/* 技能市场：沿用插件市场的分面栏/工具栏/网格；详情改为整页。 */
+.plugin-toolbar #skills-market-search { flex: 1; min-width: 140px; font-size: var(--fs-sm); }
+.skills-market-detail { max-width: 1000px; margin: 0 auto; }
+.skills-market-detail-back { margin-bottom: 12px; }
+.skills-market-detail .skills-market-preview { position: static; max-height: none; }
+.skills-publish { padding-top: 4px; }
+.skills-publish-card { max-width: 900px; margin: 0 auto; padding: 24px; border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--bg-2) 82%, transparent); box-shadow: var(--shadow-card); }
+.skills-publish-card h3 { margin: 6px 0 8px; font-size: var(--fs-xl); }
+.skills-publish-card p { max-width: 75ch; margin: 0 0 14px; color: var(--muted); line-height: 1.7; }
+.skills-publish-steps { margin: 0 0 18px; padding-left: 20px; color: var(--muted); line-height: 1.8; }
+.skills-publish-steps code { font-family: var(--mono); font-size: var(--fs-sm); color: var(--text); }
+.skills-publish-card .skills-market-actions { justify-content: flex-start; }
+[data-glass] .skills-publish-card { background: var(--glass-fill); border-color: var(--glass-edge); backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%)); -webkit-backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%)); }
+@media (max-width: 900px) {
+  .plugin-toolbar #skills-market-search { flex: 1 1 100%; }
+}

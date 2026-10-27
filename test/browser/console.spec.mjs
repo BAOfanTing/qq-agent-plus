@@ -76,6 +76,10 @@ test('技能页：渲染内置技能并可全局启停', async ({ page }) => {
   await expect.poll(readEnabled).toBe(false);
   await toggle.click();
   await expect.poll(readEnabled).toBe(true);
+
+  await page.click('[data-skills-view="publish"]');
+  await expect(page.locator('#skills-publish-view')).toBeVisible();
+  await expect(page.locator('#skills-publish-view')).toContainText('提交一个技能');
 });
 
 test('技能市场：预览、安装、已安装列表与卸载', async ({ page }) => {
