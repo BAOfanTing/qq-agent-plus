@@ -122,9 +122,13 @@ function overviewHtml() {
   const entries = lm().list?.entries || [];
   const recent = entries.slice(0, 6);
   const archived = entries.filter((memory) => memory.status === 'archived').length;
+  const total = Number(lm().list?.total ?? entries.length) || 0;
   const scope = selectedScope();
   const groups = Array.isArray(cfg.groups) ? cfg.groups.filter(Boolean) : [];
   const autoScope = cfg.allowPrivate === true ? '群聊 + 私聊' : '仅群聊';
+  // 只有两三条记忆时，两栏里左卡会明显短一截，右侧空出一大块。少于 3 条就改成上下堆叠，
+  // 新实例（0 条）则直接显示三步引导，不再留一张空卡片。
+  const stacked = recent.length < 3;
   return `
   <div class="lm-kpis">
     <article class="lm-kpi"><span>活跃记忆</span><strong>${num(st.active)}</strong><small>全部 ${num(st.total)} 条${archived ? ` · 已归档 ${archived}` : ''}</small></article>
@@ -132,10 +136,10 @@ function overviewHtml() {
     <article class="lm-kpi"><span>来源回合</span><strong>${num(st.turns)}</strong><small>本地 SQLite 留痕</small></article>
     <article class="lm-kpi"><span>运行模式</span><strong>${esc(modeLabel(cfg))}</strong><small>${esc(modeHint(cfg))}</small></article>
   </div>
-  <div class="lm-overview-cols">
+  <div class="lm-overview-cols${stacked ? ' is-stacked' : ''}">
     <section class="lm-card">
       <div class="lm-card-head">
-        <div><span class="lm-section-kicker">最近写入</span><h3>${esc(scope ? scopeTitle(scope, lm().chats) : '当前范围的记忆')}</h3><p>按更新时间倒序，只显示前 6 条。</p></div>
+        <div><span class="lm-section-kicker">最近写入</span><h3>${esc(scope ? scopeTitle(scope, lm().chats) : '当前范围的记忆')}</h3><p>按更新时间倒序，最近的 6 条会出现在这里。</p></div>
         <div class="lm-card-head-actions">
           <select id="lm-overview-scope" class="lm-scope-select" aria-label="概览记忆范围">${scopeOptionsHtml(scope) || '<option value="">暂无会话</option>'}</select>
           <button type="button" class="btn btn-small" data-lm-jump="memories">管理全部</button>
@@ -143,9 +147,12 @@ function overviewHtml() {
       </div>
       ${recent.length
         ? `<div class="lm-recent">${recent.map(recentRow).join('')}</div>`
-        : `<div class="lm-empty">${scope
-          ? '这个范围还没有长期记忆。启用影子模式后，让机器人完成若干轮有价值的对话即可自动提炼。'
-          : '还没有可管理的会话。先在设置里启用长期记忆，并确认群聊已在允许范围内。'}</div>`}
+        : `<div class="lm-onboarding">
+            <div class="lm-onboarding-step"><b>1</b><div><strong>确认长期记忆已开启</strong><small>${cfg.enabled === true ? `当前已启用 · ${esc(modeLabel(cfg))}` : '当前已停用，打开开关后才会开始记录'}</small></div><button type="button" class="btn btn-small" data-lm-jump="settings">看设置</button></div>
+            <div class="lm-onboarding-step"><b>2</b><div><strong>在群里正常聊几轮</strong><small>累计 ${num(cfg.captureMinMessages) || 6} 个回合后会自动提炼；影子模式只记录，不影响回复。</small></div></div>
+            <div class="lm-onboarding-step"><b>3</b><div><strong>回来核对，或手动补录</strong><small>提炼出的卡片会出现在这里；也可以直接写一条。</small></div><button type="button" class="btn btn-small" data-lm-jump="memories">打开记忆库</button></div>
+          </div>`}
+      ${recent.length ? `<div class="lm-recent-foot">共 ${total} 条${archived ? ` · 已归档 ${archived}` : ''}；完整列表在「记忆库」。</div>` : ''}
     </section>
     <section class="lm-card">
       <div class="lm-card-head">

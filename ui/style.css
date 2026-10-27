@@ -6476,7 +6476,19 @@ html[data-glass] .plugin-related-item {
 .lm-kpi span, .lm-kpi small { display: block; color: var(--muted); font-size: var(--fs-2xs); }
 .lm-kpi strong { display: block; margin: 3px 0 2px; font-family: var(--mono); font-size: var(--fs-xl); color: var(--text); }
 
-.lm-overview-cols { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr); gap: 14px; align-items: start; }
+.lm-overview-cols { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr); gap: 14px; align-items: stretch; }
+.lm-overview-cols.is-stacked { grid-template-columns: 1fr; }
+.lm-overview-cols > .lm-card { display: flex; flex-direction: column; }
+.lm-overview-cols > .lm-card > .lm-recent { flex: 1; }
+.lm-overview-cols > .lm-card > .lm-card-note,
+.lm-overview-cols > .lm-card > .lm-recent-foot { margin-top: auto; }
+.lm-onboarding { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.lm-onboarding-step { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); }
+.lm-onboarding-step > b { display: grid; place-items: center; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-family: var(--mono); font-size: var(--fs-2xs); font-weight: 600; }
+.lm-onboarding-step > div { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.lm-onboarding-step strong { font-size: var(--fs-sm); }
+.lm-onboarding-step small { color: var(--muted); font-size: var(--fs-2xs); line-height: 1.5; }
+.lm-onboarding-step .btn { flex: 0 0 auto; align-self: center; }
 .lm-card { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--bg-2) 80%, transparent); box-shadow: var(--shadow-card); }
 .lm-tabpanel > .lm-card + .lm-card,
 .lm-tabpanel > .lm-overview-cols + .lm-card { margin-top: 14px; }
@@ -6497,6 +6509,7 @@ html[data-glass] .plugin-related-item {
 .lm-recent-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-sm); }
 .lm-recent-main small, .lm-recent-side { color: var(--faint); font-size: var(--fs-2xs); }
 .lm-recent-side { flex: 0 0 auto; }
+.lm-recent-foot { padding-top: 10px; border-top: 1px solid var(--border); color: var(--faint); font-size: var(--fs-2xs); }
 
 .lm-kv { margin: 0; }
 .lm-kv > div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--border); }
@@ -6614,6 +6627,13 @@ html[data-glass] .plugin-related-item {
   border-color: var(--glass-edge);
   backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%));
   -webkit-backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%));
+}
+@media (min-width: 900px) {
+  .lm-overview-cols.is-stacked .lm-kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; }
+  .lm-overview-cols.is-stacked .lm-kv > div:nth-last-child(-n + 2) { border-bottom: 0; }
+}
+@media (max-width: 899px) {
+  .lm-onboarding { grid-template-columns: 1fr; }
 }
 @media (max-width: 1050px) {
   .lm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
