@@ -25,9 +25,9 @@ function timestamp(value, fallback = Date.now()) {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : fallback;
 }
 
-function jsonValue(value, fallback, predicate) {
+function jsonValue(value, fallback, fn) {
   const parsed = parseJson(value, fallback);
-  return stableJson(predicate(parsed) ? parsed : fallback);
+  return stableJson(fn(parsed) ? parsed : fallback);
 }
 
 function arrayValue(value) {

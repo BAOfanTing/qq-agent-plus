@@ -179,7 +179,7 @@ export class LivingMemoryService {
    * It is used by the external-service migration and is deliberately opt-in:
    * normal startup never turns an Embedding provider into an unbounded job.
    */
-  async reindexVectors({ limit = 100000, batchSize = 8, timeoutMs = 0, force = false, onProgress = null } = {}) {
+  async reindexVectors({ limit = 100000, batchSize = 8, timeoutMs = 0, force = false, fn = null } = {}) {
     const report = { configured: this.embedder.ready(), candidates: 0, attempted: 0, ready: 0, failed: 0 };
     if (!this.embedder.ready()) return { ...report, reason: 'Embedding 未配置' };
     const items = this.store.vectorWork({ model: this.embeddingConfig.model, limit, force });
@@ -187,7 +187,7 @@ export class LivingMemoryService {
     const size = clampInt(batchSize, 1, 64, 8);
     const effectiveTimeoutMs = clampInt(timeoutMs, 0, 120000, 0);
     const notify = () => {
-      if (typeof onProgress === 'function') onProgress({ ...report });
+      if (typeof fn === 'function') fn({ ...report });
     };
     const saveReady = (memory, vector) => {
       this.store.setVectorState(memory.id, {
