@@ -6658,3 +6658,6 @@ html[data-glass] .plugin-related-item {
 .skills-chat-row input[type='checkbox'] { accent-color: var(--accent); flex: 0 0 auto; }
 .skills-chat-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skills-chat-row em { flex: 0 0 auto; color: var(--faint); font-size: var(--fs-2xs); font-style: normal; }
+.skills-market-refresh { margin-left: 2px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-2); }
+.skills-market-refresh:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); color: var(--text); }
+.skills-market-refresh.is-loading svg { animation: spin 1s linear infinite; }

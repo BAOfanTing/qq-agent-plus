@@ -303,12 +303,13 @@ function skillsRenderMarket() {
         <button type="button" class="btn btn-small plugin-filter-toggle${skillsState.marketFiltersOpen ? ' is-on' : ''}" data-skills-filters="1">${iconSvg('filter', { size: 13 })}<span>筛选</span></button>
         <div class="plugin-viewtoggle" role="group" aria-label="视图"><button type="button" class="plugin-view ${skillsState.marketView === 'grid' ? 'is-on' : ''}" data-market-view="grid" title="卡片">${iconSvg('layout', { size: 14 })}</button><button type="button" class="plugin-view ${skillsState.marketView === 'list' ? 'is-on' : ''}" data-market-view="list" title="列表">${iconSvg('layers', { size: 14 })}</button></div>
         <select id="skills-market-sort" class="plugin-sort" aria-label="技能排序"><option value="name" ${skillsState.marketSort === 'name' ? 'selected' : ''}>按名称</option><option value="version" ${skillsState.marketSort === 'version' ? 'selected' : ''}>按版本</option><option value="author" ${skillsState.marketSort === 'author' ? 'selected' : ''}>按作者</option></select>
+        <button type="button" class="plugin-view skills-market-refresh${skillsState.marketLoading ? ' is-loading' : ''}" data-market-refresh title="刷新索引" aria-label="刷新索引" ${skillsState.marketLoading ? 'disabled' : ''}>${iconSvg('refresh', { size: 14 })}</button>
       </div>
       ${index.stale && index.error ? `<div class="skills-market-note">索引暂时不可用，正在使用缓存：${esc(index.error)}</div>` : ''}
       ${skillsState.marketError ? `<div class="skills-market-note">${esc(skillsState.marketError)}</div>` : ''}
       <div id="skills-market-list" class="plugin-grid${skillsState.marketView === 'list' ? ' is-list' : ''}">${pageList.map(skillsMarketCard).join('') || '<div class="skills-empty">没有匹配的技能。</div>'}</div>
       ${skillsMarketPagination(page, totalPages, sorted.length)}
-      <div class="plugin-index-foot"><span>${esc(index.name || '技能索引')}${index.stale ? ' · 使用本地缓存' : ''}${when ? ` · ${esc(when)}` : ''}</span><button type="button" class="btn btn-small" data-market-refresh>${iconSvg('refresh', { size: 14 })}刷新索引</button></div>
+      <div class="plugin-index-foot"><span>${esc(index.name || '技能索引')}${index.stale ? ' · 使用本地缓存' : ''}${when ? ` · ${esc(when)}` : ''}</span></div>
     </div>
   </div>`;
 }
@@ -570,7 +571,7 @@ function skillsBind(root) {
       return;
     }
     if (event.target?.closest?.('[data-market-refresh]')) {
-      skillsState.market = null;
+      // 保留当前列表，刷新期间只转图标；拉取失败也还能看旧数据。
       void skillsLoadMarket(true);
       return;
     }
