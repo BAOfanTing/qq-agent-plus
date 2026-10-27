@@ -578,6 +578,7 @@ MiMo 的写法（想要语气、又不想上 GPU 时最省事）：
   | Pollinations | `https://image.pollinations.ai` | **不用** | 免注册免 Key，零成本开箱可用；第三方公共服务，**按 IP 限流**（官方口径匿名档 15 秒 1 次，2026-10-01 查阅）、**图片带它的水印**、提示词会经过它。额度用完返回空的 402 —— 当"试玩"，长期用换有免费额度的图模型 |
   | 智谱 CogView-3-Flash | `https://open.bigmodel.cn/api/paas/v4` | 要（免费档） | 2026-10-01 真机实测：8~9 秒出一张 1024×1024（约 100 KB）；是否仍免费以智谱定价页为准。出图**右下角带「AI 生成」水印** —— 国内厂商按《人工智能生成合成内容标识办法》都要打，介意水印只能换海外服务商 |
   | 硅基流动 | `https://api.siliconflow.cn/v1` | 要 | 到「模型广场」挑标了**免费**的图模型填进「模型」栏 |
+  | Moss Image | `https://api.mosi.cn/v1` | 要 | `moss-image-base-1.0` / `moss-image-sft-1.0`；地址只填到 `/v1`，不要带 `/images/generations`；官方只支持 `response_format=url`，生成较慢 |
   | 魔搭 ModelScope | `https://api-inference.modelscope.cn/v1` | 要 Token | 按公开口径有每日免费额度（以官网为准） |
   | 自定义 / 自建 | 自己填 | 要 | 任何 OpenAI 兼容的 `/images/generations` |
 

@@ -112,6 +112,11 @@ HTML 里的 markdown 星号）。
 
 - 修复用量统计缓存 key 含 `Date.now()` 窗口终点导致永不命中（issue #61）：签名只看 range、会话文件集合和稳定起点；`24h` 滚动窗口按 TTL 分桶。命中时返回缓存对应的窗口，避免行数据与标签错位。
 
+**图片生成**
+
+- 修复 issue #62：服务地址误填完整 `/images/generations` 端点时会重复拼接，现在统一按 base 地址处理；控制台标签也提示填到 `/v1`。
+- 新增 Moss Image 预设（`moss-image-base-1.0` / `moss-image-sft-1.0`），地址 `https://api.mosi.cn/v1`；按官方文档标注 `response_format` 只支持 url、生成较慢。
+
 **技能市场与技能页**
 
 - 新增 `src/skills/market.js` 与 `skills/market.json`：官方索引列出可安装技能，安装前可预览 SKILL.md、允许工具、来源与 sha256。

@@ -66,6 +66,22 @@ export const IMAGEGEN_SERVICES = [
       + '地址填到 /v1 这一层，Key 用硅基流动的 API Key（与语音转写可以是同一把）。'
   },
   {
+    id: 'moss',
+    label: 'Moss Image（moss-image-base / sft）',
+    shape: 'openai',
+    creds: ['key'],
+    baseUrl: 'https://api.mosi.cn/v1',
+    hosts: ['api.mosi.cn'],
+    keyUrl: 'https://platform.mosi.cn',
+    models: [
+      { id: 'moss-image-base-1.0' },
+      { id: 'moss-image-sft-1.0' }
+    ],
+    note: '服务地址填到 /v1，不要带 /images/generations（适配器会自己拼）。'
+      + '官方文档：response_format 只支持 url（不支持 b64_json），n 只能 1，'
+      + '请求示例超时给到 900 秒；生成慢时把 imageGen.timeoutMs 调大。'
+  },
+  {
     id: 'modelscope',
     label: '魔搭 ModelScope API-Inference（有每日免费额度，需 Token）',
     shape: 'openai',
