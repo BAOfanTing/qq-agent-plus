@@ -14,6 +14,7 @@ const MAX_FILE_BYTES = 128 * 1024;
 const MAX_TOTAL_BYTES = 512 * 1024;
 const MAX_FILES = 8;
 const CACHE_TTL_MS = 30 * 60 * 1000;
+const CACHE_VERSION = 2;
 const STALE_FALLBACK_MS = 7 * 86400000;
 const SKILL_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const FILE_KEY_RE = /^[A-Za-z0-9_.-]{1,80}$/;
@@ -129,7 +130,7 @@ function readFileCache(url) {
   try {
     const text = fs.readFileSync(cacheFile(), 'utf8');
     const parsed = JSON.parse(text);
-    if (parsed?.url !== url || !isPlainObject(parsed.payload)) return null;
+    if (parsed?.url !== url || parsed?.cacheVersion !== CACHE_VERSION || !isPlainObject(parsed.payload)) return null;
     return { at: Number(parsed.at) || 0, index: normalizeIndex(parsed.payload, url) };
   } catch { return null; }
 }
@@ -140,7 +141,7 @@ function writeFileCache(url, index, at) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const target = cacheFile();
     const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
-    fs.writeFileSync(tmp, JSON.stringify({ url, at, payload: { version: index.version, name: index.name, updatedAt: index.updatedAt, skills: index.skills } }), { mode: 0o600 });
+    fs.writeFileSync(tmp, JSON.stringify({ cacheVersion: CACHE_VERSION, url, at, payload: { version: index.version, name: index.name, updatedAt: index.updatedAt, skills: index.skills } }), { mode: 0o600 });
     fs.renameSync(tmp, target);
   } catch { /* 缓存写失败不影响本次结果 */ }
 }
@@ -171,7 +172,10 @@ export async function loadMarketIndex({ force = false } = {}) {
     if (response.statusCode !== 200) throw new Error(`索引 HTTP ${response.statusCode}`);
     if (response.truncated) throw new Error('索引超过 256KB 上限');
     const raw = JSON.parse(response.body);
-    const index = normalizeIndex(raw, response.url || url);
+    // 相对文件路径必须按用户配置的索引地址解析。API 兜底时 response.url 是
+    // api.github.com/contents/...，拿它当 base 会把文件地址变成 JSON 信封地址，
+    // 下载到的不是原文件，sha256 必然不匹配。
+    const index = normalizeIndex(raw, url);
     memoryCache = { url, at: now, payload: index };
     writeFileCache(url, index, now);
     return { index, fetchedAt: now, stale: false, url };
@@ -190,11 +194,26 @@ export async function loadMarketIndex({ force = false } = {}) {
 export async function listMarketSkills({ force = false } = {}) {
   const { index, fetchedAt, stale, url, error } = await loadMarketIndex({ force });
   const registry = getSkillRegistry();
-  const installed = new Map(registry.list().map((skill) => [skill.id, skill]));
+  const installedList = registry.list();
+  const installed = new Map(installedList.map((skill) => [skill.id, skill]));
+  const indexedIds = new Set(index.skills.map((entry) => entry.id));
+  const localOnly = installedList.filter((skill) => !indexedIds.has(skill.id)).map((skill) => ({
+    ...skill,
+    installed: true,
+    installedVersion: skill.version,
+    installedSource: skill.source,
+    builtin: skill.source === 'builtin',
+    localOnly: true,
+    files: {},
+    sha256: '',
+    author: '',
+    category: '本地',
+    homepage: ''
+  }));
   return {
     ok: true,
     index: { name: index.name, updatedAt: index.updatedAt, url, fetchedAt, stale, error: error || '' },
-    skills: index.skills.map((entry) => {
+    skills: [...index.skills.map((entry) => {
       const current = installed.get(entry.id);
       return {
         ...entry,
@@ -204,7 +223,7 @@ export async function listMarketSkills({ force = false } = {}) {
         builtin: current?.source === 'builtin',
         updateAvailable: Boolean(current && compareVersions(entry.version, current.version) > 0)
       };
-    })
+    }), ...localOnly]
   };
 }
 

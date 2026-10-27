@@ -71,7 +71,10 @@ test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控�
   assert.match(chat, /id="cfg-pro-private"[^\n]*privateEnabled === true/);
   assert.match(chat, /群聊（独立节奏，按群白名单）/);
   assert.match(chat, /私聊（独立节奏，按私聊白名单）/);
-  assert.match(chat, /各自独立计时、独立按概率判定/);
+  assert.match(chat, /群聊和私聊各自独立计时/);
+  assert.match(chat, /每个群\/私聊独立判定/);
+  assert.match(save, /scopeMode:/);
+  assert.match(save, /perChatMaxPerTick:/);
   for (const key of ['replyGuardEnabled', 'pokeReplyEnabled']) {
     assert.ok(save.includes(`${key}:`), `保存端缺少 ${key}`);
   }

@@ -107,7 +107,7 @@ import { visibleImpressions, memoryVisibilityOf } from './memory-visibility.js';
 import { knowledgeEnabled } from '../knowledge/store.js';
 import { buildReminderNote, reminderNoteCost } from './reminders.js';
 import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey, sanitizeUserText } from './util.js';
-import { readProactiveAttempts, writeProactiveAttempt } from './proactive-state.js';
+import { readProactiveAttempts, readProactiveState, writeProactiveAttempt, writeProactiveChatAttempt } from './proactive-state.js';
 import { buildSystemPrompt, buildUserPrompt, isAtMe, resolveContextTier } from '../llm/prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
@@ -2950,6 +2950,34 @@ export class Orchestrator {
       }
       if (this.runningChats.size >= Math.max(1, Number(cfg.maxConcurrentRuns) || 2)) {
         log.info(`[proactive] 跳过（${scopeLabel(scope)}）：并发任务已满`);
+        return;
+      }
+      if (cfg.proactive?.scopeMode === 'perChat') {
+        // perChat：每个群/私聊各自判定；概率仍按会话独立掷，但每轮最多开 maxPerTick 个，
+        // 避免几十个群同时命中造成刷屏。
+        const candidates = this.#proactiveCandidates(cfg, scope);
+        if (!candidates.length) {
+          log.info(`[proactive] 跳过（${scopeLabel(scope)}）：没有安静下来的会话，45 分钟后再看`);
+          clearTimeout(this.proactiveTimers.get(scope));
+          schedule(scope, 45 * 60 * 1000);
+          return;
+        }
+        const state = readProactiveState(PROACTIVE_STATE_FILE);
+        const minGapMs = Math.max(60000, Number(cfg.proactive?.checkIntervalMinMs) || 1800000);
+        const maxPerTick = Math.max(1, Math.min(10, Number(cfg.proactive?.perChatMaxPerTick) || 2));
+        const chance = proactiveProbability(cfg.proactive?.probability);
+        let sent = 0;
+        for (const chatKey of candidates) {
+          if (sent >= maxPerTick) break;
+          if (nowTick - Number(state.chats[chatKey] || 0) < minGapMs) continue;
+          writeProactiveChatAttempt(PROACTIVE_STATE_FILE, chatKey, nowTick);
+          if (this.random() > chance) continue;
+          if (this.runningChats.size >= Math.max(1, Number(cfg.maxConcurrentRuns) || 2)) break;
+          sent += 1;
+          log.info(`[proactive] 主动开话题（${scopeLabel(scope)}·独立） → ${chatKey}`);
+          this.wake(chatKey, { proactive: true }).catch((error) => log.error('[orchestrator] proactive 出错:', error));
+        }
+        if (!sent) log.info(`[proactive] 跳过（${scopeLabel(scope)}）：本轮独立判定没有命中`);
         return;
       }
       if (this.random() > proactiveProbability(cfg.proactive?.probability)) {

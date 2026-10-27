@@ -206,8 +206,8 @@ function skillsMarketPreviewHtml() {
   const tools = (preview.manifest.allowedTools || []).map((tool) => `<span class="skills-chip">${esc(tool)}</span>`).join('');
   const homepage = preview.entry.homepage ? `<a class="skills-market-link" href="${esc(preview.entry.homepage)}" target="_blank" rel="noopener noreferrer">主页</a>` : '';
   return `<section class="skills-market-preview">
-    <div class="skills-market-preview-head"><div><span class="skills-eyebrow">市场详情 · ${esc(preview.entry.id)}</span><h3>${esc(preview.manifest.name)} <span class="skills-version">v${esc(preview.manifest.version)}</span></h3><p>${esc(preview.manifest.description || '')}</p></div><div class="skills-market-actions">${homepage}<button type="button" class="btn btn-small btn-primary" data-market-install="${esc(preview.entry.id)}" ${entry.builtin || skillsState.marketBusyId ? 'disabled' : ''}>${skillsState.marketBusyId === preview.entry.id ? '安装中…' : skillsMarketInstallLabel(entry)}</button>${entry.installed && entry.installedSource === 'user' ? `<button type="button" class="btn btn-small btn-danger" data-market-uninstall="${esc(preview.entry.id)}">卸载</button>` : ''}</div></div>
-    <div class="skills-detail-grid"><div class="skills-detail-block"><h4>允许工具</h4><div class="skills-chips">${tools || '<span class="skills-chip is-soft">仅 finish</span>'}</div></div><div class="skills-detail-block"><h4>文件与校验</h4><p class="skills-muted">${Object.entries(preview.entry.files).map(([name, meta]) => `${esc(name)} · ${Number(meta.bytes) || 0}B`).join('<br>')}</p></div><div class="skills-detail-block"><h4>来源</h4><p class="skills-muted">${esc(preview.entry.author || '未署名')}<br><span class="skills-market-hash">${esc(String(preview.entry.sha256 || '').slice(0, 16))}</span></p></div></div>
+    <div class="skills-market-preview-head"><div><span class="skills-eyebrow">市场详情 · ${esc(preview.entry.id)}</span><h3>${esc(preview.manifest.name)} <span class="skills-version">v${esc(preview.manifest.version)}</span></h3><p>${esc(preview.manifest.description || '')}</p></div><div class="skills-market-actions">${homepage}${entry.localOnly ? '' : `<button type="button" class="btn btn-small btn-primary" data-market-install="${esc(preview.entry.id)}" ${entry.builtin || skillsState.marketBusyId ? 'disabled' : ''}>${skillsState.marketBusyId === preview.entry.id ? '安装中…' : skillsMarketInstallLabel(entry)}</button>`}${entry.installed && entry.installedSource === 'user' ? `<button type="button" class="btn btn-small btn-danger" data-market-uninstall="${esc(preview.entry.id)}">卸载</button>` : ''}</div></div>
+    <div class="skills-detail-grid"><div class="skills-detail-block"><h4>允许工具</h4><div class="skills-chips">${tools || '<span class="skills-chip is-soft">仅 finish</span>'}</div></div><div class="skills-detail-block"><h4>文件与校验</h4><p class="skills-muted">${preview.entry.localOnly ? '本地技能目录（非市场包）' : Object.entries(preview.entry.files).map(([name, meta]) => `${esc(name)} · ${Number(meta.bytes) || 0}B`).join('<br>')}</p></div><div class="skills-detail-block"><h4>来源</h4><p class="skills-muted">${esc(preview.entry.author || '未署名')}<br><span class="skills-market-hash">${esc(String(preview.entry.sha256 || '').slice(0, 16))}</span></p></div></div>
     <section class="skills-doc-block"><h4>安装前预览（SKILL.md）</h4><pre class="skills-doc">${esc(preview.instructions || '（索引没有提供摘要，加载完整说明后可查看）')}</pre></section>
   </section>`;
 }
@@ -335,6 +335,20 @@ async function skillsLoadMarketPreview(id, { full = true } = {}) {
   skillsState.marketPreview = null;
   skillsState.marketPreviewError = '';
   skillsRenderMarket();
+  const entry = skillsMarketEntry(id);
+  if (entry?.localOnly) {
+    try {
+      const result = await api(`/api/skills/${encodeURIComponent(id)}`);
+      const skill = result?.skill || {};
+      skillsState.marketPreview = {
+        ok: true, previewOnly: false, entry: { ...entry, files: {} },
+        instructions: skill.instructions || '（本地技能没有 SKILL.md 内容）',
+        manifest: { id: skill.id || id, name: skill.name || entry.name, version: skill.version || entry.version, description: skill.description || entry.description, allowedTools: skill.allowedTools || entry.allowedTools || [], triggers: skill.triggers || entry.triggers || [] }
+      };
+    } catch (error) { skillsState.marketPreviewError = String(error?.message || error); }
+    skillsRenderMarket();
+    return;
+  }
   try {
     const result = await api(`/api/skills/market/preview?id=${encodeURIComponent(id)}${full ? '&full=1' : ''}`);
     if (skillsState.marketPreviewId === id) skillsState.marketPreview = result;

@@ -95,6 +95,8 @@
     "probability": 0.55,
     "groupEnabled": true,
     "privateEnabled": false,
+    "scopeMode": "shared",
+    "perChatMaxPerTick": 2,
     "followUpEnabled": true,
     "selfWakeEnabled": true,
     "activeHours": {
@@ -108,6 +110,7 @@
 
 - `enabled`：会话安静时按概率发起话题（控制台「设置 → 聊天设置 → 主动开话题」第一条），只管这一条链路。
 - `groupEnabled`：安静时发起话题是否挑群聊，默认 `true`；候选沿用 `allow.groups` 与 `allowAllWhenEmpty`。
+- `scopeMode`：`shared`（默认）= 群聊/私聊各共用一次机会，每轮各挑一个会话；`perChat` = 每个群/私聊独立按概率判定。`perChatMaxPerTick`（默认 2）限制独立模式每轮最多开几个，避免群多时刷屏。
 - `privateEnabled`：是否也挑私聊，默认 `false`。打开后（且 `enabled: true`）按 `allow.private`
   的私聊白名单挑人，`deny.private` 仍然优先；规则与平时回复私聊一致，不另建名单。
   被选中的私聊同样要满足：没有未读、安静超过 `idleThresholdMs`、当前允许运行。

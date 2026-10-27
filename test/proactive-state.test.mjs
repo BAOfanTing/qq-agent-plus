@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { readProactiveAttempts, writeProactiveAttempt } from '../src/core/proactive-state.js';
+import { readProactiveAttempts, readProactiveState, writeProactiveAttempt, writeProactiveChatAttempt } from '../src/core/proactive-state.js';
 
 const tempFile = (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-proactive-state-'));
@@ -42,4 +42,24 @@ test('主动循环为群聊和私聊分别排程，候选也按范围过滤', ()
   assert.match(source, /const candidates = this\.#proactiveCandidates\(cfg, scope\)/,
     '调用点必须带 scope；只匹配方法定义会把“调用点漏传 scope”放过去');
   assert.match(source, /chatKeys: this\.store\.listChats\(\)\.filter\(\(key\) => String\(key\)\.startsWith\(prefix\)\)/);
+});
+
+test('per-chat 模式各会话独立记录，写范围不会清掉会话记录', (t) => {
+  const file = tempFile(t);
+  const now = Date.now();
+  writeProactiveChatAttempt(file, 'group:1', now - 3000);
+  writeProactiveChatAttempt(file, 'group:2', now - 2000);
+  writeProactiveChatAttempt(file, 'private:3', now - 1000);
+  let state = readProactiveState(file);
+  assert.equal(state.chats['group:1'], now - 3000);
+  assert.equal(state.chats['group:2'], now - 2000);
+  assert.equal(state.chats['private:3'], now - 1000);
+  writeProactiveAttempt(file, 'group', now);
+  state = readProactiveState(file);
+  assert.equal(state.group, now);
+  assert.equal(state.chats['group:1'], now - 3000, '范围记录不能清掉 per-chat 记录');
+  writeProactiveChatAttempt(file, 'group:1', now + 1000);
+  state = readProactiveState(file);
+  assert.equal(state.chats['group:1'], now + 1000);
+  assert.equal(state.group, now, 'per-chat 记录不能清掉范围记录');
 });

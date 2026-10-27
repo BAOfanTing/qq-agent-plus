@@ -862,6 +862,11 @@ async function saveConfig({ quiet = false } = {}) {
       // 控件缺失时都按已保存值回退。
       groupEnabled: chk('#cfg-pro-group', c.proactive?.groupEnabled !== false),
       privateEnabled: chk('#cfg-pro-private', c.proactive?.privateEnabled === true),
+      scopeMode: val('#cfg-pro-mode', c.proactive?.scopeMode === 'perChat' ? 'perChat' : 'shared') === 'perChat' ? 'perChat' : 'shared',
+      perChatMaxPerTick: Math.round(numKeep(
+        val('#cfg-pro-per-max', Number(c.proactive?.perChatMaxPerTick) || 2),
+        Number(c.proactive?.perChatMaxPerTick) || 2, 1, 10, 2
+      )),
       // 时段：空列表 = 全天；结束允许 24:00；格式不对直接拒绝保存，不静默丢掉用户刚填的值。
       activeHours: {
         windows: (() => {

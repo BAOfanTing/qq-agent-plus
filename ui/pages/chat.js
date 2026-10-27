@@ -275,6 +275,10 @@ return `
       <label for="cfg-pro-group">群聊（独立节奏，按群白名单）</label></div>
     <div class="checkbox-row"><input type="checkbox" id="cfg-pro-private" ${c.proactive?.privateEnabled === true ? 'checked' : ''} />
       <label for="cfg-pro-private">私聊（独立节奏，按私聊白名单）</label></div>
+    <div class="field-row">
+      <div class="field"><label>判定方式</label><select id="cfg-pro-mode"><option value="shared" ${c.proactive?.scopeMode !== 'perChat' ? 'selected' : ''}>群聊/私聊各共用一次机会</option><option value="perChat" ${c.proactive?.scopeMode === 'perChat' ? 'selected' : ''}>每个群/私聊独立判定</option></select></div>
+      <div class="field"><label>独立模式每轮最多开口</label><input type="number" id="cfg-pro-per-max" min="1" max="10" step="1" value="${esc(Number(c.proactive?.perChatMaxPerTick) || 2)}" /></div>
+    </div>
     <div class="field pro-windows-field">
       <label>主动发言时段（仅在该时段内发起）</label>
       <div id="pro-windows" class="pro-windows">
@@ -297,7 +301,7 @@ return `
       <label for="cfg-pro-selfwake">允许模型给自己安排稍后的主动发言</label></div>
     <div class="hint">
       中间的「群聊 / 私聊」是范围：分别沿用「群白名单」与「私聊白名单」（deny 优先），两个都不勾就不主动开话题。
-      群聊和私聊各自独立计时、独立按概率判定：一边开了话题或摇到不发言，不会占用另一边的机会。
+      群聊和私聊各自独立计时；默认「范围共用一次机会」= 每轮在所有群里挑一个、所有私聊里挑一个。选「每个群/私聊独立判定」后，每个会话各自按概率判定，并受「每轮最多开口」限制。
       后两条是补话与自安排唤醒，独立开关。完全不想让它主动开口，就把上面所有勾选都取消。
       私聊默认不勾：勾上后私聊白名单里的人（安静够久且没有未读时）也可能收到主动消息。
     </div>
