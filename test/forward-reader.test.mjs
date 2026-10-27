@@ -183,6 +183,117 @@ test('聊天记录卡片单独标成 [卡片聊天记录 …]：提示词里的�
   assert.equal(cardToText({ type: 'json', data: {} }), '[卡片消息]');
 });
 
+test('视频分享卡片保留 detail_1.url 中的原始短链', async () => {
+  const { cardToText, segmentsToText } = await import('../src/onebot/onebot.js');
+  const seg = { type: 'json', data: { data: JSON.stringify({
+    app: 'com.tencent.miniapp_01', prompt: '[QQ小程序]',
+    meta: { detail_1: { title: '测试视频', desc: '哔哩哔哩', url: 'https://b23.tv/AbCdEf1' } }
+  }) } };
+  const expected = '[卡片 [QQ小程序]：测试视频 — 哔哩哔哩 — https://b23.tv/AbCdEf1]';
+  assert.equal(cardToText(seg), expected);
+  assert.equal(await segmentsToText([seg]), '[卡片[QQ小程序]：测试视频 — 哔哩哔哩 — https://b23.tv/AbCdEf1]');
+});
+
+test('视频分享卡片递归查找嵌套对象和数组，采用第一个合法链接', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  const data = { meta: { detail_1: { title: '嵌套视频', extra: { links: [
+    { url: 'https://example.com/news' },
+    { url: 'https://www.bilibili.com/video/BV1xx411c7mD/?p=2&share_source=qq' },
+    { url: 'https://youtu.be/second' }
+  ] } } } };
+  assert.equal(cardToText({ type: 'json', data: { data } }),
+    '[卡片：嵌套视频 — https://www.bilibili.com/video/BV1xx411c7mD/?p=2&share_source=qq]');
+});
+
+test('视频分享卡片支持白名单平台及子域名', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  for (const url of [
+    'https://bilibili.com/video/BV1xx411c7mD', 'https://b23.tv/AbCdEf1',
+    'https://m.youtube.com/watch?v=example&t=42', 'https://youtu.be/example?t=42',
+    'https://v.douyin.com/example/', 'https://www.iesdouyin.com/share/video/123',
+    'http://www.bilibili.com/video/BV1xx411c7mD',
+    'https://www.youtube.com/watch?v=example&feature=a%2Fb&punct=.!',
+    'https://www.youtube.com/watch?v=example&empty='
+  ]) {
+    const data = { meta: { detail_1: { title: '平台视频', url } } };
+    assert.equal(cardToText({ type: 'json', data: { data } }), `[卡片：平台视频 — ${url}]`);
+  }
+});
+
+test('XML 视频卡片还原 amp 实体并保留完整 query', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  const data = '<msg url="https://www.youtube.com/watch?v=example&amp;t=42&amp;list=a%2Fb"><title>XML 视频</title><summary>简介</summary></msg>';
+  assert.equal(cardToText({ type: 'xml', data: { data } }),
+    '[卡片：XML 视频 — 简介 — https://www.youtube.com/watch?v=example&t=42&list=a%2Fb]');
+  const punctuation = '<msg url="https://www.youtube.com/watch?v=example&amp;punct=.!" />';
+  assert.equal(cardToText({ type: 'xml', data: { data: punctuation } }),
+    '[卡片：https://www.youtube.com/watch?v=example&punct=.!]');
+});
+
+test('视频链接文本兜底去掉引号和常见尾随标点', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  const data = '<msg><title>视频</title><summary>简介</summary><url><![CDATA[看看（https://b23.tv/AbCdEf1）。]]></url></msg>';
+  assert.equal(cardToText({ type: 'xml', data: { data } }), '[卡片：视频 — 简介 — https://b23.tv/AbCdEf1]');
+});
+
+test('纯视频 URL 卡片也有非空正文', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  for (const [type, data] of [
+    ['json', { url: 'https://youtu.be/example' }],
+    ['xml', '<msg url="https://youtu.be/example" />'],
+    ['json', '{invalid: "https://youtu.be/example"}']
+  ]) {
+    assert.equal(cardToText({ type, data: { data } }), '[卡片：https://youtu.be/example]');
+  }
+});
+
+test('普通分享卡片输出保持原样，不追加新闻或不支持主机', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  for (const url of ['', 'https://example.com/news', 'https://news.example.org/article']) {
+    const data = { app: 'com.tencent.structmsg', prompt: '[分享]',
+      meta: { news: { title: '标题', desc: '摘要', url } } };
+    assert.equal(cardToText({ type: 'json', data: { data } }), '[卡片 [分享]：标题 — 摘要]');
+  }
+});
+
+test('视频 URL 校验拒绝仿冒域名、凭据和非 HTTP 协议', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  for (const url of [
+    'https://evilbilibili.com/video/x', 'https://bilibili.com.example.org/video/x',
+    'https://youtube.com.example.org/watch?v=x', 'https://notdouyin.com/video/x',
+    'https://b23.tv.example.org/x', 'https://user:password@b23.tv/x',
+    'https://user@www.youtube.com/watch?v=x', 'ftp://b23.tv/x', 'javascript:alert(1)'
+  ]) {
+    for (const [type, data] of [
+      ['json', { meta: { detail_1: { title: '普通标题', url } } }],
+      ['xml', `<msg url="${url}"><title>普通标题</title></msg>`]
+    ]) {
+      assert.equal(cardToText({ type, data: { data } }), '[卡片：普通标题]', url);
+    }
+  }
+});
+
+test('聊天记录卡片含视频 URL 时仍保留聊天记录标记和 resid', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  const { forwardResIdFromSegment } = await import('../src/onebot/forward-reader.js');
+  const data = { app: 'com.tencent.multimsg', prompt: '[聊天记录]', meta: { detail_1: {
+    resid: 'abcdefgh12345', title: '群聊的聊天记录', url: 'https://b23.tv/AbCdEf1'
+  } } };
+  const seg = { type: 'json', data: { data: JSON.stringify(data) } };
+  assert.equal(cardToText(seg), '[卡片聊天记录 [聊天记录]：群聊的聊天记录 — https://b23.tv/AbCdEf1]');
+  assert.equal(forwardResIdFromSegment(seg), 'abcdefgh12345');
+});
+
+test('视频分享卡片保留来源昵称和自己的动态标记', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  const data = { prompt: '[分享]', meta: { detail_1: {
+    title: '视频', desc: '简介', host: { nick: '作者', uin: '12345' }, url: 'https://b23.tv/AbCdEf1'
+  } } };
+  const seg = { type: 'json', data: { data } };
+  assert.equal(cardToText(seg), '[卡片 [分享] · 来自 作者：视频 — 简介 — https://b23.tv/AbCdEf1]');
+  assert.equal(cardToText(seg, '12345'), '[卡片 [分享] · 你自己的动态：视频 — 简介 — https://b23.tv/AbCdEf1]');
+});
+
 // 「消息类型」关掉自动展开后（issue #34），**按需展开这条路必须还在** ——
 // 关的是"入站顺手展开"，不是"模型想看时看不到"。哪天有人把同一个闸门也加到工具上，
 // 这条用例会红。
