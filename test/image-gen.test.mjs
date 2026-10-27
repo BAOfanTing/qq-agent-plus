@@ -91,6 +91,32 @@ test('适配器：b64_json 直接解码；不发 response_format（新版 OpenAI
   assert.equal('response_format' in calls3[0], false);
 });
 
+test('适配器：extraBody 原样合并进请求体（Moss 的 output_watermark=false）', async () => {
+  const calls = [];
+  await generateImage({
+    cfg: {
+      imageGen: {
+        enabled: true,
+        baseUrl: 'https://api.mosi.cn/v1',
+        model: 'moss-image-base-1.0',
+        extraBody: { output_watermark: false, quality: 'high' }
+      }
+    },
+    apiCfg: { baseUrl: 'https://api.mosi.cn/v1' },
+    apiKey: 'moss-key',
+    prompt: '一只橘猫',
+    fetchFn: async (url, req) => {
+      calls.push(JSON.parse(req.body));
+      return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }) };
+    }
+  });
+  assert.equal(calls[0].output_watermark, false);
+  assert.equal(calls[0].quality, 'high');
+  assert.equal(calls[0].model, 'moss-image-base-1.0');
+  assert.equal(calls[0].prompt, '一只橘猫');
+  assert.equal(calls[0].n, 1);
+});
+
 test('适配器：url 形态走内置安全下载器（真发一次 HTTP，验字节与体积上限口径）', async () => {
   const { updateConfig } = await import('../src/core/config.js');
   // 真起一个本地 HTTP 服务当"图片 CDN"：url 形态由适配器自己 import 的 safeFetchBinary 下载

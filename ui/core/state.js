@@ -47,8 +47,14 @@ const state = {
   consolidateResult: {},   // chatKey -> { note, at, failed? }
   livingMemory: {
     status: null,
+    chats: [],
+    tab: 'overview',
     selectedScope: '',
     query: '',
+    search: '',
+    view: 'list',
+    page: 1,
+    createOpen: false,
     selectedMemoryId: '',
     detail: null,
     recallResult: null,

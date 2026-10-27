@@ -59,20 +59,26 @@ function renderExperimentalSettingsSectionImpl(c) {
           </span>
         </div>
         <div class="control-key-row">
-          <span><strong>长期语义记忆</strong><small id="living-memory-state">${livingMemory.enabled === true ? '已启用' : '已停用'} · ${livingMemory.graduated === true ? '已固化' : '实验中'} · 默认影子模式</small></span>
-          <span class="settings-actions" style="margin:0">
-            <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-living-memory-enabled" ${livingMemory.enabled === true ? 'checked' : ''} /><span>启用</span></label>
-            <button type="button" class="btn btn-small ${livingMemory.graduated === true ? '' : 'btn-primary'}"
-              id="launch-living-memory-feature" ${livingMemory.graduated === true ? 'disabled' : ''}>
-              ${livingMemory.graduated === true ? '已固化' : '固化上线'}
-            </button>
-          </span>
-        </div>
-        <div class="control-key-row">
           <span><strong>群游戏</strong><small id="experiment-groupgame-state">${c.groupGame?.enabled === true ? '已启用' : '已停用'} · 实验中</small></span>
           <span class="settings-actions" style="margin:0">
             <label class="checkbox-row" style="margin:0"><input type="checkbox" id="cfg-game-enabled" ${c.groupGame?.enabled === true ? 'checked' : ''} /><span>启用</span></label>
           </span>
+        </div>
+      </div>
+      <div class="experiment-card ${livingMemory.enabled === true ? 'is-on' : ''}" id="experiment-living-memory">
+        <div class="experiment-card-main">
+          <div class="experiment-card-title">
+            <strong>长期语义记忆</strong>
+            <span class="experiment-badge ${livingMemory.graduated === true ? 'is-solid' : ''}" id="living-memory-badge">${livingMemory.graduated === true ? '已固化' : '实验中'}</span>
+          </div>
+          <p>把群聊里值得长期保留的事件、约定和项目记下来，回复前按会话范围召回。数据只存在本机 SQLite，默认按群/私聊隔离，不跨会话共享。</p>
+          <small id="living-memory-state">${livingMemory.enabled === true ? '已启用' : '已停用'} · ${livingMemory.mode === 'active' ? '注入模式' : '影子模式'}</small>
+        </div>
+        <div class="experiment-card-side">
+          <label class="skills-switch"><input type="checkbox" class="sw" id="cfg-living-memory-enabled" ${livingMemory.enabled === true ? 'checked' : ''} /><span>启用</span></label>
+          ${livingMemory.graduated === true
+            ? '<button type="button" class="btn btn-small" id="lm-open-console">打开记忆页</button>'
+            : '<button type="button" class="btn btn-small btn-primary" id="launch-living-memory-feature">固化上线</button>'}
         </div>
       </div>
       <div class="hint">群游戏（数字炸弹 / 谁是卧底 / 狼人杀）的详细设置与「正在进行的局」在 <b>设置 → 群游戏</b>；

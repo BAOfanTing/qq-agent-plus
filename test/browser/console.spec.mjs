@@ -61,6 +61,27 @@ test('设置保存：改发送频率后落盘，再还原', async ({ page }) => 
   await expect.poll(read).toBe(80);
 });
 
+test('图片生成：自定义请求参数保存后回显', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="asr"]');
+
+  const area = page.locator('#cfg-img-extra-body');
+  await expect(area).toBeAttached();
+  await area.fill('{"output_watermark": false}');
+  await page.click('#save-cfg-btn');
+  await expect(page.locator('#cfg-save-result')).toHaveText('已保存 ✓');
+
+  const read = async () => (await (await page.request.get('/api/config')).json()).imageGen.extraBody;
+  await expect.poll(read).toEqual({ output_watermark: false });
+
+  await page.reload();
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="asr"]');
+  await expect(page.locator('#cfg-img-extra-body')).toHaveValue(/"output_watermark": false/);
+});
+
 test('技能页：渲染内置技能并可全局启停', async ({ page }) => {
   await login(page);
   await page.goto('/');
@@ -121,7 +142,7 @@ test('人物记忆：控制台按关键词检索记忆', async ({ page }) => {
   await expect(page.locator('#gm-search-results')).toContainText('面馆');
 });
 
-test('长期记忆页：策略控件、召回测试与管理区可渲染', async ({ page }) => {
+test('长期记忆页：四个页签、记忆详情与召回测试可用', async ({ page }) => {
   await login(page);
   await page.goto('/');
   await switchTo(page, 'living-memory');
@@ -129,8 +150,35 @@ test('长期记忆页：策略控件、召回测试与管理区可渲染', async
   await expect(page.locator('#lm-enabled')).toBeChecked();
   await expect(page.locator('#lm-shadow-semantic')).toBeAttached();
   await expect(page.locator('#lm-turn-retention')).toHaveValue('7');
-  await expect(page.locator('#lm-test')).toHaveText('测试召回');
   await expect(page.locator('#lm-status-filter')).toBeAttached();
+
+  await page.click('[data-lm-tab="memories"]');
+  await expect(page.locator('#lm-memory-list')).toContainText('NAS 迁移计划');
+  await page.locator('.lm-memory-row', { hasText: 'NAS 迁移计划' }).click();
+  await expect(page.locator('.lm-detail-card h3')).toHaveText('NAS 迁移计划');
+  await page.click('[data-lm-back]');
+  await expect(page.locator('#lm-memory-list')).toContainText('NAS 迁移计划');
+
+  await page.click('[data-lm-tab="recall"]');
+  await expect(page.locator('#lm-test')).toHaveText('测试召回');
+  await page.fill('#lm-query', 'NAS 迁移备份');
+  await page.click('#lm-test');
+  await expect(page.locator('#lm-recall-result')).toContainText('NAS 迁移计划');
+
+  await page.click('[data-lm-tab="settings"]');
+  await expect(page.locator('#lm-enabled')).toBeVisible();
+});
+
+test('设置 → 实验功能：长期记忆卡片显示状态并可进入管理页', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('button[data-section="experiments"]');
+  await expect(page.locator('#experiment-living-memory')).toBeVisible();
+  await expect(page.locator('#living-memory-badge')).toHaveText('已固化');
+  await expect(page.locator('#living-memory-state')).toContainText('运行中');
+  await page.click('#lm-open-console');
+  await expect(page.locator('#living-memory-page h2')).toHaveText('长期记忆');
 });
 
 test('语音服务切换：豆包/MiMo 各自恢复上次保存的音色', async ({ page }) => {

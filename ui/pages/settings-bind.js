@@ -2,7 +2,7 @@
 // 设置页事件绑定；跨文件引用走 import，可变状态挂 state（见 AGENTS.md）。
 'use strict';
 
-import { currentThinkingRaw, loadSettings, refreshStatus, renderSettings } from '../app.js';
+import { currentThinkingRaw, loadSettings, refreshStatus, renderSettings, switchTab } from '../app.js';
 import { api } from '../core/api.js';
 import { ASR_SERVICES, MODEL_SERVICES_UI, QZONE_RUN_LABELS } from '../core/constants.js';
 import { askForConfirmation, bindPeekToggle, requestExperimentOwnerUin, syncClampedInputs } from '../core/dom-util.js';
@@ -300,6 +300,7 @@ function bindSettingsSaveAndSections() {
 
   if ((state.settingsSection || 'api') === 'experiments') {
     loadExperimentalFeatureStatuses();
+    $('#lm-open-console')?.addEventListener('click', () => switchTab('living-memory'));
     Object.entries({ '#launch-identity-feature': 'identity', '#launch-auto-friend-feature': 'auto-friend', '#launch-slang-feature': 'slang', '#launch-incident-feature': 'incidents', '#launch-living-memory-feature': 'living-memory' }).forEach(([selector, feature]) => {
       $(selector)?.addEventListener('click', () =>
         launchExperimentalFeature(feature).catch(() => {}));

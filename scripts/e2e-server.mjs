@@ -170,6 +170,36 @@ const { createApp } = await import('../src/console/app.js');
 const app = createApp({ log: (...args) => { if (process.env.E2E_VERBOSE) console.log(...args); } });
 const port = await app.start();
 app.memory.append(`group:${E2E_GROUP}`, 'memberImpression', '昨天中午去新开的面馆排队半小时，汤有点咸', { userId: '2001', target: '演示群友' });
+// 聊天页、长期记忆页都按真实会话列表渲染；没有消息时这两页只剩空态，浏览器冒烟也就测不到管理区。
+app.store.appendIncoming(`group:${E2E_GROUP}`, {
+  mid: 'e2e-message-1',
+  senderId: '2001',
+  senderName: '演示群友',
+  text: '今晚八点老地方开黑，别迟到',
+  ts: Date.now() - 60 * 60 * 1000
+}, { recordOnly: true });
+const e2eScope = `group:${E2E_GROUP}`;
+await app.livingMemory.create({
+  scopeKey: e2eScope,
+  type: 'project',
+  summary: 'NAS 迁移计划',
+  content: '准备把家庭照片从旧群晖迁到新 NAS，周末先做一次增量备份，确认校验通过后再删旧盘。',
+  importance: 6.5,
+  confidence: 0.9,
+  tags: ['NAS', '项目', '备份'],
+  entities: ['NAS', '群晖'],
+  relations: [{ source: 'NAS 迁移计划', predicate: '涉及', target: '群晖' }]
+});
+await app.livingMemory.create({
+  scopeKey: e2eScope,
+  type: 'commitment',
+  summary: '周五晚上八点群内开黑',
+  content: '群里约好周五 20:00 一起开黑，提前十分钟在群里集合；临时有事要在群里说一声。',
+  importance: 5,
+  confidence: 0.85,
+  tags: ['约定', '游戏'],
+  entities: ['周五']
+});
 console.log(`E2E_READY http://127.0.0.1:${port} data=${dataDir}`);
 
 let stopping = false;

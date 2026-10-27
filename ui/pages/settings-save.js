@@ -635,6 +635,26 @@ async function saveConfig({ quiet = false } = {}) {
           baseUrl: String(val('#cfg-img-baseurl', g.baseUrl || '') || '').trim(),
           model: String(val('#cfg-img-model', g.model || '') || '').trim(),
           size: String(val('#cfg-img-size', g.size || '') || '').trim(),
+          // 服务商文档里的怪参数（如 Moss 的 output_watermark）走这里；空 = 清空。
+          // 用 __replace__ 才能真的删掉旧键，否则深合并会把它一直留着。
+          extraBody: (() => {
+            const node = document.querySelector('#cfg-img-extra-body');
+            if (!node) return g.extraBody || {};
+            const raw = node.value.trim();
+            if (!raw) return { __replace__: {} };
+            try {
+              const o = JSON.parse(raw);
+              if (o && typeof o === 'object' && !Array.isArray(o)) return { __replace__: o };
+              throw new Error('not-object');
+            } catch {
+              const h = document.querySelector('#cfg-img-extra-body-hint');
+              if (h) {
+                h.textContent = 'JSON 解析失败：已保留原值。格式示例：{"output_watermark": false}';
+                h.className = 'hint error';
+              }
+              return g.extraBody || {};
+            }
+          })(),
           maxPerHour: normalizeImageGenMax(val('#cfg-img-max', g.maxPerHour), 6),   // 与运行期 imageGenMaxPerHour 同口径
           // 服务端据此合并：掩码/空 = 保持原 Key；新输入才替换
           ...(rawKey && rawKey !== '******' ? { apiKey: rawKey } : {})

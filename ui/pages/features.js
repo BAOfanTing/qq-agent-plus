@@ -1506,10 +1506,13 @@ async function loadExperimentalFeatureStatuses() {
   const friendNode = $('#experiment-auto-friend-state');
   const slangNode = $('#slang-pilot-state');
   const incidentNode = $('#incident-pilot-state');
-  const [identityResult, slangResult, incidentResult] = await Promise.allSettled([
+  const livingNode = $('#living-memory-state');
+  const livingBadge = $('#living-memory-badge');
+  const [identityResult, slangResult, incidentResult, livingResult] = await Promise.allSettled([
       api('/api/identity-pilot/status'),
       api('/api/slang-pilot/status'),
-      api('/api/incident-pilot/status')
+      api('/api/incident-pilot/status'),
+      api('/api/living-memory/status')
   ]);
   if (identityResult.status === 'fulfilled') {
     const identity = identityResult.value;
@@ -1541,6 +1544,26 @@ async function loadExperimentalFeatureStatuses() {
   } else if (incidentNode) {
     incidentNode.textContent =
       `状态读取失败：${incidentResult.reason?.message || incidentResult.reason}`;
+  }
+  if (livingNode && livingResult.status === 'fulfilled') {
+    const payload = livingResult.value || {};
+    const cfg = payload.config || state.config?.livingMemory || {};
+    const status = payload.status || {};
+    const active = Number(status.stats?.active) || 0;
+    const mode = cfg.graduated === true ? '已固化' : '实验中';
+    if (livingBadge) {
+      livingBadge.textContent = mode;
+      livingBadge.classList.toggle('is-solid', cfg.graduated === true);
+    }
+    if (status.ok === false) {
+      livingNode.textContent = `初始化失败：${status.error || '未知错误'}`;
+    } else {
+      const running = cfg.enabled !== true ? '已停用' : status.initialized === false ? '等待首条记忆' : '运行中';
+      const recall = cfg.mode === 'active' ? '注入模式' : '影子模式';
+      livingNode.textContent = `${running} · ${recall} · ${active} 条活跃记忆`;
+    }
+  } else if (livingNode) {
+    livingNode.textContent = `状态读取失败：${livingResult.reason?.message || livingResult.reason}`;
   }
 }
 
