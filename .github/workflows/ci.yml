@@ -78,6 +78,9 @@ jobs:
       - name: 未定义调用扫描（严格模式）
         run: node src/ops.js scan --strict
 
+      - name: 官方技能索引体检
+        run: npm run skill:check
+
       - name: 单元测试
         run: npm run test:unit
 

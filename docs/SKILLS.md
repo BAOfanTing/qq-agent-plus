@@ -75,6 +75,8 @@ skills/<id>/
 
 随仓库提供两个示例：`examples/skills/trip-planner` 与 `examples/skills/recipe-helper`。
 
+创作者向官方市场上架：见 [SKILL-SUBMISSION.md](SKILL-SUBMISSION.md)。`npm run skill:pack` 生成索引条目，`npm run skill:check` 在 CI/本地校验。官方索引是审核制，不提供匿名上传接口。
+
 ## 限制
 
 - 技能只能“建议模型怎么做”，不能保证模型每一步都照做；

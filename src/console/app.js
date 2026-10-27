@@ -3724,7 +3724,7 @@ export function createApp({
   router.add('GET', '/api/skills/market/preview', async (req, res, params, url) => {
     const id = String(url.searchParams.get('id') || '').trim();
     if (!id) return json(res, 400, { ok: false, error: '缺少技能 id' });
-    try { return json(res, 200, await previewMarketSkill(id)); }
+    try { return json(res, 200, await previewMarketSkill(id, { full: url.searchParams.get('full') === '1' })); }
     catch (error) { return json(res, 400, { ok: false, error: String(error?.message ?? error) }); }
   });
   router.add('POST', '/api/skills/market/install', async (req, res) => {

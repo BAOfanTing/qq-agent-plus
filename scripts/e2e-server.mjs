@@ -84,6 +84,7 @@ async function startMarketFixture() {
       id: 'trip-planner',
       name: '出行规划',
       description: '浏览器冒烟用的可安装技能。',
+      preview: '这是索引摘要，查看完整说明才下载文件。',
       version: '1.0.0',
       author: 'e2e',
       category: '测试',

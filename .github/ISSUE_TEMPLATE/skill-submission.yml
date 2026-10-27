@@ -1,0 +1,70 @@
+name: 技能提交
+description: 向官方技能市场提交一个只读 Markdown 技能
+title: "[Skill] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        官方技能市场只收**只读 Markdown 流程 + 工具白名单**，不执行代码。
+        提交前请阅读 [技能提交指南](https://github.com/sakurawwwxh/qq-agent-plus/blob/main/docs/SKILL-SUBMISSION.md)。
+
+        推荐流程：把 `skill.json` / `SKILL.md` 托管到公开地址（GitHub raw 即可），
+        运行 `node scripts/skill-pack.mjs <目录> --base-url <公开目录>`，把输出的 JSON 贴到下面。
+  - type: input
+    id: skill-id
+    attributes:
+      label: 技能 id
+      description: 小写字母/数字/连字符，2–64 位
+      placeholder: trip-planner
+    validations:
+      required: true
+  - type: input
+    id: skill-name
+    attributes:
+      label: 技能名称
+      placeholder: 出行规划
+    validations:
+      required: true
+  - type: input
+    id: skill-version
+    attributes:
+      label: 版本
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: author
+    attributes:
+      label: 作者 / 组织
+      placeholder: your-github-name
+    validations:
+      required: true
+  - type: input
+    id: homepage
+    attributes:
+      label: 主页或仓库地址
+      placeholder: https://github.com/you/skill-repo
+  - type: textarea
+    id: index-entry
+    attributes:
+      label: 索引条目 JSON
+      description: 粘贴 `node scripts/skill-pack.mjs ...` 的输出。不要手改 sha256。
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 补充说明
+      description: 技能适用场景、依赖的插件/工具、是否包含敏感内容
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: 确认
+      options:
+        - label: 我拥有这些文件的分发权，且内容不含密钥、个人信息或侵权材料
+          required: true
+        - label: 技能只包含 Markdown 与 manifest，不包含可执行代码
+          required: true
+        - label: 我理解官方索引需要维护者审核后才会出现在市场
+          required: true

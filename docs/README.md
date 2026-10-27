@@ -27,6 +27,7 @@
 | [QZONE_INTERACTIONS.md](QZONE_INTERACTIONS.md) | 好友动态与评论回复的巡检节奏与退避 |
 | [MEMORY.md](MEMORY.md) | 人物印象与会话交接、FTS5 + 中文二元组检索、可见性、容量/保留期与召回基准 |
 | [SKILLS.md](SKILLS.md) | 技能包：只读 Markdown 流程、工具白名单、按群启用、安全边界与内置示例 |
+| [SKILL-SUBMISSION.md](SKILL-SUBMISSION.md) | 向官方技能市场提交技能：打包脚本、托管、哈希与审核标准 |
 | [model-prices.md](model-prices.md) | 价格体系：模型 id 归一化与别名、渠道价、账户口径三选一、实付/估算/未定价 |
 | [STABLE_FEATURES.md](STABLE_FEATURES.md) | 已从实验转为默认开启的功能，以及转正的判定标准 |
 | [STABLE_FEATURE_MIGRATION_NOTES.md](STABLE_FEATURE_MIGRATION_NOTES.md) | 实验/退役功能留下的一次性兼容边界（身份、好友、异常、黑话） |

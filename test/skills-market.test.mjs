@@ -38,6 +38,7 @@ function indexPayload({ shaOverride = '', id = 'trip-planner', extraFiles = {} }
       name: '出行规划',
       description: '测试用技能',
       version: '1.0.0',
+      preview: '先问日期，再给方案。',
       author: 'tester',
       category: '生活',
       homepage: 'https://example.com/skill',
@@ -53,6 +54,7 @@ function indexPayload({ shaOverride = '', id = 'trip-planner', extraFiles = {} }
 }
 
 let currentIndex = indexPayload();
+let fileRequests = 0;
 
 before(async () => {
   configModule = await import('../src/core/config.js');
@@ -66,6 +68,7 @@ before(async () => {
     }
     const name = decodeURIComponent(String(req.url || '').replace('/files/', ''));
     if (files[name]) {
+      fileRequests += 1;
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(files[name]);
       return;
@@ -95,8 +98,15 @@ test('market lists, previews, installs and uninstalls a user skill', async () =>
   assert.equal(entry.installed, false);
   assert.equal(entry.sha256.length, 64);
 
+  const requestsBefore = fileRequests;
   const preview = await market.previewMarketSkill('trip-planner');
+  assert.equal(preview.previewOnly, true);
   assert.match(preview.instructions, /先问日期/);
+  assert.equal(fileRequests, requestsBefore, '查看摘要不应该下载技能文件');
+  const full = await market.previewMarketSkill('trip-planner', { full: true });
+  assert.equal(full.previewOnly, false);
+  assert.match(full.instructions, /# 出行规划/);
+  assert.equal(fileRequests > requestsBefore, true, '加载完整说明才下载文件');
 
   await assert.rejects(() => market.installMarketSkill({ id: 'trip-planner' }), /确认/);
   await assert.rejects(() => market.installMarketSkill({ id: 'trip-planner', confirm: true, expectedSha256: '0'.repeat(64) }), /已变化/);

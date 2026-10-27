@@ -23,7 +23,9 @@
     "test:usage": "node test/usage-e2e.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "humanize:eval": "node scripts/humanize-eval.mjs"
+    "humanize:eval": "node scripts/humanize-eval.mjs",
+    "skill:pack": "node scripts/skill-pack.mjs",
+    "skill:check": "node scripts/skill-market-check.mjs"
   },
   "dependencies": {
     "jce": "0.2.3",

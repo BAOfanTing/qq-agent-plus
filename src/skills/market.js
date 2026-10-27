@@ -109,6 +109,7 @@ function normalizeIndex(raw, indexUrl) {
       author: clean(item.author, 80),
       category: clean(item.category, 40) || '其他',
       homepage: clean(item.homepage, 300),
+      preview: clean(item.preview, 2000),
       allowedTools,
       triggers,
       files,
@@ -250,22 +251,43 @@ function removeQuietly(target) {
   try { fs.rmSync(target, { recursive: true, force: true, maxRetries: 3 }); } catch { /* 忽略 */ }
 }
 
-export async function previewMarketSkill(id) {
+function publicEntry(entry) {
+  return {
+    ...entry,
+    files: Object.fromEntries(Object.entries(entry.files).map(([name, meta]) => [name, { sha256: meta.sha256, bytes: meta.bytes }]))
+  };
+}
+
+export async function previewMarketSkill(id, { full = false } = {}) {
   const { index, url, fetchedAt, stale } = await loadMarketIndex();
   const entry = findEntry(index, id);
-  const files = await downloadPackage(entry, textFetcher(MAX_FILE_BYTES));
-  const manifest = JSON.parse(files['skill.json']);
-  const instructionsName = String(manifest.instructions || 'SKILL.md').trim();
+  const manifest = {
+    id: entry.id, name: entry.name, version: entry.version,
+    description: entry.description, allowedTools: entry.allowedTools, triggers: entry.triggers
+  };
+  // 默认只返回索引里的摘要：查看详情不应该先把整个技能包下载一遍。
+  if (!full) {
+    return {
+      ok: true, url, fetchedAt, stale, previewOnly: true,
+      entry: publicEntry(entry),
+      instructions: entry.preview || '',
+      manifest
+    };
+  }
+  // 只有明确点“加载完整 SKILL.md”时才下载 manifest 和说明文件，不碰其余文件。
+  const fetcher = textFetcher(MAX_FILE_BYTES);
+  const manifestText = await downloadFile(entry.files['skill.json'], fetcher);
+  const rawManifest = JSON.parse(manifestText);
+  const instructionsName = String(rawManifest.instructions || 'SKILL.md').trim();
+  if (!entry.files[instructionsName]) throw new Error('索引缺少 SKILL.md 文件条目');
+  const instructions = await downloadFile(entry.files[instructionsName], fetcher);
   return {
-    ok: true,
-    url,
-    fetchedAt,
-    stale,
-    entry: { ...entry, files: Object.fromEntries(Object.entries(entry.files).map(([name, meta]) => [name, { sha256: meta.sha256, bytes: meta.bytes }])) },
-    instructions: String(files[instructionsName] || '').slice(0, 12000),
+    ok: true, url, fetchedAt, stale, previewOnly: false,
+    entry: publicEntry(entry),
+    instructions: String(instructions).slice(0, 12000),
     manifest: {
-      id: manifest.id, name: manifest.name, version: manifest.version,
-      description: manifest.description, allowedTools: manifest.allowedTools || [], triggers: manifest.triggers || []
+      id: rawManifest.id, name: rawManifest.name, version: rawManifest.version,
+      description: rawManifest.description, allowedTools: rawManifest.allowedTools || [], triggers: rawManifest.triggers || []
     }
   };
 }
