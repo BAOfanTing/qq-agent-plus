@@ -37,9 +37,14 @@ function hostOf(url) {
 
 /** 实际要打的地址：imageGen 没填就跟聊天模型同一家（很多网关同域就带 images 端点）。 */
 export function imageGenBaseUrl(imageGen, api) {
-  const own = String(imageGen?.baseUrl || '').trim();
-  if (own) return own.replace(/\/+$/, '');
-  return String(api?.baseUrl || '').trim().replace(/\/+$/, '');
+  const clean = (value) => String(value || '').trim()
+    .replace(/\/+$/, '')
+    // 用户常把完整端点粘进「服务地址」（issue #62）：适配器自己会拼 /images/generations，
+    // 不剥掉就会变成 /images/generations/images/generations，服务端只会回 404。
+    .replace(/\/images\/generations$/i, '');
+  const own = clean(imageGen?.baseUrl);
+  if (own) return own;
+  return clean(api?.baseUrl);
 }
 
 /**

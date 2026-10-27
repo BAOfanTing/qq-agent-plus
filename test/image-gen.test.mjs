@@ -364,3 +364,18 @@ test('服务预设表不变量：openai 形状的预设必须声明要 Key（新
     );
   }
 });
+
+test('服务地址误填完整 /images/generations 时剥掉，避免拼成双路径（issue #62）', async () => {
+  const calls = [];
+  await generateImage({
+    cfg: { imageGen: { enabled: true, baseUrl: 'https://api.mosi.cn/v1/images/generations', model: 'moss-image-sft-1.0' } },
+    apiCfg: { baseUrl: 'https://api.mosi.cn/v1' },
+    apiKey: 'k',
+    prompt: '一只鲸鱼',
+    fetchFn: async (url) => {
+      calls.push(String(url));
+      return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }) };
+    }
+  });
+  assert.equal(calls[0], 'https://api.mosi.cn/v1/images/generations');
+});

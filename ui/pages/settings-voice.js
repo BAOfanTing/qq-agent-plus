@@ -259,7 +259,7 @@ function renderAsrSection(c) {
     <div class="field"><label for="cfg-img-service">服务预设</label>
       <select id="cfg-img-service"><option value="">（加载中…）</option></select>
       <div class="hint" id="img-preset-hint"></div></div>
-    <div class="field"><label for="cfg-img-baseurl">服务地址</label>
+    <div class="field"><label for="cfg-img-baseurl">服务地址（填到 /v1，不要带 /images/generations）</label>
       <input type="text" id="cfg-img-baseurl" value="${esc(c.imageGen?.baseUrl || '')}" placeholder="留空 = 与聊天模型同一家（同域时才复用它的 Key）" /></div>
     <div class="field-row">
       <div class="field"><label for="cfg-img-model">模型</label>
