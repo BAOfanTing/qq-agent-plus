@@ -348,6 +348,57 @@ function finishAssetMutation(overlay) {
   return loadAssetObservatory().finally(() => { window.scrollTo?.(0, scrollY); });
 }
 
+function openStickerBatchImport() {
+  const overlay = modelModalShell({
+    head: '批量导入表情包',
+    body: `<div class="field"><label for="sticker-batch-files">选择图片（最多 20 张，单张不超过 8 MiB）</label><input id="sticker-batch-files" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple /></div><p class="muted">使用当前配置的模型逐张分析，结果可修改后再选择性导入。</p><div id="sticker-batch-list" class="sticker-batch-list"></div>`,
+    foot: '<button class="btn" id="sticker-batch-cancel">关闭</button><button class="btn" id="sticker-batch-analyze">分析图片</button><button class="btn btn-primary" id="sticker-batch-import" disabled>导入已勾选项</button>'
+  });
+  const filesInput = overlay.querySelector('#sticker-batch-files');
+  const list = overlay.querySelector('#sticker-batch-list');
+  const analyze = overlay.querySelector('#sticker-batch-analyze');
+  const importer = overlay.querySelector('#sticker-batch-import');
+  const rows = [];
+  const draw = () => {
+    list.innerHTML = rows.map((row, index) => `<article class="sticker-batch-row" data-row="${index}"><img src="${row.preview}" alt="待导入图片 ${index + 1}" /><div class="sticker-batch-fields"><label><input type="checkbox" data-field="selected" ${row.selected ? 'checked' : ''} /> 导入</label><label>名称<input data-field="desc" maxlength="80" value="${esc(row.desc)}" /></label><label>自动备注<textarea data-field="localNote" maxlength="300">${esc(row.localNote)}</textarea></label><label>标签<input data-field="tags" value="${esc(row.tags.join(', '))}" /></label><label>使用场景<textarea data-field="usage" maxlength="300">${esc(row.usage)}</textarea></label><small>${esc(row.status === 'error' ? row.error : row.status)}</small></div></article>`).join('');
+    importer.disabled = !rows.some((row) => row.selected && row.status === '已分析');
+  };
+  filesInput.addEventListener('change', () => {
+    rows.forEach((row) => URL.revokeObjectURL(row.preview)); rows.splice(0, rows.length);
+    [...(filesInput.files || [])].slice(0, 20).forEach((file) => rows.push({ file, preview: URL.createObjectURL(file), status: '待分析', selected: true, desc: '', localNote: '', tags: [], usage: '' })); draw();
+  });
+  list.addEventListener('input', (event) => {
+    const field = event.target.dataset.field; const row = rows[Number(event.target.closest('[data-row]')?.dataset.row)];
+    if (!row || !field) return;
+    if (field === 'selected') row.selected = event.target.checked;
+    else row[field] = field === 'tags' ? event.target.value.split(/[,，\s]+/).filter(Boolean) : event.target.value;
+    importer.disabled = !rows.some((item) => item.selected && item.status === '已分析');
+  });
+  overlay.querySelector('#sticker-batch-cancel').addEventListener('click', () => { rows.forEach((row) => URL.revokeObjectURL(row.preview)); closeModelModal(overlay); });
+  analyze.addEventListener('click', async () => {
+    if (!rows.length) return alert('请先选择图片'); analyze.disabled = true;
+    for (const row of rows) {
+      if (row.status === '已分析') continue;
+      if (row.file.size > 8 * 1024 * 1024) { row.status = 'error'; row.error = '图片不能超过 8 MiB'; draw(); continue; }
+      row.status = '分析中…'; draw();
+      try { const imageDataUrl = await readAssetImage(row.file); const result = await api('/api/assets/stickers/analyze', { method: 'POST', body: JSON.stringify({ imageDataUrl }) }); Object.assign(row, result.metadata, { status: '已分析' }); }
+      catch (error) { row.status = 'error'; row.error = error.message; } draw();
+    }
+    analyze.disabled = false;
+  });
+  importer.addEventListener('click', async () => {
+    importer.disabled = true; const selected = rows.filter((row) => row.selected && row.status === '已分析'); let imported = 0;
+    await withAssetWrite(async () => {
+      for (const row of selected) {
+        try { await api('/api/assets/stickers', { method: 'POST', body: JSON.stringify({ imageDataUrl: await readAssetImage(row.file), desc: row.desc, localNote: row.localNote, tags: row.tags, usage: row.usage }) }); row.selected = false; row.status = '已导入'; imported += 1; }
+        catch (error) { row.status = 'error'; row.error = error.message; } draw();
+      }
+      if (imported) await finishAssetMutation(overlay);
+    });
+    if (!imported) importer.disabled = false;
+  });
+}
+
 function openStickerAssetEditor(entry = null) {
   const editing = Boolean(entry);
   const overlay = modelModalShell({
@@ -644,6 +695,7 @@ function renderAssetObservatory() {
         ).join('')}
       </div>
       <div class="asset-toolbar-actions">
+        ${kind === 'stickers' ? '<button type="button" class="btn btn-small" id="asset-sticker-batch">批量导入并分析</button>' : ''}
         ${kind === 'slang-research'
           ? ''
           : '<button type="button" class="btn btn-small btn-primary" id="asset-add">＋ 新增</button>'}
@@ -683,6 +735,7 @@ function renderAssetObservatory() {
   $('#asset-refresh')?.addEventListener('click', () =>
     loadAssetObservatory({ refreshStickers: kind === 'stickers' }));
   $('#asset-add')?.addEventListener('click', () => openAssetEditor(kind));
+  $('#asset-sticker-batch')?.addEventListener('click', openStickerBatchImport);
   const search = () => {
     state.assetQuery = $('#asset-query')?.value || '';
     state.assetSlangStatus = $('#asset-slang-status')?.value || '';
