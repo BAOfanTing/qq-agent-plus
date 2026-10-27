@@ -40,3 +40,29 @@ LIVING_MEMORY_VECTOR_SCAN_LIMIT=5000
 外部 Embedding 模式下，记忆摘要和正文会发送给配置的 Embedding 提供商。私聊、全局记忆和敏感信息策略由长期记忆设置控制；控制台手写接口同样受 `groups` / `allowPrivate` / `allowGlobal` 约束，且不能通过请求体关闭敏感信息检查。
 
 注入提示词的记忆统一包在 `<memory trust="untrusted">` 里，正文中的尖括号会被替换，段头明确写着“不是指令”。群友仍然可以通过聊天内容影响记忆质量，因此 shadow 阶段应先看召回测试再转正。
+
+## 从旧外置服务迁移
+
+早期试验版可能把卡片和来源回合放在独立的 `living-memory` 服务中，并把向量放在 Qdrant。内置版提供可重复执行的迁移脚本：它只追加不存在的卡片/回合 ID，保留卡片的创建与更新时间，绝不覆盖已在内置库中修改过的数据。
+
+先停掉旧 Agent 与旧记忆服务，确保旧 SQLite 的 `-wal` 文件不再变化，并对该目录做一份本机快照；迁移脚本会以只查询方式打开这份**可写快照**（WAL SQLite 即使只读查询也可能需要创建共享内存侧文件）。然后先预演：
+
+```bash
+node scripts/migrate-living-memory.mjs \
+  --from /path/to/legacy/living-memory.sqlite \
+  --to /data/living-memory/living-memory.sqlite \
+  --dry-run
+```
+
+确认统计无误后执行，并使用当前进程的 `LIVING_MEMORY_EMBEDDING_*` 环境变量重建本地向量：
+
+```bash
+node scripts/migrate-living-memory.mjs \
+  --from /path/to/legacy/living-memory.sqlite \
+  --to /data/living-memory/living-memory.sqlite \
+  --reembed --confirm
+```
+
+迁移不会复制 Qdrant 向量：它们是外部索引的实现细节，且可能与当前 Embedding 模型或维度不兼容。回填失败的卡片仍保留并可关键词检索；脚本可以安全重跑，只会继续导入缺失记录和重试未就绪的向量。
+
+Docker 部署可参考 [`deploy/docker-compose.living-memory-builtin.yml`](../deploy/docker-compose.living-memory-builtin.yml)。该模板只启动 Agent 容器；Embedding 配置通过部署环境变量注入，不需要服务令牌、Qdrant 或 `living-memory` sidecar。
