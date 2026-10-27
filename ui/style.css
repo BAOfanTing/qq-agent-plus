@@ -6555,7 +6555,8 @@ html[data-glass] .plugin-related-item {
 }
 
 /* ── 技能市场：索引卡、信任预览、已安装/市场子页签 ─────────────────────── */
-.skills-subtabs { display: inline-flex; gap: 3px; margin: 0 0 16px; padding: 3px; border: 1px solid var(--border); border-radius: var(--r-pill); background: color-mix(in srgb, var(--bg-2) 72%, transparent); }
+.skills-subtabs-wrap { max-width: 1200px; margin: 0 auto 16px; }
+.skills-subtabs { display: inline-flex; gap: 3px; margin: 0; padding: 3px; border: 1px solid var(--border); border-radius: var(--r-pill); background: color-mix(in srgb, var(--bg-2) 72%, transparent); }
 .skills-subtab { padding: 6px 14px; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--muted); font-size: var(--fs-sm); cursor: pointer; transition: background-color var(--dur-interaction) var(--ease-in-out), color var(--dur-interaction) var(--ease-in-out); }
 .skills-subtab:hover { color: var(--text); }
 .skills-subtab.is-on { background: var(--accent); color: #fff; }

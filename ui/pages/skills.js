@@ -453,7 +453,13 @@ function skillsBind(root) {
   });
   root.addEventListener('click', async (event) => {
     const view = event.target?.closest?.('[data-skills-view]');
-    if (view) { skillsSwitchView(view.dataset.skillsView); return; }
+    if (view) {
+      skillsSwitchView(view.dataset.skillsView);
+      // 换子页时回到顶部，否则从预览/详情滚到底部再切页会落在另一个页面的半截。
+      const scroller = $('#skills-page');
+      if (scroller) scroller.scrollTop = 0;
+      return;
+    }
     if (event.target?.closest?.('[data-market-refresh]')) {
       skillsState.market = null;
       void skillsLoadMarket(true);
@@ -537,9 +543,11 @@ function loadSkillsPage() {
           <div class="skills-master-status" id="skills-status"></div>
         </div>
       </div>
-      <div class="skills-subtabs" role="tablist" aria-label="技能页面">
-        <button type="button" class="skills-subtab is-on" role="tab" aria-selected="true" data-skills-view="installed">已安装</button>
-        <button type="button" class="skills-subtab" role="tab" aria-selected="false" data-skills-view="market">技能市场 <em id="skills-market-count"></em></button>
+      <div class="skills-subtabs-wrap">
+        <div class="skills-subtabs" role="tablist" aria-label="技能页面">
+          <button type="button" class="skills-subtab is-on" role="tab" aria-selected="true" data-skills-view="installed">已安装</button>
+          <button type="button" class="skills-subtab" role="tab" aria-selected="false" data-skills-view="market">技能市场 <em id="skills-market-count"></em></button>
+        </div>
       </div>
       <div id="skills-installed-view">
         <div class="skills-kpis" id="skills-kpis"></div>
