@@ -77,11 +77,9 @@ function renderExperimentalSettingsSectionImpl(c) {
         <div class="experiment-card-side">
           <label class="skills-switch"><input type="checkbox" class="sw" id="cfg-living-memory-enabled" ${livingMemory.enabled === true ? 'checked' : ''} /><span>启用</span></label>
           <div class="experiment-card-actions">
-            ${livingMemory.graduated === true ? '<button type="button" class="btn btn-small" id="lm-open-console">打开记忆页</button>' : ''}
-            <button type="button" class="btn btn-small ${livingMemory.graduated === true ? '' : 'btn-primary'}"
-              id="launch-living-memory-feature" ${livingMemory.graduated === true ? 'disabled' : ''}>
-              ${livingMemory.graduated === true ? '已固化' : '固化上线'}
-            </button>
+            ${livingMemory.graduated === true
+              ? '<button type="button" class="btn btn-small" id="lm-open-console">打开记忆页</button><button type="button" class="btn btn-small" id="lm-ungraduate">取消固化</button>'
+              : '<button type="button" class="btn btn-small btn-primary" id="launch-living-memory-feature">固化上线</button>'}
           </div>
         </div>
       </div>
@@ -158,6 +156,35 @@ async function launchExperimentalFeature(feature) {
     if (button) button.disabled = false;
     if (result) result.textContent = `上线失败：${error.message}`;
     throw error;
+  }
+}
+
+async function cancelLivingMemoryGraduation() {
+  const button = $('#lm-ungraduate');
+  if (button?.disabled) return;
+  if (button) button.disabled = true;
+  if (!await askForConfirmation(
+    '取消固化长期语义记忆？会同时关闭开关并隐藏左侧入口；已保存的记忆不会删除，重新固化后可以继续使用。'
+  )) {
+    if (button) button.disabled = false;
+    return;
+  }
+  const result = $('#experiment-launch-result');
+  if (result) result.textContent = '正在取消固化…';
+  try {
+    const response = await api('/api/config', {
+      method: 'POST',
+      body: JSON.stringify({ livingMemory: { enabled: false, graduated: false } })
+    });
+    state.config = response.config || state.config;
+    syncGraduatedFeatureNavigation(state.config);
+    renderSettings();
+    const current = $('#experiment-launch-result');
+    if (current) current.textContent = '已取消固化；记忆保留，重新固化后可继续使用。';
+    refreshStatus();
+  } catch (error) {
+    if (button) button.disabled = false;
+    if (result) result.textContent = `取消失败：${error.message}`;
   }
 }
 
@@ -861,7 +888,7 @@ function bindAdminBriefingRunButton() {
 }
 
 export {
-  bindAdminBriefingRunButton, launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
+  bindAdminBriefingRunButton, cancelLivingMemoryGraduation, launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
   loadRemindersView, momentStatusLabel, renderDailyMomentsSection, renderExperimentalSettingsSectionImpl,
   renderGroupChecklist, renderGroupGameSection, renderMomentWindowRow, renderQzoneInteractionSection,
   renderRemindersSection

@@ -13,7 +13,7 @@ import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCreden
 import { tokenSaverEffective } from '../core/token-saver.js';
 import { redactText } from '../core/redact.js';
 import { getSkillRegistry } from '../skills/registry.js';
-import { listMarketSkills, previewMarketSkill, installMarketSkill, uninstallMarketSkill, marketIndexUrl } from '../skills/market.js';
+import { listMarketSkills, previewMarketSkill, installMarketSkill, uninstallMarketSkill, marketIndexUrl, warmMarketIndex } from '../skills/market.js';
 import { catchupReplyWindowMs, catchupLogLine, isFreshForReply } from '../core/catchup-policy.js';
 import { budgetStatus } from '../core/budget.js';
 import { sanitizeConfigSecrets } from '../core/secret-keys.js';
@@ -5022,6 +5022,25 @@ export function createApp({
         else apiGuard[field] = healed;
       }
     }
+    // imageGen.extraBody 是同一个"文本域回填脱敏视图"的坑：Moss 的自定义参数也可能
+    // 叫 authorization/token 之类，GET 时会被脱敏成 hasXxx。打开设置页原样保存一次
+    // 不能把真值换成占位，否则每个生图请求都会带上 hasAuthorization。
+    if (patch?.imageGen && typeof patch.imageGen === 'object') {
+      const imgGuard = sectionBody(patch.imageGen);
+      const raw = imgGuard.extraBody;
+      if (raw !== undefined) {
+        const isReplace = raw && typeof raw === 'object' && !Array.isArray(raw) && '__replace__' in raw;
+        const submitted = isReplace ? raw.__replace__ : raw;
+        const sanitizedImageGen = sanitizeConfigSecrets({ imageGen: cfgNow.imageGen || {} }).imageGen || {};
+        if (stableJson(submitted) === stableJson(sanitizedImageGen.extraBody)) {
+          delete imgGuard.extraBody;
+        } else {
+          const healed = unmaskSubmitted(submitted, cfgNow.imageGen?.extraBody);
+          if (isReplace) raw.__replace__ = healed;
+          else imgGuard.extraBody = healed;
+        }
+      }
+    }
     // 控制台保存总会带上显式的 provider（来自服务预设）：等于用户确认过这一家，
     // 清掉"升级默认值"的标记，让环境变量 Key 恢复生效（2026-09-26 审查 P2）。
     // 要删在**有效体**上：整节替换时节点层的 delete 落不到最终配置上，替换体里那份
@@ -6202,6 +6221,9 @@ export function createApp({
       log('[plugins] 插件宿主启动失败：', error);
     }
     startPluginIndexRefresh();
+    // 技能市场索引预热（不阻塞启动）：GitHub raw 偶发 20 秒超时，第一次打开市场不该替它买单。
+    // 测试集会设 QQ_AGENT_SKIP_INDEX_WARM=1，避免每个 createApp().start() 都打外网。
+    if (process.env.QQ_AGENT_SKIP_INDEX_WARM !== '1') void warmMarketIndex().catch(() => {});
     if (isContainerRuntime()) {
       log('[auto-update] 容器模式：应用与协议端都由镜像管理，跳过自动更新通知器与协议端定时器');
     } else {

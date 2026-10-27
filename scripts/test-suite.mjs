@@ -108,7 +108,9 @@ function cleanup() {
 }
 
 // 子进程只继承我们重定向后的临时目录，其余环境原样透传。
-const childEnv = { ...process.env, TMPDIR: tmpRoot, TMP: tmpRoot, TEMP: tmpRoot };
+// 单元测试会频繁 createApp().start()；默认配置里的技能索引是真实 GitHub 地址，
+// 启动预热会让每个测试都发一次外网请求（离线 CI 还会拖到超时）。测试集里统一关掉。
+const childEnv = { ...process.env, TMPDIR: tmpRoot, TMP: tmpRoot, TEMP: tmpRoot, QQ_AGENT_SKIP_INDEX_WARM: '1' };
 let current = null;
 let aborted = null;
 

@@ -120,6 +120,33 @@ test('imageGen.extraBody：自定义参数能落盘，清空用 __replace__ 真�
   assert.deepEqual(getConfig().imageGen?.extraBody, {}, '清空后不能留下旧参数');
 });
 
+test('imageGen.extraBody 的脱敏占位不会覆盖真值', async (t) => {
+  const secret = { scheme: 'Bearer', value: 'sk-imagegen-secret' };
+  const { request } = await boot(t, (cfg) => {
+    cfg.imageGen = { ...cfg.imageGen, extraBody: { normal: 'ok', authorization: secret } };
+  });
+  const view = (await request('/api/config')).body.imageGen.extraBody;
+  assert.equal(view.normal, 'ok');
+  assert.equal(view.authorization, undefined, '视图里不能出现明文');
+  assert.equal(view.hasAuthorization, true, '脱敏后应留下占位');
+
+  // 原样回传 = 没动过：不能把 hasAuthorization 落盘
+  await request('/api/config', { method: 'POST', body: { imageGen: { extraBody: { __replace__: { ...view } } } } });
+  assert.deepEqual(getConfig().imageGen.extraBody, { normal: 'ok', authorization: secret });
+  assert.equal('hasAuthorization' in getConfig().imageGen.extraBody, false);
+
+  // 改了别的字段：真值要回填，新字段也要生效
+  await request('/api/config', {
+    method: 'POST',
+    body: { imageGen: { extraBody: { __replace__: { ...view, output_watermark: false } } } }
+  });
+  assert.deepEqual(getConfig().imageGen.extraBody, {
+    normal: 'ok',
+    authorization: secret,
+    output_watermark: false
+  });
+});
+
 test('「显示」按钮的端点：回环请求能取回明文 Key；不可信来源被拒', async (t) => {
   const { request } = await boot(t, (cfg) => { cfg.imageGen = { ...cfg.imageGen, apiKey: 'img-secret' }; });
   // 本机控制台：能取回（与 /api/tts/key 同一道守卫）

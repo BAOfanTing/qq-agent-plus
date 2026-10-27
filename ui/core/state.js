@@ -59,6 +59,7 @@ const state = {
     detail: null,
     recallResult: null,
     list: null,
+    overviewList: null,
     graph: null,
     statusFilter: '',
     pageError: ''

@@ -23,6 +23,8 @@ const clean = (value, max = 240) => String(value ?? '').replace(/\s+/g, ' ').tri
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 let memoryCache = { url: '', at: 0, payload: null };
+// 后台刷新去重：过期缓存先返回旧数据，同一 URL 只允许一个刷新请求在飞。
+let refreshInFlight = { url: '', promise: null };
 
 function cacheFile() {
   return path.join(skillUserDir(), '.market-cache.json');
@@ -148,11 +150,60 @@ function writeFileCache(url, index, at) {
 
 export function resetMarketCacheForTests() {
   memoryCache = { url: '', at: 0, payload: null };
+  refreshInFlight = { url: '', promise: null };
   try { fs.rmSync(cacheFile(), { force: true }); } catch { /* 忽略 */ }
 }
 
 export function marketIndexUrl() {
   return String(getConfig().skills?.indexUrl || '').trim();
+}
+
+async function fetchMarketIndex(url) {
+  const response = await textFetcher(MAX_INDEX_BYTES)(url);
+  if (response.statusCode !== 200) throw new Error(`索引 HTTP ${response.statusCode}`);
+  if (response.truncated) throw new Error('索引超过 256KB 上限');
+  const raw = JSON.parse(response.body);
+  // 相对文件路径必须按用户配置的索引地址解析。API 兜底时 response.url 是
+  // api.github.com/contents/...，拿它当 base 会把文件地址变成 JSON 信封地址，
+  // 下载到的不是原文件，sha256 必然不匹配。
+  const index = normalizeIndex(raw, url);
+  const at = Date.now();
+  memoryCache = { url, at, payload: index };
+  writeFileCache(url, index, at);
+  return { index, fetchedAt: at, stale: false, url };
+}
+
+function sharedMarketFetch(url) {
+  if (refreshInFlight.url === url && refreshInFlight.promise) return refreshInFlight.promise;
+  const promise = fetchMarketIndex(url);
+  refreshInFlight = { url, promise };
+  void promise.finally(() => {
+    if (refreshInFlight.promise === promise) refreshInFlight = { url: '', promise: null };
+  }).catch(() => {});
+  return promise;
+}
+
+function refreshMarketIndexInBackground(url) {
+  return sharedMarketFetch(url).catch(() => null);
+}
+
+/**
+ * 启动预热：只负责把索引放进内存/文件缓存，不阻塞启动。
+ * GitHub raw 从机房偶发 20 秒超时；首次打开技能市场不应该替这个等待买单。
+ */
+export function warmMarketIndex() {
+  const url = marketIndexUrl();
+  if (!url) return Promise.resolve(null);
+  const now = Date.now();
+  if (memoryCache.url === url && memoryCache.payload && now - memoryCache.at < CACHE_TTL_MS) {
+    return Promise.resolve(null);
+  }
+  const fileCache = readFileCache(url);
+  if (fileCache && now - fileCache.at < CACHE_TTL_MS) {
+    memoryCache = { url, at: fileCache.at, payload: fileCache.index };
+    return Promise.resolve(null);
+  }
+  return refreshMarketIndexInBackground(url);
 }
 
 export async function loadMarketIndex({ force = false } = {}) {
@@ -167,18 +218,15 @@ export async function loadMarketIndex({ force = false } = {}) {
     memoryCache = { url, at: fileCache.at, payload: fileCache.index };
     return { index: fileCache.index, fetchedAt: fileCache.at, stale: false, url };
   }
+  // 缓存过期：先把旧索引给页面，后台再刷新。GitHub raw 超时就 next time 再说，
+  // 页面不再为了"确认有没有新技能"干等 20 秒。
+  if (!force && fileCache && now - fileCache.at < STALE_FALLBACK_MS) {
+    memoryCache = { url, at: fileCache.at, payload: fileCache.index };
+    void refreshMarketIndexInBackground(url);
+    return { index: fileCache.index, fetchedAt: fileCache.at, stale: true, url, refreshing: true };
+  }
   try {
-    const response = await textFetcher(MAX_INDEX_BYTES)(url);
-    if (response.statusCode !== 200) throw new Error(`索引 HTTP ${response.statusCode}`);
-    if (response.truncated) throw new Error('索引超过 256KB 上限');
-    const raw = JSON.parse(response.body);
-    // 相对文件路径必须按用户配置的索引地址解析。API 兜底时 response.url 是
-    // api.github.com/contents/...，拿它当 base 会把文件地址变成 JSON 信封地址，
-    // 下载到的不是原文件，sha256 必然不匹配。
-    const index = normalizeIndex(raw, url);
-    memoryCache = { url, at: now, payload: index };
-    writeFileCache(url, index, now);
-    return { index, fetchedAt: now, stale: false, url };
+    return await sharedMarketFetch(url);
   } catch (error) {
     if (fileCache && now - fileCache.at < STALE_FALLBACK_MS) {
       memoryCache = { url, at: fileCache.at, payload: fileCache.index };

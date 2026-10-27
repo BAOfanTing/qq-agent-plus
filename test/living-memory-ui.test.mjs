@@ -26,6 +26,7 @@ test('experiment settings use a dedicated living-memory card', () => {
   assert.match(ui, /id="experiment-living-memory"/);
   assert.match(ui, /id="living-memory-badge"/);
   assert.match(ui, /id="lm-open-console"/);
+  assert.match(ui, /id="lm-ungraduate"/);
 });
 
 test('living-memory settings expose the recall time budget', () => {

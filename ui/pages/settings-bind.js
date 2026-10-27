@@ -16,7 +16,7 @@ import { loadExperimentalFeatureStatuses } from './features.js';
 import { bindAdminBriefingRunButton } from './moments.js';
 import { openMemoryModelPicker } from './memory.js';
 import {
-  launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
+  cancelLivingMemoryGraduation, launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
   loadRemindersView, momentStatusLabel, renderGroupChecklist, renderMomentWindowRow
 } from './moments.js';
 import {
@@ -301,6 +301,7 @@ function bindSettingsSaveAndSections() {
   if ((state.settingsSection || 'api') === 'experiments') {
     loadExperimentalFeatureStatuses();
     $('#lm-open-console')?.addEventListener('click', () => switchTab('living-memory'));
+    $('#lm-ungraduate')?.addEventListener('click', () => cancelLivingMemoryGraduation().catch(() => {}));
     Object.entries({ '#launch-identity-feature': 'identity', '#launch-auto-friend-feature': 'auto-friend', '#launch-slang-feature': 'slang', '#launch-incident-feature': 'incidents', '#launch-living-memory-feature': 'living-memory' }).forEach(([selector, feature]) => {
       $(selector)?.addEventListener('click', () =>
         launchExperimentalFeature(feature).catch(() => {}));
@@ -345,6 +346,9 @@ function bindSettingsSaveAndSections() {
           renderSettings();
         } catch (error) {
           toggle.checked = !toggle.checked;
+          if (selector === '#cfg-living-memory-enabled' && state.config?.livingMemory) {
+            state.config.livingMemory = { ...state.config.livingMemory, enabled: toggle.checked === true };
+          }
           toggle.disabled = false;
           if (result) result.textContent = `保存失败：${error.message}`;
         }

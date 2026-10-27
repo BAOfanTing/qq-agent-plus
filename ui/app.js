@@ -1446,8 +1446,8 @@ async function init() {
       || cfg.allowAllWhenEmpty === true;
     const ready = Boolean(cfg.api?.model) && allowReady;
     if (!ready) {
-      // 启动时已经在总览就不重复 loadOverview（那会并发发两轮 6 个请求）。
-      if (state.tab !== 'overview') switchTab('overview');
+      // 启动兜底只负责补齐轮询；不要在这里强制切回总览 —— 用户可能已经在首屏
+      // 点进了功能页（或从总览清单跳到设置），抢回来会让人刚打开的页面闪回。
       connectSSE();
       refreshStatus();
       startListPoller();   // 配置已就绪，把 4s 兜底轮询校准到 ui.refreshMs

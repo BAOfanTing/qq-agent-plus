@@ -28,7 +28,7 @@ let market;
 let configModule;
 let registryModule;
 
-function indexPayload({ shaOverride = '', id = 'trip-planner', extraFiles = {} } = {}) {
+function indexPayload({ shaOverride = '', id = 'trip-planner', extraFiles = {}, description = '测试用技能' } = {}) {
   return {
     version: 1,
     name: '测试索引',
@@ -36,7 +36,7 @@ function indexPayload({ shaOverride = '', id = 'trip-planner', extraFiles = {} }
     skills: [{
       id,
       name: '出行规划',
-      description: '测试用技能',
+      description,
       version: '1.0.0',
       preview: '先问日期，再给方案。',
       author: 'tester',
@@ -55,6 +55,7 @@ function indexPayload({ shaOverride = '', id = 'trip-planner', extraFiles = {} }
 
 let currentIndex = indexPayload();
 let fileRequests = 0;
+let indexRequests = 0;
 
 before(async () => {
   configModule = await import('../src/core/config.js');
@@ -62,6 +63,7 @@ before(async () => {
   market = await import('../src/skills/market.js');
   server = http.createServer((req, res) => {
     if (req.url === '/index.json' || req.url.startsWith('/index.json?')) {
+      indexRequests += 1;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(currentIndex));
       return;
@@ -150,4 +152,43 @@ test('private index is refused unless explicitly allowed', async () => {
   market.resetMarketCacheForTests();
   await assert.rejects(() => market.listMarketSkills({ force: true }), /读取技能索引失败|内网|私有/);
   configModule.updateConfig({ skills: { allowPrivateIndex: true, indexUrl } });
+});
+
+test('过期缓存先返回旧索引，同时后台刷新', async () => {
+  registryModule.resetSkillRegistryForTests();
+  await market.listMarketSkills({ force: true });
+  const cachePath = path.join(root, 'data', 'skills', '.market-cache.json');
+  const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+  market.resetMarketCacheForTests();
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, JSON.stringify({ ...cached, at: Date.now() - 31 * 60 * 1000 }));
+
+  currentIndex = indexPayload({ description: '后台刷新后的描述' });
+  const started = Date.now();
+  const stale = await market.listMarketSkills();
+  assert.equal(stale.index.stale, true, '过期缓存要先按 stale 返回');
+  assert.equal(stale.skills[0].description, '测试用技能', '先返回旧数据');
+  assert.ok(Date.now() - started < 1000, '不应为了刷新索引卡住页面');
+
+  let fresh = null;
+  for (let i = 0; i < 20; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    fresh = await market.listMarketSkills();
+    if (fresh.index.stale === false) break;
+  }
+  assert.equal(fresh?.index.stale, false, '后台刷新完成后应回到 fresh');
+  assert.equal(fresh.skills[0].description, '后台刷新后的描述');
+  currentIndex = indexPayload();
+  market.resetMarketCacheForTests();
+});
+
+test('冷启动预热与首次打开共用同一次索引请求', async () => {
+  market.resetMarketCacheForTests();
+  indexRequests = 0;
+  const warm = market.warmMarketIndex();
+  const listed = await market.listMarketSkills();
+  await warm;
+  assert.equal(indexRequests, 1, '并发冷启动不应重复下载索引');
+  assert.equal(listed.skills[0].id, 'trip-planner');
+  market.resetMarketCacheForTests();
 });

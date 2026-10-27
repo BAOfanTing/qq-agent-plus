@@ -119,10 +119,10 @@ function recentRow(memory) {
 function overviewHtml() {
   const cfg = config();
   const st = stats();
-  const entries = lm().list?.entries || [];
-  const recent = entries.slice(0, 6);
-  const archived = entries.filter((memory) => memory.status === 'archived').length;
-  const total = Number(lm().list?.total ?? entries.length) || 0;
+  // 概览永远看当前范围的全量最近记忆，不受「记忆库」页签的状态筛选影响。
+  const overview = lm().overviewList || { entries: [], total: 0 };
+  const recent = (overview.entries || []).slice(0, 6);
+  const total = Number(overview.total) || 0;
   const scope = selectedScope();
   const groups = Array.isArray(cfg.groups) ? cfg.groups.filter(Boolean) : [];
   const autoScope = cfg.allowPrivate === true ? '群聊 + 私聊' : '仅群聊';
@@ -131,7 +131,7 @@ function overviewHtml() {
   const stacked = recent.length < 3;
   return `
   <div class="lm-kpis">
-    <article class="lm-kpi"><span>活跃记忆</span><strong>${num(st.active)}</strong><small>全部 ${num(st.total)} 条${archived ? ` · 已归档 ${archived}` : ''}</small></article>
+    <article class="lm-kpi"><span>活跃记忆</span><strong>${num(st.active)}</strong><small>全部 ${num(st.total)} 条</small></article>
     <article class="lm-kpi"><span>已向量化</span><strong>${num(st.vectorReady)}</strong><small>可参与语义检索</small></article>
     <article class="lm-kpi"><span>来源回合</span><strong>${num(st.turns)}</strong><small>本地 SQLite 留痕</small></article>
     <article class="lm-kpi"><span>运行模式</span><strong>${esc(modeLabel(cfg))}</strong><small>${esc(modeHint(cfg))}</small></article>
@@ -147,12 +147,14 @@ function overviewHtml() {
       </div>
       ${recent.length
         ? `<div class="lm-recent">${recent.map(recentRow).join('')}</div>`
-        : `<div class="lm-onboarding">
+        : (!scope
+          ? '<div class="lm-empty">还没有可管理的会话。先在设置里启用长期记忆，并确认群聊已在允许范围内。</div>'
+          : `<div class="lm-onboarding">
             <div class="lm-onboarding-step"><b>1</b><div><strong>确认长期记忆已开启</strong><small>${cfg.enabled === true ? `当前已启用 · ${esc(modeLabel(cfg))}` : '当前已停用，打开开关后才会开始记录'}</small></div><button type="button" class="btn btn-small" data-lm-jump="settings">看设置</button></div>
             <div class="lm-onboarding-step"><b>2</b><div><strong>在群里正常聊几轮</strong><small>累计 ${num(cfg.captureMinMessages) || 6} 个回合后会自动提炼；影子模式只记录，不影响回复。</small></div></div>
             <div class="lm-onboarding-step"><b>3</b><div><strong>回来核对，或手动补录</strong><small>提炼出的卡片会出现在这里；也可以直接写一条。</small></div><button type="button" class="btn btn-small" data-lm-jump="memories">打开记忆库</button></div>
-          </div>`}
-      ${recent.length ? `<div class="lm-recent-foot">共 ${total} 条${archived ? ` · 已归档 ${archived}` : ''}；完整列表在「记忆库」。</div>` : ''}
+          </div>`)}
+      ${recent.length ? `<div class="lm-recent-foot">共 ${total} 条；完整列表在「记忆库」。</div>` : ''}
     </section>
     <section class="lm-card">
       <div class="lm-card-head">
@@ -277,7 +279,9 @@ function memoryListHtml() {
       ? '这个会话还没有长期记忆。启用影子模式后，让机器人完成若干轮有价值的对话即可自动提炼。'
       : '先选择一个会话；没有可选项时，请在设置里放宽记忆范围。')
     : '没有匹配当前搜索或状态筛选的记忆。';
-  return `<div class="lm-list-summary" id="lm-list-summary">${all.length ? `共 ${all.length} 条` : ''}${lm().search ? ` · 搜索「${esc(lm().search)}」` : ''}</div>
+  const loaded = lm().list?.entries?.length || 0;
+  const serverTotal = Number(lm().list?.total) || all.length;
+  return `<div class="lm-list-summary" id="lm-list-summary">${serverTotal ? `共 ${serverTotal} 条` : ''}${serverTotal > loaded ? ` · 当前显示最近 ${loaded} 条` : ''}${lm().search ? ` · 搜索「${esc(lm().search)}」` : ''}</div>
     <div id="lm-memory-list" class="lm-memory-list${lm().view === 'grid' ? ' is-grid' : ''}">${entries.length ? entries.map(memoryRowHtml).join('') : `<div class="lm-empty">${esc(hint)}</div>`}</div>
     <div id="lm-memory-pager">${memoryPagerHtml(page, totalPages, all.length)}</div>`;
 }
@@ -435,7 +439,7 @@ function renderPage() {
   const st = stats();
   const tab = ['overview', 'memories', 'recall', 'settings'].includes(lm().tab) ? lm().tab : 'overview';
   lm().tab = tab;
-  const total = num(lm().list?.total ?? st.total);
+  const total = num(lm().overviewList?.total ?? lm().list?.total ?? st.total);
   const tabs = [
     ['overview', '概览', ''],
     ['memories', '记忆库', ` <span class="plugin-tab-n">${total}</span>`],
@@ -683,6 +687,8 @@ function bindPage(box) {
 
   box.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
+    // 行内还有归档/恢复/删除按钮：焦点在它们身上时，Enter/Space 属于按钮自己。
+    if (event.target.closest?.('button, a, input, select, textarea')) return;
     const row = event.target.closest?.('[data-lm-open]');
     if (!row) return;
     event.preventDefault();
@@ -730,7 +736,11 @@ function bindPage(box) {
           : '<div class="lm-empty">没有匹配当前搜索或状态筛选的记忆。</div>';
       }
       if (pager) pager.innerHTML = memoryPagerHtml(page, totalPages, all.length);
-      if (summary) summary.textContent = `${all.length ? `共 ${all.length} 条` : ''}${lm().search ? ` · 搜索「${lm().search}」` : ''}`;
+      if (summary) {
+        const loaded = lm().list?.entries?.length || 0;
+        const serverTotal = Number(lm().list?.total) || all.length;
+        summary.textContent = `${serverTotal ? `共 ${serverTotal} 条` : ''}${serverTotal > loaded ? ` · 当前显示最近 ${loaded} 条` : ''}${lm().search ? ` · 搜索「${lm().search}」` : ''}`;
+      }
       return;
     }
     if (event.target.id === 'lm-query') lm().query = String(event.target.value || '');
@@ -756,10 +766,13 @@ async function loadLivingMemoryPage() {
       lm().selectedScope = first?.key || '';
     }
     const scope = selectedScope();
-    const [list, graph] = scope ? await Promise.all([
-      api(`/api/living-memory/memories?scopeKey=${encodeURIComponent(scope)}&limit=100&status=${encodeURIComponent(lm().statusFilter || '')}`),
+    const emptyList = { entries: [], total: 0 };
+    const [overview, list, graph] = scope ? await Promise.all([
+      api(`/api/living-memory/memories?scopeKey=${encodeURIComponent(scope)}&limit=6&status=`),
+      api(`/api/living-memory/memories?scopeKey=${encodeURIComponent(scope)}&limit=200&status=${encodeURIComponent(lm().statusFilter || '')}`),
       api(`/api/living-memory/graph?scopeKey=${encodeURIComponent(scope)}&limit=160`)
-    ]) : [{ entries: [], total: 0 }, { nodes: [], edges: [] }];
+    ]) : [emptyList, emptyList, { nodes: [], edges: [] }];
+    lm().overviewList = overview;
     lm().list = list;
     lm().graph = graph;
     lm().pageError = '';

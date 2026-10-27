@@ -154,6 +154,15 @@ test('长期记忆页：四个页签、记忆详情与召回测试可用', async
 
   await page.click('[data-lm-tab="memories"]');
   await expect(page.locator('#lm-memory-list')).toContainText('NAS 迁移计划');
+
+  // 键盘焦点在行内「归档」上时，Enter 应触发归档确认，而不是打开详情。
+  const archive = page.locator('.lm-memory-row [data-lm-archive]').first();
+  await archive.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-confirm-accept]')).toBeVisible();
+  await page.click('[data-confirm-cancel]');
+  await expect(page.locator('.lm-detail-card')).toHaveCount(0);
+
   await page.locator('.lm-memory-row', { hasText: 'NAS 迁移计划' }).click();
   await expect(page.locator('.lm-detail-card h3')).toHaveText('NAS 迁移计划');
   await page.click('[data-lm-back]');
@@ -169,7 +178,7 @@ test('长期记忆页：四个页签、记忆详情与召回测试可用', async
   await expect(page.locator('#lm-enabled')).toBeVisible();
 });
 
-test('设置 → 实验功能：长期记忆卡片显示状态并可进入管理页', async ({ page }) => {
+test('设置 → 实验功能：长期记忆卡片显示状态并可进入/取消固化', async ({ page }) => {
   await login(page);
   await page.goto('/');
   await switchTo(page, 'settings');
@@ -177,8 +186,8 @@ test('设置 → 实验功能：长期记忆卡片显示状态并可进入管理
   await expect(page.locator('#experiment-living-memory')).toBeVisible();
   await expect(page.locator('#living-memory-badge')).toHaveText('已固化');
   await expect(page.locator('#living-memory-state')).toContainText('运行中');
-  await expect(page.locator('#launch-living-memory-feature')).toBeDisabled();
-  await expect(page.locator('#launch-living-memory-feature')).toHaveText('已固化');
+  await expect(page.locator('#lm-ungraduate')).toBeVisible();
+  await expect(page.locator('#launch-living-memory-feature')).toHaveCount(0);
   await expect(page.locator('#lm-open-console')).toBeVisible();
 
   // 开关不应触发整页重绘（否则卡片会消失再出现）：先记下节点，再切换两次。
@@ -196,6 +205,23 @@ test('设置 → 实验功能：长期记忆卡片显示状态并可进入管理
 
   await page.click('#lm-open-console');
   await expect(page.locator('#living-memory-page h2')).toHaveText('长期记忆');
+
+  // 取消固化：同时关闭开关并隐藏导航入口，记忆数据不清空。
+  await switchTo(page, 'settings');
+  await page.click('button[data-section="experiments"]');
+  await page.click('#lm-ungraduate');
+  await page.click('[data-confirm-accept]');
+  const readFlags = async () => {
+    const lm = (await (await page.request.get('/api/config')).json()).livingMemory;
+    return { enabled: lm.enabled, graduated: lm.graduated };
+  };
+  await expect.poll(async () => (await readFlags()).graduated).toBe(false);
+  await expect.poll(async () => (await readFlags()).enabled).toBe(false);
+  await expect(page.locator('#launch-living-memory-feature')).toHaveText('固化上线');
+  await expect(page.locator('#tabs .tab[data-tab="living-memory"]')).toHaveClass(/hidden/);
+
+  // 还原，避免影响同一服务器上的后续用例。
+  await page.request.post('/api/config', { data: { livingMemory: { enabled: true, graduated: true } } });
 });
 
 test('语音服务切换：豆包/MiMo 各自恢复上次保存的音色', async ({ page }) => {
