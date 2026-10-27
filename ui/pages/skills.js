@@ -17,7 +17,7 @@ const skillsState = {
   detail: null,
   detailError: '',
   loadingDetail: false,
-  view: 'installed',
+  view: 'market',
   market: null,
   marketError: '',
   marketLoading: false,
@@ -689,8 +689,8 @@ function loadSkillsPage() {
         </div>
       </div>
       <div class="plugin-tabs skills-tabs" role="tablist" aria-label="技能页面">
-        <button type="button" class="plugin-tab is-on" role="tab" aria-selected="true" data-skills-view="installed">已安装<span class="plugin-tab-n" id="skills-installed-count"></span></button>
-        <button type="button" class="plugin-tab" role="tab" aria-selected="false" data-skills-view="market">技能市场<span class="plugin-tab-n" id="skills-market-count"></span></button>
+        <button type="button" class="plugin-tab is-on" role="tab" aria-selected="true" data-skills-view="market">技能市场<span class="plugin-tab-n" id="skills-market-count"></span></button>
+        <button type="button" class="plugin-tab" role="tab" aria-selected="false" data-skills-view="installed">已安装<span class="plugin-tab-n" id="skills-installed-count"></span></button>
         <button type="button" class="plugin-publish-cta" role="tab" aria-selected="false" data-skills-view="publish">${iconSvg('upload', { size: 13 })}<span>提交技能</span></button>
       </div>
       <div id="skills-installed-view">
