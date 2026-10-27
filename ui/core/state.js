@@ -37,6 +37,8 @@ const state = {
   assetSlangResearchState: '',
   assetOverview: null,
   assetDetail: null,
+  assetStickerSelectMode: false,
+  assetStickerSelectedIds: [],
   assetLoadSeq: 0,
   groupMembers: [],
   groupMembersLoaded: false,

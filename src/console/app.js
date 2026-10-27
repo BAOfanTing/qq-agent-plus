@@ -2688,8 +2688,23 @@ export function createApp({
   router.add('POST', '/api/assets/stickers/analyze', async (req, res) => {
     try {
       const body = await readBody(req, 12 * 1024 * 1024);
-      const imageBuffer = decodeImageDataUrl(body.imageDataUrl);
-      const mime = imageType(imageBuffer);
+      let imageBuffer;
+      let mime;
+      if (body.stickerId) {
+        const id = String(body.stickerId).trim();
+        if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) return json(res, 400, { error: '表情 ID 无效' });
+        const localImage = stickers.readImage(id);
+        if (localImage) { imageBuffer = localImage.buffer; mime = localImage.contentType; }
+        else {
+          const sticker = await stickers.findForSend(id);
+          if (!sticker?.url) return json(res, 404, { error: '表情图片不存在' });
+          imageBuffer = (await safeFetchBinary(sticker.url, 8 * 1024 * 1024)).buffer;
+          mime = imageType(imageBuffer);
+        }
+      } else {
+        imageBuffer = decodeImageDataUrl(body.imageDataUrl);
+        mime = imageType(imageBuffer);
+      }
       if (!mime) return json(res, 400, { error: '图片内容无效或格式不受支持' });
       const result = await chatCompletion({
         purpose: 'sticker-image-description',
