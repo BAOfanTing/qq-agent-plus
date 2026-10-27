@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { readProactiveAttempts, readProactiveState, writeProactiveAttempt, writeProactiveChatAttempt } from '../src/core/proactive-state.js';
+import { readProactiveAttempts, readProactiveState, writeProactiveAttempt, writeProactiveChatAttempt, writeProactiveChatAttempts } from '../src/core/proactive-state.js';
 
 const tempFile = (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-proactive-state-'));
@@ -62,4 +62,15 @@ test('per-chat 模式各会话独立记录，写范围不会清掉会话记录',
   state = readProactiveState(file);
   assert.equal(state.chats['group:1'], now + 1000);
   assert.equal(state.group, now, 'per-chat 记录不能清掉范围记录');
+});
+
+test('per-chat 批量写只落盘一次，且不覆盖范围记录', (t) => {
+  const file = tempFile(t);
+  const now = Date.now();
+  writeProactiveAttempt(file, 'group', now - 1000);
+  writeProactiveChatAttempts(file, ['group:1', 'group:2', 'group:1'], now);
+  const state = readProactiveState(file);
+  assert.equal(state.group, now - 1000);
+  assert.equal(state.chats['group:1'], now);
+  assert.equal(state.chats['group:2'], now);
 });

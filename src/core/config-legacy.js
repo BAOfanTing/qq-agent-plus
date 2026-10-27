@@ -1316,7 +1316,12 @@ function migrateConfig(parsed) {
   out.skills.perChat = skillPerChat;
   if (typeof out.skills.indexUrl === 'string') {
     const url = out.skills.indexUrl.trim();
-    out.skills.indexUrl = /^https?:\/\//i.test(url) ? url.slice(0, 500) : '';
+    // 2026-10：官方索引从主仓库迁到 qq-agent-skills；只迁移出厂旧地址，
+    // 用户自己填的第三方索引保持原样。
+    const legacy = 'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/skills/market.json';
+    out.skills.indexUrl = url === legacy
+      ? DEFAULT_CONFIG.skills.indexUrl
+      : (/^https?:\/\//i.test(url) ? url.slice(0, 500) : '');
   }
   out.skills.allowPrivateIndex = out.skills.allowPrivateIndex === true;
   // 记忆容量/保留期：夹在可解释范围内；手写条目不受影响。

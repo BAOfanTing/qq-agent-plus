@@ -73,3 +73,14 @@ export function writeProactiveChatAttempt(file, chatKey, ts) {
   state.chats[key] = Number(ts) || Date.now();
   writeState(file, state);
 }
+
+/** 批量写多个会话的判定时间：per-chat 模式一次 tick 读/写一次，避免 N 个群写 N 次文件。 */
+export function writeProactiveChatAttempts(file, chatKeys, ts) {
+  const keys = [...new Set((Array.isArray(chatKeys) ? chatKeys : []).map((key) => String(key || '').trim()))]
+    .filter((key) => /^(group|private):\d+$/.test(key));
+  if (!keys.length) return;
+  const state = readState(file);
+  const at = Number(ts) || Date.now();
+  for (const key of keys) state.chats[key] = at;
+  writeState(file, state);
+}

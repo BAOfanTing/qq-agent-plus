@@ -107,7 +107,7 @@ import { visibleImpressions, memoryVisibilityOf } from './memory-visibility.js';
 import { knowledgeEnabled } from '../knowledge/store.js';
 import { buildReminderNote, reminderNoteCost } from './reminders.js';
 import { ZONE_OFFSET_MS, minuteOfDayInZone, randInt, createEventBus, todayKey, sanitizeUserText } from './util.js';
-import { readProactiveAttempts, readProactiveState, writeProactiveAttempt, writeProactiveChatAttempt } from './proactive-state.js';
+import { readProactiveAttempts, readProactiveState, writeProactiveAttempt, writeProactiveChatAttempts } from './proactive-state.js';
 import { buildSystemPrompt, buildUserPrompt, isAtMe, resolveContextTier } from '../llm/prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, emptyUsage, isRetryableError } from '../llm/llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool, platformToolAllowed } from '../tools/tools.js';
@@ -2967,16 +2967,19 @@ export class Orchestrator {
         const maxPerTick = Math.max(1, Math.min(10, Number(cfg.proactive?.perChatMaxPerTick) || 2));
         const chance = proactiveProbability(cfg.proactive?.probability);
         let sent = 0;
+        const touched = [];
         for (const chatKey of candidates) {
           if (sent >= maxPerTick) break;
           if (nowTick - Number(state.chats[chatKey] || 0) < minGapMs) continue;
-          writeProactiveChatAttempt(PROACTIVE_STATE_FILE, chatKey, nowTick);
+          touched.push(chatKey);
           if (this.random() > chance) continue;
           if (this.runningChats.size >= Math.max(1, Number(cfg.maxConcurrentRuns) || 2)) break;
           sent += 1;
           log.info(`[proactive] 主动开话题（${scopeLabel(scope)}·独立） → ${chatKey}`);
           this.wake(chatKey, { proactive: true }).catch((error) => log.error('[orchestrator] proactive 出错:', error));
         }
+        // 一轮只落盘一次：群多时不要为每个候选读/写整份状态文件。
+        writeProactiveChatAttempts(PROACTIVE_STATE_FILE, touched, nowTick);
         if (!sent) log.info(`[proactive] 跳过（${scopeLabel(scope)}）：本轮独立判定没有命中`);
         return;
       }
