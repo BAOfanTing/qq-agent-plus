@@ -338,6 +338,11 @@ function bindSettingsSaveAndSections() {
         if (result) result.textContent = '保存中…';
         try {
           await saveConfig({ quiet: true });
+          if (selector === '#cfg-living-memory-enabled') { // 原地更新，避免整页重渲染让卡片闪一下
+            $('#experiment-living-memory')?.classList.toggle('is-on', toggle.checked === true);
+            toggle.disabled = false; if (result) result.textContent = '已保存';
+            void loadExperimentalFeatureStatuses(); return;
+          }
           renderSettings();
         } catch (error) {
           toggle.checked = !toggle.checked;

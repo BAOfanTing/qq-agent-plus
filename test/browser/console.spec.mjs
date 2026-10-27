@@ -177,6 +177,20 @@ test('设置 → 实验功能：长期记忆卡片显示状态并可进入管理
   await expect(page.locator('#experiment-living-memory')).toBeVisible();
   await expect(page.locator('#living-memory-badge')).toHaveText('已固化');
   await expect(page.locator('#living-memory-state')).toContainText('运行中');
+
+  // 开关不应触发整页重绘（否则卡片会消失再出现）：先记下节点，再切换两次。
+  await page.evaluate(() => { globalThis.__lmCard = document.querySelector('#experiment-living-memory'); });
+  const enabled = page.locator('#cfg-living-memory-enabled');
+  const readEnabled = async () => (await (await page.request.get('/api/config')).json()).livingMemory.enabled;
+  await enabled.click();
+  await expect.poll(readEnabled).toBe(false);
+  await expect(page.locator('#living-memory-state')).toContainText('已停用');
+  expect(await page.evaluate(() => globalThis.__lmCard === document.querySelector('#experiment-living-memory'))).toBe(true);
+  await enabled.click();
+  await expect.poll(readEnabled).toBe(true);
+  await expect(page.locator('#living-memory-state')).toContainText('运行中');
+  expect(await page.evaluate(() => globalThis.__lmCard === document.querySelector('#experiment-living-memory'))).toBe(true);
+
   await page.click('#lm-open-console');
   await expect(page.locator('#living-memory-page h2')).toHaveText('长期记忆');
 });
