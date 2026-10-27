@@ -621,7 +621,9 @@ export function buildToolDefs() {
           const targetError = messageTargetError(ctx, args);
           if (targetError) return err(targetError);
           const gate = actionGate(ctx, 'sticker');
-          if (!gate.ok) return err(gate.reason, { reportIncident: false });
+          if (!gate.ok) {
+            return err(`${gate.reason}。这次表情没有发出；请改用 send_message 发文字回复，不要再试表情，也不要只结束本轮。`, { reportIncident: false });
+          }
           // 有本地文件的就是"托管内联"：findForSend 会给 base64，别过 validateImageUrl（它只收 http(s)）。
           // 原来这里写死 source==='manual'，而"收藏即落盘"之后 AI 收藏项也带 localFile + base64
           // —— 会被判"图片地址不合法"永远发不出去（2026-09-27 审查 P0）。

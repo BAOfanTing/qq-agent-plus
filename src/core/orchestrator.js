@@ -370,8 +370,15 @@ function mergeImpressionLists(base = [], extra = []) {
  *  - finish 成功之后，同批后面的工具不再执行（不能再产生副作用）。
  * 返回空串 = 放行；返回非空串 = 这条工具要返回的拒绝原因。
  */
-export function finishBarrierBlock(name, { finished = false, priorFailure = false } = {}) {
+export function finishBarrierBlock(name, {
+  finished = false,
+  priorFailure = false,
+  unsentDeliveryFailure = false
+} = {}) {
   if (finished) return '未执行：finish 已形成本轮终止边界，之后的工具不能再产生副作用。';
+  if (name === 'finish' && unsentDeliveryFailure) {
+    return 'finish 未执行：本轮尝试发送内容但尚未成功送达。请立即改用 send_message 发送文字回复；不要重试表情，也不要只结束本轮。';
+  }
   if (name === 'finish' && priorFailure) {
     return 'finish 未执行：本轮前置工具有失败项，需要先查看错误并重新决定。';
   }
@@ -2297,6 +2304,8 @@ export class Orchestrator {
     const maxRounds = runLimits.maxRounds;
     let finish = false;
     let completed = false;
+    // 发送动作跨模型轮次失败时仍要阻止“只总结、不回复”的 finish；有任何内容送达后解除。
+    let unsentDeliveryFailure = false;
     let webSearchCount = 0;
     session.activity = '';
     session.webSearchCount = 0;
@@ -2500,7 +2509,11 @@ export class Orchestrator {
         // send_message 永远放行：模型可能只是想“看看有哪些技能，然后正常回一句”；
         // 不能因为列过一次技能就把正常回复也堵死。
         const skillGate = skillGateMessage(ctx.activeSkill, ctx.pendingSkillUse, name, safeParse(argsRaw));
-        const blocked = finishBarrierBlock(name, { finished: finish, priorFailure }) || skillGate;
+        const blocked = finishBarrierBlock(name, {
+          finished: finish,
+          priorFailure,
+          unsentDeliveryFailure: unsentDeliveryFailure && session.sent.length === 0
+        }) || skillGate;
         const result = blocked
           ? { content: blocked, isError: true, reportIncident: false, skillBlocked: Boolean(skillGate) }
           : await executeTool(toolDefs, ctx, name, argsRaw);
@@ -2564,6 +2577,12 @@ export class Orchestrator {
         // 技能白名单拦截不是"工具坏了"：不让它把 finish 屏障也一起触发，否则模型被挡住一次
         // 就再也收不了尾。真正的工具失败仍然照旧挡 finish。
         if ((result.isError && result.skillBlocked !== true) || result.partialFailure === true) priorFailure = true;
+        if (name === 'send_sticker'
+          && result.isError
+          && /这个动作刚刚用过/.test(contentStr)
+          && session.sent.length === 0) {
+          unsentDeliveryFailure = true;
+        }
         if (name === 'finish' && !result.isError) finish = true;
       }
       messages.push(...toolResults.map(({ role, tool_call_id, name, content }) => ({ role, tool_call_id, content, name })));
