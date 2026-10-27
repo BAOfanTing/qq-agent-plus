@@ -1,0 +1,39 @@
+name: Retag GHCR
+
+# 临时运维工作流：把已发布的镜像 manifest 重新指向移动 tag（0.9 / latest）。
+# 只用于 tag push 未能触发 Docker 工作流时手动补齐，用完即删。
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: '源 tag（已存在的不可变版本 tag）'
+        required: true
+      targets:
+        description: '目标 tag，逗号分隔（如 0.9,latest）'
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Retag
+        env:
+          SOURCE: ${{ inputs.source }}
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -e
+          IMAGE="ghcr.io/${{ github.repository }}"
+          args=()
+          for tag in $(printf '%s' "$TARGETS" | tr ',' ' '); do
+            args+=(--tag "$IMAGE:$tag")
+          done
+          docker buildx imagetools create "${args[@]}" "$IMAGE:$SOURCE"
+          for tag in $(printf '%s' "$TARGETS" | tr ',' ' '); do
+            docker buildx imagetools inspect "$IMAGE:$tag"
+          done
