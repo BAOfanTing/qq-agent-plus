@@ -259,7 +259,7 @@ function skillsRenderMarket() {
   const box = $('#skills-market-view');
   if (!box) return;
   const count = $('#skills-market-count');
-  if (count) count.textContent = skillsState.market ? String(skillsState.market.skills.length) : '';
+  if (count) count.textContent = Array.isArray(skillsState.market?.skills) ? String(skillsState.market.skills.length) : '';
   if (skillsState.marketDetailId) {
     box.innerHTML = `<div class="skills-market-detail"><div class="skills-market-detail-back"><button type="button" class="btn btn-small" data-market-close>← 返回技能市场</button></div>${skillsMarketPreviewHtml() || '<div class="skills-market-preview">正在读取技能详情…</div>'}</div>`;
     return;
