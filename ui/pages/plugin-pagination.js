@@ -1,5 +1,5 @@
 // 插件目录分页控件：纯前端（索引已经整份拉回），与技能市场的分页保持同一套视觉。
-const PLUGIN_PAGE_SIZE = 24;
+const PLUGIN_PAGE_SIZE = 12;
 
 function pluginPaginationHtml(page, totalPages, total) {
   if (totalPages <= 1) return '';

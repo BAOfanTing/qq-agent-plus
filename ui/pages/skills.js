@@ -68,35 +68,45 @@ function skillsEnabledCount() {
 }
 
 function skillsRenderKpis() {
-  const box = $('#skills-kpis');
-  if (!box) return;
+  const sub = $('#skills-installed-sub');
+  if (!sub) return;
   const overrides = Object.keys(skillsState.perChat).length;
-  box.innerHTML = `
-    <div class="skills-kpi"><span>已加载</span><strong>${skillsState.skills.length}</strong><small>个技能</small></div>
-    <div class="skills-kpi"><span>全局启用</span><strong>${skillsEnabledCount()}</strong><small>个技能</small></div>
-    <div class="skills-kpi"><span>按会话覆盖</span><strong>${overrides}</strong><small>个会话</small></div>`;
+  sub.textContent = `${skillsState.skills.length} 个技能 · ${skillsEnabledCount()} 个全局启用 · ${overrides} 个会话覆盖`;
 }
 
 function skillsRenderList() {
   const box = $('#skills-list');
   if (!box) return;
   if (!skillsState.skills.length) {
-    box.innerHTML = '<div class="skills-empty">没有找到技能。把技能目录放到 <code>skills/&lt;id&gt;/</code> 或 <code>data/skills/&lt;id&gt;/</code>，再点右上角「重新扫描」。</div>';
+    box.innerHTML = '<div class="plugin-empty">没有找到技能。把技能目录放到 <code>skills/&lt;id&gt;/</code> 或 <code>data/skills/&lt;id&gt;/</code>，再点右上角「重新扫描」。</div>';
     return;
   }
   box.innerHTML = skillsState.skills.map((skill) => {
     const on = skillsIsGlobal(skill.id);
     const override = skillsHasOverride(skill.id);
     const state = on ? '全局启用' : override ? '按会话启用' : '未启用';
-    return `<button type="button" class="skill-card ${skill.id === skillsState.selectedId ? 'is-on' : ''}" data-skill-open="${esc(skill.id)}">
+    const source = skill.source === 'user' ? 'data/skills（用户目录）' : '内置 skills 目录';
+    return `<div class="plugin-row" data-skill-open="${esc(skill.id)}" tabindex="0" role="button" aria-label="查看 ${esc(skill.name)} 详情">
       <span class="skill-avatar">${iconSvg('sparkles', { size: 18 })}</span>
-      <span class="skill-card-main">
-        <span class="skill-card-title"><b>${esc(skill.name)}</b><em>v${esc(skill.version)}</em></span>
-        <span class="skill-card-desc">${esc(skill.description || '（没有说明）')}</span>
-        <span class="skill-card-meta">${skill.allowedTools.length} 个工具 · <i class="${on || override ? 'is-on' : ''}">${state}</i></span>
-      </span>
-    </button>`;
+      <div class="plugin-row-main">
+        <div class="plugin-row-top"><span class="plugin-name">${esc(skill.name)}</span><span class="plugin-ver">v${esc(skill.version)}</span><span class="plugin-state-text ${on ? 'idle' : 'off'}"><i></i>${esc(state)}</span></div>
+        <div class="plugin-fact">${skill.allowedTools.length} 个工具 · ${esc(source)}</div>
+        <div class="plugin-note">${esc(skill.description || '（没有说明）')}</div>
+      </div>
+      <div class="plugin-row-actions"><span class="plugin-fact">${on ? '已全局启用' : override ? '按会话启用' : '未启用'}</span></div>
+    </div>`;
   }).join('');
+}
+
+function skillsRenderInstalled() {
+  const list = $('#skills-list');
+  const detail = $('#skills-detail');
+  const selected = skillsSelected();
+  if (list) list.hidden = Boolean(selected);
+  if (detail) detail.hidden = !selected;
+  skillsRenderKpis();
+  if (selected) skillsRenderDetail();
+  else skillsRenderList();
 }
 
 function skillsRenderDetail() {
@@ -107,8 +117,9 @@ function skillsRenderDetail() {
     box.innerHTML = '<div class="skills-detail-empty">选择左侧技能，查看它的工作流程和工具范围。</div>';
     return;
   }
+  const back = '<div class="skills-detail-back"><button type="button" class="btn btn-small" data-skill-back>← 返回已安装</button></div>';
   if (skillsState.loadingDetail) {
-    box.innerHTML = '<div class="skills-detail-empty">正在读取技能说明…</div>';
+    box.innerHTML = `${back}<div class="skills-detail-empty">正在读取技能说明…</div>`;
     return;
   }
   if (skillsState.detailError) {
@@ -123,7 +134,7 @@ function skillsRenderDetail() {
   const checkedInChat = override ? override.includes(skill.id) : on;
   const tools = (skill.allowedTools || []).map((tool) => `<span class="skills-chip">${esc(tool)}</span>`).join('');
   const triggers = (skill.triggers || []).map((trigger) => `<span class="skills-chip is-soft">${esc(trigger)}</span>`).join('');
-  box.innerHTML = `
+  box.innerHTML = `${back}
     <div class="skills-detail-head">
       <div>
         <span class="skills-eyebrow">技能 · ${esc(skill.id)}</span>
@@ -416,9 +427,7 @@ function skillsSwitchView(view) {
     skillsRenderMarket();
     if (!skillsState.market && !skillsState.marketLoading) void skillsLoadMarket(false);
   } else if (skillsState.view === 'installed') {
-    skillsRenderKpis();
-    skillsRenderList();
-    skillsRenderDetail();
+    skillsRenderInstalled();
   }
 }
 
@@ -428,7 +437,7 @@ function skillsRender() {
   const installedCount = $('#skills-installed-count');
   if (installedCount) installedCount.textContent = String(skillsState.skills.length);
   const marketCount = $('#skills-market-count');
-  if (marketCount) marketCount.textContent = skillsState.market ? `${skillsState.market.skills.length}` : '';
+  if (marketCount) marketCount.textContent = Array.isArray(skillsState.market?.skills) ? `${skillsState.market.skills.length}` : '';
   const master = $('#skills-enabled');
   if (master) master.checked = skillsState.enabled === true;
   skillsStatus(skillsState.enabled
@@ -444,9 +453,7 @@ function skillsRender() {
     skillsSwitchView(skillsState.view);
     return;
   }
-  skillsRenderKpis();
-  skillsRenderList();
-  skillsRenderDetail();
+  skillsRenderInstalled();
 }
 
 async function skillsLoadDetail(id) {
@@ -498,12 +505,11 @@ async function skillsLoad() {
     skillsState.skills = Array.isArray(data.skills) ? data.skills : [];
     skillsState.errors = Array.isArray(data.errors) ? data.errors : [];
     skillsState.chats = Array.isArray(chats.chats) ? chats.chats : [];
-    if (!skillsState.skills.some((skill) => skill.id === skillsState.selectedId)) {
-      const first = skillsState.skills.find((skill) => skillsIsGlobal(skill.id)) || skillsState.skills[0];
-      skillsState.selectedId = first?.id || '';
+    if (skillsState.selectedId && !skillsState.skills.some((skill) => skill.id === skillsState.selectedId)) {
+      skillsState.selectedId = '';
+      skillsState.detail = null;
     }
     skillsRender();
-    if (skillsState.selectedId) void skillsLoadDetail(skillsState.selectedId);
   } catch (error) {
     skillsStatus(`读取失败：${error?.message || error}`, true);
     skillsRenderDetail();
@@ -623,14 +629,19 @@ function skillsBind(root) {
     if (marketOpen) { void skillsLoadMarketPreview(marketOpen.dataset.marketOpen); return; }
     const marketFull = event.target?.closest?.('[data-market-full]');
     if (marketFull) { void skillsLoadMarketPreview(marketFull.dataset.marketFull, { full: true }); return; }
+    if (event.target?.closest?.('[data-skill-back]')) {
+      skillsState.selectedId = '';
+      skillsState.detail = null;
+      skillsRenderInstalled();
+      return;
+    }
     const skillUninstall = event.target?.closest?.('[data-skill-uninstall]');
     if (skillUninstall) { void skillsUninstallMarket(skillUninstall.dataset.skillUninstall); return; }
     const open = event.target?.closest?.('[data-skill-open]');
     if (open) {
       skillsState.selectedId = open.dataset.skillOpen;
       skillsState.detail = null;
-      skillsRenderList();
-      skillsRenderDetail();
+      skillsRenderInstalled();
       void skillsLoadDetail(skillsState.selectedId);
       return;
     }
@@ -694,15 +705,10 @@ function loadSkillsPage() {
         <button type="button" class="plugin-publish-cta" role="tab" aria-selected="false" data-skills-view="publish">${iconSvg('upload', { size: 13 })}<span>提交技能</span></button>
       </div>
       <div id="skills-installed-view">
-        <div class="skills-kpis" id="skills-kpis"></div>
+        <div class="plugin-pane-head"><span class="plugin-sec-sub" id="skills-installed-sub"></span></div>
         <div class="skills-errors" id="skills-errors"></div>
-        <div class="skills-layout">
-          <section class="skills-list-pane">
-            <div class="skills-list-head"><span>已加载</span><span id="skills-count"></span></div>
-            <div id="skills-list" class="skills-list"></div>
-          </section>
-          <section id="skills-detail" class="skills-detail"></section>
-        </div>
+        <div id="skills-list" class="plugin-ledger"></div>
+        <section id="skills-detail" class="skills-detail is-full" hidden></section>
       </div>
       <div id="skills-market-view" class="skills-market" hidden></div>
       <div id="skills-publish-view" class="skills-publish" hidden>

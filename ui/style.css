@@ -6649,3 +6649,5 @@ html[data-glass] .plugin-related-item {
 @media (max-width: 900px) {
   .plugin-toolbar #skills-market-search { flex: 1 1 100%; }
 }
+.skills-detail.is-full { max-width: 1000px; max-height: none; margin: 0 auto; padding: 0; overflow: visible; border: 0; background: transparent; box-shadow: none; }
+.skills-detail-back { margin-bottom: 12px; }
