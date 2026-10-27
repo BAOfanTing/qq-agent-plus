@@ -6595,9 +6595,8 @@ html[data-glass] .plugin-related-item {
 .lm-graph-wrap .entity-node circle { fill: var(--green); }
 .lm-graph-wrap text { font-size: var(--fs-xs); fill: var(--muted); text-anchor: middle; }
 
-/* 设置 → 实验功能：长期语义记忆单独一张卡片，状态与入口分开，不再挤在表格行里 */
-.experiment-card { display: flex; justify-content: space-between; gap: 18px; margin-top: 14px; padding: 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in srgb, var(--bg-2) 84%, transparent); box-shadow: var(--shadow-card); }
-.experiment-card.is-on { border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); }
+/* 设置 → 实验功能：长期语义记忆单独一张卡片，视觉与上面的 .control-key-list 保持一致 */
+.experiment-card { display: flex; justify-content: space-between; gap: 18px; margin-top: 14px; padding: 14px; border: 1px solid var(--border); border-radius: var(--r-card); background: var(--bg-2); }
 .experiment-card-main { min-width: 0; }
 .experiment-card-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .experiment-card-title strong { font-size: var(--fs-md); }
@@ -6606,11 +6605,11 @@ html[data-glass] .plugin-related-item {
 .experiment-badge { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border)); border-radius: var(--r-pill); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); font-size: var(--fs-2xs); }
 .experiment-badge.is-solid { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); background: color-mix(in srgb, var(--green) 8%, transparent); color: var(--green); }
 .experiment-card-side { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 12px; flex: 0 0 auto; }
+.experiment-card-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
 [data-glass] .lm-kpi,
 [data-glass] .lm-card,
-[data-glass] .lm-detail-card,
-[data-glass] .experiment-card {
+[data-glass] .lm-detail-card {
   background: var(--glass-fill);
   border-color: var(--glass-edge);
   backdrop-filter: blur(var(--glass-blur, 10px)) saturate(var(--glass-sat, 130%));

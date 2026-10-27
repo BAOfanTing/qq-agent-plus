@@ -65,7 +65,7 @@ function renderExperimentalSettingsSectionImpl(c) {
           </span>
         </div>
       </div>
-      <div class="experiment-card ${livingMemory.enabled === true ? 'is-on' : ''}" id="experiment-living-memory">
+      <div class="experiment-card" id="experiment-living-memory">
         <div class="experiment-card-main">
           <div class="experiment-card-title">
             <strong>长期语义记忆</strong>
@@ -76,9 +76,13 @@ function renderExperimentalSettingsSectionImpl(c) {
         </div>
         <div class="experiment-card-side">
           <label class="skills-switch"><input type="checkbox" class="sw" id="cfg-living-memory-enabled" ${livingMemory.enabled === true ? 'checked' : ''} /><span>启用</span></label>
-          ${livingMemory.graduated === true
-            ? '<button type="button" class="btn btn-small" id="lm-open-console">打开记忆页</button>'
-            : '<button type="button" class="btn btn-small btn-primary" id="launch-living-memory-feature">固化上线</button>'}
+          <div class="experiment-card-actions">
+            ${livingMemory.graduated === true ? '<button type="button" class="btn btn-small" id="lm-open-console">打开记忆页</button>' : ''}
+            <button type="button" class="btn btn-small ${livingMemory.graduated === true ? '' : 'btn-primary'}"
+              id="launch-living-memory-feature" ${livingMemory.graduated === true ? 'disabled' : ''}>
+              ${livingMemory.graduated === true ? '已固化' : '固化上线'}
+            </button>
+          </div>
         </div>
       </div>
       <div class="hint">群游戏（数字炸弹 / 谁是卧底 / 狼人杀）的详细设置与「正在进行的局」在 <b>设置 → 群游戏</b>；
