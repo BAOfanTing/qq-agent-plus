@@ -84,6 +84,10 @@ test('技能市场：预览、安装、已安装列表与卸载', async ({ page 
   await switchTo(page, 'skills');
   await page.click('[data-skills-view="market"]');
   await expect(page.locator('#skills-market-view')).toContainText('出行规划');
+  await expect(page.locator('.skills-market-pagination')).toBeVisible();
+  await page.click('[data-market-page="next"]');
+  await expect(page.locator('.skills-market-page.is-on')).toHaveText('2');
+  await page.click('[data-market-page="prev"]');
 
   await page.click('[data-market-open="trip-planner"]');
   await expect(page.locator('.skills-market-preview')).toContainText('这是索引摘要');
@@ -234,6 +238,33 @@ test('好友设置保存：改入站待批上限后落盘，再还原', async ({
   await page.locator('#cfg-identity-incoming-max-pending').fill('50');
   await page.click('#friend-feature-save');
   await expect.poll(read).toBe(50);
+});
+
+test('插件目录：索引超过一页时分页', async ({ page }) => {
+  const plugins = Array.from({ length: 30 }, (_, index) => ({
+    id: `demo-${String(index + 1).padStart(2, '0')}`,
+    name: `测试插件 ${String(index + 1).padStart(2, '0')}`,
+    description: '分页回归用条目',
+    version: '1.0.0',
+    author: 'tester',
+    category: '测试',
+    tags: ['test'],
+    capabilities: ['tools'],
+    compatible: true,
+    downloads: index,
+    updatedAt: '2026-10-01'
+  }));
+  await page.route('**/api/plugins/index', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ plugins, skipped: [], sources: [{ name: '测试索引', ok: true, count: plugins.length }] })
+  }));
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'plugins');
+  await expect(page.locator('.plugin-pagination')).toBeVisible();
+  await page.click('[data-plugin-page="next"]');
+  await expect(page.locator('.plugin-page.is-on')).toHaveText('2');
 });
 
 test('插件审批：待批请求能在插件详情里点「批准一次」', async ({ page }) => {

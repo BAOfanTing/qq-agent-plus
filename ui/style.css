@@ -6099,6 +6099,12 @@ html[data-motion='off'] .chat-item.leaving { animation: none; }
 .plugin-grid.is-list .plugin-card-desc { flex: 1; min-width: 0; -webkit-line-clamp: 1; margin-left: 4px; }
 .plugin-grid.is-list .plugin-card-foot { flex: 0 0 auto; }
 .plugin-grid.is-list .plugin-warn { flex: 0 0 auto; }
+.plugin-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px; margin: 16px 0 2px; }
+.plugin-page { min-width: 32px; height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-2); color: var(--muted); font-size: var(--fs-sm); cursor: pointer; }
+.plugin-page:hover:not(:disabled) { color: var(--text); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); }
+.plugin-page.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.plugin-page:disabled { opacity: .4; cursor: not-allowed; }
+.plugin-page-summary { margin-left: 6px; color: var(--faint); font-size: var(--fs-2xs); }
 
 /* ── 详情：面包屑 + 色带 Hero + 正文/侧栏两栏 ──
    版式照参照量着做（VS Code 市场详情页：面包屑 → 整条彩色 Hero 带大图标/大名字/byline/主按钮
@@ -6599,4 +6605,31 @@ html[data-glass] .plugin-related-item {
   .skills-market-body { grid-template-columns: 1fr; }
   .skills-market-grid { grid-template-columns: 1fr; }
   .skills-market-preview { position: static; max-height: none; }
+}
+.skills-market-filters { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.skills-market-categories { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.skills-market-cat { padding: 4px 9px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--bg-2); color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+.skills-market-cat:hover { color: var(--text); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); }
+.skills-market-cat.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.skills-market-cat em { margin-left: 3px; font-family: var(--mono); font-size: var(--fs-2xs); font-style: normal; opacity: .75; }
+.skills-market-sortbar { display: flex; align-items: center; gap: 8px; }
+.skills-market-sortbar select { min-width: 0; padding: 5px 8px; font-size: var(--fs-sm); }
+.skills-market-list-col { min-width: 0; }
+.skills-market-grid.is-list { display: flex; flex-direction: column; gap: 8px; }
+.skills-market-grid.is-list .skills-market-card { flex-direction: row; align-items: center; gap: 12px; }
+.skills-market-grid.is-list .skills-market-card-top { flex: 0 0 auto; }
+.skills-market-grid.is-list .skills-market-card p { flex: 1; -webkit-line-clamp: 1; }
+.skills-market-grid.is-list .skills-market-meta, .skills-market-grid.is-list .skills-market-actions { flex: 0 0 auto; }
+.skills-market-pagination { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 5px; margin: 16px 0 2px; }
+.skills-market-page { min-width: 32px; height: 32px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-2); color: var(--muted); font-size: var(--fs-sm); cursor: pointer; }
+.skills-market-page:hover:not(:disabled) { color: var(--text); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); }
+.skills-market-page.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.skills-market-page:disabled { opacity: .4; cursor: not-allowed; }
+.skills-market-page-summary { margin-left: 6px; color: var(--faint); font-size: var(--fs-2xs); }
+@media (max-width: 720px) {
+  .skills-market-head .skills-market-actions { width: 100%; flex-wrap: wrap; }
+  .skills-market-head .skills-market-actions input[type='search'] { flex: 1 1 100%; }
+  .skills-market-filters, .skills-market-sortbar { width: 100%; }
+  .skills-market-sortbar { justify-content: space-between; }
+  .skills-market-grid.is-list .skills-market-card { flex-wrap: wrap; }
 }

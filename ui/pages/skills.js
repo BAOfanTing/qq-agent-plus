@@ -25,7 +25,12 @@ const skillsState = {
   marketPreview: null,
   marketPreviewId: '',
   marketPreviewError: '',
-  marketBusyId: ''
+  marketBusyId: '',
+  marketPage: 1,
+  marketPageSize: 12,
+  marketCategory: '',
+  marketSort: 'name',
+  marketView: 'grid'
 };
 
 function skillsChatLabel(key) {
@@ -194,6 +199,33 @@ function skillsMarketPreviewHtml() {
   </section>`;
 }
 
+function skillsMarketSort(list, mode) {
+  const copy = [...list];
+  if (mode === 'version') {
+    return copy.sort((a, b) => String(b.version || '').localeCompare(String(a.version || ''), undefined, { numeric: true })
+      || String(a.name).localeCompare(String(b.name)));
+  }
+  if (mode === 'author') {
+    return copy.sort((a, b) => String(a.author || '').localeCompare(String(b.author || ''))
+      || String(a.name).localeCompare(String(b.name)));
+  }
+  return copy.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+function skillsMarketPagination(page, totalPages, total) {
+  if (totalPages <= 1) return '';
+  const nums = [];
+  for (let i = Math.max(1, page - 2); i <= Math.min(totalPages, page + 2); i += 1) {
+    nums.push(`<button type="button" class="skills-market-page${i === page ? ' is-on' : ''}" data-market-page="${i}" aria-current="${i === page ? 'page' : 'false'}">${i}</button>`);
+  }
+  return `<nav class="skills-market-pagination" data-pages="${totalPages}" aria-label="技能市场分页">
+    <button type="button" class="skills-market-page" data-market-page="prev" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+    ${nums.join('')}
+    <button type="button" class="skills-market-page" data-market-page="next" ${page >= totalPages ? 'disabled' : ''}>下一页</button>
+    <span class="skills-market-page-summary">第 ${page} / ${totalPages} 页 · 共 ${total} 条</span>
+  </nav>`;
+}
+
 function skillsRenderMarket() {
   const box = $('#skills-market-view');
   if (!box) return;
@@ -210,15 +242,40 @@ function skillsRenderMarket() {
   const data = skillsState.market;
   if (!data) { box.innerHTML = ''; return; }
   const query = skillsState.marketQuery.trim().toLowerCase();
-  const list = (data.skills || []).filter((entry) => !query
-    || `${entry.name} ${entry.id} ${entry.description} ${entry.author} ${entry.category}`.toLowerCase().includes(query));
+  const all = Array.isArray(data.skills) ? data.skills : [];
+  const categories = new Map();
+  for (const entry of all) {
+    const name = entry.category || '其他';
+    categories.set(name, (categories.get(name) || 0) + 1);
+  }
+  const list = all.filter((entry) => {
+    if (skillsState.marketCategory && (entry.category || '其他') !== skillsState.marketCategory) return false;
+    return !query || `${entry.name} ${entry.id} ${entry.description} ${entry.author} ${entry.category}`.toLowerCase().includes(query);
+  });
+  const sorted = skillsMarketSort(list, skillsState.marketSort);
+  const totalPages = Math.max(1, Math.ceil(sorted.length / skillsState.marketPageSize));
+  const page = Math.min(Math.max(1, Number(skillsState.marketPage) || 1), totalPages);
+  skillsState.marketPage = page;
+  const pageList = sorted.slice((page - 1) * skillsState.marketPageSize, page * skillsState.marketPageSize);
+  const catChips = [
+    `<button type="button" class="skills-market-cat${!skillsState.marketCategory ? ' is-on' : ''}" data-market-category="">全部 <em>${all.length}</em></button>`,
+    ...[...categories.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => `<button type="button" class="skills-market-cat${skillsState.marketCategory === name ? ' is-on' : ''}" data-market-category="${esc(name)}">${esc(name)} <em>${count}</em></button>`)
+  ].join('');
   const index = data.index || {};
   const when = index.fetchedAt ? new Date(index.fetchedAt).toLocaleString('zh-CN', { hour12: false }) : '';
   box.innerHTML = `<div class="skills-market-head"><div><h3>技能市场</h3><p>${esc(index.name || '技能索引')}${index.stale ? ' · 使用本地缓存' : ''}${when ? ` · ${esc(when)}` : ''}</p></div><div class="skills-market-actions"><input type="search" id="skills-market-search" value="${esc(skillsState.marketQuery)}" placeholder="搜索技能、作者或分类" aria-label="搜索技能市场" /><a class="btn btn-small" href="https://github.com/sakurawwwxh/qq-agent-plus/issues/new?template=skill-submission.yml" target="_blank" rel="noopener noreferrer">提交技能</a><button type="button" class="btn btn-small" data-market-refresh>${iconSvg('refresh', { size: 14 })}刷新索引</button></div></div>
+    <div class="skills-market-filters"><div class="skills-market-categories">${catChips}</div><div class="skills-market-sortbar">
+      <select id="skills-market-sort" aria-label="技能排序"><option value="name" ${skillsState.marketSort === 'name' ? 'selected' : ''}>按名称</option><option value="version" ${skillsState.marketSort === 'version' ? 'selected' : ''}>按版本</option><option value="author" ${skillsState.marketSort === 'author' ? 'selected' : ''}>按作者</option></select>
+      <div class="plugin-viewtoggle" role="group" aria-label="视图"><button type="button" class="plugin-view ${skillsState.marketView === 'grid' ? 'is-on' : ''}" data-market-view="grid" title="卡片">${iconSvg('layout', { size: 14 })}</button><button type="button" class="plugin-view ${skillsState.marketView === 'list' ? 'is-on' : ''}" data-market-view="list" title="列表">${iconSvg('layers', { size: 14 })}</button></div>
+    </div></div>
     ${index.stale && index.error ? `<div class="skills-market-note">索引暂时不可用，正在使用缓存：${esc(index.error)}</div>` : ''}
     ${skillsState.marketError ? `<div class="skills-market-note">${esc(skillsState.marketError)}</div>` : ''}
     <div class="skills-market-body">
-      <div class="skills-market-grid">${list.map(skillsMarketCard).join('') || '<div class="skills-empty">没有匹配的技能。</div>'}</div>
+      <div class="skills-market-list-col">
+        <div class="skills-market-grid${skillsState.marketView === 'list' ? ' is-list' : ''}">${pageList.map(skillsMarketCard).join('') || '<div class="skills-empty">没有匹配的技能。</div>'}</div>
+        ${skillsMarketPagination(page, totalPages, sorted.length)}
+      </div>
       ${skillsMarketPreviewHtml() || '<aside class="skills-market-placeholder"><span class="skills-eyebrow">安装前预览</span><p>选择左侧技能，查看 SKILL.md、允许工具、文件哈希与来源。</p></aside>'}
     </div>`;
 }
@@ -439,10 +496,16 @@ function skillsBind(root) {
       skillsState.selectedChat = event.target.value;
       skillsRenderDetail();
     }
+    if (event.target?.id === 'skills-market-sort') {
+      skillsState.marketSort = event.target.value || 'name';
+      skillsState.marketPage = 1;
+      skillsRenderMarket();
+    }
   });
   root.addEventListener('input', (event) => {
     if (event.target?.id !== 'skills-market-search') return;
     skillsState.marketQuery = String(event.target.value || '');
+    skillsState.marketPage = 1;
     const box = $('#skills-market-view');
     if (box) {
       // 只重绘市场区，避免搜索框自己丢焦点。
@@ -470,6 +533,30 @@ function skillsBind(root) {
       skillsState.marketPreview = null;
       skillsState.marketPreviewId = '';
       skillsState.marketPreviewError = '';
+      skillsRenderMarket();
+      return;
+    }
+    const marketCategory = event.target?.closest?.('[data-market-category]');
+    if (marketCategory) {
+      skillsState.marketCategory = marketCategory.dataset.marketCategory === skillsState.marketCategory ? '' : marketCategory.dataset.marketCategory;
+      skillsState.marketPage = 1;
+      skillsRenderMarket();
+      return;
+    }
+    const marketView = event.target?.closest?.('[data-market-view]');
+    if (marketView) {
+      skillsState.marketView = marketView.dataset.marketView === 'list' ? 'list' : 'grid';
+      skillsState.marketPage = 1;
+      skillsRenderMarket();
+      return;
+    }
+    const marketPage = event.target?.closest?.('[data-market-page]');
+    if (marketPage) {
+      const totalPages = Math.max(1, Number(marketPage.closest('.skills-market-pagination')?.dataset.pages) || 1);
+      const value = marketPage.dataset.marketPage;
+      if (value === 'prev') skillsState.marketPage = Math.max(1, (skillsState.marketPage || 1) - 1);
+      else if (value === 'next') skillsState.marketPage = Math.min(totalPages, (skillsState.marketPage || 1) + 1);
+      else skillsState.marketPage = Math.max(1, Number(value) || 1);
       skillsRenderMarket();
       return;
     }

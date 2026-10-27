@@ -76,22 +76,29 @@ async function startMarketFixture() {
   const texts = {};
   for (const name of ['skill.json', 'SKILL.md']) texts[name] = fs.readFileSync(path.join(source, name), 'utf8');
   const hashes = Object.fromEntries(Object.entries(texts).map(([name, text]) => [name, crypto.createHash('sha256').update(text).digest('hex')]));
+  const baseEntry = {
+    id: 'trip-planner',
+    name: '出行规划',
+    description: '浏览器冒烟用的可安装技能。',
+    preview: '这是索引摘要，查看完整说明才下载文件。',
+    version: '1.0.0',
+    author: 'e2e',
+    category: '测试',
+    allowedTools: ['web_search', 'send_message'],
+    triggers: ['规划行程'],
+    files: Object.fromEntries(Object.entries(hashes).map(([name, sha256]) => [name, { path: `/files/${name}`, sha256, bytes: Buffer.byteLength(texts[name]) }]))
+  };
+  // 额外条目只用于浏览/筛选/分页，文件仍指向同一份测试包。
   const payload = {
     version: 1,
     name: '浏览器测试技能索引',
     updatedAt: '2026-10-26',
-    skills: [{
-      id: 'trip-planner',
-      name: '出行规划',
-      description: '浏览器冒烟用的可安装技能。',
-      preview: '这是索引摘要，查看完整说明才下载文件。',
-      version: '1.0.0',
-      author: 'e2e',
-      category: '测试',
-      allowedTools: ['web_search', 'send_message'],
-      triggers: ['规划行程'],
-      files: Object.fromEntries(Object.entries(hashes).map(([name, sha256]) => [name, { path: `/files/${name}`, sha256, bytes: Buffer.byteLength(texts[name]) }]))
-    }]
+    skills: [baseEntry, ...Array.from({ length: 14 }, (_, index) => ({
+      ...baseEntry,
+      id: `demo-${String(index + 1).padStart(2, '0')}`,
+      name: `示例技能 ${String(index + 1).padStart(2, '0')}`,
+      category: index % 2 ? '效率' : '生活'
+    }))]
   };
   const server = http.createServer((req, res) => {
     if (req.url === '/index.json') {

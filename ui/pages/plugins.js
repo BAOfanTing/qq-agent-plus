@@ -5,7 +5,6 @@
 //   · 放进设置里时框架会给每个分区追加一条 sticky 保存条，于是得写一句"不用点下面那个按钮"
 //     去解释它 —— 用文案解释布局矛盾，是布局错了的信号。
 // 因此这里也**不参与** saveConfig 的键收集（越界检查见 render-test 的"保存分支"用例）。
-//
 // 版式照参照（Obsidian 的社区插件目录、VS Code 市场、Raycast 商店，都是暗色、都在应用内）量着做：
 //   · **市场就是这一页**：三个面用页签切换（目录 / 已装 / 手动安装），目录是默认面 ——
 //     原来"已装台账"压在目录上面，等于让人先看管理再看市场，两样都不像；
@@ -15,6 +14,7 @@
 //     不再有一整条页脚；状态与风险标记留在卡面，动作跟在名字后面。
 import { api } from '../core/api.js';
 import { $, esc } from '../core/dom.js';
+import { PLUGIN_PAGE_SIZE, pluginPaginationHtml } from './plugin-pagination.js';
 import { askForConfirmation } from '../core/dom-util.js';
 import { iconSvg } from '../core/icons.js';
 // README 是作者写的 markdown：与 Release 说明共用同一条"先整体转义、再换少量样式"的通路
@@ -25,7 +25,6 @@ import {
   toggleWriteSwitch, decidePendingApproval, clearPluginSecretField, probePlugin,
   startQrLogin, pollQrOnce, setSettingsStatus, stopQrPoll
 } from './plugin-settings.js';
-
 /** 全局待批红点：侧栏「插件」按钮上的未批请求计数（跨插件汇总，审批是全局状态）。 */
 async function refreshPendingBadge() {
   try {
@@ -151,7 +150,7 @@ function compareVersion(a, b) {
 }
 
 /** 列表筛选状态（搜索词 + 标签 + 排序 + 视图 + 范围）：纯前端，不动索引请求。 */
-const pluginFilter = { q: '', tag: '', sort: 'updated', onlyInstalled: false, view: 'grid', range: 'all' };
+const pluginFilter = { q: '', tag: '', sort: 'updated', onlyInstalled: false, view: 'grid', range: 'all', page: 1, filterKey: '' };
 /** 当前页签（目录 / 已装 / 手动安装） */
 let pluginPane = 'catalog';
 /** 详情页当前打开的插件 id（空 = 看目录）。市场要有"点进去看清楚再装"这一步。 */
@@ -1078,6 +1077,18 @@ function renderIndex(index, installed) {
       .some((field) => String(field || '').toLowerCase().includes(needle));
   });
   const list = sortMarketList(filtered, pluginFilter.sort);
+  const filterKey = JSON.stringify([
+    pluginFilter.q, pluginFilter.tag, pluginFilter.sort, pluginFilter.onlyInstalled,
+    pluginFilter.view, pluginFilter.range, pluginFilter.category, pluginFilter.hideRevoked
+  ]);
+  if (pluginFilter.filterKey !== filterKey) {
+    pluginFilter.filterKey = filterKey;
+    pluginFilter.page = 1;
+  }
+  const totalPages = Math.max(1, Math.ceil(list.length / PLUGIN_PAGE_SIZE));
+  const page = Math.min(Math.max(1, Number(pluginFilter.page) || 1), totalPages);
+  pluginFilter.page = page;
+  const pageList = list.slice((page - 1) * PLUGIN_PAGE_SIZE, page * PLUGIN_PAGE_SIZE);
 
   if (!all.length && !skipped.length) {
     box.className = '';
@@ -1097,7 +1108,7 @@ function renderIndex(index, installed) {
     return;
   }
   const have = installedIds;
-  box.innerHTML = list.map((item) => {
+  box.innerHTML = pageList.map((item) => {
     const own = (installed?.plugins || []).find((row) => row.id === item.id);
     const isInstalled = have.has(item.id);
     let action = '';
@@ -1143,7 +1154,7 @@ function renderIndex(index, installed) {
           ${item.updatedAt ? `<span class="pb-item">${iconSvg('clock', { size: 13 })}${esc(relativeTime(item.updatedAt))}</span>` : ''}
         </div>
       </article>`;
-  }).join('') + skippedLine(skipped);
+  }).join('') + pluginPaginationHtml(page, totalPages, list.length) + skippedLine(skipped);
 }
 
 /**
@@ -1551,6 +1562,16 @@ function bindPluginsSection() {
         closePluginDetail();
         return;
       }
+      const pageBtn = event.target?.closest?.('[data-plugin-page]');
+      if (pageBtn && $('#plugins-page')) {
+        const totalPages = Math.max(1, Number(pageBtn.closest('.plugin-pagination')?.dataset.pages) || 1);
+        const value = pageBtn.dataset.pluginPage;
+        if (value === 'prev') pluginFilter.page = Math.max(1, (pluginFilter.page || 1) - 1);
+        else if (value === 'next') pluginFilter.page = Math.min(totalPages, (pluginFilter.page || 1) + 1);
+        else pluginFilter.page = Math.max(1, Number(value) || 1);
+        safeRenderIndex();
+        return;
+      }
       if (tagChip && $('#plugins-page')) {
         const next = tagChip.dataset.pluginTag || '';
         pluginFilter.tag = pluginFilter.tag === next ? '' : next;
@@ -1638,6 +1659,15 @@ function bindPluginsSection() {
       return;
     }
     if (!$('#plugins-page')) return;   // 只在插件页生效
+    if (button.dataset.pluginPage) {
+      const value = button.dataset.pluginPage;
+      const totalPages = Math.max(1, Number(button.closest('.plugin-pagination')?.dataset.pages) || 1);
+      if (value === 'prev') pluginFilter.page = Math.max(1, (pluginFilter.page || 1) - 1);
+      else if (value === 'next') pluginFilter.page = Math.min(totalPages, (pluginFilter.page || 1) + 1);
+      else pluginFilter.page = Math.max(1, Number(value) || 1);
+      safeRenderIndex();
+      return;
+    }
     const action = button.dataset.pluginAction;
     const id = button.dataset.pluginId || '';
     if (action === 'uninstall') {
