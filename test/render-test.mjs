@@ -1978,7 +1978,9 @@ try {
     const at = appSrc.indexOf(`addEventListener('${name}'`);
     return at >= 0 && appSrc.slice(at, at + 900).includes('assetWriteInFlight');
   };
-  const guardPins = wrapCount >= 5 && wrapCount === finishCount
+  // 批量表情维护会以单个在途窗口包住多次逐项写入，不存在逐个 finishAssetMutation；
+  // 允许这个额外的封装点，其余每个普通保存点仍必须一一配对。
+  const guardPins = wrapCount >= 5 && wrapCount >= finishCount && wrapCount <= finishCount + 1
     && featuresSrc.includes("const inFlight = { kind, id: String(entry.id ?? entry.userId ?? '') };")
     && featuresSrc.includes('state.assetDeleteInFlight = inFlight;')
     && featuresSrc.includes('if (state.assetDeleteInFlight === inFlight) state.assetDeleteInFlight = null;')
@@ -1986,6 +1988,16 @@ try {
   guardPins ? pass++ : fail++;
   console.log('  ' + (guardPins ? 'OK   ' : 'FAIL ')
     + `写入/删除在途守卫的源码约定保持（保存点包裹 ${wrapCount}/${finishCount}）`);
+
+  const batchPins = featuresSrc.includes('unzipStickerImages(file)')
+    && featuresSrc.includes('new DecompressionStream(\'deflate-raw\')')
+    && featuresSrc.includes('id="sticker-batch-progress"')
+    && featuresSrc.includes('id="asset-sticker-bulk-analyze"')
+    && featuresSrc.includes('id="asset-sticker-bulk-delete"')
+    && featuresSrc.includes("'/api/assets/stickers/analyze'")
+    && fs.readFileSync(path.join(ROOT, 'src', 'console', 'app.js'), 'utf8').includes('if (body.stickerId)');
+  batchPins ? pass++ : fail++;
+  console.log('  ' + (batchPins ? 'OK   ' : 'FAIL ') + '表情包 ZIP 导入、多选批量操作与进度接口存在');
 
   // 滑条填充色不能靠 background transition 动画（2026-10-02 用户反馈"一卡一卡"）：
   // 线性渐变之间无法插值，浏览器会在过渡结束才整段切换 —— 拖动时填充追不上滑块、
