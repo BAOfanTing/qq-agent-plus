@@ -24,7 +24,8 @@ const skillsState = {
   marketQuery: '',
   marketPreview: null,
   marketPreviewId: '',
-  marketPreviewError: ''
+  marketPreviewError: '',
+  marketBusyId: ''
 };
 
 function skillsChatLabel(key) {
@@ -166,13 +167,13 @@ function skillsMarketInstallLabel(entry) {
 function skillsMarketCard(entry) {
   const tools = (entry.allowedTools || []).length;
   const stateText = entry.builtin ? '内置技能' : entry.installed ? (entry.updateAvailable ? '有更新' : '已安装') : '可安装';
-  return `<article class="skills-market-card ${entry.installed ? 'is-installed' : ''}">
+  return `<article class="skills-market-card ${entry.installed ? 'is-installed' : ''} ${skillsState.marketPreviewId === entry.id ? 'is-previewing' : ''}">
     <div class="skills-market-card-top"><span class="skill-avatar">${iconSvg('sparkles', { size: 16 })}</span><div><b>${esc(entry.name)}</b><small>${esc(entry.author || '未署名')} · ${esc(entry.category || '其他')}</small></div><span class="skills-market-badge">${esc(stateText)}</span></div>
     <p>${esc(entry.description || '（没有说明）')}</p>
     <div class="skills-market-meta"><span>v${esc(entry.version)}</span><span>${tools} 个工具</span><span class="skills-market-hash" title="${esc(entry.sha256)}">${esc(String(entry.sha256 || '').slice(0, 10))}</span></div>
     <div class="skills-market-actions">
       <button type="button" class="btn btn-small" data-market-open="${esc(entry.id)}">查看</button>
-      <button type="button" class="btn btn-small ${entry.installed ? '' : 'btn-primary'}" data-market-install="${esc(entry.id)}" ${entry.builtin ? 'disabled' : ''}>${skillsMarketInstallLabel(entry)}</button>
+      <button type="button" class="btn btn-small ${entry.installed ? '' : 'btn-primary'}" data-market-install="${esc(entry.id)}" ${entry.builtin || skillsState.marketBusyId ? 'disabled' : ''}>${skillsState.marketBusyId === entry.id ? '安装中…' : skillsMarketInstallLabel(entry)}</button>
     </div>
   </article>`;
 }
@@ -186,7 +187,7 @@ function skillsMarketPreviewHtml() {
   const tools = (preview.manifest.allowedTools || []).map((tool) => `<span class="skills-chip">${esc(tool)}</span>`).join('');
   const homepage = preview.entry.homepage ? `<a class="skills-market-link" href="${esc(preview.entry.homepage)}" target="_blank" rel="noopener noreferrer">主页</a>` : '';
   return `<section class="skills-market-preview">
-    <div class="skills-market-preview-head"><div><span class="skills-eyebrow">市场详情 · ${esc(preview.entry.id)}</span><h3>${esc(preview.manifest.name)} <span class="skills-version">v${esc(preview.manifest.version)}</span></h3><p>${esc(preview.manifest.description || '')}</p></div><div class="skills-market-actions">${homepage}<button type="button" class="btn btn-small btn-primary" data-market-install="${esc(preview.entry.id)}" ${entry.builtin ? 'disabled' : ''}>${skillsMarketInstallLabel(entry)}</button>${entry.installed && entry.installedSource === 'user' ? `<button type="button" class="btn btn-small btn-danger" data-market-uninstall="${esc(preview.entry.id)}">卸载</button>` : ''}</div></div>
+    <div class="skills-market-preview-head"><div><span class="skills-eyebrow">市场详情 · ${esc(preview.entry.id)}</span><h3>${esc(preview.manifest.name)} <span class="skills-version">v${esc(preview.manifest.version)}</span></h3><p>${esc(preview.manifest.description || '')}</p></div><div class="skills-market-actions">${homepage}<button type="button" class="btn btn-small btn-primary" data-market-install="${esc(preview.entry.id)}" ${entry.builtin || skillsState.marketBusyId ? 'disabled' : ''}>${skillsState.marketBusyId === preview.entry.id ? '安装中…' : skillsMarketInstallLabel(entry)}</button>${entry.installed && entry.installedSource === 'user' ? `<button type="button" class="btn btn-small btn-danger" data-market-uninstall="${esc(preview.entry.id)}">卸载</button>` : ''}<button type="button" class="btn btn-small" data-market-close aria-label="关闭预览">关闭</button></div></div>
     <div class="skills-detail-grid"><div class="skills-detail-block"><h4>允许工具</h4><div class="skills-chips">${tools || '<span class="skills-chip is-soft">仅 finish</span>'}</div></div><div class="skills-detail-block"><h4>文件与校验</h4><p class="skills-muted">${Object.entries(preview.entry.files).map(([name, meta]) => `${esc(name)} · ${Number(meta.bytes) || 0}B`).join('<br>')}</p></div><div class="skills-detail-block"><h4>来源</h4><p class="skills-muted">${esc(preview.entry.author || '未署名')}<br><span class="skills-market-hash">${esc(String(preview.entry.sha256 || '').slice(0, 16))}</span></p></div></div>
     <section class="skills-doc-block"><h4>安装前预览（SKILL.md）</h4><pre class="skills-doc">${esc(preview.instructions || '（没有正文）')}</pre></section>
   </section>`;
@@ -195,6 +196,8 @@ function skillsMarketPreviewHtml() {
 function skillsRenderMarket() {
   const box = $('#skills-market-view');
   if (!box) return;
+  const count = $('#skills-market-count');
+  if (count) count.textContent = skillsState.market ? String(skillsState.market.skills.length) : '';
   if (skillsState.marketLoading && !skillsState.market) {
     box.innerHTML = '<div class="skills-empty">正在读取技能索引…</div>';
     return;
@@ -213,8 +216,10 @@ function skillsRenderMarket() {
   box.innerHTML = `<div class="skills-market-head"><div><h3>技能市场</h3><p>${esc(index.name || '技能索引')}${index.stale ? ' · 使用本地缓存' : ''}${when ? ` · ${esc(when)}` : ''}</p></div><div class="skills-market-actions"><input type="search" id="skills-market-search" value="${esc(skillsState.marketQuery)}" placeholder="搜索技能、作者或分类" aria-label="搜索技能市场" /><button type="button" class="btn btn-small" data-market-refresh>${iconSvg('refresh', { size: 14 })}刷新索引</button></div></div>
     ${index.stale && index.error ? `<div class="skills-market-note">索引暂时不可用，正在使用缓存：${esc(index.error)}</div>` : ''}
     ${skillsState.marketError ? `<div class="skills-market-note">${esc(skillsState.marketError)}</div>` : ''}
-    <div class="skills-market-grid">${list.map(skillsMarketCard).join('') || '<div class="skills-empty">没有匹配的技能。</div>'}</div>
-    ${skillsMarketPreviewHtml()}`;
+    <div class="skills-market-body">
+      <div class="skills-market-grid">${list.map(skillsMarketCard).join('') || '<div class="skills-empty">没有匹配的技能。</div>'}</div>
+      ${skillsMarketPreviewHtml() || '<aside class="skills-market-placeholder"><span class="skills-eyebrow">安装前预览</span><p>选择左侧技能，查看 SKILL.md、允许工具、文件哈希与来源。</p></aside>'}
+    </div>`;
 }
 
 async function skillsLoadMarket(force = false) {
@@ -244,7 +249,14 @@ async function skillsLoadMarketPreview(id) {
   } catch (error) {
     if (skillsState.marketPreviewId === id) skillsState.marketPreviewError = String(error?.message || error);
   } finally {
-    if (skillsState.marketPreviewId === id) skillsRenderMarket();
+    if (skillsState.marketPreviewId === id) {
+      skillsRenderMarket();
+      // 窄屏上预览在卡片下方；点“查看”后把它带到视口内，否则看起来像没反应。
+      requestAnimationFrame(() => {
+        if (window.innerWidth > 720) return;
+        document.querySelector('.skills-market-preview')?.scrollIntoView({ block: 'nearest' });
+      });
+    }
   }
 }
 
@@ -254,6 +266,8 @@ async function skillsInstallMarket(id) {
   const tools = (entry.allowedTools || []).join('、') || '（无额外工具）';
   const ok = await askForConfirmation(`安装技能「${entry.name}」v${entry.version}？允许工具：${tools}。来源：${entry.homepage || entry.author || '未知'}。技能只读 Markdown、不执行代码；安装后可在技能页随时卸载。`);
   if (!ok) return;
+  skillsState.marketBusyId = id;
+  skillsRenderMarket();
   try {
     await api('/api/skills/market/install', {
       method: 'POST',
@@ -267,6 +281,9 @@ async function skillsInstallMarket(id) {
     await skillsLoadMarket(true);
   } catch (error) {
     skillsStatus(`安装失败：${error?.message || error}`, true);
+    skillsRenderMarket();
+  } finally {
+    skillsState.marketBusyId = '';
     skillsRenderMarket();
   }
 }
@@ -298,6 +315,8 @@ function skillsSwitchView(view) {
   const market = $('#skills-market-view');
   if (installed) installed.hidden = skillsState.view !== 'installed';
   if (market) market.hidden = skillsState.view !== 'market';
+  const reload = $('#skills-reload');
+  if (reload) reload.hidden = skillsState.view === 'market';
   document.querySelectorAll('[data-skills-view]').forEach((button) => {
     const on = button.dataset.skillsView === skillsState.view;
     button.classList.toggle('is-on', on);
@@ -438,6 +457,13 @@ function skillsBind(root) {
     if (event.target?.closest?.('[data-market-refresh]')) {
       skillsState.market = null;
       void skillsLoadMarket(true);
+      return;
+    }
+    if (event.target?.closest?.('[data-market-close]')) {
+      skillsState.marketPreview = null;
+      skillsState.marketPreviewId = '';
+      skillsState.marketPreviewError = '';
+      skillsRenderMarket();
       return;
     }
     const marketOpen = event.target?.closest?.('[data-market-open]');
