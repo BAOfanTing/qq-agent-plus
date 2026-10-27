@@ -1,7 +1,7 @@
 // 技能页：只读 Markdown 流程 + 工具白名单。
 // 独立页面，不复用设置页的分区容器；开关和按会话覆盖即时写 /api/skills/state。
 import { api } from '../core/api.js';
-import { $, esc } from '../core/dom.js';
+import { $, $$, esc } from '../core/dom.js';
 import { askForConfirmation } from '../core/dom-util.js';
 import { iconSvg } from '../core/icons.js';
 
@@ -129,9 +129,6 @@ function skillsRenderDetail() {
   const detail = skillsState.detail && skillsState.detail.id === skill.id ? skillsState.detail : skill;
   const on = skillsIsGlobal(skill.id);
   const chatKeys = skillsState.chats.map((chat) => chat.key);
-  const selectedChat = chatKeys.includes(skillsState.selectedChat) ? skillsState.selectedChat : (chatKeys[0] || '');
-  const override = Array.isArray(skillsState.perChat[selectedChat]) ? skillsState.perChat[selectedChat] : null;
-  const checkedInChat = override ? override.includes(skill.id) : on;
   const tools = (skill.allowedTools || []).map((tool) => `<span class="skills-chip">${esc(tool)}</span>`).join('');
   const triggers = (skill.triggers || []).map((trigger) => `<span class="skills-chip is-soft">${esc(trigger)}</span>`).join('');
   box.innerHTML = `${back}
@@ -160,15 +157,14 @@ function skillsRenderDetail() {
     </section>
     <section class="skills-chat-block">
       <h4>按会话启用</h4>
-      <p class="skills-muted">全局=${on ? '启用' : '停用'}；下面可以给单个群/私聊覆盖。</p>
+      <p class="skills-muted">全局=${on ? '启用' : '停用'}。下面勾选多个群/私聊后一次保存；勾选状态和全局相同就回退为“跟随全局”，不同才建立覆盖。</p>
       ${chatKeys.length ? `
-        <div class="skills-chat-controls">
-          <select id="skill-chat-select" aria-label="选择会话">${chatKeys.map((key) => `<option value="${esc(key)}" ${key === selectedChat ? 'selected' : ''}>${esc(skillsChatLabel(key))}</option>`).join('')}</select>
-          <label class="checkbox-row"><input type="checkbox" id="skill-chat-enabled" ${checkedInChat ? 'checked' : ''} /> <span>这个会话启用</span></label>
-          <button class="btn btn-small btn-primary" id="skill-chat-save" type="button">保存这个会话</button>
-          <button class="btn btn-small" id="skill-chat-follow" type="button" ${override ? '' : 'disabled'}>恢复跟随全局</button>
-        </div>
-        <p class="skills-muted">${override ? '这个会话有单独覆盖。' : '当前跟随全局；勾选并保存后为这个会话建立覆盖。'}</p>` : '<p class="skills-muted">还没有可配置的群或私聊。</p>'}
+        <div class="skills-chat-tools"><button type="button" class="btn btn-small" data-skill-chat-all="1">全选</button><button type="button" class="btn btn-small" data-skill-chat-all="0">全不选</button><button type="button" class="btn btn-small btn-primary" id="skill-chat-save-all">保存勾选</button></div>
+        <div class="skills-chat-list">${chatKeys.map((key) => {
+          const ids = Array.isArray(skillsState.perChat[key]) ? skillsState.perChat[key] : null;
+          const checked = ids ? ids.includes(skill.id) : on;
+          return `<label class="skills-chat-row"><input type="checkbox" data-skill-chat="${esc(key)}" ${checked ? 'checked' : ''} /><span>${esc(skillsChatLabel(key))}</span><em>${ids ? '覆盖' : '跟随全局'}</em></label>`;
+        }).join('')}</div>` : '<p class="skills-muted">还没有可配置的群或私聊。</p>'}
     </section>`;
 }
 
@@ -213,7 +209,6 @@ function skillsMarketPreviewHtml() {
     <div class="skills-market-preview-head"><div><span class="skills-eyebrow">市场详情 · ${esc(preview.entry.id)}</span><h3>${esc(preview.manifest.name)} <span class="skills-version">v${esc(preview.manifest.version)}</span></h3><p>${esc(preview.manifest.description || '')}</p></div><div class="skills-market-actions">${homepage}<button type="button" class="btn btn-small btn-primary" data-market-install="${esc(preview.entry.id)}" ${entry.builtin || skillsState.marketBusyId ? 'disabled' : ''}>${skillsState.marketBusyId === preview.entry.id ? '安装中…' : skillsMarketInstallLabel(entry)}</button>${entry.installed && entry.installedSource === 'user' ? `<button type="button" class="btn btn-small btn-danger" data-market-uninstall="${esc(preview.entry.id)}">卸载</button>` : ''}</div></div>
     <div class="skills-detail-grid"><div class="skills-detail-block"><h4>允许工具</h4><div class="skills-chips">${tools || '<span class="skills-chip is-soft">仅 finish</span>'}</div></div><div class="skills-detail-block"><h4>文件与校验</h4><p class="skills-muted">${Object.entries(preview.entry.files).map(([name, meta]) => `${esc(name)} · ${Number(meta.bytes) || 0}B`).join('<br>')}</p></div><div class="skills-detail-block"><h4>来源</h4><p class="skills-muted">${esc(preview.entry.author || '未署名')}<br><span class="skills-market-hash">${esc(String(preview.entry.sha256 || '').slice(0, 16))}</span></p></div></div>
     <section class="skills-doc-block"><h4>安装前预览（SKILL.md）</h4><pre class="skills-doc">${esc(preview.instructions || '（索引没有提供摘要，加载完整说明后可查看）')}</pre></section>
-    ${preview.previewOnly ? `<div class="skills-market-preview-more"><span class="skills-muted">以上是索引里的摘要；安装时会校验完整文件。</span><button type="button" class="btn btn-small" data-market-full="${esc(preview.entry.id)}">加载完整 SKILL.md</button></div>` : ''}
   </section>`;
 }
 
@@ -334,7 +329,7 @@ async function skillsLoadMarket(force = false) {
   }
 }
 
-async function skillsLoadMarketPreview(id, { full = false } = {}) {
+async function skillsLoadMarketPreview(id, { full = true } = {}) {
   skillsState.marketDetailId = id;
   skillsState.marketPreviewId = id;
   skillsState.marketPreview = null;
@@ -532,10 +527,6 @@ function skillsBind(root) {
       void skillsSaveState({ enabledIds: [...set] });
       return;
     }
-    if (event.target?.id === 'skill-chat-select') {
-      skillsState.selectedChat = event.target.value;
-      skillsRenderDetail();
-    }
     if (event.target?.id === 'skills-market-sort') {
       skillsState.marketSort = event.target.value || 'name';
       skillsState.marketPage = 1;
@@ -627,8 +618,6 @@ function skillsBind(root) {
     if (marketUninstall) { void skillsUninstallMarket(marketUninstall.dataset.marketUninstall); return; }
     const marketOpen = event.target?.closest?.('[data-market-open]');
     if (marketOpen) { void skillsLoadMarketPreview(marketOpen.dataset.marketOpen); return; }
-    const marketFull = event.target?.closest?.('[data-market-full]');
-    if (marketFull) { void skillsLoadMarketPreview(marketFull.dataset.marketFull, { full: true }); return; }
     if (event.target?.closest?.('[data-skill-back]')) {
       skillsState.selectedId = '';
       skillsState.detail = null;
@@ -662,20 +651,29 @@ function skillsBind(root) {
       }
       return;
     }
-    if (event.target?.closest?.('#skill-chat-save')) {
-      const chatKey = $('#skill-chat-select')?.value || skillsState.selectedChat;
-      if (!chatKey) return;
-      const enabled = $('#skill-chat-enabled')?.checked === true;
-      const current = Array.isArray(skillsState.perChat[chatKey]) ? [...skillsState.perChat[chatKey]] : [...skillsState.enabledIds];
-      const next = enabled ? [...new Set([...current, skillsState.selectedId])] : current.filter((id) => id !== skillsState.selectedId);
-      await skillsSaveState({ perChat: { ...skillsState.perChat, [chatKey]: next } });
+    if (event.target?.closest?.('[data-skill-chat-all]')) {
+      const want = event.target.closest('[data-skill-chat-all]').dataset.skillChatAll === '1';
+      $$('[data-skill-chat]').forEach((box) => { box.checked = want; });
       return;
     }
-    if (event.target?.closest?.('#skill-chat-follow')) {
-      const chatKey = $('#skill-chat-select')?.value || skillsState.selectedChat;
-      if (!chatKey) return;
+    if (event.target?.closest?.('#skill-chat-save-all')) {
+      const on = skillsIsGlobal(skillsState.selectedId);
       const perChat = { ...skillsState.perChat };
-      delete perChat[chatKey];
+      for (const box of $$('[data-skill-chat]')) {
+        const key = box.dataset.skillChat;
+        const desired = box.checked;
+        const current = Array.isArray(perChat[key]) ? [...perChat[key]] : null;
+        if (desired === on) {
+          if (!current) continue;
+          const next = current.filter((id) => id !== skillsState.selectedId);
+          if (next.length) perChat[key] = next; else delete perChat[key];
+          continue;
+        }
+        const next = current || [...skillsState.enabledIds];
+        if (desired && !next.includes(skillsState.selectedId)) next.push(skillsState.selectedId);
+        if (desired) perChat[key] = next;
+        else perChat[key] = next.filter((id) => id !== skillsState.selectedId);
+      }
       await skillsSaveState({ perChat });
     }
   });

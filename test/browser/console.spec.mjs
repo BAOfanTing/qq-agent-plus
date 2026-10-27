@@ -99,8 +99,6 @@ test('技能市场：预览、安装、已安装列表与卸载', async ({ page 
   await page.click('[data-market-page="prev"]');
 
   await page.click('[data-market-open="trip-planner"]');
-  await expect(page.locator('.skills-market-preview')).toContainText('这是索引摘要');
-  await page.click('[data-market-full="trip-planner"]');
   await expect(page.locator('.skills-market-preview')).toContainText('目标：');
   await page.click('[data-market-install="trip-planner"]');
   await page.click('[data-confirm-accept]');

@@ -6651,3 +6651,10 @@ html[data-glass] .plugin-related-item {
 }
 .skills-detail.is-full { max-width: 1000px; max-height: none; margin: 0 auto; padding: 0; overflow: visible; border: 0; background: transparent; box-shadow: none; }
 .skills-detail-back { margin-bottom: 12px; }
+.skills-chat-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+.skills-chat-list { max-height: 280px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-2); padding: 4px 8px; }
+.skills-chat-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); font-size: var(--fs-sm); cursor: pointer; }
+.skills-chat-row:last-child { border-bottom: 0; }
+.skills-chat-row input[type='checkbox'] { accent-color: var(--accent); flex: 0 0 auto; }
+.skills-chat-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skills-chat-row em { flex: 0 0 auto; color: var(--faint); font-size: var(--fs-2xs); font-style: normal; }
