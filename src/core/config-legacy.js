@@ -856,7 +856,7 @@ export const DEFAULT_CONFIG = {
     enabledIds: [],
     perChat: {},
     // 官方技能索引；留空 = 不显示市场。索引只提供元数据与文件哈希，安装时逐文件校验。
-    indexUrl: 'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/skills/market.json',
+    indexUrl: 'https://raw.githubusercontent.com/sakurawwwxh/qq-agent-skills/main/index.json',
     // 自建/局域网索引只在管理员显式打开时允许；默认仍然只访问公网地址。
     allowPrivateIndex: false
   },

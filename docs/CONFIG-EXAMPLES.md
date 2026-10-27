@@ -388,7 +388,7 @@
     "perChat": {
       "group:123456": ["video-digest"]
     },
-    "indexUrl": "https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/skills/market.json",
+    "indexUrl": "https://raw.githubusercontent.com/sakurawwwxh/qq-agent-skills/main/index.json",
     "allowPrivateIndex": false
   }
 }
@@ -398,7 +398,7 @@
 - `enabledIds`：全局启用的技能 id。
 - `perChat`：按会话覆盖；键是 `group:<群号>` / `private:<QQ>`，值是该会话可用的技能 id 列表。
 - 技能是只读 Markdown + 工具白名单，不能执行代码；给技能的工具只能**收窄**本轮工具，不能新增。
-- 控制台顶部「技能」页可以开关、按会话覆盖、重新扫描目录，并在「技能市场」子页从索引安装/卸载用户技能；格式见 [SKILLS.md](SKILLS.md)。
+- 控制台顶部「技能」页可以开关、按会话覆盖、重新扫描目录，并在「技能市场」子页从官方索引 `qq-agent-skills` 安装/卸载用户技能；格式见 [SKILLS.md](SKILLS.md)。
 - `indexUrl`：技能市场索引地址；留空 = 不显示市场。`allowPrivateIndex` 只给自建/局域网索引用，默认 `false`（市场只访问公网地址）。
 
 ## livingMemory：长期向量记忆（实验性，默认关闭）

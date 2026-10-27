@@ -4,6 +4,10 @@
 宿主只读取这里的 `skill.json` 与 `SKILL.md`，模型在 `skill_use` 后按技能流程做事，本轮可用
 工具会被收窄到 `allowedTools`。
 
+
+> 官方市场索引现在独立在 [qq-agent-skills](https://github.com/sakurawwwxh/qq-agent-skills)；
+> 这里的 `skills/market.json` 只作为本地示例/离线校验镜像保留。
+
 ## 目录
 
 ```text

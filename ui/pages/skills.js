@@ -733,7 +733,7 @@ function loadSkillsPage() {
             <li>通过提交表单或 PR 提交到官方索引。</li>
             <li>维护者运行 <code>npm run skill:check</code> 后合并。</li>
           </ol>
-          <div class="skills-market-actions"><a class="btn btn-primary" href="https://github.com/sakurawwwxh/qq-agent-plus/issues/new?template=skill-submission.yml" target="_blank" rel="noopener noreferrer">打开技能提交表单</a><a class="btn" href="https://github.com/sakurawwwxh/qq-agent-plus/blob/main/docs/SKILL-SUBMISSION.md" target="_blank" rel="noopener noreferrer">阅读提交指南</a></div>
+          <div class="skills-market-actions"><a class="btn btn-primary" href="https://github.com/sakurawwwxh/qq-agent-skills/issues/new?template=skill-submission.yml" target="_blank" rel="noopener noreferrer">打开技能提交表单</a><a class="btn" href="https://github.com/sakurawwwxh/qq-agent-skills/blob/main/README.md" target="_blank" rel="noopener noreferrer">阅读提交指南</a></div>
         </div>
       </div>`;
     box.dataset.ready = '1';

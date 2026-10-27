@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 把一个技能目录打成官方索引条目：校验 manifest、算 sha256、生成可粘贴到
-// skills/market.json 的 JSON。它不联网、不上传；创作者把文件托管到公开地址后，
+// 官方索引 qq-agent-skills 的 JSON。它不联网、不上传；创作者把文件托管到公开地址后，
 // 用这里生成的 url+sha256 提 PR / issue。
 import crypto from 'node:crypto';
 import fs from 'node:fs';

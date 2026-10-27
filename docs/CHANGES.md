@@ -125,7 +125,7 @@ HTML 里的 markdown 星号）。
 - 技能页整体改成与插件市场同构：左侧分面栏（范围/分类）、主区工具栏、插件式卡片网格/列表、整页技能详情与「返回市场」，并新增「提交技能」发布页；已安装改为插件式台账 + 整页详情；移动端分面栏收进「筛选」按钮。
 - 技能详情打开后自动加载完整 SKILL.md，不再需要再点一次「加载完整说明」；已安装技能的按会话启用改成多选清单，可全选/全不选后一次保存，只有与全局状态不同才建立覆盖。
 - 市场卡片只展示索引里的 `preview` 摘要；打开详情时自动读取 manifest 与 SKILL.md 两个文件，安装时才下载全部文件并校验哈希。
-- 补官方市场提交链路：`npm run skill:pack` 生成带 sha256 的索引条目，`.github/ISSUE_TEMPLATE/skill-submission.yml` 接收提交，`npm run skill:check` 在 CI/本地校验；官方索引仍是审核制，不提供匿名上传接口。
+- 补官方市场提交链路：`npm run skill:pack` 生成带 sha256 的索引条目，[qq-agent-skills](https://github.com/sakurawwwxh/qq-agent-skills) 接收提交，`npm run skill:check` 在 CI/本地校验；官方索引仍是审核制，不提供匿名上传接口。
 - 修正技能页子页签被 `plugins-pane` 的居中规则挤到内容左侧的问题，并与头部/KPI 对齐；切子页时重置滚动位置。
 - 随仓库提供两个示例技能：`examples/skills/trip-planner`、`examples/skills/recipe-helper`。
 

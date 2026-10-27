@@ -1,7 +1,7 @@
 # 提交技能到官方市场
 
 官方技能市场是**审核制索引**：创作者把技能文件托管到公开地址，提交索引条目；维护者校验后合并到
-[`skills/market.json`](../skills/market.json)。控制台不提供匿名上传接口 —— 自托管控制台可能直接暴露在公网，
+[`qq-agent-skills`](https://github.com/sakurawwwxh/qq-agent-skills) 的 `index.json`。控制台不提供匿名上传接口 —— 自托管控制台可能直接暴露在公网，
 开放任意文件写入等于把提示词和工具白名单交给陌生人。
 
 普通用户不需要做任何事：在「技能 → 技能市场」点刷新，就能看到审核通过的技能并一键安装。
@@ -61,17 +61,17 @@ node scripts/skill-pack.mjs ./my-skill \
 
 二选一：
 
-- 打开 [技能提交 issue](https://github.com/sakurawwwxh/qq-agent-plus/issues/new?template=skill-submission.yml)，
+- 打开 [技能提交 issue](https://github.com/sakurawwwxh/qq-agent-skills/issues/new?template=skill-submission.yml)，
   贴上脚本输出；
-- 或直接给 `skills/market.json` 提 PR，追加条目。
+- 或直接给 [qq-agent-skills](https://github.com/sakurawwwxh/qq-agent-skills) 提 PR，在 `index.json` 追加条目。
 
-维护者会运行：
+维护者会在索引仓库运行：
 
 ```bash
-npm run skill:check
+node scripts/check.mjs
 ```
 
-它校验索引字段、semver、文件哈希/大小，以及本地示例文件与 manifest 是否一致。通过后合并，市场刷新即可见。
+它校验索引字段、semver、文件哈希/大小，以及本地文件与 manifest 是否一致。通过后合并，市场刷新即可见。
 
 ## 审核标准
 

@@ -66,7 +66,7 @@ skills/<id>/
 
 控制台「技能」页的「技能市场」子页从索引读取可安装技能：
 
-- 索引是 JSON（默认 `https://raw.githubusercontent.com/sakurawwwxh/qq-agent-plus/main/skills/market.json`），
+- 索引是 JSON（官方仓库 `sakurawwwxh/qq-agent-skills`，默认 `https://raw.githubusercontent.com/sakurawwwxh/qq-agent-skills/main/index.json`），
   条目给出 `id`、名称、版本、作者、描述、允许工具、触发词和文件列表；
 - 每个文件必须带 `sha256`，安装时逐文件下载校验；单文件 ≤128KB、整包 ≤512KB、最多 8 个文件；
 - 安装先写临时目录，跑同一套 manifest 校验后再换入 `data/skills/<id>/`；失败会回滚；
@@ -76,7 +76,7 @@ skills/<id>/
 
 随仓库提供两个示例：`examples/skills/trip-planner` 与 `examples/skills/recipe-helper`。
 
-创作者向官方市场上架：见 [SKILL-SUBMISSION.md](SKILL-SUBMISSION.md)。`npm run skill:pack` 生成索引条目，`npm run skill:check` 在 CI/本地校验。官方索引是审核制，不提供匿名上传接口。
+创作者向官方市场上架：见 [SKILL-SUBMISSION.md](SKILL-SUBMISSION.md)，提交到 [qq-agent-skills](https://github.com/sakurawwwxh/qq-agent-skills)。`npm run skill:pack` 生成索引条目，`npm run skill:check` 在 CI/本地校验。官方索引是审核制，不提供匿名上传接口。
 
 ## 限制
 
