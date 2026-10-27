@@ -39,9 +39,14 @@ jobs:
       # 与 ci.yml 同步：runner 没有 ffmpeg，缺了会让 GIF 帧条与语音转码的用例静默跳过
       - name: 安装 ffmpeg（GIF 帧条 / 音频转码用例依赖）
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
-          ffmpeg -version | head -n 1
+          # 与 ci.yml 同口径：apt 源偶尔卡死，失败只警告并继续；依赖用例会显式 skip。
+          APT_OPTS=(-o Acquire::ForceIPv4=true -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          if ! timeout 180 sudo apt-get install -y -qq "${APT_OPTS[@]}" ffmpeg; then
+            if ! timeout 240 sudo apt-get update -qq "${APT_OPTS[@]}" || ! timeout 180 sudo apt-get install -y -qq "${APT_OPTS[@]}" ffmpeg; then
+              echo "::warning::ffmpeg 安装失败（apt 源不可达），相关用例将跳过"
+            fi
+          fi
+          ffmpeg -version | head -n 1 || echo "ffmpeg unavailable; dependent tests will be skipped"
       - name: 语法检查（src / scripts / test / ui，递归）
         run: |
           set -e
@@ -79,6 +84,8 @@ jobs:
           for f in "${shells[@]}"; do bash -n "$f"; done
           echo "Shell 语法检查通过（${#shells[@]} 个）"
       - run: node src/ops.js scan --strict
+      - name: 官方技能索引体检
+        run: npm run skill:check
       - run: npm run test:unit
       # 与 ci.yml 同一步：发布闸门也要按更新器 unit 的加固环境（NoNewPrivileges + umask 0077）
       # 把门禁全清单复跑一遍 —— 门禁跑在加固 unit 里，2026-10-10 的事故（加固环境里两条
