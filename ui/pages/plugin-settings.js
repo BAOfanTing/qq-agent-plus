@@ -292,7 +292,7 @@ async function startQrLogin(id) {
       try {
         const r = await api('/api/plugins/call', {
           method: 'POST',
-          body: JSON.stringify({ id, tool: 'login', args: { action: 'poll' } })
+          body: JSON.stringify({ id, tool: 'login', args: { action: 'poll', channel: 'console' } })
         });
         if (gen !== qrPollGen) return;
         const statusNode = blockStatusNode();
@@ -334,7 +334,7 @@ async function pollQrOnce(id) {
   try {
     const r = await api('/api/plugins/call', {
       method: 'POST',
-      body: JSON.stringify({ id, tool: 'login', args: { action: 'poll' } })
+      body: JSON.stringify({ id, tool: 'login', args: { action: 'poll', channel: 'console' } })
     });
     if (r?.ok && r?.state === 'done') {
       stopQrPoll();

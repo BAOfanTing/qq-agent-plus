@@ -17,6 +17,14 @@ const platform = read('ui/pages/platform.js');
 const memory = read('ui/pages/memory.js');
 const extensions = read('ui/pages/settings-extensions.js');
 const format = read('ui/core/format.js');
+const pluginSettings = read('ui/pages/plugin-settings.js');
+
+test('插件控制台扫码轮询：两个 poll 都带 channel=console（issue #21）', () => {
+  const polls = pluginSettings.match(/action: 'poll'/g) || [];
+  const withChannel = pluginSettings.match(/action: 'poll', channel: 'console'/g) || [];
+  assert.equal(polls.length, 2, '控制台应只有两处 poll 调用');
+  assert.equal(withChannel.length, 2, '两处 poll 都必须带 channel=console，否则旧的 poll 判定会把它当成聊天内非管理员');
+});
 
 test('聊天设置：回复纠正 / 拍一拍 / 自主节奏 / 数据保留控件与保存接线', () => {
   for (const id of ['cfg-reply-guard', 'cfg-poke-reply', 'cfg-pacing-enabled',

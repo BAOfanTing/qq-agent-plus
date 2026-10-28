@@ -519,10 +519,14 @@ const tools = {
   // ── 扫码登录（聊天内完成，Cookie 进加密凭据、立即生效） ──
   async login({ action, channel: channelArg } = {}, context = {}) {
     const PASSPORT = 'https://passport.bilibili.com';
-    const channel = String(channelArg || 'chat');
+    // 控制台直调时宿主会带 context.channel='console'；旧版前端只给 start 传了 channel，
+    // poll 没传，曾把控制台自己的轮询误判成"非管理员在群里扫码"（issue #21）。
+    const channel = String(channelArg || context?.channel || 'chat');
     // 聊天内登录/退出只允许管理员：私聊白名单里的普通好友不能把机器人绑到自己账号上，
     // 也不能把管理员的凭据清掉。控制台走已鉴权的 callConsoleTool，不受这条限制。
-    if (channel !== 'console' && action !== 'status' && context?.senderIsOwner !== true) {
+    // poll 只读且不产生凭据（凭据是 B 站确认后随响应回来的），并且 pendingLogin.chatKey
+    // 已限制只能由发起登录的会话查询，因此同样豁免。
+    if (channel !== 'console' && action !== 'status' && action !== 'poll' && context?.senderIsOwner !== true) {
       throw new Error('只有管理员可以扫码登录或退出 B 站；其他人请在控制台操作');
     }
     if (action === 'status') return probeStatus();

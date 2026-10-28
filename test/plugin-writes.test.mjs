@@ -313,6 +313,16 @@ test('控制台直调不能绕过写门：声明 action 的登录工具也拒绝
   );
 });
 
+test('控制台直调带 channel=console，但不伪造 senderIsOwner（issue #21）', async () => {
+  const tools = [{ name: 'login', description: '扫码登录', parameters: { type: 'object', properties: {} } }];
+  const { registry, calls } = makeRegistry({ manifestPatch: { tools } });
+  const result = await registry.callConsoleTool('demo', 'login', { action: 'poll' });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].context, { channel: 'console', chatKey: '' },
+    '控制台调用要带 channel，但不能伪造 senderIsOwner 提权');
+});
+
 test('超时/进程退出：结果未知 → 不退批准与配额，并明确不重试', async () => {
   const failing = makeRegistry({ behavior: { throw: 'request timeout', throwCode: 'E_TIMEOUT' } });
   failing.registry.lastWriteAt.set('demo', 0);

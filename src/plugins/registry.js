@@ -841,7 +841,10 @@ export class PluginRegistry {
     if (!ready || ready.state !== 'running') {
       throw Object.assign(new Error(`插件未在运行（${ready?.lastError || '按需启动失败'}）`), { code: 'E_DOWN' });
     }
-    const result = await ready.callTool(toolName, args ?? {}, { timeoutMs: Number(tool.timeoutMs) || 30000, context: {} });
+    // 明确告诉插件"这次来自已鉴权的控制台"，但**不**伪造 senderIsOwner：
+    // 控制台直调只等于"管理员本人点了按钮"，不等于聊天内管理员身份；需要更强语义的插件
+    // 应按 channel 判断。写动作仍由上面的 tool.action 硬拦截（issue #21）。
+    const result = await ready.callTool(toolName, args ?? {}, { timeoutMs: Number(tool.timeoutMs) || 30000, context: { channel: 'console', chatKey: '' } });
     return result && typeof result === 'object' ? result : {};
   }
 
