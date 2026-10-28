@@ -304,3 +304,56 @@ test('候选入库：同一 UP 与同一标签在队列里也限流', async (t) 
   for (const item of state.candidates) byUp.set(item.upMid, (byUp.get(item.upMid) || 0) + 1);
   for (const count of byUp.values()) assert.ok(count <= 3);
 });
+
+test('share_bilibili：先发封面再发标题链接，并把候选标记为 shared', async (t) => {
+  const dir = tempDir(t);
+  const list = [{
+    bvid: 'BV1share', title: '深海潜水第一视角', desc: '海底',
+    tname: '户外', duration: 600, pubdate: NOW / 1000,
+    owner: { name: '潜水员', mid: 11 }, stat: { view: '1.2万' },
+    pic: '//i0.hdslb.com/bfs/archive/cover.jpg'
+  }];
+  const manager = new LifeFeedManager({
+    dataDir: dir,
+    store: null,
+    config: () => ({ lifeFeed: { enabled: true } }),
+    fetchImpl: fakeFetch([
+      ['popular', { code: 0, data: { list } }],
+      ['search/type', { code: 0, data: { result: [] } }]
+    ]),
+    now: () => NOW
+  });
+  await manager.forageNow();
+  const candidate = manager.status().candidates[0];
+  assert.equal(candidate.cover, 'https://i0.hdslb.com/bfs/archive/cover.jpg');
+  assert.equal(candidate.play, 12000, '中文播放量要能解析');
+
+  const images = [];
+  const sent = [];
+  const ctx = {
+    chatKey: 'group:1',
+    session: { id: 's1', leaseId: 'lease', sent: [] },
+    getLifeFeed: () => manager,
+    sender: {
+      sendImage: async (_chatKey, image) => { images.push(image); return { message_id: 1 }; },
+      sendTextBatch: async (_chatKey, messages) => {
+        sent.push(...messages);
+        return { sent: messages.map((text, i) => ({ text, at: Date.now(), messageId: i + 1 })), failed: [] };
+      }
+    },
+    emit: () => {}
+  };
+  const { buildToolDefs, executeTool } = await import('../src/tools/tools.js');
+  const tool = buildToolDefs().find((item) => item.name === 'share_bilibili');
+  assert.ok(tool, '要有 share_bilibili 工具');
+  const result = await executeTool([tool], ctx, 'share_bilibili', JSON.stringify({ bvid: 'BV1share', comment: '这个潜水视角很稳' }));
+  assert.equal(result.isError, undefined, result.content);
+  assert.equal(images.length, 1);
+  assert.equal(images[0].url, 'https://i0.hdslb.com/bfs/archive/cover.jpg');
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /【B站】深海潜水第一视角/);
+  assert.match(sent[0], /BV1share/);
+  assert.match(sent[0], /这个潜水视角很稳/);
+  assert.equal(ctx.session.sent.length, 1);
+  assert.equal(manager.candidate('BV1share'), null, '分享后应从候选队列移除');
+});

@@ -5689,7 +5689,9 @@ export function createApp({
     if (taken.error) return json(res, 404, { ok: false, error: taken.error });
     const item = taken.item;
     // 不直接发：交给主动发言链路，由模型用自己的语气说，人设/分条/限速/安静时段全部生效。
-    const note = `【系统提醒】可以分享这条 B 站见闻：${item.title}（UP：${item.up}）${item.url}`.slice(0, 600);
+    const note = `【系统提醒】可以分享这条 B 站见闻：${item.title}（UP：${item.up}）${item.url}。`
+      + `请调用 share_bilibili（bvid=${item.id}，comment=你的一句话）发送封面和标题链接，不要用 send_message 重复发链接。`
+      .slice(0, 600);
     orchestrator.wake(chatKey, { manual: true, wakeNote: note }).catch((error) => {
       log(`[life-feed] 手动分享唤醒失败：${error?.message ?? error}`);
     });

@@ -67,6 +67,7 @@ export const EXPERIMENTAL_SAME_ROUND_ACTION_TOOLS = new Set([
   'remind',        // 本地持久化写入
   'group_game',    // 开局/结束：本地状态 + 对外公告
   'send_voice',    // 对外发送
+  'share_bilibili', // 对外发送封面+标题链接，并回写生活层队列
   'set_group_card', // 对外写：改自己的群名片
   'set_group_ban',  // 对外写：禁言/解禁
   'kick_group_member', // 对外写：移出群

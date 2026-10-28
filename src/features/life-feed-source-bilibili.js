@@ -20,6 +20,15 @@ function parseDuration(value) {
   return parts.reduce((total, part) => total * 60 + part, 0);
 }
 
+function parseCount(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.round(value));
+  const text = String(value || '').replace(/,/g, '').trim();
+  const match = /^(\d+(?:\.\d+)?)\s*(万|亿)?/.exec(text);
+  if (!match) return 0;
+  const scale = match[2] === '亿' ? 100000000 : (match[2] === '万' ? 10000 : 1);
+  return Math.max(0, Math.round(Number(match[1]) * scale));
+}
+
 function normalizeVideo(raw, source) {
   const id = String(raw?.bvid || '').trim();
   if (!id) return null;
@@ -27,6 +36,7 @@ function normalizeVideo(raw, source) {
     raw?.tname,
     ...(String(raw?.tag || '').split(','))
   ].map((tag) => stripTags(tag)).filter(Boolean);
+  const pic = String(raw?.pic || raw?.cover || raw?.pic_url || '').trim();
   return {
     source: 'bilibili',
     via: source,
@@ -36,9 +46,10 @@ function normalizeVideo(raw, source) {
     up: stripTags(raw?.owner?.name || raw?.author || ''),
     upMid: String(raw?.owner?.mid || raw?.mid || ''),
     duration: parseDuration(raw?.duration),
-    play: Number(raw?.stat?.view ?? raw?.play ?? 0) || 0,
+    play: parseCount(raw?.stat?.view ?? raw?.play ?? 0),
     pubdate: Number(raw?.pubdate ?? 0) || 0,
     tags: [...new Set(tags)].slice(0, 6),
+    cover: pic.startsWith('//') ? `https:${pic}` : pic.replace(/^http:\/\//i, 'https://'),
     url: `https://www.bilibili.com/video/${id}`
   };
 }

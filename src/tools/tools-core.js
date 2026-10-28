@@ -1832,7 +1832,7 @@ export function buildToolDefs() {
               url: item.url,
               summary: safeSlice(item.desc, 200)
             })),
-            note: '用自己的话挑一条说，别念标题；不想发就用 life_feed_feedback 标记 skip。'
+            note: '选好后用 share_bilibili 分享（会先发封面，再发标题+链接+你的话），别念标题；不要用 send_message 重复发链接。不想发就用 life_feed_feedback 标记 skip。'
           });
         } catch (error) {
           return err(`生活层取内容失败：${error?.message ?? error}`);
@@ -1862,6 +1862,52 @@ export function buildToolDefs() {
           return result.ok ? ok(result) : err(result.error);
         } catch (error) {
           return err(`生活层回写失败：${error?.message ?? error}`);
+        }
+      }
+    },
+    {
+      name: 'share_bilibili',
+      description: '分享一条见闻：先发 B 站封面（有封面时），再发「【B站】标题 + 链接 + 你的一句话」。用于主动分享或控制台手动分享；不要再用 send_message 重复发链接。',
+      parameters: {
+        type: 'object',
+        properties: {
+          bvid: { type: 'string', description: 'life_feed_next 返回的 BV 号' },
+          comment: { type: 'string', description: '你自己的一句话/推荐理由，最多 300 字' }
+        },
+        required: ['bvid']
+      },
+      async execute(ctx, args) {
+        try {
+          const feed = ctx.getLifeFeed?.();
+          if (!feed) return err('生活层没有开启');
+          const item = feed.candidate(String(args.bvid ?? '').trim());
+          if (!item) return err('这条见闻不在候选队列里（可能已过期或已分享）');
+          const comment = safeSlice(String(args.comment ?? ''), 300);
+          const lines = [`【B站】${safeSlice(item.title, 80)}`, item.url];
+          if (comment) lines.push(comment);
+          let coverSent = false;
+          if (item.cover) {
+            try {
+              await ctx.sender.sendImage(ctx.chatKey, {
+                id: `bili-${item.id}`, url: item.cover, desc: item.title
+              }, { runId: ctx.session.leaseId, signal: ctx.signal });
+              coverSent = true;
+            } catch { /* 封面失败只降级成文本，不阻断分享 */ }
+          }
+          const result = await ctx.sender.sendTextBatch(ctx.chatKey, [lines.join('\n')], {
+            runId: ctx.session.leaseId, signal: ctx.signal, persona: false
+          });
+          if (!result.sent.length) {
+            return err(`标题链接没有发出去：${result.failed?.[0]?.error || '未知原因'}`);
+          }
+          afterSent(() => {
+            ctx.session.sent.push({ type: 'text', text: `[B站分享:${safeSlice(item.title, 40)}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
+            ctx.emit('session-update', ctx.session.id);
+          });
+          feed.feedback({ id: item.id, action: 'shared', chatKey: ctx.chatKey });
+          return ok({ sent: result.sent.length, cover: coverSent, note: '已发封面和标题链接；不要再重复发同一条。' });
+        } catch (error) {
+          return sendErr(error);
         }
       }
     },

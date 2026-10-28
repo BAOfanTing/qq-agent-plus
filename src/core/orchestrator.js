@@ -2030,7 +2030,7 @@ export class Orchestrator {
       if (!selfWakeEnabled && d.name === 'schedule_wake') return false;
       // 生活层没开：工具与提示词一起撤（与 schedule_wake / generate_image 同一口径）
       if (cfg.lifeFeed?.enabled !== true
-        && (d.name === 'life_feed_next' || d.name === 'life_feed_feedback')) return false;
+        && (d.name === 'life_feed_next' || d.name === 'life_feed_feedback' || d.name === 'share_bilibili')) return false;
       // 群游戏引擎关掉：group_game 工具一并摘掉 —— 提示词侧（prompt.js 玩法与工具箱）
       // 只在开启时教"主持小游戏"，工具表却恒在，模型仍会去调一个必然报错的工具
       //（group-game.js 对 enabled=false 直接拒），白花一轮（2026-10-10 审查 D3）。

@@ -99,6 +99,7 @@ function publicCandidate(item) {
     duration: item.duration,
     play: item.play,
     tags: item.tags || [],
+    cover: item.cover || '',
     url: item.url,
     desc: item.desc,
     score: item.score,
@@ -542,6 +543,13 @@ export class LifeFeedManager {
     this.#prune(this.now());
     this.#save();
     return { ok: true, action: verb };
+  }
+
+  /** 按 id 取一条候选（分享工具用；不改变队列）。 */
+  candidate(id) {
+    this.#load();
+    const item = this.state.candidates.find((entry) => entry.id === String(id || ''));
+    return item ? publicCandidate(item) : null;
   }
 
   /** 清空候选队列（不动 seen / offers / 反馈权重）：用于画像或搜索词修正后立刻重来。 */
