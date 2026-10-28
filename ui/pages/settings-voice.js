@@ -269,8 +269,8 @@ function renderAsrSection(c) {
       <input type="text" id="cfg-img-size" value="${esc(c.imageGen?.size || '')}" placeholder="如 1024x1024；留空用服务商默认" /></div>
     </div>
     <div class="field"><label for="cfg-img-extra-body">自定义请求参数（JSON，可选）</label>
-      <textarea id="cfg-img-extra-body" rows="3" style="width:100%" placeholder='例如 {"output_watermark": false}。留空 = 不附加。'>${esc(extraBodyText(c.imageGen?.extraBody))}</textarea>
-      <div class="hint" id="cfg-img-extra-body-hint">会原样合并进生图请求体，适合服务商文档里的 output_watermark、quality 这类参数；同名键会覆盖上面的模型、尺寸和 n。只填 JSON 对象，留空 = 不附加。Moss 示例：{"output_watermark": false}</div>
+      <textarea id="cfg-img-extra-body" rows="3" style="width:100%" placeholder='例如 {"output_watermark": {"enabled": false}}。留空 = 不附加。'>${esc(extraBodyText(c.imageGen?.extraBody))}</textarea>
+      <div class="hint" id="cfg-img-extra-body-hint">会原样合并进生图请求体，适合服务商文档里的 output_watermark、quality 这类参数；同名键会覆盖上面的模型、尺寸和 n。只填 JSON 对象，留空 = 不附加。Moss 示例：{"output_watermark": {"enabled": false}}（官方是嵌套对象）</div>
     </div>
     <div class="field-row">      <div class="field"><label for="cfg-img-max">每小时最多生成（张）</label>
         <input type="number" id="cfg-img-max" min="1" max="100" value="${esc(c.imageGen?.maxPerHour ?? 6)}" />

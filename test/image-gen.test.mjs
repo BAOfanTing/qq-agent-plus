@@ -91,7 +91,7 @@ test('适配器：b64_json 直接解码；不发 response_format（新版 OpenAI
   assert.equal('response_format' in calls3[0], false);
 });
 
-test('适配器：extraBody 原样合并进请求体（Moss 的 output_watermark=false）', async () => {
+test('适配器：extraBody 原样合并进请求体（Moss 的 output_watermark 嵌套对象）', async () => {
   const calls = [];
   await generateImage({
     cfg: {
@@ -99,7 +99,7 @@ test('适配器：extraBody 原样合并进请求体（Moss 的 output_watermark
         enabled: true,
         baseUrl: 'https://api.mosi.cn/v1',
         model: 'moss-image-base-1.0',
-        extraBody: { output_watermark: false, quality: 'high' }
+        extraBody: { output_watermark: { enabled: false }, quality: 'high' }
       }
     },
     apiCfg: { baseUrl: 'https://api.mosi.cn/v1' },
@@ -110,11 +110,29 @@ test('适配器：extraBody 原样合并进请求体（Moss 的 output_watermark
       return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }) };
     }
   });
-  assert.equal(calls[0].output_watermark, false);
+  assert.deepEqual(calls[0].output_watermark, { enabled: false }, 'Moss 的 output_watermark 是嵌套对象');
   assert.equal(calls[0].quality, 'high');
   assert.equal(calls[0].model, 'moss-image-base-1.0');
   assert.equal(calls[0].prompt, '一只橘猫');
   assert.equal(calls[0].n, 1);
+});
+
+test('Moss 布尔 output_watermark 自动兼容成官方嵌套对象；其他服务商不改写', async () => {
+  const bodies = [];
+  const fetchFn = async (url, req) => {
+    bodies.push(JSON.parse(req.body));
+    return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }) };
+  };
+  const base = {
+    enabled: true,
+    model: 'moss-image-base-1.0',
+    prompt: '猫',
+    fetchFn
+  };
+  await generateImage({ cfg: { imageGen: { ...base, baseUrl: 'https://api.mosi.cn/v1', extraBody: { output_watermark: false } } }, apiCfg: { baseUrl: 'https://api.mosi.cn/v1' }, apiKey: 'k', prompt: '猫', fetchFn });
+  assert.deepEqual(bodies[0].output_watermark, { enabled: false }, 'Moss 的布尔旧写法要转成嵌套对象');
+  await generateImage({ cfg: { imageGen: { ...base, baseUrl: 'https://api.openai.com/v1', model: 'gpt-image-1', extraBody: { output_watermark: false } } }, apiCfg: { baseUrl: 'https://api.openai.com/v1' }, apiKey: 'k', prompt: '猫', fetchFn });
+  assert.equal(bodies[1].output_watermark, false, '不是 Moss 就原样透传，不做服务商特判');
 });
 
 test('适配器：url 形态走内置安全下载器（真发一次 HTTP，验字节与体积上限口径）', async () => {

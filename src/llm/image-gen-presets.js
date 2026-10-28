@@ -80,6 +80,7 @@ export const IMAGEGEN_SERVICES = [
     note: '服务地址填到 /v1，不要带 /images/generations（适配器会自己拼）。'
       + '官方文档：response_format 只支持 url（不支持 b64_json），n 只能 1，'
       + '请求示例超时给到 900 秒；生成慢时把 imageGen.timeoutMs 调大。'
+      + '去水印在「自定义请求参数」填 {"output_watermark": {"enabled": false}}（官方是嵌套对象）。'
   },
   {
     id: 'modelscope',

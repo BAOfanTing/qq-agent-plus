@@ -649,7 +649,7 @@ async function saveConfig({ quiet = false } = {}) {
             } catch {
               const h = document.querySelector('#cfg-img-extra-body-hint');
               if (h) {
-                h.textContent = 'JSON 解析失败：已保留原值。格式示例：{"output_watermark": false}';
+                h.textContent = 'JSON 解析失败：已保留原值。格式示例：{"output_watermark": {"enabled": false}}';
                 h.className = 'hint error';
               }
               return g.extraBody || {};

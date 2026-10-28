@@ -69,17 +69,17 @@ test('图片生成：自定义请求参数保存后回显', async ({ page }) => 
 
   const area = page.locator('#cfg-img-extra-body');
   await expect(area).toBeAttached();
-  await area.fill('{"output_watermark": false}');
+  await area.fill('{"output_watermark": {"enabled": false}}');
   await page.click('#save-cfg-btn');
   await expect(page.locator('#cfg-save-result')).toHaveText('已保存 ✓');
 
   const read = async () => (await (await page.request.get('/api/config')).json()).imageGen.extraBody;
-  await expect.poll(read).toEqual({ output_watermark: false });
+  await expect.poll(read).toEqual({ output_watermark: { enabled: false } });
 
   await page.reload();
   await switchTo(page, 'settings');
   await page.click('.settings-menu-item[data-section="asr"]');
-  await expect(page.locator('#cfg-img-extra-body')).toHaveValue(/"output_watermark": false/);
+  await expect(page.locator('#cfg-img-extra-body')).toHaveValue(/"output_watermark": {"enabled": false}/);
 });
 
 test('技能页：渲染内置技能并可全局启停', async ({ page }) => {

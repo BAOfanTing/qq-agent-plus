@@ -168,6 +168,11 @@ export async function generateImage({
   }
   const releaseTimeGuard = watchTimeWindow((error) => controller.abort(error));
   const preset = imageGenServiceOfBaseUrl(base);
+  // Moss 官方 output_watermark 是 { enabled: boolean }；0.9.11 早期说明误导过布尔写法，
+  // 这里兼容一次，免得按旧说明保存的配置在升级后还是发不出（issue #62 更正）。
+  const requestExtra = extra.output_watermark !== undefined && typeof extra.output_watermark === 'boolean' && preset?.id === 'moss'
+    ? { ...extra, output_watermark: { enabled: extra.output_watermark } }
+    : extra;
   try {
     // 免 Key 的 pollinations 形状单独走一条：提示词在 URL 路径里、GET 取图字节
     // （它那个长得像 OpenAI 的 POST /openai/images/generations **不看 body**，别用）
@@ -186,7 +191,7 @@ export async function generateImage({
         n: 1,
         ...formatParam,
         ...(size ? { size } : {}),
-        ...extra
+        ...requestExtra
       }),
       signal: controller.signal
     });
