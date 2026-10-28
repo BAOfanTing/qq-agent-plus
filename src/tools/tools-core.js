@@ -2051,7 +2051,7 @@ export function buildToolDefs() {
     },
     {
       name: 'get_recent_messages',
-      description: '往前翻当前会话的更多历史消息（提示词里只带了最近一段；需要更早的上下文时用）。返回带 messageId（就是聊天记录里的 #数字），可用于引用或看图。消息文本出现 [合并转发聊天记录] 时，用 read_forward 展开看内容。',
+      description: '往前翻当前会话的更多历史消息（提示词里只带了最近一段；需要更早的上下文时用）。返回带 messageId（就是聊天记录里的 #数字），可用于引用或看图。消息文本出现 [合并转发聊天记录] 时，用 read_forward 展开看内容。开启「群聊与私聊共用上下文」时会同时包含其它会话的消息，并标注 [群 <群号>] / [与 <QQ>]（这些消息没有可用 messageId）。',
       parameters: {
         type: 'object',
         properties: {
@@ -2062,35 +2062,39 @@ export function buildToolDefs() {
       async execute(ctx, args) {
         const limit = Math.min(100, Math.max(1, Number(args.limit) || 30));
         const offset = Math.max(0, Number(args.offset) || 0);
-        const sharedPrivate = getConfig().memory?.privateSharedContext === true
+        const memCfg = getConfig().memory || {};
+        const crossScope = memCfg.crossScopeSharedContext === true;
+        const sharedPrivate = !crossScope && memCfg.privateSharedContext === true
           && String(ctx.chatKey || '').startsWith('private:');
+        const sharedContext = crossScope || sharedPrivate;
         const pastCount = Math.max(0, Number(ctx.session.pastStateCount) || 0);
-        // shared-private 的 pastState 不包含 leased 触发消息；pastStateCount 却把触发数加上了，
+        // 共享上下文的 pastState 不包含 leased 触发消息；pastStateCount 却把触发数加上了，
         // 直接用会多跳过 N 条（复审 P2）。
-        const offsetBase = sharedPrivate
+        const offsetBase = sharedContext
           ? Math.max(0, pastCount - Math.max(0, Number(ctx.triggerEntries?.length) || 0))
           : pastCount;
         const messages = ctx.store.recent(ctx.chatKey, {
           limit,
           offset: offset + offsetBase,
-          scope: sharedPrivate ? 'private' : 'chat',
-          // 共享私聊时与【过去状态】同口径：只翻已处理的历史，不把别的好友的未读带进来
-          readOnly: sharedPrivate
+          scope: crossScope ? 'all' : (sharedPrivate ? 'private' : 'chat'),
+          // 共享上下文时与【过去状态】同口径：只翻已处理的历史，不把别处的未读带进来
+          readOnly: sharedContext
         })
           // 引擎发的游戏私聊（身份/查验结果/行动回执）连翻页都不该看到：模型在私聊里不是上帝视角
           .filter((m) => m.eventKind !== 'game-secret');
         return ok({
           count: messages.length,
           messages: messages.map((m) => {
-            const cross = sharedPrivate && String(m.chatKey || '') !== String(ctx.chatKey);
-            const peer = cross ? (String(m.chatKey).split(':')[1] || '另一位好友') : '';
+            const cross = sharedContext && String(m.chatKey || '') !== String(ctx.chatKey);
+            const [kind, id] = cross ? String(m.chatKey || '').split(':') : [];
+            const label = !cross ? '' : (kind === 'group' ? `[群 ${id || '?'}]` : `[与 ${id || '另一位好友'}]`);
             return {
-              // 别的私聊的 mid 在当前会话无效，不能给模型拿去引用/看图
+              // 别的会话的 mid 在当前会话无效，不能给模型拿去引用/看图
               messageId: cross ? undefined : (m.mid ?? undefined),
               time: new Date(m.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
               sender: m.self ? '我' : displayNameOf(m.senderId, m.senderName),
               // 与【过去状态】同一套渲染：正文缺引用块时补上（回复 + 合并转发卡片那类记录）
-              text: cross ? `[与 ${peer}] ${stripQuoteMessageId(m.text)}` : textWithQuote(m)
+              text: cross ? `${label} ${stripQuoteMessageId(m.text)}` : textWithQuote(m)
             };
           })
         });

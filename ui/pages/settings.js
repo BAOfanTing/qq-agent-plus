@@ -766,6 +766,9 @@ function renderMemorySettingsSection(c) {
     <div class="checkbox-row"><input type="checkbox" id="cfg-mem-private-shared" ${mem.privateSharedContext === true ? 'checked' : ''} />
       <label for="cfg-mem-private-shared">所有私聊共用最近消息与交接（默认关）</label></div>
     <div class="hint">打开后，机器人跟不同好友聊天时会看到彼此的最近私聊内容（消息会标「与 &lt;QQ&gt;」），更像同一个“人”；代价是不同好友的上下文会混在一起、更费 token，也可能把 A 的话带到 B 的对话里。写入和发送目标不变，群聊不受影响。</div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-mem-cross-scope-shared" ${mem.crossScopeSharedContext === true ? 'checked' : ''} />
+      <label for="cfg-mem-cross-scope-shared">群聊与私聊共用最近上下文（默认关）</label></div>
+    <div class="hint">打开后，机器人在任意群或私聊里都能看到其他群/好友的最近消息与最多 3 份交接（消息会标「群 &lt;群号&gt;」或「与 &lt;QQ&gt;」）。这会把 A 群/好友的话带到 B 的对话里，隐私边界最大、也更费 token；写入、发送目标和人物印象可见性都不变。打开这个后，上面的「所有私聊共用」已经包含在内，不必再开。</div>
     <div class="field-row" style="align-items:start">
       <div class="field"><label for="cfg-mem-max-per-person">每人最多保留印象（条）</label>
         <input type="number" id="cfg-mem-max-per-person" min="5" max="200" value="${esc(mem.maxImpressionsPerPerson ?? 50)}" />

@@ -180,15 +180,24 @@ export class MemoryStore {
   clearHandoff(chatKey) { try { fs.rmSync(handoffFile(chatKey), { force: true }); } catch { /* 有意忽略：删失败＝文件残留，下次同 chatKey 写入时覆盖 */ } }
   /** 最近几份私聊交接：当前聊天第一，其余按更新时间倒序（issue #14）。 */
   privateHandoffs(chatKey, limit = 3) {
+    return this.peerHandoffs(chatKey, limit, /^private_(\d+)$/);
+  }
+
+  /** 群聊 + 私聊共用上下文时的交接清单（issue #14 第二项）。 */
+  sharedHandoffs(chatKey, limit = 3) {
+    return this.peerHandoffs(chatKey, limit, /^(group|private)_(\d+)$/);
+  }
+
+  peerHandoffs(chatKey, limit, pattern) {
     const out = [];
     const current = this.getHandoff(chatKey);
     if (current) out.push({ chatKey: String(chatKey), handoff: current });
     let names = [];
     try { names = fs.readdirSync(MEMORY_DIR); } catch { /* 目录不存在就只返回当前会话 */ }
     for (const name of names) {
-      const m = /^private_(\d+)$/.exec(name);
+      const m = pattern.exec(name);
       if (!m) continue;
-      const key = `private:${m[1]}`;
+      const key = m.length > 2 ? `${m[1]}:${m[2]}` : `private:${m[1]}`;
       if (key === String(chatKey)) continue;
       const handoff = this.getHandoff(key);
       if (handoff) out.push({ chatKey: key, handoff });
@@ -219,12 +228,15 @@ export class MemoryStore {
       Number(cfg.memory?.handoffMaxChars) || 4000,
       tokenSaverCapsOf(cfg)?.handoffMaxChars
     )));
-    const sharedPrivate = cfg.memory?.privateSharedContext === true && String(chatKey || '').startsWith('private:');
-    if (!sharedPrivate) {
+    // 群聊与私聊共用上下文（issue #14 第二项）：读取侧合并所有会话的交接；
+    // privateSharedContext 只合并私聊，仍保留为更窄的选项。
+    const crossScope = cfg.memory?.crossScopeSharedContext === true;
+    const sharedPrivate = !crossScope && cfg.memory?.privateSharedContext === true && String(chatKey || '').startsWith('private:');
+    if (!crossScope && !sharedPrivate) {
       const h = this.getHandoff(chatKey);
       return h ? this.renderHandoff(h, '【上次会话交接】', totalCap) : '';
     }
-    const entries = this.privateHandoffs(chatKey, 3);
+    const entries = crossScope ? this.sharedHandoffs(chatKey, 3) : this.privateHandoffs(chatKey, 3);
     if (!entries.length) return '';
     const current = entries.find(({ chatKey: key }) => String(key) === String(chatKey));
     const others = entries.filter(({ chatKey: key }) => String(key) !== String(chatKey));
@@ -235,8 +247,11 @@ export class MemoryStore {
     const chunks = [];
     if (current) chunks.push(this.renderHandoff(current.handoff, '【上次会话交接】', currentCap));
     for (const { chatKey: key, handoff } of others) {
-      const peer = String(key).split(':')[1] || '另一位好友';
-      chunks.push(this.renderHandoff(handoff, `【上次会话交接 · 与 ${peer}】`, otherCap));
+      const [kind, id] = String(key).split(':');
+      const title = kind === 'group'
+        ? `【上次会话交接 · 群 ${id || '?'}】`
+        : `【上次会话交接 · 与 ${id || '另一位好友'}】`;
+      chunks.push(this.renderHandoff(handoff, title, otherCap));
     }
     return chunks.join('\n\n').slice(0, totalCap);
   }

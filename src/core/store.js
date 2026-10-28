@@ -107,6 +107,9 @@ export class ChatStore {
       -- getChatMeta 取"最新一条"按 ts 排序（历史导入的 ts 可能乱序）；没有这个索引
       -- 时 SQLite 要对整个会话做临时排序。
       CREATE INDEX IF NOT EXISTS messages_chat_ts ON messages(chat_key, ts DESC, id DESC);
+      -- 群聊/私聊共用上下文按 ts 跨会话取最新 N 条；不加这条会每次唤醒全表扫描 + 排序
+      -- （messages_chat_ts 以 chat_key 开头，跨会话的 ORDER BY ts 用不上）。
+      CREATE INDEX IF NOT EXISTS messages_ts ON messages(ts DESC, id DESC);
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, chat_key TEXT NOT NULL, state TEXT NOT NULL,
         expires_at INTEGER NOT NULL, error TEXT
@@ -1076,11 +1079,18 @@ export class ChatStore {
     // beforeId：控制台向上翻页，取"比这个 id 更老的最新 N 条"，仍按时间正序返回。
     // 非增量调用仍保持"最新 N 条、按时间正序返回"的既有语义。
     // scope='private'：只给"私聊共享上下文"用，读所有 private:*，按 ts 排序（跨会话没有可比 id）。
+    // scope='all'：群聊与私聊共用上下文（issue #14 第二项），读所有会话，同样按 ts 排序。
     const after = Number(afterId) > 0 ? Number(afterId) : 0;
     const before = !after && Number(beforeId) > 0 ? Number(beforeId) : 0;
     const filters = `${includeSelf ? '' : 'AND self=0'} ${readOnly ? "AND state='acked'" : ''}`;
     if (scope === 'private' && String(chatKey || '').startsWith('private:')) {
       const rows = this.db.prepare(`SELECT * FROM messages WHERE chat_key LIKE 'private:%' ${filters}
+        ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`)
+        .all(Math.max(1, Number(limit) || 1), Math.max(0, Number(offset) || 0));
+      return rows.reverse().map(entry);
+    }
+    if (scope === 'all') {
+      const rows = this.db.prepare(`SELECT * FROM messages WHERE 1=1 ${filters}
         ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`)
         .all(Math.max(1, Number(limit) || 1), Math.max(0, Number(offset) || 0));
       return rows.reverse().map(entry);

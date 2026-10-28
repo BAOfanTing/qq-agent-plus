@@ -107,3 +107,32 @@ test('私聊共享上下文：合并最近私聊交接，当前会话优先，�
   assert.doesNotMatch(isolated, /B 的交接/);
   assert.doesNotMatch(isolated, /与 2/);
 });
+
+test('群聊与私聊共用上下文：交接跨群/私聊合并并标来源，默认关仍隔离', () => {
+  const cfg = structuredClone(DEFAULT_CONFIG);
+  cfg.memory.handoffEnabled = true;
+  cfg.memory.handoffMaxChars = 4000;
+  cfg.memory.crossScopeSharedContext = true;
+  setRuntimeConfig(cfg);
+  const memory = new MemoryStore();
+  for (const key of ['private:1', 'private:2', 'group:123', 'private:456']) memory.clearHandoff(key);
+  memory.setHandoff('private:1', { summary: 'A 的交接' });
+  memory.setHandoff('private:2', { summary: 'B 的交接' });
+  memory.setHandoff('group:123', { summary: '群 123 的交接' });
+
+  const merged = memory.formatHandoffForPrompt('group:123');
+  assert.match(merged, /群 123 的交接/);
+  assert.match(merged, /【上次会话交接 · 与 1】/);
+  assert.match(merged, /【上次会话交接 · 与 2】/);
+
+  const fromPrivate = memory.formatHandoffForPrompt('private:1');
+  assert.match(fromPrivate, /群 123 的交接/);
+  assert.match(fromPrivate, /【上次会话交接 · 群 123】/);
+
+  cfg.memory.crossScopeSharedContext = false;
+  setRuntimeConfig(cfg);
+  const isolated = memory.formatHandoffForPrompt('group:123');
+  assert.match(isolated, /群 123 的交接/);
+  assert.doesNotMatch(isolated, /A 的交接/);
+  assert.doesNotMatch(isolated, /B 的交接/);
+});

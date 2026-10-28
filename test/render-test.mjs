@@ -1669,6 +1669,7 @@ try {
     document.querySelector('#cfg-mem-discover-min').value = '8';
     document.querySelector('#cfg-mem-discover-max').value = '5';
     document.querySelector('#cfg-mem-private-shared').checked = true;
+    document.querySelector('#cfg-mem-cross-scope-shared').checked = true;
     const before = sandbox.fetch;
     sandbox.fetch = async (url, options) => {
       if (String(url).includes('/api/config') && options?.method === 'POST') {
@@ -1681,8 +1682,9 @@ try {
     sandbox.fetch = before;
     const memOk = posted?.memory?.discoverMinMessages === 8 && posted?.memory?.discoverMaxMembers === 5
       && posted?.memory?.privateSharedContext === true
+      && posted?.memory?.crossScopeSharedContext === true
       && code.includes('id="cfg-mem-discover-min"') && code.includes('id="cfg-mem-discover-max"')
-      && code.includes('id="cfg-mem-private-shared"');
+      && code.includes('id="cfg-mem-private-shared"') && code.includes('id="cfg-mem-cross-scope-shared"');
     memOk ? pass++ : fail++;
     console.log('  ' + (memOk ? 'OK   ' : 'FAIL ') + '设置页：记忆整理可设"发现新人的最少发言条数/单次最多发现几人"并落到 memory.*'
       + (memOk ? '' : ` -> ${JSON.stringify(posted?.memory)}`));

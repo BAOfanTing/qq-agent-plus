@@ -846,7 +846,10 @@ export const DEFAULT_CONFIG = {
     visibility: { mode: 'global', hidePrivateInGroup: false },
     // 私聊上下文共享（issue #14）：默认关，保持每个私聊各自的历史/交接。
     // 打开后只在**读取**侧把最近私聊消息与交接合并；写入、发送目标、群聊都不变。
-    privateSharedContext: false
+    privateSharedContext: false,
+    // 群聊与私聊共用最近上下文（issue #14 第二项）：默认关。打开后只在读取侧把群聊/私聊
+    // 的最近消息与交接合并，消息标明来源；写入、发送目标、长记忆可见性都不变。
+    crossScopeSharedContext: false
   },
   // 长期语义记忆：独立服务 + 向量库，默认关闭且先走 shadow，不改变既有 MemoryStore 行为。
   livingMemory: structuredClone(LIVING_MEMORY_DEFAULTS),

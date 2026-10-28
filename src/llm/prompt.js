@@ -943,28 +943,43 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
   const maxLimit = Math.min(PAST_STATE_MAX_MESSAGES, limit === null ? Math.max(1, Number(cfg.allCount) || 300) : Math.max(0, Number(limit) || 0));
   const exclude = new Set(excludeIds);
   if (maxLimit <= 0) return { text: '', count: 0, messages: [] };
-  const sharedPrivate = getConfig().memory?.privateSharedContext === true && String(chatKey || '').startsWith('private:');
+  const memCfg = getConfig().memory || {};
+  // 群聊与私聊共用上下文（issue #14 第二项）：与 privateSharedContext 一样只影响读取侧。
+  const crossScope = memCfg.crossScopeSharedContext === true;
+  const sharedPrivate = !crossScope && memCfg.privateSharedContext === true && String(chatKey || '').startsWith('private:');
+  const crossChat = (m) => String(m?.chatKey || '') !== String(chatKey);
   let messages = store.recent(chatKey, {
     limit: maxLimit + exclude.size,
     readOnly: true,
-    scope: sharedPrivate ? 'private' : 'chat'
-  }).filter((m) => (sharedPrivate && String(m.chatKey || '') !== String(chatKey)) ? true : !exclude.has(m.id));
+    scope: crossScope ? 'all' : (sharedPrivate ? 'private' : 'chat')
+  }).filter((m) => ((crossScope || sharedPrivate) && crossChat(m)) ? true : !exclude.has(m.id));
   // 引擎发的游戏私聊（身份/查验结果/行动回执）不进模型上下文：模型在私聊里不该是上帝视角
   // （2026-09-29 审查 P2；标记由群游戏管理器在发送时登记、ingest 落库时打上 eventKind='game-secret'）
   messages = messages.filter((m) => m.eventKind !== 'game-secret');
-  // 私聊共享上下文：别的私聊消息要标明"与谁"，并去掉只在原会话有效的 mid，
+  // 共享上下文：别的会话消息要标明来源，并去掉只在原会话有效的 mid，
   // 否则模型会拿别的会话的 #id 去引用/看图，永远查不到（issue #14）。
-  if (sharedPrivate) {
+  if (crossScope || sharedPrivate) {
     messages = messages.map((m) => {
-      if (String(m.chatKey || '') === String(chatKey)) return m;
-      const peer = String(m.chatKey || '').split(':')[1] || '另一位好友';
-      return { ...m, mid: null, reply: null, text: `[与 ${peer}] ${stripQuoteMessageId(m.text)}` };
+      if (!crossChat(m)) return m;
+      const [kind, id] = String(m.chatKey || '').split(':');
+      const label = kind === 'group' ? `[群 ${id || '?'}]` : `[与 ${id || '另一位好友'}]`;
+      return { ...m, mid: null, reply: null, text: `${label} ${stripQuoteMessageId(m.text)}` };
     });
   }
   // 屏蔽名单兜底过滤：屏蔽生效前已存档的历史消息，也不能再进提示词。
   // 入口拦截只管"新消息"，这里管"老库存"。机器人自己的发言（self）不过滤。
+  // 跨会话共享时按消息自己的群号取屏蔽名单，不能只按当前会话过滤。
   const [pKind, pId] = String(chatKey || '').split(':');
-  if (pKind === 'group' && pId) {
+  if (crossScope) {
+    const blockedSets = new Map(Object.entries(getConfig().blocklist || {})
+      .map(([group, list]) => [String(group), new Set((Array.isArray(list) ? list : []).map(String))]));
+    messages = messages.filter((m) => {
+      if (m.self) return true;
+      const [kind, id] = String(m.chatKey || '').split(':');
+      if (kind !== 'group' || !id) return true;
+      return !blockedSets.get(String(id))?.has(String(m.senderId));
+    });
+  } else if (pKind === 'group' && pId) {
     const blocked = new Set((getConfig().blocklist?.[pId] || []).map(String));
     if (blocked.size) messages = messages.filter((m) => m.self || !blocked.has(String(m.senderId)));
   }

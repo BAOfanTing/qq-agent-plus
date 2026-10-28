@@ -105,6 +105,8 @@ HTML 里的 markdown 星号）。
 - 关键词命中（必回档）但名字边界判不出「在叫它」（两字昵称、名字前接汉字）时，模型写好的正文被静默丢弃 → 回复纠正对关键词档开旁路：模型确实写出了正文草稿就纠正发送；「（这条不用接）」类自注与无草稿仍保持沉默（issue #64）。
 - 触发条目为空跳过回复纠正时不再静默：会话标注 skipped 并记日志，与「没走到 guard」区分开。
 - 表情冷却失败后的 finish 拦截改为按结构化 errorCode 判定（不再匹配错误文案）。
+- issue #14 第二项：新增 `memory.crossScopeSharedContext`（默认关，控制台「记忆整理」）。打开后读取侧合并群聊与私聊的最近消息及最多 3 份交接，消息标 `[群 <群号>]` / `[与 <QQ>]`，跨会话 mid 不暴露；屏蔽名单按消息自己的群过滤；写入、发送目标与人物印象可见性不变。
+- 修复插件仓库 issue #21：控制台扫码登录的两次 `poll` 没带 `channel=console`，被插件当成聊天内非管理员拒绝。前端两处补齐 `channel`；B 站插件 `poll` 豁免管理员判定并接受宿主 `context.channel`；宿主 `callConsoleTool` 传 `{channel:"console",chatKey:""}`（不伪造 `senderIsOwner`）。bilibili 插件升到 1.0.5，索引已更新。
 - 生图发送格式可选：`imageGen.sendAs` 默认 `sticker`（按表情发送，保持旧行为），可切 `image` 发普通图片、群友能直接保存；只影响 generate_image 自动发送，控制台「图片生成」区块有下拉（issue #67）。
 - 更正 Moss 去水印参数写法：官方要求 `{"output_watermark": {"enabled": false}}`（嵌套对象），修正控制台/文档示例；按 0.9.11 早期说明保存成布尔值的配置，在 Moss 预设下自动转成嵌套对象（其他服务商原样透传）。
 - 表情包批量导入的 ZIP 解包抽成 ui/core/zip-images.js 并补负面用例（加密位、坏目录、条目数、截断 payload、超批）；解压前检测 DecompressionStream，旧浏览器给出可读提示；在途守卫断言恢复严格一一配对（批量窗口单独豁免）。
