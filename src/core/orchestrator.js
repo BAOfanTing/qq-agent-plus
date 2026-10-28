@@ -2254,11 +2254,23 @@ export class Orchestrator {
         : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。'
           + (getConfig().lifeFeed?.enabled === true
             ? '今天想分享点见闻的话，可以调用 life_feed_next 看看队列里有什么。' : ''));
+    // 手动唤醒（控制台「见闻→分享」、手动触发）也可能带 wakeNote；此前只有 paced 分支
+    // 使用 note，manual 的提醒被丢掉，用户点了分享却什么都没发生。
+    const manualNote = manual && wakeNote
+      ? (isReminderNote || String(wakeNote).startsWith('【系统提醒】')
+        ? safeSlice(String(wakeNote), 600)
+        : `这是你自己之前安排的：${safeSlice(String(wakeNote), 600)}。`)
+      : '';
     const currentUserMessage = {
       role: 'user',
       content: (humanLines ? `${humanLines}\n\n` : '') + (proactive && !manual
         ? `${userPrompt}\n\n【本次唤醒】${wakeLead}${wakeTail}`
-        : (paced ? `${userPrompt}\n\n【本次唤醒】${pacedLead}` : userPrompt))
+        : (paced
+          ? `${userPrompt}\n\n【本次唤醒】${pacedLead}`
+          : (manualNote
+            ? `${userPrompt}\n\n【本次唤醒】${manualNote}`
+              + (String(wakeNote).startsWith('【系统提醒】') ? `\n${wakeTail}` : '')
+            : userPrompt)))
     };
     const messages = [
       { role: 'system', content: systemPrompt },

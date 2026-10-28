@@ -457,3 +457,20 @@ test('表情冷却失败 → finish 被拦 → 改发文字后 finish 放行（P
   assert.deepEqual(f.sent, ['那我用文字回']);
   assert.equal(f.lastSession()?.sent.length, 1, '纠正后真的送出了一条');
 });
+
+test('手动唤醒带 wakeNote（见闻/提醒）时，提醒必须进模型上下文', async (t) => {
+  const f = fixture(t, { group: true });
+  f.responses.push(f.sendReply('我分享一个视频'));
+  f.responses.push({
+    choices: [{ message: { content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'finish', arguments: JSON.stringify({ summary: '分享完成' }) } }] } }],
+    usage: { total_tokens: 5 }
+  });
+  const note = '【系统提醒】可以分享这条 B 站见闻：测试视频（UP：甲）https://www.bilibili.com/video/BV1test';
+  await f.runner.wake('group:1', { manual: true, wakeNote: note });
+
+  assert.equal(f.bodies.length, 2, '手动唤醒应该真的跑模型并收尾');
+  const content = String(f.bodies[0].messages?.at(-1)?.content || '');
+  assert.match(content, /【系统提醒】可以分享这条 B 站见闻/, '提醒不能在手动脉络里被丢掉');
+  assert.match(content, /测试视频/);
+  assert.deepEqual(f.sent, ['我分享一个视频']);
+});
