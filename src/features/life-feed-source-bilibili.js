@@ -99,7 +99,12 @@ export async function forageBilibili({
   log = () => {}
 } = {}) {
   const logger = typeof log === 'function' ? log : () => {};
-  const queries = (profile?.terms || [])
+  // 搜索词优先用人设 topics / 显式关键词；没有时才退回群聊高频词。
+  // 群聊高频词继续参与打分，但不直接拿去搜 B 站 —— 否则一个刷天气的群会让队列全是天气预报。
+  const sourceTerms = Array.isArray(profile?.searchTerms) && profile.searchTerms.length
+    ? profile.searchTerms.map((term) => ({ term }))
+    : (profile?.terms || []);
+  const queries = sourceTerms
     .slice(0, 3)
     .map((entry) => String(entry?.term || '').trim())
     .filter(Boolean);

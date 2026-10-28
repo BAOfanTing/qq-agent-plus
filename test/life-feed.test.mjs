@@ -231,3 +231,76 @@ test('重启时进行中的觅食标记为 interrupted，不把半个队列当�
   const status = manager.status();
   assert.match(status.lastError, /interrupted/);
 });
+
+test('兴趣画像：结构化播报与他人消息才参与，机器人自己的播报不算兴趣', () => {
+  const rows = [
+    { ts: NOW - 1000, self: true, text: '今日天气 当前25℃ 体感27℃ 湿度60% 风速3级' },
+    { ts: NOW - 1000, self: false, text: '当前气温25℃ 体感27℃ 湿度60% 风速3级 日出06:12 日落18:30' },
+    { ts: NOW - 1000, self: false, text: '最近深海潜水很好看' }
+  ];
+  const profile = buildInterestProfile({
+    store: {
+      recent: (_chatKey, opts = {}) => rows.filter((row) => opts.includeSelf !== false || !row.self)
+    },
+    chatKeys: ['group:1'],
+    personaTemplateId: 'xiaojingyu',
+    now: NOW
+  });
+  const terms = profile.terms.map((item) => item.term);
+  assert.ok(terms.includes('深海'), terms.join(','));
+  assert.ok(!terms.includes('气温'), '天气播报的字段词不能进画像');
+  assert.ok(!terms.includes('体感'), '机器人自己的播报更不能当成群友兴趣');
+  assert.ok(profile.searchTerms.includes('深海与潜水视频'), '搜索词优先人设 topics');
+  assert.ok(!profile.searchTerms.includes('天气'));
+});
+
+test('觅食搜索词：有人设 topics 时不拿群聊高频词去搜 B 站', async () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(String(url));
+    if (String(url).includes('popular')) return { statusCode: 200, body: JSON.stringify({ code: 0, data: { list: [] } }) };
+    return { statusCode: 200, body: JSON.stringify({ code: 0, data: { result: [] } }) };
+  };
+  await forageBilibili({
+    profile: {
+      terms: [{ term: '天气', weight: 30 }, { term: '今日', weight: 14 }],
+      searchTerms: ['深海与潜水视频', '独立游戏的新玩法']
+    },
+    limit: 5,
+    fetchImpl
+  });
+  const searches = urls.filter((url) => url.includes('search/type'));
+  assert.ok(searches.some((url) => url.includes(encodeURIComponent('深海与潜水视频'))));
+  assert.ok(!searches.some((url) => decodeURIComponent(url).includes('keyword=天气')), '群聊高频词不能直接成为搜索词');
+});
+
+test('候选入库：同一 UP 与同一标签在队列里也限流', async (t) => {
+  const dir = tempDir(t);
+  const list = Array.from({ length: 15 }, (_, index) => ({
+    bvid: `BVW${index}`,
+    title: `天气预报 ${index}`,
+    desc: '',
+    tname: '天气',
+    duration: 600,
+    pubdate: NOW / 1000,
+    owner: { name: `UP${index % 2}`, mid: 100 + (index % 2) },
+    stat: { view: 1000 }
+  }));
+  const manager = new LifeFeedManager({
+    dataDir: dir,
+    store: null,
+    config: () => ({ lifeFeed: { enabled: true, maxCandidates: 200, maxPerForage: 30 } }),
+    fetchImpl: fakeFetch([
+      ['popular', { code: 0, data: { list } }],
+      ['search/type', { code: 0, data: { result: [] } }]
+    ]),
+    now: () => NOW
+  });
+  await manager.forageNow();
+  const state = JSON.parse(fs.readFileSync(path.join(dir, 'life-feed.json'), 'utf8'));
+  assert.ok(state.candidates.length > 0);
+  assert.ok(state.candidates.length <= 6, `同一标签最多 8 条且同一 UP 最多 3 条，实际 ${state.candidates.length}`);
+  const byUp = new Map();
+  for (const item of state.candidates) byUp.set(item.upMid, (byUp.get(item.upMid) || 0) + 1);
+  for (const count of byUp.values()) assert.ok(count <= 3);
+});

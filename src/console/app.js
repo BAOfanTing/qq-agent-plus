@@ -5673,6 +5673,13 @@ export function createApp({
     const result = lifeFeed.dismiss(id);
     return json(res, result.ok ? 200 : 404, result);
   });
+  router.add('POST', '/api/life-feed/clear', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    if (body?.confirm !== true) return json(res, 400, { ok: false, error: '清空候选需要 confirm:true' });
+    const result = lifeFeed.clearCandidates();
+    auditWrite('life-feed.clear', 'life-feed:candidates', { req, removed: result.removed });
+    return json(res, 200, result);
+  });
   router.add('POST', '/api/life-feed/share', async (req, res) => {
     const body = await readBody(req).catch(() => ({}));
     if (body?.confirm !== true) return json(res, 400, { ok: false, error: '请带 confirm:true' });

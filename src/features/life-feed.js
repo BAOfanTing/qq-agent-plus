@@ -417,13 +417,25 @@ export class LifeFeedManager {
       ...this.state.candidates.map((item) => item.id),
       ...this.state.seen.map((item) => item.id)
     ]);
+    // 队列层面也要有配额：只在 #pick 限 UP/标签的话，候选池早被同一种日更视频占满。
+    const upCounts = new Map();
+    const tagCounts = new Map();
+    for (const candidate of this.state.candidates) {
+      if (candidate.upMid) upCounts.set(candidate.upMid, (upCounts.get(candidate.upMid) || 0) + 1);
+      for (const tag of candidate.tags || []) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+    }
     let added = 0;
     for (const item of items) {
       if (known.has(item.id)) continue;
-      const tagBoost = (item.tags || []).reduce((sum, tag) => sum + (Number(this.state.tagWeights[tag]) || 0) * 2, 0);
+      if (item.upMid && (upCounts.get(item.upMid) || 0) >= 3) continue;
+      const tags = item.tags || [];
+      if (tags.some((tag) => (tagCounts.get(tag) || 0) >= 8)) continue;
+      const tagBoost = tags.reduce((sum, tag) => sum + (Number(this.state.tagWeights[tag]) || 0) * 2, 0);
       const score = scoreCandidate(item, profile) + tagBoost;
       this.state.candidates.push({ ...item, score, addedAt: now });
       known.add(item.id);
+      if (item.upMid) upCounts.set(item.upMid, (upCounts.get(item.upMid) || 0) + 1);
+      for (const tag of tags) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
       added += 1;
     }
     this.state.candidates.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
@@ -530,6 +542,16 @@ export class LifeFeedManager {
     this.#prune(this.now());
     this.#save();
     return { ok: true, action: verb };
+  }
+
+  /** 清空候选队列（不动 seen / offers / 反馈权重）：用于画像或搜索词修正后立刻重来。 */
+  clearCandidates() {
+    this.#load();
+    const removed = this.state.candidates.length;
+    this.state.candidates = [];
+    this.state.records.unshift({ at: this.now(), action: 'clear-candidates', removed });
+    this.#save();
+    return { ok: true, removed };
   }
 
   dismiss(id) {

@@ -64,11 +64,26 @@ async function loadStatus() {
 async function onAction(event) {
   const forage = event.target?.closest?.('#lifefeed-forage');
   const refresh = event.target?.closest?.('#lifefeed-refresh');
+  const clear = event.target?.closest?.('#lifefeed-clear');
   const share = event.target?.closest?.('[data-lifefeed-share]');
   const dismiss = event.target?.closest?.('[data-lifefeed-dismiss]');
 
   if (refresh) {
     await loadStatus();
+    return;
+  }
+  if (clear) {
+    if (!(await askForConfirmation('清空全部候选？已分享记录、去重记录和反馈权重都会保留。'))) return;
+    clear.disabled = true;
+    try {
+      const result = await api('/api/life-feed/clear', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+      setResult(`已清空 ${result.removed ?? 0} 条候选`);
+      await loadStatus();
+    } catch (error) {
+      setResult(`清空失败：${error?.message || error}`, true);
+    } finally {
+      clear.disabled = false;
+    }
     return;
   }
   if (forage) {
@@ -195,6 +210,7 @@ function renderLifeFeedSection(c) {
 
       <div class="asset-head-actions">
         <button type="button" class="btn btn-small" id="lifefeed-forage">立刻觅食</button>
+        <button type="button" class="btn btn-small" id="lifefeed-clear">清空候选</button>
         <button type="button" class="btn btn-small" id="lifefeed-refresh">刷新状态</button>
         <span class="hint" id="lifefeed-action-result"></span>
       </div>

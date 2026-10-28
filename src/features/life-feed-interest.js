@@ -44,8 +44,27 @@ export function tokenize(text) {
 }
 
 /**
- * @returns {{terms: Array<{term:string,weight:number}>, personaTopics: string[], generatedAt: number}}
+ * 结构化播报（天气/行情类的键值行）不该当成"群友兴趣"：它们会让一个词在画像里
+ * 刷到几十倍权重，最后搜索词只剩「天气」。这里用两个通用信号拦一下，不做具体站点/命令匹配。
+ */
+export function looksLikeStructuredReport(text) {
+  const source = String(text || '');
+  if (!source) return false;
+  if (/\bwttr\b/i.test(source)) return true;
+  const compact = source.replace(/\s+/g, '');
+  if (compact.length >= 20) {
+    const digits = (compact.match(/[0-9]/g) || []).length;
+    if (digits / compact.length >= 0.16) return true;
+  }
+  const fields = (source.match(/气温|体感|湿度|风速|气压|降水|日出|日落|紫外线|空气质量|AQI/gi) || []).length;
+  return fields >= 3;
+}
+
+/**
+ * @returns {{terms: Array<{term:string,weight:number}>, personaTopics: string[], searchTerms: string[], generatedAt: number}}
  * weight 只表示“相对更该关注”，不是概率；打分时按 6 倍放大。
+ * searchTerms 只取人设 topics + 显式关键词：群聊高频词用于排序，不直接拿去搜 B 站，
+ * 否则一个刷天气的群会让整个候选队列变成天气预报。
  */
 export function buildInterestProfile({
   store,
@@ -70,10 +89,13 @@ export function buildInterestProfile({
   const since = now - Math.max(1, days) * 86400000;
   for (const chatKey of chatKeys) {
     let rows = [];
-    try { rows = store?.recent?.(chatKey, { limit: 800 }) || []; } catch { rows = []; }
+    // includeSelf:false：机器人自己的播报/回复不能反过来变成"群友兴趣"的来源
+    try { rows = store?.recent?.(chatKey, { limit: 800, includeSelf: false }) || []; } catch { rows = []; }
     for (const message of rows) {
       if (Number(message?.ts) < since) continue;
-      for (const term of tokenize(message?.text)) bump(term, 1);
+      if (looksLikeStructuredReport(message?.text)) continue;
+      const text = String(message?.text || '').slice(0, 500);
+      for (const term of tokenize(text)) bump(term, 1);
     }
   }
 
@@ -81,5 +103,8 @@ export function buildInterestProfile({
     .sort((a, b) => b[1] - a[1])
     .slice(0, Math.max(1, maxTerms))
     .map(([term, weight]) => ({ term, weight }));
-  return { terms, personaTopics, generatedAt: now };
+  const searchTerms = [...new Set([...personaTopics, ...extraKeywords]
+    .map((term) => String(term || '').trim())
+    .filter(Boolean))].slice(0, 6);
+  return { terms, personaTopics, searchTerms, generatedAt: now };
 }
