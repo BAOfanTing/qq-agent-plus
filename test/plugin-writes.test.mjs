@@ -158,6 +158,7 @@ test('注册表全链路：开关隐藏工具 → 未批生成待批 → 批准�
   const denied = parse(await runTool(registry, { bvid: 'BVZ', text: '内容' }));
   assert.equal(denied.needsApproval, true);
   assert.match(denied.error, /需要管理员批准/);
+  assert.match(denied.error, /不用重复调用/, '批准后宿主会自动执行，不能再引导模型重试');
   const pending = listPendingApprovals(dataDir).find((item) => item.pluginId === 'demo' && item.target === 'BVZ');
   assert.ok(pending, '待批已登记');
   assert.equal(pending.preview, '内容', 'actionPreview 参数进了待批预览');

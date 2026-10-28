@@ -28,6 +28,7 @@ import {
 } from '../core/tier-slider.js';
 export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider };
 import { formatFullTime, formatShortTime, quotePrefixFor, safeSlice, sanitizeUserText, resolveSelfName, stripQuoteMessageId } from '../core/util.js';
+import { filterBlockedHistory } from '../core/blocklist.js';
 import { displayNameOf } from '../core/display-name.js';
 import { voiceForPersona } from '../personas.js';
 import { buildStickerContext, buildStickerStrategyHint } from '../onebot/stickers.js';
@@ -966,23 +967,8 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
       return { ...m, mid: null, reply: null, text: `${label} ${stripQuoteMessageId(m.text)}` };
     });
   }
-  // 屏蔽名单兜底过滤：屏蔽生效前已存档的历史消息，也不能再进提示词。
-  // 入口拦截只管"新消息"，这里管"老库存"。机器人自己的发言（self）不过滤。
-  // 跨会话共享时按消息自己的群号取屏蔽名单，不能只按当前会话过滤。
-  const [pKind, pId] = String(chatKey || '').split(':');
-  if (crossScope) {
-    const blockedSets = new Map(Object.entries(getConfig().blocklist || {})
-      .map(([group, list]) => [String(group), new Set((Array.isArray(list) ? list : []).map(String))]));
-    messages = messages.filter((m) => {
-      if (m.self) return true;
-      const [kind, id] = String(m.chatKey || '').split(':');
-      if (kind !== 'group' || !id) return true;
-      return !blockedSets.get(String(id))?.has(String(m.senderId));
-    });
-  } else if (pKind === 'group' && pId) {
-    const blocked = new Set((getConfig().blocklist?.[pId] || []).map(String));
-    if (blocked.size) messages = messages.filter((m) => m.self || !blocked.has(String(m.senderId)));
-  }
+  // 屏蔽名单兜底：屏蔽前已存档的消息也不能再进提示词；跨会话按消息自己的群号过滤。
+  messages = filterBlockedHistory(messages, chatKey, { crossScope });
   messages = messages.slice(-maxLimit);
   const maxChars = Math.min(PAST_STATE_MAX_CHARS, Math.max(100, Number(cfg.pastStateMaxChars) || 24000));
   let remaining = maxChars;

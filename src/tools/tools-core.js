@@ -154,6 +154,7 @@ async function stickerLookupHint(ctx, key) {
 }
 
 import { normalizeMessageList, safeSlice, sanitizeUserText, textWithQuote, unquoteJsonString, stripQuoteMessageId } from '../core/util.js';
+import { filterBlockedHistory } from '../core/blocklist.js';
 import { displayNameOf } from '../core/display-name.js';
 import { setMemberNote } from '../memory/memory-global.js';
 import { repairUnescapedStringQuotes } from '../core/json-repair.js';
@@ -1824,13 +1825,14 @@ export function buildToolDefs() {
           return ok({
             items: result.items.map((item) => ({
               bvid: item.id,
-              title: item.title,
-              up: item.up,
+              // 标题/UP/简介来自公开页面，按不可信文本处理，去掉段头伪装
+              title: sanitizeUserText(String(item.title ?? '')),
+              up: sanitizeUserText(String(item.up ?? '')),
               durationSec: item.duration,
               play: item.play,
-              tags: item.tags,
+              tags: (Array.isArray(item.tags) ? item.tags : []).map((tag) => sanitizeUserText(String(tag))),
               url: item.url,
-              summary: safeSlice(item.desc, 200)
+              summary: sanitizeUserText(safeSlice(String(item.desc ?? ''), 200))
             })),
             note: '选好后用 share_bilibili 分享（会先发封面，再发标题+链接+你的话），别念标题；不要用 send_message 重复发链接。不想发就用 life_feed_feedback 标记 skip。'
           });
@@ -2119,7 +2121,7 @@ export function buildToolDefs() {
         const offsetBase = sharedContext
           ? Math.max(0, pastCount - Math.max(0, Number(ctx.triggerEntries?.length) || 0))
           : pastCount;
-        const messages = ctx.store.recent(ctx.chatKey, {
+        let messages = ctx.store.recent(ctx.chatKey, {
           limit,
           offset: offset + offsetBase,
           scope: crossScope ? 'all' : (sharedPrivate ? 'private' : 'chat'),
@@ -2128,6 +2130,8 @@ export function buildToolDefs() {
         })
           // 引擎发的游戏私聊（身份/查验结果/行动回执）连翻页都不该看到：模型在私聊里不是上帝视角
           .filter((m) => m.eventKind !== 'game-secret');
+        // 与【过去状态】同一口径：屏蔽名单生效前存档的消息，翻页也不能漏出来。
+        messages = filterBlockedHistory(messages, ctx.chatKey, { crossScope });
         return ok({
           count: messages.length,
           messages: messages.map((m) => {

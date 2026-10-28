@@ -539,7 +539,7 @@ export class LifeFeedManager {
     const item = this.state.candidates.find((candidate) => candidate.id === String(id || ''));
     if (!item) return { error: '这条候选不在队列里（可能已过期或已被分享）' };
     item.offeredAt = now;
-    this.state.offers.push({ day, id: item.id, upMid: item.upMid, tags: item.tags || [], at: now, manual: true });
+    this.state.offers.push({ day, id: item.id, upMid: item.upMid, tags: item.tags || [], at: now, manual: manual === true });
     this.state.records.unshift({ at: now, action: 'manual-share', id: item.id, day });
     this.#prune(now);
     this.#save();

@@ -116,11 +116,21 @@ test('群聊与私聊共用上下文：跨会话消息带来源标签、无 mid�
   store.close();
 });
 
-test('跨会话共享时屏蔽名单按消息自己的群过滤', () => {
+test('跨会话共享时屏蔽名单按消息自己的群过滤（提示词与翻页同口径）', async () => {
   configWith(false, true, { 9: ['9'] });
   const store = seed();
   const state = buildPastState(store, 'private:1');
   assert.doesNotMatch(state.text, /群里说的话/, '被屏蔽群员的消息不能随共享漏进别的会话');
   assert.match(state.text, /另一个群的话/, '别的群不受影响');
+
+  const tool = buildToolDefs().find((d) => d.name === 'get_recent_messages');
+  const result = await executeTool([tool], {
+    chatKey: 'private:1',
+    store,
+    session: { pastStateCount: 0 }
+  }, 'get_recent_messages', JSON.stringify({ limit: 10 }));
+  const payload = JSON.parse(result.content);
+  assert.ok(payload.messages.some((m) => m.text.includes('另一个群的话')), '未屏蔽的群仍可翻到');
+  assert.ok(!payload.messages.some((m) => m.text.includes('群里说的话')), '翻页不能绕过屏蔽名单');
   store.close();
 });

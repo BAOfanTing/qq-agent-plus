@@ -754,7 +754,7 @@ export class PluginRegistry {
       if (pending.duplicate !== true) void this.#notifyOwnerApproval(pending);
       return denied(
         `需要管理员批准：${declared?.label || action}${target ? ` → ${target}` : ''}。`
-          + `已通知管理员（待批编号 ${pending.id}），批准后让用户再试一次即可`,
+          + `已通知管理员（待批编号 ${pending.id}），批准后会自动执行一次，不用重复调用`,
         'pending',
         pending.id
       );
@@ -879,6 +879,7 @@ export class PluginRegistry {
       `插件「${pending.pluginName}」已批准并自动执行：${pending.label || pending.action}`
         + `${pending.target ? ` → ${pending.target}` : ''}`,
       `结果：${result.ok ? '成功' : '失败'}${result.message ? `：${result.message}` : ''}`
+        + (result.ok ? '（本次已执行，不需要让机器人重复调用）' : '')
     ].join('\n');
     const sent = await this.#sendOwnerNotice(text);
     if (!sent.delivered) this.log(`[plugins] 自动重试结果通知发送失败（${pending.id}）：${sent.error}`);

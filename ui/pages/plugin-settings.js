@@ -249,7 +249,7 @@ async function decidePendingApproval(id, pendingId, decision, uses = 1) {
       result.retry.ok ? 'success' : 'error');
       return;
     }
-    setSettingsStatus(id, '已批准一次，让用户再试即可', 'success');
+    setSettingsStatus(id, '已批准一次；模型下次调用会直接执行', 'success');
   } catch (error) {
     setSettingsStatus(id, `处理失败：${String(error?.message || error)}`, 'error');
   }
