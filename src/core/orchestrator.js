@@ -3156,19 +3156,31 @@ export class Orchestrator {
     const vis = memoryVisibilityOf(cfg);
     // 只要这个人的任何一条印象在当前会话不可见（私聊来源/perChat），就跳过整理：
     // 整理模型看到的是全量印象、写回也会整份替换，混着整理会把不可见内容带进群或删掉。
+    const invisibleMembers = [];
     const existing = this.memory.members(chatKey).filter((member) => {
       const impressions = Array.isArray(member.impressions) ? member.impressions : [];
-      return visibleImpressions(impressions, chatKey, vis).length === impressions.length;
+      if (visibleImpressions(impressions, chatKey, vis).length === impressions.length) return true;
+      invisibleMembers.push(member);
+      return false;
     });
+    // 被可见性排除不等于没有记忆，不能在指定目标或发现新人时重新纳入。
+    const invisibleUserIds = new Set(invisibleMembers.map((member) => String(member.userId || '')));
 
     // ── 选出要整理的人 ──
     const targets = [];
-    const skipped = [];
+    const skipped = invisibleMembers
+      .filter((member) => !only || only.has(String(member.userId || '')))
+      .map((member) => ({
+        userId: member.userId,
+        name: member.name,
+        reason: '存在当前会话不可见的印象，跳过整理'
+      }));
 
     // 指定群友但记忆里还没有 → 也要能"新建"印象（这是本功能的关键价值：
     // 聊了 200 条却零印象的人，可以手动让他被分析一次）
     if (only) {
       for (const uid of only) {
+        if (invisibleUserIds.has(uid)) continue;
         const found = existing.find((m) => String(m.userId || '') === uid);
         if (found) {
           const resolved = this.#resolveIdentity(chatKey, found, stats, notes);
@@ -3190,7 +3202,7 @@ export class Orchestrator {
       }
     } else {
       // 先整理记忆里已有的人
-      const knownUserIds = new Set();
+      const knownUserIds = new Set(invisibleUserIds);
       // 反查之后，同一个人的两条记录（"只有名字的遗留条目" + 本人的记录）会指向同一个 QQ 号：
       // 必须并成一条再送给模型 —— 分开整理的话，后写回的那条会把前一条的并集结果覆盖掉。
       const targetByUid = new Map();
