@@ -43,7 +43,8 @@ function context(patch = {}) {
       chatKey: 'group:1',
       session: { id: 'session', leaseId: 'lease', sent: [], feedbacks: [] },
       sender: {
-        sendSticker: async (...args) => { sends.push(args); return { message_id: 7 }; }
+        sendSticker: async (...args) => { sends.push({ mode: 'sticker', args }); return { message_id: 7 }; },
+        sendImage: async (...args) => { sends.push({ mode: 'image', args }); return { message_id: 8 }; }
       },
       stickers: manager,
       store: { activeMembers: () => [], recent: () => [], findByMid: () => null },
@@ -91,6 +92,7 @@ test('端到端：拿到 b64_json → 真落库（addManual）→ 自动发到�
     assert.equal(saved.sent, true);
     assert.equal(saved.messageId, 7);
     assert.equal(f.sends.length, 1, '生成成功后必须已经发出去一次');
+    assert.equal(f.sends[0].mode, 'sticker', '默认仍按表情发送（旧行为不变）');
     assert.equal(f.ctx.session.sent.length, 1, '会话记录里要有这条图片');
     const forSend = await f.manager.findForSend(saved.id);
     assert.ok(forSend?.url?.startsWith('base64://'), '有 localFile 的条目要能给 base64 内联地址');
@@ -266,6 +268,29 @@ test('系统提示词不再教「生成后再调 send_sticker」（否则一次�
   const prompt = fs.readFileSync(path.resolve('src/llm/prompt.js'), 'utf8');
   assert.doesNotMatch(prompt, /再用 send_sticker 发出去/);
   assert.match(prompt, /生成后会自动发到当前会话/);
+});
+
+test('imageGen.sendAs=image 时生成图按普通图片发送（issue #67）', async () => {
+  resetImageQuotaForTest();
+  const { updateConfig } = await import('../src/core/config.js');
+  updateConfig({ imageGen: { sendAs: 'image', autoSend: true } });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] })
+  });
+  try {
+    const f = context();
+    const res = await tool('generate_image').execute(f.ctx, { prompt: '发普通图片' });
+    assert.equal(res.isError, undefined, res.content);
+    assert.equal(f.sends.length, 1);
+    assert.equal(f.sends[0].mode, 'image', 'sendAs=image 必须走 sendImage，不能带表情标记');
+    assert.equal(f.ctx.session.sent[0].type, 'image');
+  } finally {
+    globalThis.fetch = realFetch;
+    updateConfig({ imageGen: { sendAs: 'sticker' } });
+  }
 });
 
 test('imageGen.autoSend=false 时只入库、不自动发送', async () => {

@@ -696,17 +696,18 @@ test('㉕ B4：消息已送达后，记账失败不能改判成「发送失败�
     '兜住之后不能把记账错误再抛出去 —— 那会让模型以为没送达而重发');
 });
 
-test('㉖ B4 正解：送达后的记账（appendSelf + onSent）十条写路径都要被单独兜住', async () => {
+test('㉖ B4 正解：送达后的记账（appendSelf + onSent）十一条写路径都要被单独兜住', async () => {
   // 上一版只包了 #deliver 里的 finishSend，而复现点是 appendSelf / onSent ——
   // 锚点认证了一个没覆盖复现路径的修复（2026-10-04 全面复审）。这里盯真正的落点。
   // 第六条是 set_group_card（PR#19 合并后补上的，2026-10-05 复审）；
   // 第七条是 sendForwardCard（合并转发卡片，2026-10-07 协议端能力接入）；
   // 第八~十条是 aiVoice / groupFile / albumPhoto（QQ 原生语音、群文件、群相册上传 ——
-  // 2026-10-07 复审 P2 把三条从"直接 onebot.call"收进发送队列，同款兜底一并补上）。
+  // 2026-10-07 复审 P2 把三条从"直接 onebot.call"收进发送队列，同款兜底一并补上）；
+  // 第十一条是 sendImage（生图按普通图片发送，issue #67）。
   const src = fs.readFileSync('src/onebot/sender.js', 'utf8');
   assert.match(src, /#afterSent\(run\) \{/, '要有「送达后记账」的统一兜底');
   const wrapped = (src.match(/this\.#afterSent\(\(\) => \{/g) || []).length;
-  assert.equal(wrapped, 10, `文本/贴纸/语音/拍一拍/表情/改群名片/转发卡片/QQ语音/群文件/群相册 十条写路径都要包（实际 ${wrapped}）`);
+  assert.equal(wrapped, 11, `文本/贴纸/语音/拍一拍/表情/改群名片/转发卡片/QQ语音/群文件/群相册/普通图片 十一条写路径都要包（实际 ${wrapped}）`);
   // 每处包里必须真的同时含 appendSelf 与 onSent
   // 每处包里必须真的同时含 appendSelf 与 onSent（按出现位置取窗口：花括号嵌套正则不可靠）
   let from = 0;

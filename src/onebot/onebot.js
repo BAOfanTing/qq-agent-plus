@@ -31,6 +31,41 @@ const MEDIA_TIMEOUT_MS = 60000;
 // ≈10.7MiB = 8MiB 原始图 × 4/3，在实测范围内且留有余量），其余流量保持原 HTTP 路线不动。
 const HTTP_BODY_SAFE_MAX = 1536 * 1024;
 
+/**
+ * 图片消息段（贴纸与普通图片共用）：reply/at 校验只在一处维护。
+ * asSticker=true 时带 sub_type/summary，让 QQ 按表情样式渲染；false 就是普通图片（可保存）。
+ */
+function imageMessageSegments(kind, imageUrl, { replyToMessageId = null, atUserId = null, asSticker = true } = {}) {
+  const segments = [];
+  if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
+    const rid = String(replyToMessageId).trim();
+    if (!/^-?[1-9]\d*$/.test(rid)) {
+      throw new OneBotActionError('replyToMessageId 必须是非零整数', {
+        action: kind === 'private' ? 'send_private_msg' : 'send_group_msg',
+        outcome: 'failed'
+      });
+    }
+    segments.push({ type: 'reply', data: { id: rid } });
+  }
+  if (atUserId !== undefined && atUserId !== null && String(atUserId).trim() !== '') {
+    const at = String(atUserId).trim();
+    if (!/^\d+$/.test(at)) {
+      throw new OneBotActionError('atUserId 必须是正整数 QQ 号，且不能为 all', {
+        action: kind === 'private' ? 'send_private_msg' : 'send_group_msg',
+        outcome: 'failed'
+      });
+    }
+    segments.push({ type: 'at', data: { qq: at } });
+  }
+  segments.push({
+    type: 'image',
+    data: asSticker
+      ? { file: String(imageUrl), sub_type: 1, summary: '[动画表情]' }
+      : { file: String(imageUrl) }
+  });
+  return segments;
+}
+
 export class OneBotActionError extends Error {
   constructor(message, {
     action = '',
@@ -513,32 +548,16 @@ export class OneBotClient {
   }
 
   async sendSticker(kind, id, imageUrl, { replyToMessageId = null, atUserId = null, signal } = {}) {
-    const segments = [];
-    if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
-      const rid = String(replyToMessageId).trim();
-      if (!/^-?[1-9]\d*$/.test(rid)) {
-        throw new OneBotActionError('replyToMessageId 必须是非零整数', {
-          action: kind === 'private' ? 'send_private_msg' : 'send_group_msg',
-          outcome: 'failed'
-        });
-      }
-      segments.push({ type: 'reply', data: { id: rid } });
-    }
-    if (atUserId !== undefined && atUserId !== null && String(atUserId).trim() !== '') {
-      const at = String(atUserId).trim();
-      if (!/^\d+$/.test(at)) {
-        throw new OneBotActionError('atUserId 必须是正整数 QQ 号，且不能为 all', {
-          action: kind === 'private' ? 'send_private_msg' : 'send_group_msg',
-          outcome: 'failed'
-        });
-      }
-      segments.push({ type: 'at', data: { qq: at } });
-    }
     // sub_type/summary 是「按表情样式发出」的呈现元数据：QQ 只有拿到它们才把这张图渲染成
     // 表情（否则就是普通图片，用户 2026-10-07 反馈的"发表情包变图片"）；SnowLuma ≥1.14.20 的上传
     // 管线才把它们真正带上线（群里 extData、私聊 bytesPbReserveC2c），旧版忽略、不报错。
-    // 本函数是全仓唯一的图片段出口（贴纸库是机器人唯一的出图渠道），所以只加在这一处。
-    segments.push({ type: 'image', data: { file: String(imageUrl), sub_type: 1, summary: '[动画表情]' } });
+    const segments = imageMessageSegments(kind, imageUrl, { replyToMessageId, atUserId, asSticker: true });
+    return this.sendSegments(kind, id, segments, signal, { timeoutMs: MEDIA_TIMEOUT_MS });
+  }
+
+  /** 普通图片（不带表情标记，群友可直接保存）。生成图按配置走这里（issue #67）。 */
+  async sendImage(kind, id, imageUrl, { replyToMessageId = null, atUserId = null, signal } = {}) {
+    const segments = imageMessageSegments(kind, imageUrl, { replyToMessageId, atUserId, asSticker: false });
     return this.sendSegments(kind, id, segments, signal, { timeoutMs: MEDIA_TIMEOUT_MS });
   }
 

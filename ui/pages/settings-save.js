@@ -632,6 +632,7 @@ async function saveConfig({ quiet = false } = {}) {
           ...g,
           enabled: chk('#cfg-img-enabled', g.enabled === true),
           autoSend: chk('#cfg-img-autosend', g.autoSend !== false),
+          sendAs: val('#cfg-img-send-as', g.sendAs === 'image' ? 'image' : 'sticker') === 'image' ? 'image' : 'sticker',
           baseUrl: String(val('#cfg-img-baseurl', g.baseUrl || '') || '').trim(),
           model: String(val('#cfg-img-model', g.model || '') || '').trim(),
           size: String(val('#cfg-img-size', g.size || '') || '').trim(),

@@ -866,12 +866,15 @@ export function buildToolDefs() {
           try {
             const sendable = await ctx.stickers.findForSend(entry.id);
             if (!sendable?.url) throw new Error('生成的图片没有可发送的地址');
-            const sent = await ctx.sender.sendSticker(ctx.chatKey, sendable, {
-              runId: ctx.session.leaseId, signal: ctx.signal
-            });
+            // 默认仍按表情发送（保持 0.9.x 行为）；imageGen.sendAs='image' 时发普通图片，
+            // 群友可以直接保存（issue #67）。表情库手动发表情不受这个开关影响。
+            const sendAsImage = cfg.imageGen?.sendAs === 'image';
+            const sent = sendAsImage
+              ? await ctx.sender.sendImage(ctx.chatKey, sendable, { runId: ctx.session.leaseId, signal: ctx.signal })
+              : await ctx.sender.sendSticker(ctx.chatKey, sendable, { runId: ctx.session.leaseId, signal: ctx.signal });
             afterSent(() => {
               ctx.stickers.markUsed(entry.id, String(ctx.session.triggerText || '').slice(0, 100));
-              ctx.session.sent.push({ type: 'sticker', text: `[生成的图:${sanitizeUserText(label.slice(0, 40))}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
+              ctx.session.sent.push({ type: sendAsImage ? 'image' : 'sticker', text: `[生成的图:${sanitizeUserText(label.slice(0, 40))}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
               ctx.emit('session-update', ctx.session.id);
             });
             return ok({

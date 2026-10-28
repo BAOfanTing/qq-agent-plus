@@ -495,6 +495,40 @@ export class SendQueue {
   }
 
   /**
+   * 发送一张普通图片（不带表情标记，群友可直接保存）。生成图按 imageGen.sendAs='image'
+   * 走这条；与 sendSticker 共用限频、禁言预检、outbox 记账与不确定结果防线（issue #67）。
+   */
+  sendImage(chatKey, image, options = {}) {
+    const [kind, id] = String(chatKey).split(':');
+    const chain = this.#chain(chatKey);
+    return chain(async () => {
+      if (options.runId && this.store.hasUncertainEffects(options.runId)) throw new Error('Previous send delivery is uncertain');
+      this.#checkRate(chatKey);
+      await this.#signalTyping(kind, id, options);
+      await sleep(randInt(600, 1500));
+      const data = await this.#deliver(chatKey, options, { type: 'image', id: image.id }, () => this.onebot.sendImage(kind, id, image.url, {
+        replyToMessageId: options.replyToMessageId ?? null,
+        atUserId: options.atUserId ?? null,
+        signal: options.signal
+      }));
+      const ts = Date.now();
+      let targetUserId = this.#replyTarget(chatKey, options);
+      if (!targetUserId && kind === 'private') targetUserId = String(id);
+      this.#afterSent(() => {
+        this.store.appendSelf(chatKey, {
+          text: `[图片:${image.desc || image.localNote || image.id}]`,
+          ts,
+          mid: data?.message_id ?? null,
+          targetUserId,
+          eventKind: 'message'
+        });
+        this.onSent?.({ chatKey, text: '[图片]', messageId: data?.message_id ?? null });
+      });
+      return { message_id: data?.message_id ?? null };
+    });
+  }
+
+  /**
    * QQ 原生 AI 语音（send_qq_voice 工具）：群聊限定，协议端 SnowLuma ≥1.14.20。
    * 走 #deliver —— 与文本/语音/贴纸同款：限频、禁言预检、outbox 记账。
    * （2026-10-07 复审 P2：原先工具直接 onebot.call，模型抽风时没有任何限频。）

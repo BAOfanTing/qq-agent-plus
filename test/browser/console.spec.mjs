@@ -82,6 +82,13 @@ test('图片生成：自定义请求参数保存后回显', async ({ page }) => 
   // 回显是格式化后的 JSON（多行缩进），按解析后的对象比对，别用紧凑字符串正则
   const echoed = await page.locator('#cfg-img-extra-body').inputValue();
   expect(JSON.parse(echoed)).toEqual({ output_watermark: { enabled: false } });
+
+  // 生成后发送格式（issue #67）：默认表情，可切普通图片；切换后落盘
+  await expect(page.locator('#cfg-img-send-as')).toHaveValue('sticker');
+  await page.selectOption('#cfg-img-send-as', 'image');
+  await page.click('#save-cfg-btn');
+  await expect(page.locator('#cfg-save-result')).toHaveText('已保存 ✓');
+  await expect.poll(async () => (await (await page.request.get('/api/config')).json()).imageGen.sendAs).toBe('image');
 });
 
 test('技能页：渲染内置技能并可全局启停', async ({ page }) => {

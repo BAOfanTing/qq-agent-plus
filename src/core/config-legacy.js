@@ -271,6 +271,7 @@ export const DEFAULT_CONFIG = {
     responseFormat: '',       // 留空最兼容（新版 OpenAI 会因未知参数 400）；可填 b64_json / url
     maxPerHour: 6,            // 全局每小时最多生成几张（按张计费，硬闸门）
     autoSend: true,           // 生成成功后直接发到当前会话（false = 只入库，等 send_sticker）
+    sendAs: 'sticker',        // 自动发送格式：sticker=表情（默认，旧行为）/ image=普通图片（可保存）
     timeoutMs: 120000,        // 生图比对话慢
     extraBody: {}             // 额外请求参数（个别网关要 quality/style 之类）
   },

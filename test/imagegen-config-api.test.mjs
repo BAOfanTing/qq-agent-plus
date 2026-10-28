@@ -158,3 +158,16 @@ test('「显示」按钮的端点：回环请求能取回明文 Key；不可信�
   assert.notEqual(evil.status, 200, '跨站来源不该拿到明文 Key');
   assert.equal(evil.body?.apiKey, undefined);
 });
+
+test('imageGen.sendAs：默认 sticker，可保存 image，非法值回落 sticker', async (t) => {
+  const { request } = await boot(t);
+  const initial = await request('/api/config');
+  assert.equal(initial.body.imageGen.sendAs, 'sticker', '默认保持旧行为（表情）');
+
+  const saved = await request('/api/config', { method: 'POST', body: { imageGen: { sendAs: 'image' } } });
+  assert.equal(saved.status, 200);
+  assert.equal(getConfig().imageGen.sendAs, 'image');
+
+  await request('/api/config', { method: 'POST', body: { imageGen: { sendAs: 'bogus' } } });
+  assert.equal(getConfig().imageGen.sendAs, 'sticker', '非法值不能落盘成第三种状态');
+});

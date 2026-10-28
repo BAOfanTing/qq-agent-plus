@@ -5075,6 +5075,11 @@ export function createApp({
     // 不能把真值换成占位，否则每个生图请求都会带上 hasAuthorization。
     if (patch?.imageGen && typeof patch.imageGen === 'object') {
       const imgGuard = sectionBody(patch.imageGen);
+      // 发送格式只认两个值；手改配置或旧前端传来的其它值一律回落默认（表情），
+      // 免得以后新增枚举时旧值在运行期变成"既不是图片也不是表情"的第三种状态。
+      if (imgGuard.sendAs !== undefined && imgGuard.sendAs !== 'image' && imgGuard.sendAs !== 'sticker') {
+        imgGuard.sendAs = 'sticker';
+      }
       const raw = imgGuard.extraBody;
       if (raw !== undefined) {
         const isReplace = raw && typeof raw === 'object' && !Array.isArray(raw) && '__replace__' in raw;

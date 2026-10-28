@@ -257,6 +257,12 @@ function renderAsrSection(c) {
     <div class="hint">开启后群友说「画一张」时，机器人会调用服务商的生图接口生成图片。默认生成后直接发出；
       关掉自动发送后，图片只进表情库，模型需要时再调 send_sticker。这是<strong>按张计费</strong>的，
       每小时上限是唯一的闸门，模型不会主动生成，仅在收到请求时调用。</div>
+    <div class="field"><label for="cfg-img-send-as">生成后发送格式</label>
+      <select id="cfg-img-send-as">
+        <option value="sticker" ${c.imageGen?.sendAs === 'image' ? '' : 'selected'}>表情包（默认，与以前一致）</option>
+        <option value="image" ${c.imageGen?.sendAs === 'image' ? 'selected' : ''}>普通图片（群友可以直接保存）</option>
+      </select>
+      <div class="hint">只影响 generate_image 自动发送的图；表情库手动发表情不受影响。</div></div>
     <div class="field"><label for="cfg-img-service">服务预设</label>
       <select id="cfg-img-service"><option value="">（加载中…）</option></select>
       <div class="hint" id="img-preset-hint"></div></div>
