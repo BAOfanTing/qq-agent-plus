@@ -1972,25 +1972,36 @@ try {
   //    identity-pilot-update，不能退回只标 stickers/slang）；③ 资产/身份回声监听器带着守卫。
   const featuresSrc = fs.readFileSync(path.join(ROOT, 'ui', 'pages', 'features.js'), 'utf8');
   const appSrc = fs.readFileSync(path.join(ROOT, 'ui', 'app.js'), 'utf8');
-  const wrapCount = (featuresSrc.match(/withAssetWrite\(async/g) || []).length;
-  const finishCount = (featuresSrc.match(/await finishAssetMutation\(/g) || []).length;
+  // 批量表情维护（runStickerBulkAction）以单个在途窗口包住多次逐项写入，结束时只整页重拉一次，
+  // 没有逐项 finishAssetMutation —— 这是唯一被豁免的封装点；把它整段摘掉后再数，
+  // 其余每个普通保存点仍必须严格一一配对（PR #66 复审：不允许"+1 就行"的数字放宽）。
+  const bulkAt = featuresSrc.indexOf('async function runStickerBulkAction');
+  const bulkEnd = bulkAt >= 0 ? featuresSrc.indexOf('function openSlangAssetEditor', bulkAt) : -1;
+  const singleWriteSrc = bulkAt >= 0 && bulkEnd > bulkAt
+    ? featuresSrc.slice(0, bulkAt) + featuresSrc.slice(bulkEnd)
+    : featuresSrc;
+  const wrapCount = (singleWriteSrc.match(/withAssetWrite\(async/g) || []).length;
+  const finishCount = (singleWriteSrc.match(/await finishAssetMutation\(/g) || []).length;
   const guardHit = (name) => {
     const at = appSrc.indexOf(`addEventListener('${name}'`);
     return at >= 0 && appSrc.slice(at, at + 900).includes('assetWriteInFlight');
   };
-  // 批量表情维护会以单个在途窗口包住多次逐项写入，不存在逐个 finishAssetMutation；
-  // 允许这个额外的封装点，其余每个普通保存点仍必须一一配对。
-  const guardPins = wrapCount >= 5 && wrapCount >= finishCount && wrapCount <= finishCount + 1
+  const guardPins = wrapCount >= 5 && wrapCount === finishCount
+    && bulkAt >= 0 && bulkEnd > bulkAt
+    && featuresSrc.slice(bulkAt, bulkEnd).includes('withAssetWrite(async')
+    && featuresSrc.slice(bulkAt, bulkEnd).includes('loadAssetObservatory()')
     && featuresSrc.includes("const inFlight = { kind, id: String(entry.id ?? entry.userId ?? '') };")
     && featuresSrc.includes('state.assetDeleteInFlight = inFlight;')
     && featuresSrc.includes('if (state.assetDeleteInFlight === inFlight) state.assetDeleteInFlight = null;')
     && guardHit('asset-update') && guardHit('identity-pilot-update');
   guardPins ? pass++ : fail++;
   console.log('  ' + (guardPins ? 'OK   ' : 'FAIL ')
-    + `写入/删除在途守卫的源码约定保持（保存点包裹 ${wrapCount}/${finishCount}）`);
+    + `写入/删除在途守卫的源码约定保持（保存点包裹 ${wrapCount}/${finishCount} + 批量窗口豁免）`);
 
+  const zipImagesSrc = fs.readFileSync(path.join(ROOT, 'ui', 'core', 'zip-images.js'), 'utf8');
   const batchPins = featuresSrc.includes('unzipStickerImages(file)')
-    && featuresSrc.includes('new DecompressionStream(\'deflate-raw\')')
+    && zipImagesSrc.includes("new DecompressionStream('deflate-raw')")
+    && zipImagesSrc.includes("typeof DecompressionStream === 'undefined'")
     && featuresSrc.includes('id="sticker-batch-progress"')
     && featuresSrc.includes('id="asset-sticker-bulk-analyze"')
     && featuresSrc.includes('id="asset-sticker-bulk-delete"')
