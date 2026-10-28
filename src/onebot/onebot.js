@@ -791,15 +791,44 @@ export function cardToText(seg, selfId = '') {
     if (!m) return '';
     return squash(String(m[1]).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1'));
   };
+  const videoHosts = ['bilibili.com', 'b23.tv', 'youtube.com', 'youtu.be', 'douyin.com', 'iesdouyin.com'];
+  const videoUrlInText = (text) => {
+    const decoded = text.replace(/&amp;/gi, '&');
+    for (const match of decoded.matchAll(/https?:\/\/[^\s<>"'\\]+/gi)) {
+      const quoted = /^["']/.test(decoded.slice(match.index + match[0].length));
+      const candidate = decoded.trim() === match[0] || quoted
+        ? match[0] : match[0].replace(/[)\]}.,!，。！？、）】”’]+$/u, '');
+      try {
+        const url = new URL(candidate);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+        if (url.username || url.password) continue;
+        if (videoHosts.some((host) => url.hostname === host || url.hostname.endsWith('.' + host))) return candidate;
+      } catch { /* 非法 URL：继续找下一个候选 */ }
+    }
+    return '';
+  };
+  const findVideoUrl = (value, depth = 0) => {
+    if (depth > 8) return '';
+    if (typeof value === 'string') return videoUrlInText(value);
+    if (value && typeof value === 'object') {
+      for (const child of Object.values(value)) {
+        const url = findVideoUrl(child, depth + 1);
+        if (url) return url;
+      }
+    }
+    return '';
+  };
 
   let title = '';
   let desc = '';
   let prompt = '';
   let nick = '';
   let uin = '';
+  let videoUrl = '';
   if (source.startsWith('{')) {
     try {
       const obj = JSON.parse(source);
+      videoUrl = findVideoUrl(obj);
       const meta = obj?.meta && typeof obj.meta === 'object' ? obj.meta : {};
       const detail = meta.detail_1 || meta.news || meta.music || meta.detail || Object.values(meta)[0] || {};
       title = squash(detail.title || obj.title);
@@ -817,7 +846,8 @@ export function cardToText(seg, selfId = '') {
     if (src && !prompt) prompt = src;
   }
 
-  const body = [title, desc].filter(Boolean).join(' — ');
+  if (!videoUrl) videoUrl = videoUrlInText(source);
+  const body = [title, desc, videoUrl].filter(Boolean).join(' — ');
   const mine = selfId && uin && String(uin) === String(selfId);
   const tags = [prompt, mine ? '你自己的动态' : (nick ? `来自 ${nick}` : '')].filter(Boolean).join(' · ');
   // 聊天记录卡片（app=com.tencent.multimsg，资源 id 在 detail_1.resid）单独标成「卡片聊天记录」：
