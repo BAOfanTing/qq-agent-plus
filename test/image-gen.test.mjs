@@ -286,7 +286,7 @@ test('服务预设表：id 唯一、形状合法；免 Key 的那家不放行就
   const ids = IMAGEGEN_SERVICES.map((s) => s.id);
   assert.equal(new Set(ids).size, ids.length, '预设 id 不能重复');
   for (const s of IMAGEGEN_SERVICES) {
-    assert.ok(s.label && ['openai', 'pollinations'].includes(s.shape), `${s.id} 的 label/shape 不合法`);
+    assert.ok(s.label && ['openai', 'pollinations', 'modelscope'].includes(s.shape), `${s.id} 的 label/shape 不合法`);
     assert.match(String(s.baseUrl ?? ''), /^$|^https:\/\//, `${s.id} 的 baseUrl 必须是 https 或空（自定义那家）`);
   }
   // 地址认家（控制台靠它回填下拉）
@@ -304,6 +304,33 @@ test('服务预设表：id 唯一、形状合法；免 Key 的那家不放行就
   );
   // 但守卫本身没放松：别的跨域地址照旧拒绝
   assert.equal(resolveImageGenAuth({ imageGen: { baseUrl: 'https://random-other.example.com' }, api, apiKey: 'model-key' }).ok, false);
+});
+
+test('魔搭异步生图：创建任务后必须轮询任务结果，不能把 task_id 当图片', async () => {
+  const calls = [];
+  await assert.rejects(
+    generateImage({
+      cfg: { imageGen: { enabled: true, baseUrl: 'https://api-inference.modelscope.cn/v1', model: 'Qwen/Qwen-Image-2.1-Turbo', apiKey: 'ms-token' } },
+      apiCfg: { baseUrl: 'https://gateway.example.com/v1' },
+      prompt: '一只橘猫',
+      modelscopePollMs: 0,
+      fetchFn: async (url, req) => {
+        calls.push({ url: String(url), method: req.method, headers: req.headers, body: req.body && JSON.parse(req.body) });
+        if (req.method === 'POST') {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ task_id: 'task-123' }) };
+        }
+        return { ok: true, status: 200, text: async () => JSON.stringify({ task_status: 'SUCCEED', task_id: 'task-123' }) };
+      }
+    }),
+    /任务已完成但没有返回 output_images/
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, 'https://api-inference.modelscope.cn/v1/images/generations');
+  assert.equal(calls[0].headers['X-ModelScope-Async-Mode'], 'true');
+  assert.equal(calls[0].headers.authorization, 'Bearer ms-token');
+  assert.equal(calls[0].body.model, 'Qwen/Qwen-Image-2.1-Turbo');
+  assert.equal(calls[1].url, 'https://api-inference.modelscope.cn/v1/tasks/task-123');
+  assert.equal(calls[1].headers['X-ModelScope-Task-Type'], 'image_generation');
 });
 
 test('配置访问器：imageGenAvailable 的三态与闸门默认值', async () => {
