@@ -233,12 +233,23 @@ async function toggleWriteSwitch(id, action, enabled) {
 
 async function decidePendingApproval(id, pendingId, decision, uses = 1) {
   try {
-    await api('/api/plugins/approval', {
+    const result = await api('/api/plugins/approval', {
       method: 'POST',
       body: JSON.stringify({ id, pendingId, decision, uses })
     });
     await hydratePluginSettings(id);
-    setSettingsStatus(id, decision === 'reject' ? '已拒绝该请求' : '已批准一次，让用户再试即可', 'success');
+    if (decision === 'reject') {
+      setSettingsStatus(id, '已拒绝该请求', 'success');
+      return;
+    }
+    if (result?.retry) {
+      setSettingsStatus(id, result.retry.ok
+        ? `已批准并自动执行：${String(result.retry.message || '成功')}`
+        : `已批准；自动重试失败：${String(result.retry.message || '未知原因')}`,
+      result.retry.ok ? 'success' : 'error');
+      return;
+    }
+    setSettingsStatus(id, '已批准一次，让用户再试即可', 'success');
   } catch (error) {
     setSettingsStatus(id, `处理失败：${String(error?.message || error)}`, 'error');
   }

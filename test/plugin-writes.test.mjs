@@ -148,13 +148,13 @@ test('写审计：宿主侧记录，最近在前，超过上限裁剪', () => {
   assert.equal(writes[1].outcome, 'ok');
 });
 
-test('注册表全链路：开关隐藏工具 → 未批生成待批 → 批准后执行 → 单次耗尽', async () => {
+test('注册表全链路：开关隐藏工具 → 未批生成待批 → 批准后自动执行 → 额度耗尽', async () => {
   // ① 开关关：工具不注册（模型看不见）
   const off = makeRegistry({ switchOn: false });
   assert.equal(off.registry.toolDefsFor().length, 0, '开关关时 plugin_call 都不该出现');
 
   // ② 开关开、未批：报 needsApproval、生成待批、审计记 pending
-  const { registry } = makeRegistry({ ownerUin: '10001' });
+  const { registry, calls } = makeRegistry({ ownerUin: '10001' });
   const denied = parse(await runTool(registry, { bvid: 'BVZ', text: '内容' }));
   assert.equal(denied.needsApproval, true);
   assert.match(denied.error, /需要管理员批准/);
@@ -163,22 +163,27 @@ test('注册表全链路：开关隐藏工具 → 未批生成待批 → 批准�
   assert.equal(pending.preview, '内容', 'actionPreview 参数进了待批预览');
   assert.equal(listPluginWrites(dataDir, 'demo')[0].outcome, 'pending');
 
-  // ③ 私聊同意：只有 owner 本人、且消息就是"同意/拒绝"
+  // ③ 私聊同意：只有 owner 本人；批准后宿主持有原始调用，自动重放一次
   const stranger = registry.handleOwnerApprovalText('同意', '99999');
   assert.equal(stranger.handled, false, '非 owner 不拦消息');
-  const chat = registry.handleOwnerApprovalText('同意', '10001');
+  const chat = registry.handleOwnerApprovalText(`同意 ${pending.id} 2`, '10001');
   assert.equal(chat.handled, true);
   assert.match(chat.reply, /已批准/);
+  assert.match(chat.reply, /2 次额度/);
+  assert.match(chat.reply, /自动执行/);
+  await tick();
+  assert.equal(calls.length, 1, '批准后应自动执行原请求，用户不用再说一遍');
+  assert.deepEqual(calls[0].args, { bvid: 'BVZ', text: '内容' });
+  assert.equal(listPluginWrites(dataDir, 'demo')[0].outcome, 'ok', '自动重试也要落审计');
 
-  // ④ 批准后重试：执行成功，插件拿到 approved 标记，审计记 ok，配额扣 1
+  // ④ 还剩 1 次额度：手动重试同一目标直接成功（拨开 60s 下限）
+  registry.lastWriteAt.set('demo', Date.now() - PLUGIN_WRITE_FLOOR_MS - 1000);
   const ok = parse(await runTool(registry, { bvid: 'BVZ', text: '内容' }));
   assert.equal(ok.ok, true);
   assert.deepEqual(ok.approved, { action: 'write', target: 'BVZ' });
-  const writes = listPluginWrites(dataDir, 'demo');
-  assert.equal(writes[0].outcome, 'ok');
-  assert.match(writes[0].note, /回读核验通过/);
+  assert.match(listPluginWrites(dataDir, 'demo')[0].note, /回读核验通过/);
 
-  // ⑤ 单次通行证已耗尽：再调回到"待批"（先把间隔下限拨开，别让 60s 抢戏）
+  // ⑤ 额度已耗尽：再调回到"待批"
   registry.lastWriteAt.set('demo', Date.now() - PLUGIN_WRITE_FLOOR_MS - 1000);
   const again = parse(await runTool(registry, { bvid: 'BVZ', text: '内容' }));
   assert.equal(again.needsApproval, true);
@@ -265,15 +270,15 @@ test('卸载清理：清掉授权与待批，不影响其他插件', () => {
 
 test('预览内容改变：旧批准失效，并为新内容单独生成待批', async () => {
   for (const leftover of listPendingApprovals(dataDir)) rejectPendingApproval(dataDir, leftover.id);
-  const { registry } = makeRegistry({ ownerUin: '10001' });
+  const { registry, calls } = makeRegistry({ ownerUin: '10001' });
   registry.lastWriteAt.set('demo', 0);
   await runTool(registry, { bvid: 'BVP', text: '好评' });
   const pending = listPendingApprovals(dataDir).find((item) => item.target === 'BVP');
   assert.ok(pending, '第一次请求生成待批');
   registry.handleOwnerApprovalText(`同意 ${pending.id}`, '10001');
-
-  const same = parse(await runTool(registry, { bvid: 'BVP', text: '好评' }));
-  assert.equal(same.ok, true, '批准过的同一段内容可以执行');
+  await tick();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].args.text, '好评', '自动重放的是批准时看到的那份正文');
 
   registry.lastWriteAt.set('demo', Date.now() - PLUGIN_WRITE_FLOOR_MS - 1000);
   const changed = parse(await runTool(registry, { bvid: 'BVP', text: '恶意内容' }));
@@ -338,7 +343,7 @@ test('超时/进程退出：结果未知 → 不退批准与配额，并明确�
 
 test('批准摘要绑定完整正文：前 300 字相同、尾巴不同也必须重新批准', async () => {
   for (const leftover of listPendingApprovals(dataDir)) rejectPendingApproval(dataDir, leftover.id);
-  const { registry } = makeRegistry({ ownerUin: '10001' });
+  const { registry, calls } = makeRegistry({ ownerUin: '10001' });
   registry.lastWriteAt.set('demo', 0);
   const head = 'a'.repeat(300);
   await runTool(registry, { bvid: 'BVL', text: head + '尾巴A' });
@@ -346,13 +351,14 @@ test('批准摘要绑定完整正文：前 300 字相同、尾巴不同也必须
   assert.ok(pending, '首次请求生成待批');
   assert.equal(pending.previewLength, 303, '待批要记录完整长度');
   registry.handleOwnerApprovalText(`同意 ${pending.id}`, '10001');
+  await tick();
+  assert.equal(calls.length, 1, '批准后自动重放的是待批时绑定的那份完整正文');
+  assert.equal(calls[0].args.text, head + '尾巴A');
 
-  const same = parse(await runTool(registry, { bvid: 'BVL', text: head + '尾巴A' }));
-  assert.equal(same.ok, true, '同一段完整正文可以执行');
-
+  // 正文只换后 5 个字：没有可用批准，必须生成新的待批（摘要绑定完整正文）
   registry.lastWriteAt.set('demo', Date.now() - PLUGIN_WRITE_FLOOR_MS - 1000);
   const changed = parse(await runTool(registry, { bvid: 'BVL', text: head + '尾巴B' }));
-  assert.equal(changed.needsApproval, true, '只换后 5 个字也要重新批准（摘要必须覆盖完整正文）');
+  assert.equal(changed.needsApproval, true, '只换后 5 个字也要重新批准');
   assert.ok(listPendingApprovals(dataDir).some((item) => item.target === 'BVL' && item.previewLength === 303));
 });
 
@@ -513,7 +519,7 @@ test('QQ 指令：待批列表、多条必须带编号、同意 N 次', () => {
   assert.match(ambiguous.reply, new RegExp(p1.id), '多条待批时回复里要给出编号');
 
   const approved = registry.handleOwnerApprovalText(`同意 ${p1.id} 5`, '10001');
-  assert.match(approved.reply, /5 次有效/);
+  assert.match(approved.reply, /5 次额度/);
   const status = grantsStatus(dataDir, 'demo', { approvals: manifest().approvals, quotas: manifest().quotas });
   assert.equal(status.approvals.write.usesLeft, 5, 'QQ 也应能一次批准多次');
   rejectPendingApproval(dataDir, p2.id);

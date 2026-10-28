@@ -6472,12 +6472,17 @@ html[data-side-rail='1'] .tab .pending-badge { top: 3px; right: 4px; min-width: 
 .ppb-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .ppb-head b { font-size: var(--fs-sm); }
 .ppb-head span { color: var(--muted); font-size: var(--fs-xs); }
-.ppb-rows { display: grid; gap: 4px; }
-.ppb-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text); text-align: left; cursor: pointer; }
+.ppb-rows { display: grid; gap: 2px; }
+.ppb-row { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: var(--r-sm); }
 .ppb-row:hover { background: var(--hover); }
-.ppb-row strong { font-size: var(--fs-sm); flex-shrink: 0; }
-.ppb-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--fs-xs); }
-.ppb-row em { margin-left: auto; flex-shrink: 0; color: var(--muted); font-size: var(--fs-xs); font-style: normal; }
+.ppb-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 4px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; }
+.ppb-open strong { font-size: var(--fs-sm); flex-shrink: 0; }
+.ppb-open span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--fs-xs); }
+.ppb-open em { margin-left: auto; flex-shrink: 0; color: var(--muted); font-size: var(--fs-xs); font-style: normal; }
+.ppb-act { flex-shrink: 0; padding: 2px 8px; border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--bg-2); color: var(--text); font-size: var(--fs-xs); cursor: pointer; }
+.ppb-act:hover { border-color: var(--accent); color: var(--accent); }
+.ppb-act-danger { margin-left: auto; color: var(--danger, #e5484d); }
+.ppb-status { color: var(--muted); font-size: var(--fs-xs); }
 .ppb-warn { color: var(--danger, #e5484d); font-size: var(--fs-xs); font-style: normal; flex-shrink: 0; }
 .ppb-more { color: var(--muted); font-size: var(--fs-xs); }
 

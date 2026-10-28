@@ -261,7 +261,10 @@ export function clearPluginGrants(dataDir, pluginId) {
  * 模型请求了一次未获批准的写操作：登记待批（同 插件+动作+目标 在有效期内只留一条）。
  * 返回带 id，控制台与私聊批准都用它。
  */
-export function requestPendingApproval(dataDir, { pluginId, pluginName = '', action, label = '', target = '', preview = '', manifestHash = '', now = Date.now() } = {}) {
+export function requestPendingApproval(dataDir, {
+  pluginId, pluginName = '', action, label = '', target = '', preview = '',
+  manifestHash = '', retry = null, now = Date.now()
+} = {}) {
   const key = assertAction(action);
   const wanted = normalizeTarget(target);
   if (wanted === null) throw fail('E_ARGS', '待批目标含非法字符（不会生成通配批准）');
@@ -272,6 +275,11 @@ export function requestPendingApproval(dataDir, { pluginId, pluginName = '', act
   const existing = list.find((item) => item.pluginId === pluginId && item.action === key
     && String(item.target || '') === wanted && String(item.previewKey || '') === keyPreview);
   if (existing) return { ...existing, duplicate: true };
+  // 批准后自动重试用的原始调用：只存可以重放的非敏感参数，且限制体积（参数可能在配置/待批里被手改）。
+  const retryCopy = retry && typeof retry === 'object' && typeof retry.tool === 'string' && retry.args && typeof retry.args === 'object'
+    ? { tool: retry.tool.slice(0, 80), args: retry.args, chatKey: String(retry.chatKey || '').slice(0, 80) }
+    : null;
+  const retryOk = retryCopy && JSON.stringify(retryCopy).length <= 8000 ? retryCopy : null;
   const entry = {
     id: `ap_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     pluginId,
@@ -283,6 +291,7 @@ export function requestPendingApproval(dataDir, { pluginId, pluginName = '', act
     previewLength: String(preview).length,
     ...(keyPreview ? { previewKey: keyPreview } : {}),
     ...(manifestHash ? { manifestHash: String(manifestHash) } : {}),
+    ...(retryOk ? { retry: retryOk } : {}),
     createdAt: now,
     expiresAt: now + PENDING_TTL_MS
   };

@@ -3345,9 +3345,12 @@ export function createApp({
         uses, ttlMs: ttlMinutes * 60_000
       });
       auditWrite('plugins.approval', `plugins:${id}:${hit.action}`, { req, target: hit.target, uses, ttlMinutes });
+      // P1：批准后自动重放原调用（只一次；目标/manifest 变化会在 retryApproved 里跳过）
+      const retry = hit.retry?.tool ? await pluginRegistry.retryApproved(hit) : null;
       return json(res, 200, {
         ok: true,
         grant,
+        retry,
         pending: listPendingApprovals(DATA_DIR).filter((item) => item.pluginId === id),
         grants: grantsStatus(DATA_DIR, id, entry.manifest || {})
       });

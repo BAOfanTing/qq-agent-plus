@@ -2,7 +2,7 @@
   "id": "bilibili",
   "apiVersion": 2,
   "name": "B 站",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "搜索与查看 B 站视频、UP 主、热门、评论、字幕；把视频下载合流后发到群里；点赞/投币/收藏/关注/评论/发弹幕（写操作需管理员批准并按天限额）",
   "entry": "index.mjs",
   "capabilities": [
@@ -261,7 +261,7 @@
     },
     {
       "name": "account",
-      "description": "看当前登录账号：whoami（我是谁/登录是否有效/主人绑定是否一致）、doctor（环境与登录自检）、history、favorites、followings。需要配置 Cookie。",
+      "description": "看当前登录账号与消息：whoami（我是谁/登录是否有效/主人绑定是否一致）、doctor（环境与登录自检）、notifications（未读回复/@/点赞）、history、favorites、followings。需要配置 Cookie。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -272,7 +272,8 @@
               "favorites",
               "followings",
               "doctor",
-              "whoami"
+              "whoami",
+              "notifications"
             ],
             "description": "whoami 当前账号 / doctor 自检 / history 历史 / favorites 收藏夹 / followings 关注列表"
           },
@@ -287,6 +288,19 @@
           "cursor": {
             "type": "string",
             "description": "history 翻页用：填上一次返回的 nextCursor，不填从头开始"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "reply",
+              "at",
+              "like"
+            ],
+            "description": "notifications 用：reply 回复我的（默认）/ at @我的 / like 收到的赞"
+          },
+          "limit": {
+            "type": "number",
+            "description": "notifications 用：最多返回条数，默认 20，最大 50"
           }
         },
         "required": [
@@ -430,7 +444,7 @@
     },
     {
       "name": "comment",
-      "description": "在视频下发表一条评论（需要先开开关，且每次发布都要管理员看到**评论全文**后批准这一次）。内容会以你的账号公开可见。",
+      "description": "在视频下发一条评论；传 rpid 时改为回复那条具体评论（内联回复，对方会收到通知）。root 用于回复楼中楼（传根评论 rpid）。需要先开评论开关，且每次都要管理员批准「视频 + 完整正文」。",
       "parameters": {
         "type": "object",
         "properties": {
@@ -441,6 +455,18 @@
           "text": {
             "type": "string",
             "description": "评论内容（1-500 字）"
+          },
+          "timestamps": {
+            "type": "boolean",
+            "description": "可选：把正文里的 mm:ss 自动换成可跳转的视频时间戳链接（默认 false）"
+          },
+          "rpid": {
+            "type": "string",
+            "description": "可选：要回复的评论 rpid（video 返回的评论里有）；不传就是发顶层评论"
+          },
+          "root": {
+            "type": "string",
+            "description": "可选：根评论 rpid；回复一级评论不用传"
           }
         },
         "required": [

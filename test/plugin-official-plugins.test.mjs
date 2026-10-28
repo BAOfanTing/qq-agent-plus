@@ -139,6 +139,10 @@ test('B站插件：主人 UID 绑定、whoami 与一键三连已声明，所有�
   assert.ok(interact.parameters.properties.action.enum.includes('triple'), 'interact 要支持 triple 一键三连');
   const accountTool = manifest.tools.find((tool) => tool.name === 'account');
   assert.ok(accountTool.parameters.properties.what.enum.includes('whoami'), 'account 要支持 whoami');
+  assert.ok(accountTool.parameters.properties.what.enum.includes('notifications'), 'account 要支持 notifications（未读回复/@/赞）');
+  const commentTool = manifest.tools.find((tool) => tool.name === 'comment');
+  assert.ok(commentTool.parameters.properties.rpid, 'comment 要支持 rpid（内联回复具体评论）');
+  assert.equal(manifest.version, '1.1.0');
 
   const src = fs.readFileSync(path.join(dirOf('bilibili'), 'index.mjs'), 'utf8');
   assert.match(src, /async function requireWriteAuth/, '要有统一的写操作鉴权（登录 + 主人 UID 核对）');
@@ -148,6 +152,8 @@ test('B站插件：主人 UID 绑定、whoami 与一键三连已声明，所有�
   assert.match(src, /context?.channel/, '插件要接受宿主传入的 channel=console');
   assert.match(src, /E_WRITE_UNKNOWN/, '写请求 5xx/超时/非 JSON 要标记结果未知');
   assert.match(src, /mergeLoginTokens/, '登录凭据要合并 URL 与 Set-Cookie');
+  assert.match(src, /linkTimestamps/, '评论时间戳链接能力要在源码里');
+  assert.match(src, /x\/msgfeed/, '通知收件箱要读 B 站消息中心');
   const writeEntries = src.match(/await requireWriteAuth\(\)/g) || [];
   assert.ok(writeEntries.length >= 3, `interact/comment/danmaku_send 都要走 requireWriteAuth，实际 ${writeEntries.length} 处`);
   const loginCalls = src.match(/await requireLogin\(\)/g) || [];

@@ -345,6 +345,42 @@ async function viewOf(id) {
     return attribute === 2 || attribute === 3 || attribute === 6;
   }
 
+/** 把正文里的 mm:ss / h:mm:ss 换成可跳转时间戳链接（评论/回复里用，显式传 timestamps:true 才开）。 */
+function linkTimestamps(text, bvid) {
+  const base = `https://www.bilibili.com/video/${bvid}`;
+  return String(text || '').replace(/\b(\d{1,2}):(\d{2})\b/g, (all, mm, ss) =>
+    `${all} ${base}?t=${Number(mm) * 60 + Number(ss)}`);
+}
+
+/** B 站消息中心未读（回复 / @ / 点赞）：只读，给模型决定要不要 use 现有评论能力回复。 */
+async function notificationsFeed({ kind, limit } = {}) {
+  const which = ['reply', 'at', 'like'].includes(String(kind)) ? String(kind) : 'reply';
+  const n = num(limit, 20, 1, 50);
+  const path = which === 'at' ? 'at' : (which === 'like' ? 'like' : 'reply');
+  const data = await httpJson(`${API}/x/msgfeed/${path}?platform=web&mobi_app=web&build=0&ps=${n}`, { auth: true });
+  const items = Array.isArray(data?.data?.items) ? data.data.items : [];
+  const rows = items.slice(0, n).map((entry) => {
+    const item = entry?.item && typeof entry.item === 'object' ? entry.item : {};
+    return {
+      id: String(entry?.id || item?.id || ''),
+      user: String(entry?.user?.nickname || item?.user?.nickname || ''),
+      title: String(item.title || '').slice(0, 120),
+      source: String(item.source_content || '').slice(0, 300),
+      reply: String(item.target_reply_content || '').slice(0, 300),
+      url: String(item.uri || item.native_uri || ''),
+      time: Number(entry?.reply_time || entry?.time || 0)
+    };
+  }).filter((row) => row.id || row.title || row.reply || row.source);
+  return {
+    kind: which,
+    count: rows.length,
+    items: rows,
+    note: rows.length
+      ? '未读列表来自 B 站消息中心；要回复某条评论，用 comment 并传 bvid + rpid。'
+      : '没有未读，或接口未返回条目（需要登录 Cookie）。'
+  };
+}
+
 const tools = {
   async search({ keyword, page, order } = {}) {
     const text = String(keyword || '').trim();
@@ -470,12 +506,13 @@ const tools = {
     };
   },
 
-  async account({ what, mediaId, page, cursor } = {}) {
+  async account({ what, mediaId, page, cursor, kind, limit } = {}) {
     // 只读接口有 SESSDATA 就够；doctor 要在 mid 检查之前（它就是用来排查配置缺项的）
     const auth = await requireLogin({ write: false });
     if (what === 'doctor' || what === 'whoami') {
       return probeStatus();
     }
+    if (what === 'notifications') return notificationsFeed({ kind, limit });
     if (!auth.mid && what !== 'favorites') throw new Error('需要 DedeUserID：请在插件设置里补上（B 站 UID）');
     if (what === 'history') {
       // cursor 语义（ps 固定 20）：翻页用上一次返回的 nextCursor，不是页码
@@ -992,26 +1029,42 @@ const tools = {
     return { ok: true, action, target: info.bvid, folder: folder.title, undo: Boolean(undo), verified };
   },
 
-  async comment({ bvid, text } = {}) {
+  async comment({ bvid, text, rpid, root, timestamps } = {}) {
     const auth = await requireWriteAuth();
     const body = String(text || '').trim();
     if (!body) throw new Error('评论内容不能为空');
     if (body.length > 500) throw new Error('评论最多 500 字');
     const info = await viewOf(bvid);
-    const data = await httpJson(`${API}/x/v2/reply/add`, {
-      method: 'POST', auth: true,
-      form: { oid: info.aid, type: 1, message: body, csrf: auth.bili_jct }
-    });
-    const rpid = Number(data?.data?.rpid) || 0;
+    const message = timestamps === true ? linkTimestamps(body, info.bvid) : body;
+    if (message.length > 500) throw new Error('加时间戳链接后超过 500 字，请删短正文');
+    const parent = String(rpid || '').trim();
+    if (parent && !/^\d+$/.test(parent)) throw new Error('rpid 必须是评论的数字 rpid（可在 video 返回的评论里找到）');
+    const rootId = String(root || '').trim();
+    if (rootId && !/^\d+$/.test(rootId)) throw new Error('root 必须是数字 rpid（回复二级评论时传根评论 rpid）');
+    const form = { oid: info.aid, type: 1, message, csrf: auth.bili_jct };
+    if (parent) Object.assign(form, { parent: Number(parent), root: Number(rootId) || 0 });
+    const data = await httpJson(`${API}/x/v2/reply/add`, { method: 'POST', auth: true, form });
+    const replyId = Number(data?.data?.rpid) || 0;
+    if (parent) {
+      return {
+        ok: true,
+        bvid: info.bvid,
+        rpid: replyId,
+        parent: Number(parent),
+        root: Number(rootId) || 0,
+        url: bvLink(info.bvid),
+        note: '回复已提交（B 站可能先审核，不一定立刻可见）。'
+      };
+    }
     // 回读核验：按 rpid 拉这条评论，拉不到不算 verified（可能被秒删/进审核）
     let verified = false;
-    if (rpid) {
+    if (replyId) {
       try {
-        const back = await httpJson(`${API}/x/v2/reply/view?type=1&oid=${info.aid}&root=${rpid}`, { auth: true });
-        verified = Number(back?.data?.root?.rpid) === rpid || Number(back?.data?.replies?.[0]?.rpid) === rpid;
+        const back = await httpJson(`${API}/x/v2/reply/view?type=1&oid=${info.aid}&root=${replyId}`, { auth: true });
+        verified = Number(back?.data?.root?.rpid) === replyId || Number(back?.data?.replies?.[0]?.rpid) === replyId;
       } catch { verified = false; }
     }
-    return { ok: true, bvid: info.bvid, rpid, verified, url: bvLink(info.bvid) };
+    return { ok: true, bvid: info.bvid, rpid: replyId, verified, url: bvLink(info.bvid) };
   },
 
   async danmaku({ bvid } = {}) {

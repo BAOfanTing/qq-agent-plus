@@ -669,7 +669,7 @@ export class PluginRegistry {
    * 写操作三层门（宿主侧，插件不可绕过）：开关 → 60s 间隔 → 对象级批准（未批则登记待批并
    * 通知管理员）→ 当天配额。返回 {proceed:true, …receipts} 放行，或 {proceed:false, result} 拒绝。
    */
-  #gateWrite(host, tool, args) {
+  #gateWrite(host, tool, args, ctx = null) {
     const cfgNow = this.#config();
     const action = tool.action;
     // 目标只能来自 manifest 声明的参数。三种情况分开处理（2026-10-24 审查 P1）：
@@ -732,7 +732,9 @@ export class PluginRegistry {
       if (Date.now() - lastPending < PLUGIN_WRITE_FLOOR_MS) {
         return denied(`待批请求至少间隔 ${Math.round(PLUGIN_WRITE_FLOOR_MS / 1000)} 秒，请稍后再试`, 'denied', 'rate-floor');
       }
-      // 一次批准只对一个目标：没有针对这个目标的通行证 → 生成待批请求并通知管理员
+      // 一次批准只对一个目标：没有针对这个目标的通行证 → 生成待批请求并通知管理员。
+      // 同时存下原始调用（工具 + 参数 + 来源会话），批准后由宿主自动重放一次，
+      // 用户不用再对机器人说一遍（P1）；体积上限 8KB，由 grants 层收口。
       const pending = requestPendingApproval(this.dataDir, {
         pluginId: host.id,
         pluginName: host.manifest.name,
@@ -740,7 +742,12 @@ export class PluginRegistry {
         label: declared?.label || action,
         target,
         preview,
-        manifestHash
+        manifestHash,
+        retry: {
+          tool: tool.name,
+          args: args && typeof args === 'object' ? JSON.parse(JSON.stringify(args)) : {},
+          chatKey: ctx?.chatKey || ''
+        }
       });
       this.lastPendingAt.set(host.id, Date.now());
       recordPluginWrite(this.dataDir, host.id, { action, target, outcome: 'pending', note: pending.id });
@@ -806,9 +813,38 @@ export class PluginRegistry {
   }
 
   /** 待批请求 → 管理员私聊（fire-and-forget：通知失败不影响待批列表与控制台批准）。 */
-  async #notifyOwnerApproval(pending) {
+  /** 给 owner 发私聊：先走主进程发送队列，失败再走 OneBot HTTP（不受 allow 白名单约束）。 */
+  async #sendOwnerNotice(text) {
     const owner = readOwnerUin(this.getConfig());
-    if (!/^\d{5,15}$/.test(owner || '')) return;
+    if (!/^\d{5,15}$/.test(owner || '')) return { delivered: false, error: '未配置有效的 admin.ownerUin' };
+    const errors = [];
+    const sender = this.getSender?.();
+    if (sender?.sendTextBatch) {
+      try {
+        await sender.sendTextBatch(`private:${owner}`, [text], {});
+        return { delivered: true, error: '' };
+      } catch (error) {
+        errors.push(`WS 私聊：${error?.message ?? error}`);
+      }
+    } else {
+      errors.push('发送队列不可用');
+    }
+    // 主进程的发送队列受 allow.private 等守卫约束；owner 不在白名单时通知会被拒。
+    // 这里直接走 OneBot HTTP 补一条（与 ops 健康检查同一条通道），保证管理员至少能在 QQ 收到。
+    const cfg = this.getConfig() || {};
+    const onebot = cfg.onebot && typeof cfg.onebot === 'object' ? cfg.onebot : {};
+    const fallback = await sendOwnerText({
+      httpUrl: String(onebot.httpUrl || ''),
+      token: String(onebot.httpAccessToken || onebot.accessToken || ''),
+      ownerUin: owner,
+      text
+    }).catch((error) => ({ ok: false, detail: String(error?.message ?? error) }));
+    if (fallback?.ok === true) return { delivered: true, error: '' };
+    errors.push(`HTTP 直发：${fallback?.detail || '失败'}`);
+    return { delivered: false, error: errors.join('；') };
+  }
+
+  async #notifyOwnerApproval(pending) {
     const manifest = this.hosts.get(pending.pluginId)?.manifest || {};
     const status = grantsStatus(this.dataDir, pending.pluginId, {
       approvals: Array.isArray(manifest.approvals) ? manifest.approvals : [],
@@ -830,37 +866,22 @@ export class PluginRegistry {
       `回复「同意 ${pending.id}」批准一次，或「同意 ${pending.id} 5」批准 5 次；「拒绝 ${pending.id}」取消；`
         + `回复「待批」查看全部。${minutes} 分钟内有效。`
     ].filter(Boolean).join('\n');
-    let delivered = false;
-    const errors = [];
-    const sender = this.getSender?.();
-    if (sender?.sendTextBatch) {
-      try {
-        await sender.sendTextBatch(`private:${owner}`, [text], {});
-        delivered = true;
-      } catch (error) {
-        errors.push(`WS 私聊：${error?.message ?? error}`);
-      }
-    } else {
-      errors.push('发送队列不可用');
+    const sent = await this.#sendOwnerNotice(text);
+    markPendingNotified(this.dataDir, pending.id, { ok: sent.delivered, error: sent.error });
+    if (!sent.delivered) {
+      this.log(`[plugins] 待批通知发送失败（${pending.id}）：${sent.error}`);
     }
-    if (!delivered) {
-      // 主进程的发送队列受 allow.private 等守卫约束；owner 不在白名单时通知会被拒。
-      // 这里直接走 OneBot HTTP 补一条（与 ops 健康检查同一条通道），保证管理员至少能在 QQ 收到。
-      const cfg = this.getConfig() || {};
-      const onebot = cfg.onebot && typeof cfg.onebot === 'object' ? cfg.onebot : {};
-      const fallback = await sendOwnerText({
-        httpUrl: String(onebot.httpUrl || ''),
-        token: String(onebot.httpAccessToken || onebot.accessToken || ''),
-        ownerUin: owner,
-        text
-      }).catch((error) => ({ ok: false, detail: String(error?.message ?? error) }));
-      delivered = fallback?.ok === true;
-      if (!delivered) errors.push(`HTTP 直发：${fallback?.detail || '失败'}`);
-    }
-    markPendingNotified(this.dataDir, pending.id, { ok: delivered, error: errors.join('；') });
-    if (!delivered) {
-      this.log(`[plugins] 待批通知发送失败（${pending.id}）：${errors.join('；')}`);
-    }
+  }
+
+  /** 自动重试的结果回执（批准入口已经立刻回过一条“正在执行”）。 */
+  async #notifyOwnerRetry(pending, result) {
+    const text = [
+      `插件「${pending.pluginName}」已批准并自动执行：${pending.label || pending.action}`
+        + `${pending.target ? ` → ${pending.target}` : ''}`,
+      `结果：${result.ok ? '成功' : '失败'}${result.message ? `：${result.message}` : ''}`
+    ].join('\n');
+    const sent = await this.#sendOwnerNotice(text);
+    if (!sent.delivered) this.log(`[plugins] 自动重试结果通知发送失败（${pending.id}）：${sent.error}`);
   }
 
   /**
@@ -966,11 +987,53 @@ export class PluginRegistry {
       uses,
       manifestHash: hashManifest(this.hosts.get(hit.pluginId)?.manifest)
     });
+    const retryable = Boolean(hit.retry?.tool);
+    if (retryable) {
+      // 不阻塞批准回复：重放走插件进程，最长可能到工具超时；结果另发一条私聊。
+      void this.retryApproved(hit)
+        .then((result) => this.#notifyOwnerRetry(approved.pending, result))
+        .catch((error) => this.#notifyOwnerRetry(approved.pending, { ok: false, message: String(error?.message ?? error) }));
+    }
     return {
       handled: true,
       reply: `已批准：${approved.pending.label || approved.pending.action}${approved.pending.target ? ` → ${approved.pending.target}` : ''}`
-        + `，${uses} 次有效，${new Date(approved.grant.expiresAt).toLocaleTimeString()} 前使用。让刚才那位再试一次即可。`
+        + `；${uses} 次额度，${new Date(approved.grant.expiresAt).toLocaleTimeString()} 前有效。`
+        + (retryable ? '正在按原请求自动执行一次，结果会再私聊你。' : '让刚才那位再试一次即可。')
     };
+  }
+
+  /**
+   * 批准后自动重放原始写调用（P1）。只重放一次；manifest/工具/目标任一变化都跳过，
+   * 结果不改写模型会话（原始轮次已经结束），由批准入口回报给管理员。
+   */
+  async retryApproved(pending) {
+    const retry = pending?.retry;
+    if (!retry?.tool) return { ok: false, skipped: true, message: '没有可重试的原始调用' };
+    const host = this.hosts.get(pending.pluginId);
+    if (!host?.manifest) return { ok: false, message: '插件不在运行列表，未重试' };
+    if (String(hashManifest(host.manifest)) !== String(pending.manifestHash || '')) {
+      return { ok: false, message: '插件在待批期间升级过，未重试' };
+    }
+    const tool = (host.manifest.tools || []).find((item) => item.name === retry.tool);
+    if (!tool || tool.action !== pending.action) return { ok: false, message: '插件工具或动作已变化，未重试' };
+    const targetKeys = Array.isArray(tool.actionTarget) ? tool.actionTarget : (tool.actionTarget ? [tool.actionTarget] : []);
+    const values = [...new Set(targetKeys.map((key) => normalizeTarget(retry.args?.[key])).filter(Boolean))];
+    if (values.length !== 1 || values[0] !== pending.target) {
+      return { ok: false, message: '原始请求的目标与待批不一致，未重试' };
+    }
+    try {
+      const result = await this.#callPlugin(host, tool, retry.args, { chatKey: retry.chatKey || '' });
+      let payload = null;
+      try { payload = JSON.parse(String(result?.content || '')); } catch { /* 非 JSON 按失败处理 */ }
+      const ok = !result?.isError && payload?.ok !== false;
+      return {
+        ok,
+        message: ok ? '已按原请求执行'
+          : String(payload?.error || payload?.note || result?.content || '执行失败').slice(0, 200)
+      };
+    } catch (error) {
+      return { ok: false, message: String(error?.message ?? error).slice(0, 200) };
+    }
   }
 
   /**
@@ -992,7 +1055,7 @@ export class PluginRegistry {
     // 60s 间隔 → 对象级批准（未批则登记待批并通知管理员）→ 当天配额。全部宿主侧强制。
     let gate = null;
     if (tool.action) {
-      gate = this.#gateWrite(host, tool, args ?? {});
+      gate = this.#gateWrite(host, tool, args ?? {}, ctx);
       if (gate && gate.proceed !== true) return gate.result;
     }
     let settled = false;
