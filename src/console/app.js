@@ -2685,6 +2685,54 @@ export function createApp({
       return json(res, error?.httpStatus || 400, { error: String(error?.message ?? error) });
     }
   });
+  router.add('POST', '/api/assets/stickers/analyze', async (req, res) => {
+    try {
+      const body = await readBody(req, 12 * 1024 * 1024);
+      let imageBuffer;
+      let mime;
+      if (body.stickerId) {
+        const id = String(body.stickerId).trim();
+        if (!/^[A-Za-z0-9_-]{1,120}$/.test(id)) return json(res, 400, { error: '表情 ID 无效' });
+        const localImage = stickers.readImage(id);
+        if (localImage) { imageBuffer = localImage.buffer; mime = localImage.contentType; }
+        else {
+          const sticker = await stickers.findForSend(id);
+          if (!sticker?.url) return json(res, 404, { error: '表情图片不存在' });
+          imageBuffer = (await safeFetchBinary(sticker.url, 8 * 1024 * 1024)).buffer;
+          mime = imageType(imageBuffer);
+        }
+      } else {
+        imageBuffer = decodeImageDataUrl(body.imageDataUrl);
+        mime = imageType(imageBuffer);
+      }
+      if (!mime) return json(res, 400, { error: '图片内容无效或格式不受支持' });
+      const result = await chatCompletion({
+        purpose: 'sticker-image-description',
+        temperature: 0.2,
+        maxTokens: 500,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: '你是表情包管理助手。观察图片，生成适合检索和聊天调用的中文元数据。严格只返回 JSON 对象，不要 Markdown：{"desc":"简短名称，最多20字","localNote":"客观描述画面主体、动作、文字和情绪，最多100字","tags":["2-6个简短标签"],"usage":"适合使用的聊天语境，最多60字"}。只描述图中可见内容，不推断人物身份或背景。' },
+            { type: 'image_url', image_url: { url: `data:${mime};base64,${imageBuffer.toString('base64')}` } }
+          ]
+        }]
+      });
+      const text = String(result.message?.content || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      const metadata = JSON.parse(text);
+      return json(res, 200, {
+        ok: true,
+        metadata: {
+          desc: String(metadata.desc || '').slice(0, 80),
+          localNote: String(metadata.localNote || '').slice(0, 300),
+          tags: Array.isArray(metadata.tags) ? metadata.tags.map((tag) => String(tag).slice(0, 40)).slice(0, 20) : [],
+          usage: String(metadata.usage || '').slice(0, 300)
+        }
+      });
+    } catch (error) {
+      return json(res, error?.httpStatus || 502, { error: `图片分析失败：${String(error?.message ?? error).slice(0, 240)}` });
+    }
+  });
   router.add('GET', '/api/assets/stickers/image', async (req, res, params, url) => {
     const id = String(url.searchParams.get('id') || '').trim();
     if (!id) return json(res, 400, { error: '缺少表情 ID' });

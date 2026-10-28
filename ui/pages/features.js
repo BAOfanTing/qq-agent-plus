@@ -66,7 +66,9 @@ function renderStickerAssets(data) {
   return favHint + `<div class="asset-sticker-grid">${entries.map((entry) => {
     const title = entry.localNote || entry.desc || entry.id;
     const tags = (entry.tags || []).map((tag) => `<span>${esc(tag)}</span>`).join('');
-    return `<article class="asset-sticker">
+    const selected = (state.assetStickerSelectedIds || []).includes(String(entry.id));
+    return `<article class="asset-sticker ${selected ? 'selected' : ''}">
+      ${state.assetStickerSelectMode ? `<label class="asset-sticker-select"><input type="checkbox" data-sticker-select="${esc(entry.id)}" ${selected ? 'checked' : ''} aria-label="选择表情 ${esc(title)}" /></label>` : ''}
       <div class="asset-sticker-media">
         ${entry.hasImage
           ? `<img loading="lazy" src="/api/assets/stickers/image?id=${encodeURIComponent(entry.id)}" alt="${esc(title)}" />`
@@ -348,6 +350,128 @@ function finishAssetMutation(overlay) {
   return loadAssetObservatory().finally(() => { window.scrollTo?.(0, scrollY); });
 }
 
+async function unzipStickerImages(file) {
+  if (file.size > 64 * 1024 * 1024) throw new Error('ZIP 压缩包不能超过 64 MiB');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  let end = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i -= 1) {
+    if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
+  }
+  if (end < 0) throw new Error('不是有效的 ZIP 文件');
+  const count = view.getUint16(end + 10, true);
+  let offset = view.getUint32(end + 16, true);
+  if (count > 500 || offset >= bytes.length) throw new Error('ZIP 目录无效或条目过多');
+  const output = []; let total = 0;
+  for (let i = 0; i < count; i += 1) {
+    if (view.getUint32(offset, true) !== 0x02014b50) throw new Error('ZIP 目录结构损坏');
+    const flags = view.getUint16(offset + 8, true); const method = view.getUint16(offset + 10, true);
+    const compressed = view.getUint32(offset + 20, true); const expanded = view.getUint32(offset + 24, true);
+    const nameLength = view.getUint16(offset + 28, true); const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true); const local = view.getUint32(offset + 42, true);
+    const name = new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
+    offset += 46 + nameLength + extraLength + commentLength;
+    if (!/\.(png|jpe?g|gif|webp)$/i.test(name) || name.endsWith('/')) continue;
+    if (flags & 1) throw new Error('不支持加密 ZIP，请先解密压缩包');
+    if (compressed > 8 * 1024 * 1024 || expanded > 8 * 1024 * 1024 || view.getUint32(local, true) !== 0x04034b50) throw new Error(`图片条目异常：${name}`);
+    const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+    const payload = bytes.slice(start, start + compressed);
+    let imageBytes;
+    if (method === 0) imageBytes = payload;
+    else if (method === 8) {
+      const reader = new Blob([payload]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+      const chunks = []; let size = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.length;
+          if (size > 8 * 1024 * 1024) { await reader.cancel(); throw new Error(`图片解压后超过 8 MiB：${name}`); }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+      imageBytes = new Uint8Array(size); let cursor = 0;
+      for (const chunk of chunks) { imageBytes.set(chunk, cursor); cursor += chunk.length; }
+    }
+    else continue;
+    if (imageBytes.length !== expanded) throw new Error(`解压大小不符：${name}`);
+    total += imageBytes.length;
+    if (total > 128 * 1024 * 1024) throw new Error('ZIP 解压后的图片总量超过 128 MiB');
+    const extension = name.split('.').pop().toLowerCase();
+    output.push(new File([imageBytes], name.split(/[\\/]/).pop(), { type: extension === 'jpg' ? 'image/jpeg' : `image/${extension}` }));
+    if (output.length > 100) throw new Error('每批最多处理 100 张图片');
+  }
+  if (!output.length) throw new Error('压缩包内没有支持的图片');
+  return output;
+}
+
+function openStickerBatchImport() {
+  const overlay = modelModalShell({
+    head: '批量导入表情包',
+    body: `<div class="sticker-batch-progress"><progress id="sticker-batch-progress" max="1" value="0"></progress><span id="sticker-batch-progress-text">选择 ZIP 压缩包或多张图片（最多 100 张）</span></div><div class="field"><label for="sticker-batch-files">图片或 ZIP 压缩包（单张不超过 8 MiB）</label><input id="sticker-batch-files" type="file" accept=".zip,application/zip,image/png,image/jpeg,image/gif,image/webp" multiple /></div><p class="muted">使用当前配置的模型逐张分析，结果可修改后再选择性导入。</p><div id="sticker-batch-list" class="sticker-batch-list"></div>`,
+    foot: '<button class="btn" id="sticker-batch-cancel">关闭</button><button class="btn" id="sticker-batch-analyze">分析图片</button><button class="btn btn-primary" id="sticker-batch-import" disabled>导入已勾选项</button>'
+  });
+  const filesInput = overlay.querySelector('#sticker-batch-files');
+  const list = overlay.querySelector('#sticker-batch-list');
+  const analyze = overlay.querySelector('#sticker-batch-analyze');
+  const importer = overlay.querySelector('#sticker-batch-import');
+  const progress = overlay.querySelector('#sticker-batch-progress');
+  const progressText = overlay.querySelector('#sticker-batch-progress-text');
+  const rows = [];
+  const setProgress = (done, total, label) => { progress.max = Math.max(1, total); progress.value = done; progressText.textContent = `${label} ${done}/${total}`; };
+  const draw = () => {
+    list.innerHTML = rows.map((row, index) => `<article class="sticker-batch-row" data-row="${index}"><img src="${row.preview}" alt="待导入图片 ${index + 1}" /><div class="sticker-batch-fields"><label><input type="checkbox" data-field="selected" ${row.selected ? 'checked' : ''} /> 导入</label><label>名称<input data-field="desc" maxlength="80" value="${esc(row.desc)}" /></label><label>自动备注<textarea data-field="localNote" maxlength="300">${esc(row.localNote)}</textarea></label><label>标签<input data-field="tags" value="${esc(row.tags.join(', '))}" /></label><label>使用场景<textarea data-field="usage" maxlength="300">${esc(row.usage)}</textarea></label><small>${esc(row.status === 'error' ? row.error : row.status)}</small></div></article>`).join('');
+    importer.disabled = !rows.some((row) => row.selected && row.status === '已分析');
+  };
+  filesInput.addEventListener('change', () => {
+    rows.forEach((row) => URL.revokeObjectURL(row.preview)); rows.splice(0, rows.length);
+    const selectedFiles = [...(filesInput.files || [])];
+    (async () => {
+      try {
+        let files = [];
+        for (const file of selectedFiles) files.push(...(/\.zip$/i.test(file.name) ? await unzipStickerImages(file) : [file]));
+        if (files.length > 100) throw new Error('每批最多处理 100 张图片');
+        files.forEach((file) => rows.push({ file, preview: URL.createObjectURL(file), status: '待分析', selected: true, desc: '', localNote: '', tags: [], usage: '' }));
+        progressText.textContent = `已读取 ${rows.length} 张图片`;
+      } catch (error) { progressText.textContent = `压缩包读取失败：${error.message}`; }
+      draw();
+    })();
+  });
+  list.addEventListener('input', (event) => {
+    const field = event.target.dataset.field; const row = rows[Number(event.target.closest('[data-row]')?.dataset.row)];
+    if (!row || !field) return;
+    if (field === 'selected') row.selected = event.target.checked;
+    else row[field] = field === 'tags' ? event.target.value.split(/[,，\s]+/).filter(Boolean) : event.target.value;
+    importer.disabled = !rows.some((item) => item.selected && item.status === '已分析');
+  });
+  overlay.querySelector('#sticker-batch-cancel').addEventListener('click', () => { rows.forEach((row) => URL.revokeObjectURL(row.preview)); closeModelModal(overlay); });
+  analyze.addEventListener('click', async () => {
+    if (!rows.length) return alert('请先选择图片'); analyze.disabled = true;
+    const pending = rows.filter((row) => row.status !== '已分析'); let done = 0;
+    for (const row of pending) {
+      setProgress(done, pending.length, '分析中');
+      if (row.status === '已分析') continue;
+      if (row.file.size > 8 * 1024 * 1024) { row.status = 'error'; row.error = '图片不能超过 8 MiB'; draw(); continue; }
+      row.status = '分析中…'; draw();
+      try { const imageDataUrl = await readAssetImage(row.file); const result = await api('/api/assets/stickers/analyze', { method: 'POST', body: JSON.stringify({ imageDataUrl }) }); Object.assign(row, result.metadata, { status: '已分析' }); }
+      catch (error) { row.status = 'error'; row.error = error.message; } done += 1; setProgress(done, pending.length, '分析中'); draw();
+    }
+    analyze.disabled = false;
+  });
+  importer.addEventListener('click', async () => {
+    importer.disabled = true; const selected = rows.filter((row) => row.selected && row.status === '已分析'); let imported = 0;
+    await withAssetWrite(async () => {
+      let done = 0;
+      for (const row of selected) {
+        try { await api('/api/assets/stickers', { method: 'POST', body: JSON.stringify({ imageDataUrl: await readAssetImage(row.file), desc: row.desc, localNote: row.localNote, tags: row.tags, usage: row.usage }) }); row.selected = false; row.status = '已导入'; imported += 1; }
+        catch (error) { row.status = 'error'; row.error = error.message; } done += 1; setProgress(done, selected.length, '导入中'); draw();
+      }
+      if (imported) await finishAssetMutation(overlay);
+    });
+    if (!imported) importer.disabled = false;
+  });
+}
+
 function openStickerAssetEditor(entry = null) {
   const editing = Boolean(entry);
   const overlay = modelModalShell({
@@ -394,6 +518,25 @@ function openStickerAssetEditor(entry = null) {
       button.disabled = false;
     }
   });
+}
+
+async function runStickerBulkAction(ids, label, action) {
+  const progress = $('#asset-sticker-bulk-progress');
+  const message = $('#asset-sticker-bulk-progress-text');
+  if (progress) { progress.hidden = false; progress.max = ids.length; progress.value = 0; }
+  let failed = 0;
+  await withAssetWrite(async () => {
+    for (let index = 0; index < ids.length; index += 1) {
+      try { await action(ids[index]); } catch (error) { failed += 1; if (message) message.textContent = `${label} ${index + 1}/${ids.length}：${error.message}`; }
+      if (progress) progress.value = index + 1;
+      if (message && !failed) message.textContent = `${label} ${index + 1}/${ids.length}`;
+    }
+  });
+  state.assetStickerSelectedIds = [];
+  await loadAssetObservatory();
+  const text = $('#asset-sticker-bulk-progress-text');
+  if (text) text.textContent = failed ? `完成，${failed} 项失败` : '全部完成';
+  if (failed) alert(`${label}：${ids.length - failed} 项成功，${failed} 项失败。失败项可重新选择后重试。`);
 }
 
 function openSlangAssetEditor(entry = null) {
@@ -644,6 +787,8 @@ function renderAssetObservatory() {
         ).join('')}
       </div>
       <div class="asset-toolbar-actions">
+        ${kind === 'stickers' ? '<button type="button" class="btn btn-small" id="asset-sticker-batch">批量导入并分析</button>' : ''}
+        ${kind === 'stickers' ? `<button type="button" class="btn btn-small" id="asset-sticker-select-mode">${state.assetStickerSelectMode ? '退出多选' : '多选管理'}</button>` : ''}
         ${kind === 'slang-research'
           ? ''
           : '<button type="button" class="btn btn-small btn-primary" id="asset-add">＋ 新增</button>'}
@@ -668,6 +813,7 @@ function renderAssetObservatory() {
         </div>
       </div>
     </div>
+    ${kind === 'stickers' && state.assetStickerSelectMode ? `<div class="sticker-bulk-toolbar"><label><input id="asset-sticker-select-all" type="checkbox" /> 全选当前列表</label><span id="asset-sticker-selected-count">已选 ${state.assetStickerSelectedIds.length} 项</span><button class="btn btn-small" id="asset-sticker-bulk-analyze" ${state.assetStickerSelectedIds.length ? '' : 'disabled'}>AI 分析并写入</button><button class="btn btn-small btn-danger" id="asset-sticker-bulk-delete" ${state.assetStickerSelectedIds.length ? '' : 'disabled'}>批量删除</button><progress id="asset-sticker-bulk-progress" max="1" value="0" hidden></progress><span id="asset-sticker-bulk-progress-text" aria-live="polite"></span></div>` : ''}
     <div id="asset-content">${content}</div>`;
 
   $$('#asset-page [data-asset-kind]').forEach((button) => {
@@ -683,6 +829,41 @@ function renderAssetObservatory() {
   $('#asset-refresh')?.addEventListener('click', () =>
     loadAssetObservatory({ refreshStickers: kind === 'stickers' }));
   $('#asset-add')?.addEventListener('click', () => openAssetEditor(kind));
+  $('#asset-sticker-batch')?.addEventListener('click', openStickerBatchImport);
+  $('#asset-sticker-select-mode')?.addEventListener('click', () => {
+    state.assetStickerSelectMode = !state.assetStickerSelectMode;
+    state.assetStickerSelectedIds = [];
+    renderAssetObservatory();
+  });
+  $('#asset-sticker-select-all')?.addEventListener('change', (event) => {
+    state.assetStickerSelectedIds = event.target.checked
+      ? (state.assetDetail?.entries || []).map((entry) => String(entry.id)) : [];
+    renderAssetObservatory();
+  });
+  $$('#asset-content [data-sticker-select]').forEach((checkbox) => checkbox.addEventListener('change', () => {
+    const id = String(checkbox.dataset.stickerSelect);
+    const selected = new Set(state.assetStickerSelectedIds || []);
+    if (checkbox.checked) selected.add(id); else selected.delete(id);
+    state.assetStickerSelectedIds = [...selected];
+    const count = $('#asset-sticker-selected-count');
+    if (count) count.textContent = `已选 ${selected.size} 项`;
+    $('#asset-sticker-bulk-analyze').disabled = selected.size === 0;
+    $('#asset-sticker-bulk-delete').disabled = selected.size === 0;
+    checkbox.closest('.asset-sticker')?.classList.toggle('selected', checkbox.checked);
+  }));
+  $('#asset-sticker-bulk-delete')?.addEventListener('click', async () => {
+    const ids = [...state.assetStickerSelectedIds];
+    if (ids.length && await askForConfirmation(`确定批量删除选中的 ${ids.length} 个表情包？此操作不可撤销。`)) {
+      await runStickerBulkAction(ids, '删除中', async (id) => api(`/api/assets/stickers/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ confirm: true }) }));
+    }
+  });
+  $('#asset-sticker-bulk-analyze')?.addEventListener('click', async () => {
+    const ids = [...state.assetStickerSelectedIds];
+    if (ids.length) await runStickerBulkAction(ids, 'AI 分析中', async (id) => {
+      const result = await api('/api/assets/stickers/analyze', { method: 'POST', body: JSON.stringify({ stickerId: id }) });
+      await api(`/api/assets/stickers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(result.metadata) });
+    });
+  });
   const search = () => {
     state.assetQuery = $('#asset-query')?.value || '';
     state.assetSlangStatus = $('#asset-slang-status')?.value || '';
