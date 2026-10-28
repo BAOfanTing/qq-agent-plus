@@ -22,7 +22,8 @@ export function normalizeBehaviorProfile(value) {
 //   roles/maoniang.md                猫娘（二次元），legacy 档：喵是每轮的底线（不是点缀），
 //                                    傲娇只做调味、落点是"给了"，不擦边不病娇。
 //   roles/lezi-ren.md                乐子人（抽象梗王），legacy 档：接梗翻新、不踩人、见好就收。
-//   roles/sunba.md                   孙吧大肥鱼（认爹反杀），legacy 档：先装乖再反杀，只钓玩得起的人，不碰身份。
+//   roles/sunba.md                   孙吧大肥鱼（抽象乐子人），legacy 档：孙吧/抽象底色，
+//                                    认爹反杀只是绝活之一，只钓玩得起的人，不碰身份。
 //   roles/xuexi-dazi.md              学习搭子（资料整理），grounded 档：拆任务、查资料、不代写。
 //
 // 新增卡时的约定：正文只写在 roles/ 下，用真实工具名，别引用旧架构专属指令；
@@ -96,7 +97,7 @@ export const PERSONAS = {
     voice: normalizeVoice(VOICE_PROFILES.lezi_ren)
   },
   sunba: {
-    name: '孙吧大肥鱼（认爹反杀）',
+    name: '孙吧大肥鱼（抽象乐子人）',
     behaviorProfile: 'legacy',
     text: readRole('sunba.md'),
     voice: normalizeVoice(VOICE_PROFILES.sunba)

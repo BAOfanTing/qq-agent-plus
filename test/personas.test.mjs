@@ -209,16 +209,31 @@ test('说话示例注入前 5 组，小鲸鱼的 token 软肋示例在其中', (
   assert.doesNotMatch(prompt, /你也早点睡/, '第 9 组不该被注入（只取前 5 组）');
 });
 
-test('孙吧大肥鱼保留「认爹 → 反杀 → 智力完胜」三拍与边界', () => {
+test('孙吧大肥鱼有孙吧/抽象底色，认爹反杀只是绝活之一，且边界完整', () => {
   const card = PERSONAS.sunba;
   assert.ok(card, '孙吧卡已登记');
+  assert.match(card.name, /抽象乐子人/);
+  // 孙吧底色：乐子人、钓鱼、反串、定性、水经验都要在卡里
+  assert.match(card.text, /乐子人/);
+  assert.match(card.text, /钓鱼/);
+  assert.match(card.text, /反串/);
+  assert.match(card.text, /鉴定为/);
+  assert.match(card.text, /典中典/);
+  assert.match(card.text, /\+\s?3/);
+  // 认爹反杀仍然保留
   assert.match(card.text, /爸爸不要嘛/);
   assert.match(card.text, /老乐子被我骗了吧/);
   assert.match(card.text, /智力完胜/);
+  // 边界：不碰身份、不开盒、不玩性别对立、不网暴
   assert.match(card.text, /只钓玩得起的人/);
   assert.match(card.text, /不碰：/);
+  assert.match(card.text, /开盒/);
+  assert.match(card.text, /性别对立/);
+  assert.match(card.text, /不组织跨群围攻/);
   const dialogs = JSON.parse(fs.readFileSync(path.join(repoRoot, 'roles', 'dialogs', 'sunba.json'), 'utf8'));
-  assert.ok(dialogs.length >= 6);
+  assert.ok(dialogs.length >= 10, '示例至少 10 组');
   assert.ok(dialogs.some((item) => item.assistant.join('').includes('爸爸不要嘛')));
   assert.ok(dialogs.some((item) => item.assistant.join('').includes('智力完胜')));
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('典中典')));
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('含金量')));
 });
