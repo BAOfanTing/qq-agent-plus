@@ -79,7 +79,9 @@ test('图片生成：自定义请求参数保存后回显', async ({ page }) => 
   await page.reload();
   await switchTo(page, 'settings');
   await page.click('.settings-menu-item[data-section="asr"]');
-  await expect(page.locator('#cfg-img-extra-body')).toHaveValue(/"output_watermark": {"enabled": false}/);
+  // 回显是格式化后的 JSON（多行缩进），按解析后的对象比对，别用紧凑字符串正则
+  const echoed = await page.locator('#cfg-img-extra-body').inputValue();
+  expect(JSON.parse(echoed)).toEqual({ output_watermark: { enabled: false } });
 });
 
 test('技能页：渲染内置技能并可全局启停', async ({ page }) => {
