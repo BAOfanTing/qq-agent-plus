@@ -64,10 +64,11 @@ test('配置归一化：夹紧数值、清洗关键词、只保留 bilibili', ()
     extraKeywords: ['  深海 ', '', '深海'],
     excludeKeywords: 'not-an-array'
   });
-  assert.equal(cfg.forageIntervalMinutes, 60);
-  assert.equal(cfg.maxCandidates, 500);
-  assert.equal(cfg.maxOffersPerDay, 5);
-  assert.equal(cfg.minDurationSec, Math.min(cfg.minDurationSec, cfg.maxDurationSec));
+  assert.equal(cfg.forageIntervalMinutes, 5);
+  assert.equal(cfg.maxCandidates, 10000);
+  assert.equal(cfg.maxOffersPerDay, 99);
+  assert.equal(cfg.minDurationSec, 5000);
+  assert.equal(cfg.maxDurationSec, 5000);
   assert.deepEqual(cfg.sources, ['bilibili']);
   assert.deepEqual(cfg.extraKeywords, ['深海']);
   assert.deepEqual(cfg.excludeKeywords, []);

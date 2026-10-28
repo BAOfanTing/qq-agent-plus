@@ -14,6 +14,18 @@ const SEEN_TTL_MS = 30 * 86400000;
 const OFFER_TTL_MS = 7 * 86400000;
 const MAX_RECORDS = 200;
 const BACKOFF_MINUTES = [2, 4, 8, 16, 30];
+// 设置边界集中在这里（服务端权威）：UI 不再各自写死一份，状态接口把这份 bounds 下发。
+export const LIFE_FEED_BOUNDS = Object.freeze({
+  forageIntervalMinutes: { min: 5, max: 10080 },
+  maxCandidates: { min: 10, max: 10000 },
+  maxPerForage: { min: 1, max: 500 },
+  maxOffersPerDay: { min: 1, max: 500 },
+  minDurationSec: { min: 0, max: 86400 },
+  maxDurationSec: { min: 1, max: 86400 },
+  extraKeywords: { min: 1, max: 200 },
+  excludeKeywords: { min: 1, max: 200 },
+  groups: { min: 1, max: 500 }
+});
 
 function clampInt(value, min, max, fallback) {
   const number = Number(value);
@@ -37,22 +49,24 @@ function dayKey(now) {
 
 export function normalizedLifeFeedConfig(raw = {}) {
   const cfg = raw && typeof raw === 'object' ? raw : {};
-  const minDurationSec = clampInt(cfg.minDurationSec, 0, 3600, 60);
-  const maxDurationSec = clampInt(cfg.maxDurationSec, 60, 7200, 3600);
+  const B = LIFE_FEED_BOUNDS;
+  const minDurationSec = clampInt(cfg.minDurationSec, B.minDurationSec.min, B.minDurationSec.max, 60);
+  // 下限优先：用户把 min 设得比 max 大时，抬高 max，而不是悄悄把 min 降回去。
+  const maxDurationSec = Math.max(minDurationSec, clampInt(cfg.maxDurationSec, B.maxDurationSec.min, B.maxDurationSec.max, 3600));
   return {
     enabled: cfg.enabled === true,
     graduated: cfg.graduated === true,
     sources: cleanList(cfg.sources, 4, 20).filter((source) => source === 'bilibili').length
       ? ['bilibili'] : ['bilibili'],
-    forageIntervalMinutes: clampInt(cfg.forageIntervalMinutes, 60, 1440, 360),
-    maxCandidates: clampInt(cfg.maxCandidates, 20, 500, 200),
-    maxPerForage: clampInt(cfg.maxPerForage, 5, 50, 30),
-    maxOffersPerDay: clampInt(cfg.maxOffersPerDay, 1, 5, 2),
+    forageIntervalMinutes: clampInt(cfg.forageIntervalMinutes, B.forageIntervalMinutes.min, B.forageIntervalMinutes.max, 360),
+    maxCandidates: clampInt(cfg.maxCandidates, B.maxCandidates.min, B.maxCandidates.max, 200),
+    maxPerForage: clampInt(cfg.maxPerForage, B.maxPerForage.min, B.maxPerForage.max, 30),
+    maxOffersPerDay: clampInt(cfg.maxOffersPerDay, B.maxOffersPerDay.min, B.maxOffersPerDay.max, 2),
     minDurationSec: Math.min(minDurationSec, maxDurationSec),
     maxDurationSec: Math.max(minDurationSec, maxDurationSec),
-    extraKeywords: cleanList(cfg.extraKeywords, 20, 20),
-    excludeKeywords: cleanList(cfg.excludeKeywords, 20, 20),
-    groups: cleanList(cfg.groups, 50, 32)
+    extraKeywords: cleanList(cfg.extraKeywords, B.extraKeywords.max, 20),
+    excludeKeywords: cleanList(cfg.excludeKeywords, B.excludeKeywords.max, 20),
+    groups: cleanList(cfg.groups, B.groups.max, 32)
   };
 }
 
@@ -276,6 +290,7 @@ export class LifeFeedManager {
         todayAutoOffers: 0,
         todayManualOffers: 0,
         maxOffersPerDay: cfg.maxOffersPerDay,
+        limits: LIFE_FEED_BOUNDS,
         lastForageAt: 0,
         nextForageAt: 0,
         lastForageCount: 0,
@@ -304,6 +319,7 @@ export class LifeFeedManager {
       todayAutoOffers,
       todayManualOffers,
       maxOffersPerDay: cfg.maxOffersPerDay,
+      limits: LIFE_FEED_BOUNDS,
       lastForageAt: this.state.lastForageAt,
       nextForageAt: this.state.nextForageAt,
       lastForageCount: this.state.lastForageCount,

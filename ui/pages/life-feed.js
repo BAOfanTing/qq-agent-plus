@@ -37,6 +37,21 @@ async function loadStatus() {
   if (!box) return;
   try {
     const data = await api('/api/life-feed/status');
+    const limits = data?.limits || {};
+    for (const [selector, key] of [
+      ['#cfg-lifefeed-interval', 'forageIntervalMinutes'],
+      ['#cfg-lifefeed-offers', 'maxOffersPerDay'],
+      ['#cfg-lifefeed-max-per-forage', 'maxPerForage'],
+      ['#cfg-lifefeed-max-candidates', 'maxCandidates'],
+      ['#cfg-lifefeed-min-duration', 'minDurationSec'],
+      ['#cfg-lifefeed-max-duration', 'maxDurationSec']
+    ]) {
+      const node = $(selector);
+      const bound = limits[key];
+      if (!node || !bound) continue;
+      node.min = String(bound.min);
+      node.max = String(bound.max);
+    }
     box.textContent = data.enabled
       ? `已开启 · 候选 ${data.candidateCount} 条 · 今日自动 ${data.todayAutoOffers ?? data.todayOffers}/${data.maxOffersPerDay}`
         + `${data.todayManualOffers ? ` · 手动 ${data.todayManualOffers}` : ''}`
@@ -167,25 +182,25 @@ function renderLifeFeedSection(c) {
           <label class="checkbox-row"><input type="checkbox" id="cfg-lifefeed-enabled"${cfg.enabled === true ? ' checked' : ''} /> <span>启用生活层</span></label>
         </div>
         <div class="field"><label>觅食间隔（分钟）</label>
-          <input type="number" id="cfg-lifefeed-interval" min="60" max="1440" value="${esc(cfg.forageIntervalMinutes ?? 360)}" />
+          <input type="number" id="cfg-lifefeed-interval" value="${esc(cfg.forageIntervalMinutes ?? 360)}" />
         </div>
         <div class="field"><label>每天最多领取/分享</label>
-          <input type="number" id="cfg-lifefeed-offers" min="1" max="5" value="${esc(cfg.maxOffersPerDay ?? 2)}" />
+          <input type="number" id="cfg-lifefeed-offers" value="${esc(cfg.maxOffersPerDay ?? 2)}" />
         </div>
       </div>
 
       <div class="field-row">
         <div class="field"><label>单次觅食上限</label>
-          <input type="number" id="cfg-lifefeed-max-per-forage" min="5" max="50" value="${esc(cfg.maxPerForage ?? 30)}" />
+          <input type="number" id="cfg-lifefeed-max-per-forage" value="${esc(cfg.maxPerForage ?? 30)}" />
         </div>
         <div class="field"><label>候选队列上限</label>
-          <input type="number" id="cfg-lifefeed-max-candidates" min="20" max="500" value="${esc(cfg.maxCandidates ?? 200)}" />
+          <input type="number" id="cfg-lifefeed-max-candidates" value="${esc(cfg.maxCandidates ?? 200)}" />
         </div>
         <div class="field"><label>最短时长（秒）</label>
-          <input type="number" id="cfg-lifefeed-min-duration" min="0" max="3600" value="${esc(cfg.minDurationSec ?? 60)}" />
+          <input type="number" id="cfg-lifefeed-min-duration" value="${esc(cfg.minDurationSec ?? 60)}" />
         </div>
         <div class="field"><label>最长时长（秒）</label>
-          <input type="number" id="cfg-lifefeed-max-duration" min="60" max="7200" value="${esc(cfg.maxDurationSec ?? 3600)}" />
+          <input type="number" id="cfg-lifefeed-max-duration" value="${esc(cfg.maxDurationSec ?? 3600)}" />
         </div>
       </div>
 

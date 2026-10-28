@@ -67,7 +67,7 @@
 ## 角色卡与其它
 
 - 角色卡正文：[`roles/`](../roles)，一张卡一个 markdown（内置八张：小鲸鱼、损友、温柔陪聊、
-  技术宅、猫娘、乐子人、孙吧老哥、学习搭子），说明见 [PERSONAS.md](PERSONAS.md)；声音参数在
+  技术宅、猫娘、乐子人、孙吧大肥鱼、学习搭子），说明见 [PERSONAS.md](PERSONAS.md)；声音参数在
   `roles/voice-profiles.json`，对话示例在 `roles/dialogs/`。新增卡要在 `src/personas.js` 登记，
   由 `test/personas.test.mjs` 检查。
 - 远程价格表（随版本发布）：[`prices.json`](../prices.json)

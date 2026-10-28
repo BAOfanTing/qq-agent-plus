@@ -250,15 +250,19 @@ async function saveConfig({ quiet = false } = {}) {
       .map((item) => item.trim())
       .filter(Boolean)
       .slice(0, 20);
+    const lifeNum = (selector, fallback) => {
+      const number = Number(val(selector, fallback));
+      return Number.isFinite(number) ? number : fallback;
+    };
     patch.lifeFeed = {
       ...(c.lifeFeed || {}),
       enabled: chk('#cfg-lifefeed-enabled', c.lifeFeed?.enabled === true),
-      forageIntervalMinutes: clampInt(val('#cfg-lifefeed-interval', c.lifeFeed?.forageIntervalMinutes), 60, 1440, 360),
-      maxCandidates: clampInt(val('#cfg-lifefeed-max-candidates', c.lifeFeed?.maxCandidates), 20, 500, 200),
-      maxPerForage: clampInt(val('#cfg-lifefeed-max-per-forage', c.lifeFeed?.maxPerForage), 5, 50, 30),
-      maxOffersPerDay: clampInt(val('#cfg-lifefeed-offers', c.lifeFeed?.maxOffersPerDay), 1, 5, 2),
-      minDurationSec: clampInt(val('#cfg-lifefeed-min-duration', c.lifeFeed?.minDurationSec), 0, 3600, 60),
-      maxDurationSec: clampInt(val('#cfg-lifefeed-max-duration', c.lifeFeed?.maxDurationSec), 60, 7200, 3600),
+      forageIntervalMinutes: lifeNum('#cfg-lifefeed-interval', c.lifeFeed?.forageIntervalMinutes ?? 360),
+      maxCandidates: lifeNum('#cfg-lifefeed-max-candidates', c.lifeFeed?.maxCandidates ?? 200),
+      maxPerForage: lifeNum('#cfg-lifefeed-max-per-forage', c.lifeFeed?.maxPerForage ?? 30),
+      maxOffersPerDay: lifeNum('#cfg-lifefeed-offers', c.lifeFeed?.maxOffersPerDay ?? 2),
+      minDurationSec: lifeNum('#cfg-lifefeed-min-duration', c.lifeFeed?.minDurationSec ?? 60),
+      maxDurationSec: lifeNum('#cfg-lifefeed-max-duration', c.lifeFeed?.maxDurationSec ?? 3600),
       extraKeywords: splitKeywords('#cfg-lifefeed-extra'),
       excludeKeywords: splitKeywords('#cfg-lifefeed-exclude'),
       ...(pickedGroups('cfg-lifefeed-groups-box') ? { groups: pickedGroups('cfg-lifefeed-groups-box') } : {})
