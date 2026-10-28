@@ -3868,7 +3868,8 @@ dialog { margin: auto; max-height: 88vh; }
 .kpi-unit { font-size: var(--fs-sm); font-weight: 500; color: var(--muted); }
 .kpi-sub { margin-top: 6px; font-size: var(--fs-xs); color: var(--muted); line-height: 1.5; }
 
-.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-bottom: 14px; }
+/* min(320px, 100%)：窄屏（内容宽度 <320px）时不让固定最小值把网格撑出容器 12px */
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 14px; margin-bottom: 14px; }
 .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
 
 /* 内容块＝细线分节（不再是"每块一张卡"）。横向内边距归零、只留纵向节奏；

@@ -144,6 +144,13 @@ function renderSettingsSidebar() {
   }
   filterSettingsMenu();
   syncMenuPill();
+  // 窄屏（≤600px）的分区菜单是横排滚动条：重建 DOM 会把 scrollLeft 归零，
+  // 刚点的分区被甩到屏幕外，看着像"没选中"。把当前项滚回中间；纵向菜单不处理。
+  const menuEl = sidebar.querySelector('.settings-menu');
+  const activeItem = menuEl?.querySelector('.settings-menu-item.active');
+  if (menuEl && activeItem && getComputedStyle(menuEl).flexDirection === 'row') {
+    menuEl.scrollLeft = Math.max(0, activeItem.offsetLeft - (menuEl.clientWidth - activeItem.offsetWidth) / 2);
+  }
   bindMenuPillResync();
   revealActiveMenuItem();
 }

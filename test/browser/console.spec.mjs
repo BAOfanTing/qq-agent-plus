@@ -142,6 +142,29 @@ test('技能市场：预览、安装、已安装列表与卸载', async ({ page 
   await expect(page.locator('#skills-list')).not.toContainText('出行规划');
 });
 
+test('插件详情在打开过技能市场后仍占满主区（回归：同名 .plugin-layout 抢走 is-detail）', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  // 技能市场与插件页共用 .plugin-layout/.plugin-toolbar，且 #view-skills 在 DOM 里更靠前。
+  // 先把它渲染出来，才能复现"详情落在 190px 列里"的布局串台。
+  await switchTo(page, 'skills');
+  await expect(page.locator('#skills-page .plugin-layout')).toHaveCount(1);
+
+  await switchTo(page, 'plugins');
+  await page.click('[data-plugin-pane="installed"]');
+  await page.locator('#plugins-installed [data-plugin-open]').first().click();
+  await expect(page.locator('#plugins-page .plugin-detail')).toBeVisible();
+  await expect(page.locator('#plugins-page .plugin-layout')).toHaveClass(/is-detail/);
+  await expect(page.locator('#skills-page .plugin-layout')).not.toHaveClass(/is-detail/);
+
+  const widths = await page.evaluate(() => ({
+    detail: document.querySelector('#plugins-page .plugin-detail')?.getBoundingClientRect().width || 0,
+    main: document.querySelector('#plugins-page .plugin-main')?.getBoundingClientRect().width || 0
+  }));
+  expect(widths.detail).toBeGreaterThan(500);
+  expect(widths.main).toBeGreaterThan(500);
+});
+
 test('人物记忆：控制台按关键词检索记忆', async ({ page }) => {
   await login(page);
   await page.goto('/');
@@ -396,6 +419,23 @@ test('插件审批：待批请求能在插件详情里点「批准一次」', as
   await expect.poll(async () => (await read()).pending.length).toBe(0);
   const settings = await read();
   expect(settings.grants?.approvals?.write?.usesLeft ?? 0).toBeGreaterThan(0);
+});
+
+test('窄屏设置：切到屏外分区后当前项仍在可视范围内', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="experiments"]');
+  const visible = await page.evaluate(() => {
+    const menu = document.querySelector('#settings-sidebar .settings-menu');
+    const active = menu?.querySelector('.settings-menu-item.active');
+    if (!menu || !active) return false;
+    const m = menu.getBoundingClientRect();
+    const a = active.getBoundingClientRect();
+    return a.left >= m.left - 1 && a.right <= m.right + 1;
+  });
+  expect(visible).toBe(true);
 });
 
 test('窄屏 390×844：15 个页签都没有横向溢出', async ({ page }) => {

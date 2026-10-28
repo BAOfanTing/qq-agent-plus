@@ -914,7 +914,7 @@ function openPluginDetail(id) {
   safeRenderIndex();
   // 从长列表底部点进来时，详情会停在它的中下部（Hero 与「返回目录」都在屏幕外）——
   // 那看起来就像"点了没反应"。打开即回到顶部。
-  $('.plugins-pane')?.scrollTo?.({ top: 0 });
+  document.getElementById('plugins-page')?.scrollTo?.({ top: 0 });
   try {
     const history = window.history;
     // 已经在详情里（比如点了「相关插件」）就**替换**当前条目，不再压栈：
@@ -951,9 +951,9 @@ function forgetDetailHistory() {
 }
 
 function applyFilterPanel() {
-  const layout = document.querySelector('.plugin-layout');
+  const layout = document.getElementById('plugins-page')?.querySelector('.plugin-layout') || null;
   if (layout) layout.classList.toggle('is-filters-open', filtersOpen);
-  const btn = document.querySelector('[data-plugin-filters]');
+  const btn = document.getElementById('plugins-page')?.querySelector('[data-plugin-filters]') || null;
   if (btn) {
     btn.classList.toggle('is-on', filtersOpen);
     btn.setAttribute('aria-expanded', filtersOpen ? 'true' : 'false');
@@ -1013,8 +1013,8 @@ function renderIndex(index, installed) {
   const skipped = Array.isArray(index?.skipped) ? index.skipped : [];
   const srcBox = $('#plugins-sources');
   const warnBox = $('#plugins-index-warn');
-  const toolsBox = $('.plugin-toolbar');
-  const layoutBox = $('.plugin-layout');
+  const toolsBox = box.closest('.plugin-main')?.querySelector('.plugin-toolbar');
+  const layoutBox = box.closest('.plugin-layout');
   const facetsBox = $('#plugins-facets');
   // 索引侧的两块（顶部告警 / 底部落款）由同一个函数管：详情页里两块都要收起来，
   // 漏一块就会出现"打开插件详情，下面还挂着一行目录来源"的错位。
