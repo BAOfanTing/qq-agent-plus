@@ -4,6 +4,7 @@
 // 响应两种形态（各网关不一，都要吃）：
 //   · b64_json —— 图片本体直接给（省一次下载，首选）
 //   · url      —— 给临时链接，由调用方走 safeFetchBinary 拉（本项目已有 SSRF 防护）
+// ModelScope API-Inference 是例外：创建任务后只给 task_id，必须轮询任务结果中的 output_images。
 //
 // Key 归属是这里的重点（见 resolveImageGenAuth）：配置指向别家却留空 Key 时，
 // **绝不能**回退用聊天模型那把 Key —— 那是"把 A 家的密钥发给 B 家"的经典事故。
@@ -22,6 +23,7 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;   // 与表情库落盘上限一致
 // 既容纳正常大图，又能拦住畸形响应把常驻进程读爆。
 // （图片字节本身另有 MAX_IMAGE_BYTES 与 safeFetchBinary 的限量，这里只管文本读取。）
 const IMAGE_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const MODELSCOPE_POLL_MS = 5000;
 
 export function imageGenConfigured(cfg) {
   const g = cfg?.imageGen || {};
@@ -135,7 +137,8 @@ export async function generateImage({
   apiKey = '',
   prompt,
   signal = null,
-  fetchFn = fetch
+  fetchFn = fetch,
+  modelscopePollMs = MODELSCOPE_POLL_MS
 } = {}) {
   const g = cfg?.imageGen || cfg || {};
   const base = imageGenBaseUrl(g, apiCfg);
@@ -178,6 +181,9 @@ export async function generateImage({
     // （它那个长得像 OpenAI 的 POST /openai/images/generations **不看 body**，别用）
     if (preset?.shape === 'pollinations') {
       return await pollinationsImage({ base, body, model, size, controller, fetchFn });
+    }
+    if (preset?.shape === 'modelscope') {
+      return await modelscopeImage({ base, body, model, size, extra, auth, controller, fetchFn, pollMs: modelscopePollMs });
     }
     const res = await fetchFn(`${base}/images/generations`, {
       method: 'POST',
@@ -225,6 +231,78 @@ export async function generateImage({
     releaseTimeGuard();
     if (signal) signal.removeEventListener('abort', onAbort);
   }
+}
+
+/** ModelScope API-Inference：创建异步任务，完成后从 output_images 下载结果。 */
+async function modelscopeImage({ base, body, model, size, extra, auth, controller, fetchFn, pollMs }) {
+  const headers = {
+    'content-type': 'application/json',
+    'X-ModelScope-Async-Mode': 'true',
+    ...(auth.key ? { authorization: `Bearer ${auth.key}` } : {})
+  };
+  const res = await fetchFn(`${base}/images/generations`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ model, prompt: body, n: 1, ...(size ? { size } : {}), ...extra }),
+    signal: controller.signal
+  });
+  const text = await readTextBounded(res, IMAGE_RESPONSE_MAX_BYTES);
+  let created = null;
+  try { created = JSON.parse(text); } catch { /* 按原文带出 */ }
+  if (!res.ok) {
+    const detail = String(created?.error?.message || created?.message || text || '').slice(0, 300);
+    throw new Error(`图片生成失败 HTTP ${res.status}${detail ? `：${detail}` : ''}`);
+  }
+  const taskId = String(created?.task_id || '').trim();
+  if (!taskId) throw new Error(`魔搭图片生成没有返回 task_id：${String(text).slice(0, 200)}`);
+
+  // 官方要求任务查询携带该类型；成功响应才包含 output_images，不能把创建任务的 SUCCEED 当成图片结果。
+  while (true) {
+    if (controller.signal.aborted) throw controller.signal.reason ?? new Error('图片生成超时');
+    await sleepWithSignal(Math.max(0, Number(pollMs) || 0), controller.signal);
+    const taskRes = await fetchFn(`${base}/tasks/${encodeURIComponent(taskId)}`, {
+      method: 'GET',
+      headers: {
+        ...(auth.key ? { authorization: `Bearer ${auth.key}` } : {}),
+        'X-ModelScope-Task-Type': 'image_generation'
+      },
+      signal: controller.signal
+    });
+    const taskText = await readTextBounded(taskRes, IMAGE_RESPONSE_MAX_BYTES);
+    let task = null;
+    try { task = JSON.parse(taskText); } catch { /* 按原文带出 */ }
+    if (!taskRes.ok) {
+      const detail = String(task?.error?.message || task?.message || taskText || '').slice(0, 300);
+      throw new Error(`魔搭图片任务查询失败 HTTP ${taskRes.status}${detail ? `：${detail}` : ''}`);
+    }
+    const status = String(task?.task_status || '').toUpperCase();
+    if (status === 'FAILED') {
+      const detail = String(task?.message || task?.error?.message || taskText || '').slice(0, 300);
+      throw new Error(`魔搭图片生成任务失败${detail ? `：${detail}` : ''}`);
+    }
+    if (status !== 'SUCCEED') continue;
+    const url = String(task?.output_images?.[0] || '').trim();
+    if (!url) throw new Error(`魔搭图片生成任务已完成但没有返回 output_images：${String(taskText).slice(0, 300)}`);
+    const { buffer } = await safeFetchBinary(url, MAX_IMAGE_BYTES, controller.signal);
+    if (!buffer?.length) throw new Error('从魔搭生成结果 URL 下载到的图片为空');
+    return { buffer, revisedPrompt: '' };
+  }
+}
+
+function sleepWithSignal(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      reject(signal?.reason ?? new Error('图片生成超时'));
+    };
+    function done() {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /**

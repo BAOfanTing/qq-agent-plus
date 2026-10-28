@@ -4,6 +4,7 @@
 // 预设里必须带 shape（请求形状），因为两种形状差很多：
 //   · openai       —— POST {base}/images/generations（主流网关与自建都收敛到这个形状）
 //   · pollinations —— GET  {base}/prompt/<提示词>?width=&height=（免 Key 的公共服务）
+//   · modelscope   —— POST 任务后轮询 GET {base}/tasks/{task_id}（原生异步接口）
 // 2026-10-01 实测的坑：pollinations 还有个长得像 OpenAI 的 POST /openai/images/generations，
 // 但它**不看 body** —— 两个完全不同的提示词返回逐字节相同的图。照那个接，机器人会"不管你要
 // 什么、都画同一张"。所以只认 GET 那条。
@@ -85,7 +86,7 @@ export const IMAGEGEN_SERVICES = [
   {
     id: 'modelscope',
     label: '魔搭 ModelScope API-Inference（有每日免费额度，需 Token）',
-    shape: 'openai',
+    shape: 'modelscope',
     creds: ['key'],
     baseUrl: 'https://api-inference.modelscope.cn/v1',
     hosts: ['api-inference.modelscope.cn'],
