@@ -249,7 +249,7 @@ async function saveConfig({ quiet = false } = {}) {
       .split(/[,，\n]/)
       .map((item) => item.trim())
       .filter(Boolean)
-      .slice(0, 20);
+      .slice(0, 200);
     const lifeNum = (selector, fallback) => {
       const number = Number(val(selector, fallback));
       return Number.isFinite(number) ? number : fallback;
