@@ -20,7 +20,7 @@ const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/core/config.js
 
 const replyText = '现在没开空间动态，暂时发不了。';
 
-function fixture(t, { group = false, maxRounds = 3, guard = true } = {}) {
+function fixture(t, { group = false, maxRounds = 3, guard = true, stickers = false } = {}) {
   const cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.groups = group ? ['1'] : [];
@@ -28,7 +28,9 @@ function fixture(t, { group = false, maxRounds = 3, guard = true } = {}) {
   cfg.api.model = 'mock';
   cfg.api.baseUrl = 'https://model.invalid';
   cfg.api.maxRounds = maxRounds;
-  cfg.sticker.enabled = false;
+  cfg.sticker.enabled = stickers;
+  // 动作策略（表情冷却）只在 humanize 开启时生效
+  cfg.humanize.enabled = stickers;
   cfg.memory.consolidateEnabled = false;
   cfg.conversation.replyGuardEnabled = guard;
   cfg.wakeDelayMs = 30;
@@ -43,6 +45,7 @@ function fixture(t, { group = false, maxRounds = 3, guard = true } = {}) {
   const sender = {
     // 非文本回复（拍一拍/语音/群文件）也要能让 guard 知道"已经回过了"
     poke: async () => ({ ok: true }),
+    sendSticker: async () => ({ message_id: 7 }),
     sendTextBatch: async (chatKey, messages) => {
       if (sender.failNext) {
         sender.failNext = false;
@@ -54,7 +57,10 @@ function fixture(t, { group = false, maxRounds = 3, guard = true } = {}) {
   };
   const runner = new Orchestrator({
     store, sessions, memory: { formatForPrompt: () => '', formatHandoffForPrompt: () => '', getHandoff: () => null },
-    stickers: {}, sender,
+    stickers: stickers
+      ? { findForSend: async () => ({ id: 's1', url: 'https://example.com/sticker.png', desc: 'test' }), markUsed() {} }
+      : {},
+    sender,
     onebot: { selfId: '888', selfNickname: 'bot', getGroupInfo: async () => ({ group_name: 'g' }), getGroupMemberInfo: async () => ({ nickname: 'member' }) }
   });
   const original = globalThis.fetch;
@@ -377,4 +383,77 @@ test('拍一拍机器人 = 直接互动，回复纠正要覆盖；拍别人不�
     kind: 'group', persona, selfId: '888',
     triggerEntries: [{ eventKind: 'poke', targetUserId: '999', text: '[拍一拍] 甲 拍了拍 乙' }]
   }), false);
+});
+
+test('关键词命中但名字边界判不出（issue #64）：模型写了正文 → 纠正后发出', async (t) => {
+  const f = fixture(t, { group: true });
+  // 两字昵称「附子」前接汉字/后接正文都判不出名字，但关键词档是"必回"语义
+  f.cfg.store.keywords = ['原神'];
+  f.responses.push(f.textReply('原神新版本我来聊聊'), f.sendReply());
+  f.append('m1', '原神今天更新了');
+  await f.wake();
+
+  assert.equal(f.bodies.length, 2, '应有一次纠正请求');
+  assert.deepEqual(f.sent, [replyText]);
+  assert.equal(f.lastSession()?.replyCorrection, 'corrected');
+});
+
+test('关键词命中但模型写了「（这条不用接）」类自注：保持沉默', async (t) => {
+  const f = fixture(t, { group: true });
+  f.cfg.store.keywords = ['原神'];
+  f.responses.push(f.textReply('（这条不用接）'));
+  f.append('m1', '原神今天更新了');
+  await f.wake();
+
+  assert.equal(f.bodies.length, 1, '不该有纠正请求');
+  assert.deepEqual(f.sent, []);
+});
+
+test('关键词命中但模型没有正文草稿（只调了工具）：保持沉默', async (t) => {
+  const f = fixture(t, { group: true });
+  f.cfg.store.keywords = ['原神'];
+  f.responses.push({
+    choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'finish', arguments: JSON.stringify({ summary: '不需要回复' }) } }] } }],
+    usage: { total_tokens: 5 }
+  });
+  f.append('m1', '原神今天更新了');
+  await f.wake();
+
+  assert.equal(f.bodies.length, 1);
+  assert.deepEqual(f.sent, []);
+});
+
+test('随机/全响应档 + 同样的正文草稿：口径不扩大，仍不纠正', async (t) => {
+  const f = fixture(t, { group: true });
+  f.cfg.store.randomPercent = 100; // tier 4「全部响应」，不是 keyword
+  f.responses.push(f.textReply('随便聊聊天气'));
+  f.append('m1', '今天天气不错');
+  await f.wake();
+
+  assert.equal(f.bodies.length, 1, '非关键词档不该借旁路纠正');
+  assert.deepEqual(f.sent, []);
+});
+
+test('表情冷却失败 → finish 被拦 → 改发文字后 finish 放行（PR #65 集成）', async (t) => {
+  const f = fixture(t, { group: true, stickers: true, maxRounds: 6 });
+  // 预置 sticker 冷却：刚刚发过一张
+  f.runner.actionMemory.set('group:1', { at: { sticker: Date.now() } });
+  const stickerCall = {
+    choices: [{ message: { tool_calls: [{ id: 'c1', type: 'function', function: { name: 'send_sticker', arguments: JSON.stringify({ stickerId: 's1' }) } }] } }],
+    usage: { total_tokens: 5 }
+  };
+  const finishCall = {
+    choices: [{ message: { content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'finish', arguments: '{}' } }] } }],
+    usage: { total_tokens: 5 }
+  };
+  f.responses.push(stickerCall, finishCall, f.sendReply('那我用文字回'), finishCall);
+  f.append('m1', '@bot 来个表情', { mentionsSelf: true });
+  await f.wake();
+
+  // 第 3 次请求（finish 被拦后的下一轮）里，finish 的工具结果应是拦截文案
+  const toolMsgs = f.bodies[2].messages.filter((m) => m.role === 'tool');
+  assert.equal(toolMsgs.length, 2);
+  assert.match(String(toolMsgs[1].content), /改用 send_message/);
+  assert.deepEqual(f.sent, ['那我用文字回']);
+  assert.equal(f.lastSession()?.sent.length, 1, '纠正后真的送出了一条');
 });

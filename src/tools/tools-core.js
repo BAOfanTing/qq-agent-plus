@@ -257,7 +257,7 @@ function actionGate(ctx, kind) {
   const run = ctx.session?.actionPolicy || (ctx.session.actionPolicy = { count: 0 });
   const max = Math.max(1, Number(cfg.actions?.maxPerRun) || 4);
   if (run.count >= max) {
-    return { ok: false, reason: `本轮动作次数已达上限（${max} 次），先把话说完` };
+    return { ok: false, reason: `本轮动作次数已达上限（${max} 次），先把话说完`, code: 'action-run-limit' };
   }
   const cooldownKey = kind === 'voice' ? 'voiceCooldownMs' : `${kind}CooldownMs`;
   const cooldown = Math.max(0, Number(cfg.actions?.[cooldownKey]) || 0);
@@ -265,7 +265,7 @@ function actionGate(ctx, kind) {
   const last = Number(mem?.at?.[kind]) || 0;
   if (cooldown > 0 && Date.now() - last < cooldown) {
     const wait = Math.ceil((cooldown - (Date.now() - last)) / 1000);
-    return { ok: false, reason: `这个动作刚刚用过，${wait} 秒后再试` };
+    return { ok: false, reason: `这个动作刚刚用过，${wait} 秒后再试`, code: 'action-cooldown' };
   }
   return { ok: true };
 }
@@ -622,7 +622,8 @@ export function buildToolDefs() {
           if (targetError) return err(targetError);
           const gate = actionGate(ctx, 'sticker');
           if (!gate.ok) {
-            return err(`${gate.reason}。这次表情没有发出；请改用 send_message 发文字回复，不要再试表情，也不要只结束本轮。`, { reportIncident: false });
+            // code 供编排器的 finish 屏障按结构化字段判定（PR #65 复审：别靠错误文案匹配）
+            return err(`${gate.reason}。这次表情没有发出；请改用 send_message 发文字回复，不要再试表情，也不要只结束本轮。`, { reportIncident: false, errorCode: gate.code });
           }
           // 有本地文件的就是"托管内联"：findForSend 会给 base64，别过 validateImageUrl（它只收 http(s)）。
           // 原来这里写死 source==='manual'，而"收藏即落盘"之后 AI 收藏项也带 localFile + base64

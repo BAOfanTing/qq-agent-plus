@@ -1786,12 +1786,26 @@ export class Orchestrator {
     }
     if (proactive || manual) return;
     if (session.sent.length > 0 || session.visibleReply === true) return;
-    if (!Array.isArray(triggerEntries) || !triggerEntries.length) return;
-    const directed = isDirectedAtBot({
+    if (!Array.isArray(triggerEntries) || !triggerEntries.length) {
+      // 触发条目被另一轮 claim 走等场景会走到这里；此前静默 return，会话里
+      // replyCorrection=null 与"没走到 guard"分不清（issue #64 附带的私聊现象）
+      session.replyCorrection = 'skipped';
+      log.warn(`[reply-guard] ${session.chatKey || kind || ''} 触发条目为空，跳过回复纠正`);
+      return;
+    }
+    let directed = isDirectedAtBot({
       kind, triggerEntries, persona,
       selfId: this.onebot.selfId,
       accountNickname: this.onebot.selfNickname
     });
+    if (!directed && session.triggerKind === 'keyword') {
+      // 关键词命中是"必回"档（prompt.js 的 tier 2），名字边界判不出"在叫它"不代表不用回
+      // （issue #64：两字昵称/名字前接汉字时名字判定失败，模型写好的正文被静默丢弃）。
+      // 只在模型确实写出了正文草稿时纠正；「（这条不用接）」类自注和空内容仍保持沉默。
+      const draft = [...messages].reverse().find((message) => message?.role === 'assistant');
+      const draftText = String(draft?.content ?? '').trim();
+      if (draftText && !/^[（(【\[]/.test(draftText)) directed = true;
+    }
     if (!directed) return;
     if (this.store.hasUncertainEffects?.(session.leaseId)) {
       // 可能已经发出去了：补发会造成重复，交给人工核对
@@ -2512,7 +2526,7 @@ export class Orchestrator {
         const blocked = finishBarrierBlock(name, {
           finished: finish,
           priorFailure,
-          unsentDeliveryFailure: unsentDeliveryFailure && session.sent.length === 0
+          unsentDeliveryFailure: unsentDeliveryFailure && session.sent.length === 0 && session.visibleReply !== true
         }) || skillGate;
         const result = blocked
           ? { content: blocked, isError: true, reportIncident: false, skillBlocked: Boolean(skillGate) }
@@ -2579,8 +2593,11 @@ export class Orchestrator {
         if ((result.isError && result.skillBlocked !== true) || result.partialFailure === true) priorFailure = true;
         if (name === 'send_sticker'
           && result.isError
-          && /这个动作刚刚用过/.test(contentStr)
-          && session.sent.length === 0) {
+          && (result.errorCode === 'action-cooldown' || /这个动作刚刚用过/.test(contentStr))
+          && session.sent.length === 0
+          && session.visibleReply !== true) {
+          // 表情被冷却拦下且本轮还什么都不没送到：拦住"只 finish 不回复"（PR #65）。
+          // visibleReply（拍一拍/点赞/传相册等）已算"回过"，不必再逼一条文字。
           unsentDeliveryFailure = true;
         }
         if (name === 'finish' && !result.isError) finish = true;
