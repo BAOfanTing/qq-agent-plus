@@ -17,7 +17,7 @@ const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js
 after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
 let sequence = 0;
-function fixture(t, { visibility, shared = false, otherOnly = false, empty = false, otherOrigin = 'model', singleSource = false, otherPrivate = true } = {}) {
+function fixture(t, { visibility, shared = false, otherOnly = false, empty = false, otherOrigin = 'model', singleSource = false, otherPrivate = true, legacy = false, blocked = false } = {}) {
   const uid = String(100 + ++sequence);
   const group = String(sequence);
   const chatKey = `group:${group}`;
@@ -35,6 +35,7 @@ function fixture(t, { visibility, shared = false, otherOnly = false, empty = fal
   cfg.memory.crossScopeSharedContext = shared;
   cfg.memory.discoverMinMessages = 5;
   cfg.memory.maxImpressionsPerMember = 5;
+  if (blocked) cfg.blocklist = { [group]: [uid] };
   setRuntimeConfig(cfg);
 
   const store = new ChatStore(0, { dataDir: dir });
@@ -66,6 +67,10 @@ function fixture(t, { visibility, shared = false, otherOnly = false, empty = fal
     }
     if (!singleSource) {
       memory.append(otherChat, 'memberImpression', hiddenText, { userId: uid, target: 'Fixture user', origin: otherOrigin });
+    }
+    if (legacy) {
+      // 历史遗留的"只有名字、没有 QQ 号"记录：身份反查后可能指向 uid
+      memory.append(chatKey, 'memberImpression', 'legacy-visible', { userId: '', target: 'Fixture user' });
     }
   }
   for (let n = 0; n < 5; n += 1) {
@@ -145,6 +150,25 @@ test('已在其他会话有记录的人首次出现在当前会话时仍可合�
   assert.equal(result.results[0]?.isNew, true);
   assert.deepEqual(after.find((entry) => entry.content === f.hiddenText), other);
   assert.ok(after.some((entry) => entry.content === f.replacement));
+});
+
+test('历史名字记录反查到不可见人物时也不能绕过排除', async (t) => {
+  const f = fixture(t, { legacy: true });
+  const beforeHidden = f.memory.getMember('', f.uid).impressions.find((entry) => entry.content === f.hiddenText);
+  assert.ok(beforeHidden);
+  const result = await f.runner.consolidateMemoryForChat(f.chatKey, { force: true });
+  assert.equal(f.requests.length, 0, '不能把隐藏来源印象送去模型');
+  const after = f.memory.getMember('', f.uid).impressions;
+  assert.deepEqual(after.find((entry) => entry.content === f.hiddenText), beforeHidden, '隐藏来源记录不能被截断或改写');
+  assert.ok(result.skipped.some((item) => String(item.userId) === f.uid && /不可见/.test(item.reason)));
+});
+
+test('屏蔽名单生效前存档的发言不能作为整理材料', async (t) => {
+  const f = fixture(t, { empty: true, blocked: true });
+  const result = await f.runner.consolidateMemoryForChat(f.chatKey);
+  assert.equal(f.requests.length, 0, '被屏蔽群员的发言不能进整理模型');
+  assert.equal(f.memory.getMember('', f.uid).impressions.length, 0, '不能为被屏蔽群员新建印象');
+  assert.equal(result.results.length, 0);
 });
 
 test('混合批次仍整理可见人物，指定目标不带无关的跳过项', async (t) => {

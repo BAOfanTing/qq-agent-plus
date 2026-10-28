@@ -24,6 +24,7 @@ import {
   updateConfig
 } from './config.js';
 import { cappedByTokenSaver, effectiveRunLimits, tokenSaverCapsOf } from './token-saver.js';
+import { filterBlockedHistory } from './blocklist.js';
 import { redactText } from './redact.js';
 // ── 主动开话题的时间段：窗口外不主动开口（聊天回复不受影响）──
 
@@ -3175,6 +3176,15 @@ export class Orchestrator {
         name: member.name,
         reason: '存在当前会话不可见的印象，跳过整理'
       }));
+    const skippedUserIds = new Set(skipped.map((item) => String(item.userId || '')));
+    // 名字反查可能把一条"可见的遗留名字记录"指到已经进 invisibleUserIds 的 QQ 号上：
+    // 这种目标同样不能整理，否则 #resolveIdentity 会把该人的隐藏来源印象一并读出来。
+    const skipInvisible = (member) => {
+      const uid = String(member.userId || '');
+      if (skippedUserIds.has(uid)) return;
+      skippedUserIds.add(uid);
+      skipped.push({ userId: member.userId, name: member.name, reason: '存在当前会话不可见的印象，跳过整理' });
+    };
 
     // 指定群友但记忆里还没有 → 也要能"新建"印象（这是本功能的关键价值：
     // 聊了 200 条却零印象的人，可以手动让他被分析一次）
@@ -3184,6 +3194,7 @@ export class Orchestrator {
         const found = existing.find((m) => String(m.userId || '') === uid);
         if (found) {
           const resolved = this.#resolveIdentity(chatKey, found, stats, notes);
+          if (invisibleUserIds.has(String(resolved.userId || ''))) { skipInvisible(resolved); continue; }
           targets.push({ ...resolved, isNew: false });
           continue;
         }
@@ -3209,6 +3220,7 @@ export class Orchestrator {
       for (const mem of existing) {
         const resolved = this.#resolveIdentity(chatKey, mem, stats, notes);
         const uid = String(resolved.userId || '');
+        if (uid && invisibleUserIds.has(uid)) { skipInvisible(resolved); continue; }
         if (uid) knownUserIds.add(uid);
         if (this.#shouldSkip(resolved, force)) {
           skipped.push({
@@ -3312,7 +3324,8 @@ export class Orchestrator {
     const nameToUserId = new Map();
     const nameToUids = new Map();   // 名字 → 出现过的 QQ 号集合：nameToUserId 是"先见到先赢"，看不出重名
     const uidToName = new Map();
-    for (const m of this.store.recent(chatKey, { limit: 2000 })) {
+    // 与提示词/工具结果同一口径：屏蔽名单生效前存档的消息也不能作为整理材料。
+    for (const m of filterBlockedHistory(this.store.recent(chatKey, { limit: 2000 }), chatKey)) {
       if (m.self || !m.senderId) continue;
       const uid = String(m.senderId);
       memberMsgCount.set(uid, (memberMsgCount.get(uid) || 0) + 1);
@@ -3589,7 +3602,7 @@ export class Orchestrator {
   #buildNewImpressionPrompt(chatKey, mem) {
     const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 5;
     const uid = String(mem.userId || '');
-    const sample = (this.store.recent(chatKey, { limit: 2000 }) || [])
+    const sample = filterBlockedHistory(this.store.recent(chatKey, { limit: 2000 }), chatKey)
       .filter((m) => !m.self && String(m.senderId) === uid)
       .slice(-40)
       .map((m) => safeSlice(String(m.text || ''), 200))
