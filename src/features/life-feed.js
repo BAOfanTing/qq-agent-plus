@@ -273,6 +273,8 @@ export class LifeFeedManager {
         candidates: [],
         candidateCount: 0,
         todayOffers: 0,
+        todayAutoOffers: 0,
+        todayManualOffers: 0,
         maxOffersPerDay: cfg.maxOffersPerDay,
         lastForageAt: 0,
         nextForageAt: 0,
@@ -286,6 +288,8 @@ export class LifeFeedManager {
     this.#prune(now);
     const day = dayKey(now);
     const todayOffers = this.state.offers.filter((item) => item.day === day);
+    const todayManualOffers = todayOffers.filter((item) => item.manual === true).length;
+    const todayAutoOffers = todayOffers.length - todayManualOffers;
     return {
       enabled: true,
       graduated: cfg.graduated,
@@ -297,6 +301,8 @@ export class LifeFeedManager {
         .map(publicCandidate),
       candidateCount: this.state.candidates.length,
       todayOffers: todayOffers.length,
+      todayAutoOffers,
+      todayManualOffers,
       maxOffersPerDay: cfg.maxOffersPerDay,
       lastForageAt: this.state.lastForageAt,
       nextForageAt: this.state.nextForageAt,
@@ -445,7 +451,8 @@ export class LifeFeedManager {
   }
 
   #quotaLeft(cfg, day) {
-    const used = this.state.offers.filter((item) => item.day === day).length;
+    // 手动分享是用户自己点的，不占自动份额：否则点两次没发出去，自动分享当天就没了。
+    const used = this.state.offers.filter((item) => item.day === day && item.manual !== true).length;
     return Math.max(0, cfg.maxOffersPerDay - used);
   }
 

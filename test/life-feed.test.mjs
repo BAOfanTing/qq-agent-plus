@@ -169,6 +169,8 @@ test('管理器：觅食入库、每日配额、手动分享、状态持久化',
 
   const status = manager.status();
   assert.equal(status.todayOffers, 2);
+  assert.equal(status.todayAutoOffers, 1);
+  assert.equal(status.todayManualOffers, 1);
   assert.ok(status.candidateCount >= 2);
 
   // 新实例从磁盘恢复：上次觅食时间与候选都还在
@@ -176,6 +178,25 @@ test('管理器：觅食入库、每日配额、手动分享、状态持久化',
   const status2 = reloaded.status();
   assert.equal(status2.lastForageAt, NOW);
   assert.equal(status2.candidateCount, status.candidateCount);
+});
+
+test('手动分享不占自动额度：点过手动分享，自动 next 仍可用', async (t) => {
+  const dir = tempDir(t);
+  const cfg = { lifeFeed: { enabled: true, maxPerForage: 10, maxOffersPerDay: 1, minDurationSec: 60, maxDurationSec: 3600 } };
+  const manager = new LifeFeedManager({
+    dataDir: dir, store: null, config: () => cfg,
+    fetchImpl: fakeFetch([['popular', POPULAR], ['search/type', { code: 0, data: { result: [] } }]]),
+    now: () => NOW, random: () => 0.5
+  });
+  await manager.forageNow();
+  const all = manager.status().candidates;
+  assert.ok(all.length >= 2);
+  const manual = manager.takeForShare(all[0].id, { manual: true });
+  assert.ok(manual.item, manual.error);
+  const auto = manager.next({ count: 1 });
+  assert.ok(auto.items?.length, '手动分享不能把自动额度一起吃掉');
+  const blocked = manager.next({ count: 1 });
+  assert.match(blocked.error, /今天/);
 });
 
 test('管理器：dismiss 进 seen 并从候选移除；重复觅食不重复入队', async (t) => {

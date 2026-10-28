@@ -38,7 +38,8 @@ async function loadStatus() {
   try {
     const data = await api('/api/life-feed/status');
     box.textContent = data.enabled
-      ? `已开启 · 候选 ${data.candidateCount} 条 · 今日已领取/分享 ${data.todayOffers}/${data.maxOffersPerDay}`
+      ? `已开启 · 候选 ${data.candidateCount} 条 · 今日自动 ${data.todayAutoOffers ?? data.todayOffers}/${data.maxOffersPerDay}`
+        + `${data.todayManualOffers ? ` · 手动 ${data.todayManualOffers}` : ''}`
         + ` · 上次觅食 ${fmtTime(data.lastForageAt)} · 下次 ${fmtTime(data.nextForageAt)}`
         + (data.lastError ? ` · 上次错误：${data.lastError}` : '')
       : '未开启（保存开关后才会创建状态与定时器）';
