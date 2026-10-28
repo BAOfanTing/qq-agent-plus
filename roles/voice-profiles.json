@@ -54,5 +54,13 @@
       700,
       2000
     ]
+  },
+  "sunba": {
+    "maxChars": 18,
+    "maxBubbles": 3,
+    "pauseMs": [
+      400,
+      1200
+    ]
   }
 }

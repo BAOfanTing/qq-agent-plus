@@ -34,7 +34,8 @@ test('仓库根的关键文件/目录都在', () => {
     'roles/duzui-sunyou.md',
     'roles/wenrou-peiliao.md',
     'roles/jishu-zhai.md',
-    'roles/maoniang.md'
+    'roles/maoniang.md',
+    'roles/sunba.md'
   ]) {
     assert.ok(fs.existsSync(path.join(repoRoot, rel)), `缺少 ${rel}`);
   }
