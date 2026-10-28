@@ -381,9 +381,11 @@ test('插件审批：待批请求能在插件详情里点「批准一次」', as
   await expect(page.locator('#plugins-page')).toBeVisible();
 
   await page.click('[data-plugin-pane="installed"]');
-  const row = page.locator(`[data-plugin-open="${E2E_PLUGIN_ID}"]`);
-  await expect(row).toBeVisible({ timeout: 15_000 });
-  await row.click();
+  // 顶部跨插件待批条：直接点进去，详情应自动滚到「待你批准」
+  const banner = page.locator('#plugins-pending-banner');
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  await expect(banner).toContainText('待批');
+  await banner.locator('[data-pending-jump="1"]').first().click();
 
   const block = page.locator(`[data-pd-settings="${E2E_PLUGIN_ID}"]`);
   await expect(block).toBeVisible({ timeout: 15_000 });

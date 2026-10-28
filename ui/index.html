@@ -151,7 +151,7 @@
              动作点了就生效、没有"保存设置"这一步，藏在设置里会被强制加一条保存条，还得用文案解释
              "不用点下面那个按钮" —— 那是布局错了的信号。位置放在「设置」之前（同为"管"的页面）。 -->
         <button class="tab" data-icon="sparkles" data-tab="skills" title="技能 — 按流程做事" aria-label="技能"><span class="tab-label"><b>技能</b><i>按流程做事</i></span></button>
-        <button class="tab" data-icon="chip" data-tab="plugins"><span class="tab-label"><b>插件</b><i>市场与已装的扩展</i><em class="pending-badge" data-pending-badge style="display:none"></em></span></button>
+        <button class="tab" data-icon="chip" data-tab="plugins"><span class="tab-label"><b>插件</b><i>市场与已装的扩展</i></span><em class="pending-badge" data-pending-badge style="display:none" aria-label="没有插件待批"></em></button>
         <button class="tab" data-icon="gear" data-tab="settings" data-page-node-id="4cXbRBtGmcpcL272eKvHPV"><span class="tab-label"><b>设置</b><i>全部配置</i></span></button>
       </nav>
 
@@ -430,6 +430,7 @@
   <script type="module" src="/pages/memory.js"></script>
   <script type="module" src="/pages/living-memory.js"></script>
     <script type="module" src="/pages/plugin-settings.js"></script>
+  <script type="module" src="/pages/plugin-pending.js"></script>
     <script type="module" src="/pages/plugin-pagination.js"></script>
     <script type="module" src="/pages/plugins.js"></script>
   <script type="module" src="/pages/persona-per-chat.js"></script>

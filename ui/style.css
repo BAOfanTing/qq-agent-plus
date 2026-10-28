@@ -6459,8 +6459,27 @@ html[data-glass] .plugin-related-item {
   .plugin-related-item:hover { background: var(--bg-3); border-color: var(--accent-border); }
 }
 
-/* 侧栏「插件」上的全局待批红点：跨插件汇总的未批写操作请求数 */
-.pending-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 8px; border-radius: var(--r-pill); background: var(--danger, #e5484d); color: #fff; font-size: var(--fs-xs); font-style: normal; font-weight: 600; }
+/* 侧栏「插件」上的全局待批红点：跨插件汇总的未批写操作请求数。
+   绝对定位在页签右上角 —— 放进 .tab-label（flex column）会多出一行，把导航撑高、
+   和上下项不对齐（用户反馈"不好看"）。pointer-events:none 让点击仍然落到页签上。 */
+.pending-badge { position: absolute; top: 6px; right: 8px; display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--r-pill); background: var(--danger, #e5484d); color: #fff; font-size: var(--fs-xs); font-style: normal; font-weight: 600; cursor: pointer; }
+/* 收起成图标栏时没有文字可依，缩成小圆点避免压住图标 */
+html[data-side-rail='1'] .tab .pending-badge { top: 3px; right: 4px; min-width: 8px; height: 8px; padding: 0; font-size: 0; }
+
+/* 插件页顶部：跨插件待批汇总条 */
+.plugin-pending-banner { display: grid; gap: 6px; padding: 10px 12px; margin: 10px 0 0; border: 1px solid var(--border); border-radius: var(--r-card); background: var(--bg-2); }
+.plugin-pending-banner[hidden] { display: none; }
+.ppb-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.ppb-head b { font-size: var(--fs-sm); }
+.ppb-head span { color: var(--muted); font-size: var(--fs-xs); }
+.ppb-rows { display: grid; gap: 4px; }
+.ppb-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text); text-align: left; cursor: pointer; }
+.ppb-row:hover { background: var(--hover); }
+.ppb-row strong { font-size: var(--fs-sm); flex-shrink: 0; }
+.ppb-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: var(--fs-xs); }
+.ppb-row em { margin-left: auto; flex-shrink: 0; color: var(--muted); font-size: var(--fs-xs); font-style: normal; }
+.ppb-warn { color: var(--danger, #e5484d); font-size: var(--fs-xs); font-style: normal; flex-shrink: 0; }
+.ppb-more { color: var(--muted); font-size: var(--fs-xs); }
 
 /* 周期提醒标签：列表里一眼看出哪些是持续任务 */
 .reminder-repeat { padding: 1px 8px; border: 1px solid var(--border); border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--muted); }

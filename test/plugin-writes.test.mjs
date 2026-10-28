@@ -12,7 +12,7 @@ process.on('exit', () => { try { fs.rmSync(dataDir, { recursive: true, force: tr
 
 const {
   grantApproval, checkApproval, refundApproval, consumeQuota, refundQuota,
-  requestPendingApproval, listPendingApprovals, approvePendingApproval,
+  requestPendingApproval, listPendingApprovals, approvePendingApproval, grantsStatus,
   rejectPendingApproval, recordPluginWrite, listPluginWrites,
   normalizeTarget, clearPluginGrants
 } = await import('../src/plugins/grants.js');
@@ -36,7 +36,7 @@ const manifest = () => ({
   quotas: { write: 10 }
 });
 
-function makeRegistry({ switchOn = true, ownerUin = '', behavior = {}, manifestPatch = null } = {}) {
+function makeRegistry({ switchOn = true, ownerUin = '', behavior = {}, manifestPatch = null, sender = null, onebot = {} } = {}) {
   const base = manifest();
   const m = manifestPatch ? { ...base, ...manifestPatch } : base;
   const calls = [];
@@ -65,6 +65,7 @@ function makeRegistry({ switchOn = true, ownerUin = '', behavior = {}, manifestP
     log: () => {},
     getConfig: () => ({
       admin: ownerUin ? { ownerUin } : undefined,
+      onebot,
       plugins: {
         enabled: true,
         enabledIds: ['demo'],
@@ -73,7 +74,7 @@ function makeRegistry({ switchOn = true, ownerUin = '', behavior = {}, manifestP
         switches: switchOn ? { demo: { write: true } } : {}
       }
     }),
-    getSender: () => null,
+    getSender: () => sender,
     hostFactory: () => host
   });
   registry.hosts.set('demo', host);
@@ -420,4 +421,100 @@ test('插件上下文带上 senderIsOwner：只给布尔值，不泄露 QQ 号',
     triggerEntries: [{ senderId: '20002', self: false }]
   });
   assert.equal(calls.at(-1)?.context?.senderIsOwner, false);
+});
+
+const clearPending = () => {
+  for (const item of listPendingApprovals(dataDir)) rejectPendingApproval(dataDir, item.id);
+};
+const tick = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+test('待批通知：带编号与次数指令，送达后标记 notify.ok=true', async () => {
+  clearPending();
+  const sent = [];
+  const ws = makeRegistry({
+    ownerUin: '10001',
+    sender: { sendTextBatch: async (_key, messages) => { sent.push(...messages); return { sent: [], failed: [] }; } }
+  });
+  await runTool(ws.registry, { bvid: 'BVNOTIFY', text: '内容' });
+  const pending = listPendingApprovals(dataDir).find((item) => item.target === 'BVNOTIFY');
+  assert.ok(pending, '应生成待批');
+  await tick();
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], new RegExp(pending.id), '通知必须带待批编号');
+  assert.match(sent[0], /同意 ap_.* 5/, '通知要写清带次数的批准写法');
+  assert.equal(listPendingApprovals(dataDir).find((item) => item.id === pending.id)?.notify?.ok, true);
+  clearPending();
+});
+
+test('待批通知：WS 私聊被拒时回落 OneBot HTTP', async () => {
+  clearPending();
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url: String(url), body: JSON.parse(options.body) });
+    return Response.json({ status: 'ok', retcode: 0, data: { message_id: 9 } });
+  };
+  try {
+    const ws = makeRegistry({
+    ownerUin: '10001',
+      sender: { sendTextBatch: async () => { throw new Error('private not allowed'); } },
+      onebot: { httpUrl: 'http://127.0.0.1:3390', accessToken: 'token' }
+    });
+    await runTool(ws.registry, { bvid: 'BVHTTP', text: '内容' });
+    const pending = listPendingApprovals(dataDir).find((item) => item.target === 'BVHTTP');
+    assert.ok(pending);
+    await tick();
+    assert.equal(calls.length, 1, 'WS 失败后应改走 HTTP');
+    assert.match(calls[0].url, /send_private_msg$/);
+    assert.match(String(calls[0].body.message), new RegExp(pending.id));
+    assert.equal(listPendingApprovals(dataDir).find((item) => item.id === pending.id)?.notify?.ok, true);
+  } finally {
+    globalThis.fetch = original;
+    clearPending();
+  }
+});
+
+test('待批通知两条都失败：控制台可见 notify.ok=false 与原因', async () => {
+  clearPending();
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('network down'); };
+  try {
+    const ws = makeRegistry({
+    ownerUin: '10001',
+      sender: { sendTextBatch: async () => { throw new Error('private not allowed'); } },
+      onebot: { httpUrl: 'http://127.0.0.1:3390' }
+    });
+    await runTool(ws.registry, { bvid: 'BVFAIL', text: '内容' });
+    const pending = listPendingApprovals(dataDir).find((item) => item.target === 'BVFAIL');
+    assert.ok(pending);
+    await tick();
+    const after = listPendingApprovals(dataDir).find((item) => item.id === pending.id);
+    assert.equal(after.notify?.ok, false);
+    assert.match(String(after.notify?.error || ''), /WS 私聊|HTTP 直发/);
+  } finally {
+    globalThis.fetch = original;
+    clearPending();
+  }
+});
+
+test('QQ 指令：待批列表、多条必须带编号、同意 N 次', () => {
+  clearPending();
+  clearPluginGrants(dataDir, 'demo');
+  const { registry } = makeRegistry({ ownerUin: '10001' });
+  const p1 = requestPendingApproval(dataDir, { pluginId: 'demo', pluginName: '演示', action: 'write', label: '写', target: 'BV1', preview: 'a' });
+  const p2 = requestPendingApproval(dataDir, { pluginId: 'demo', pluginName: '演示', action: 'write', label: '写', target: 'BV2', preview: 'b' });
+
+  const listed = registry.handleOwnerApprovalText('待批', '10001');
+  assert.match(listed.reply, new RegExp(p1.id));
+  assert.match(listed.reply, new RegExp(p2.id), '待批列表要能一次看全编号');
+
+  const ambiguous = registry.handleOwnerApprovalText('同意', '10001');
+  assert.match(ambiguous.reply, /带编号/);
+  assert.match(ambiguous.reply, new RegExp(p1.id), '多条待批时回复里要给出编号');
+
+  const approved = registry.handleOwnerApprovalText(`同意 ${p1.id} 5`, '10001');
+  assert.match(approved.reply, /5 次有效/);
+  const status = grantsStatus(dataDir, 'demo', { approvals: manifest().approvals, quotas: manifest().quotas });
+  assert.equal(status.approvals.write.usesLeft, 5, 'QQ 也应能一次批准多次');
+  rejectPendingApproval(dataDir, p2.id);
 });

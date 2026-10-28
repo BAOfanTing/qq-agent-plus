@@ -19,11 +19,12 @@ import { sanitizeUserText } from '../core/util.js';
 import { sanitizeDeep } from '../tools/tools-core.js';
 import { canonicalVersion } from './version.js';
 import { hashManifest } from './manifest-diff.js';
-import { readOwnerUin } from '../core/notify-owner.js';
+import { readOwnerUin, sendOwnerText } from '../core/notify-owner.js';
 import {
   checkApproval, refundApproval, consumeQuota, refundQuota,
   requestPendingApproval, listPendingApprovals, approvePendingApproval,
-  rejectPendingApproval, recordPluginWrite, normalizeTarget, backfillManifestHash
+  rejectPendingApproval, recordPluginWrite, normalizeTarget, backfillManifestHash,
+  markPendingNotified, grantsStatus
 } from './grants.js';
 
 export const PLUGIN_TOOL_TIMEOUT_MS = 20000;
@@ -808,19 +809,58 @@ export class PluginRegistry {
   async #notifyOwnerApproval(pending) {
     const owner = readOwnerUin(this.getConfig());
     if (!/^\d{5,15}$/.test(owner || '')) return;
-    const sender = this.getSender?.();
-    if (!sender?.sendTextBatch) return;
+    const manifest = this.hosts.get(pending.pluginId)?.manifest || {};
+    const status = grantsStatus(this.dataDir, pending.pluginId, {
+      approvals: Array.isArray(manifest.approvals) ? manifest.approvals : [],
+      quotas: manifest.quotas && typeof manifest.quotas === 'object' ? manifest.quotas : {}
+    });
+    const quota = status.quota?.[pending.action];
+    const quotaLine = quota
+      ? `今日配额：剩余 ${Math.max(0, Number(quota.limit) - Number(quota.used))}/${quota.limit}`
+      : '';
     const minutes = Math.max(1, Math.round((Number(pending.expiresAt) - Date.now()) / 60000));
+    // 编号必须在通知里：多条待批时 QQ 指令靠它定位；缺了它管理员只能去控制台（issue 反馈的核心）。
     const text = [
       `插件「${pending.pluginName}」请求执行写操作：${pending.label || pending.action}`,
+      `待批编号：${pending.id}`,
       pending.target ? `目标：${pending.target}` : '',
       pending.preview ? `内容预览：${pending.preview.slice(0, 200)}`
         + `${Number(pending.previewLength) > 200 ? ` …（共 ${Number(pending.previewLength)} 字，完整正文已绑定）` : ''}` : '',
-      `回复「同意」批准一次（${minutes} 分钟内有效），回复「拒绝」取消；多条待批时这里批的是最新一条，其余在控制台处理。`
+      quotaLine,
+      `回复「同意 ${pending.id}」批准一次，或「同意 ${pending.id} 5」批准 5 次；「拒绝 ${pending.id}」取消；`
+        + `回复「待批」查看全部。${minutes} 分钟内有效。`
     ].filter(Boolean).join('\n');
-    try {
-      await sender.sendTextBatch(`private:${owner}`, [text], {});
-    } catch { /* 通知失败不阻断：控制台待批列表还在 */ }
+    let delivered = false;
+    const errors = [];
+    const sender = this.getSender?.();
+    if (sender?.sendTextBatch) {
+      try {
+        await sender.sendTextBatch(`private:${owner}`, [text], {});
+        delivered = true;
+      } catch (error) {
+        errors.push(`WS 私聊：${error?.message ?? error}`);
+      }
+    } else {
+      errors.push('发送队列不可用');
+    }
+    if (!delivered) {
+      // 主进程的发送队列受 allow.private 等守卫约束；owner 不在白名单时通知会被拒。
+      // 这里直接走 OneBot HTTP 补一条（与 ops 健康检查同一条通道），保证管理员至少能在 QQ 收到。
+      const cfg = this.getConfig() || {};
+      const onebot = cfg.onebot && typeof cfg.onebot === 'object' ? cfg.onebot : {};
+      const fallback = await sendOwnerText({
+        httpUrl: String(onebot.httpUrl || ''),
+        token: String(onebot.httpAccessToken || onebot.accessToken || ''),
+        ownerUin: owner,
+        text
+      }).catch((error) => ({ ok: false, detail: String(error?.message ?? error) }));
+      delivered = fallback?.ok === true;
+      if (!delivered) errors.push(`HTTP 直发：${fallback?.detail || '失败'}`);
+    }
+    markPendingNotified(this.dataDir, pending.id, { ok: delivered, error: errors.join('；') });
+    if (!delivered) {
+      this.log(`[plugins] 待批通知发送失败（${pending.id}）：${errors.join('；')}`);
+    }
   }
 
   /**
@@ -870,29 +910,48 @@ export class PluginRegistry {
   }
 
   /**
-   * 管理员在私聊里回「同意/拒绝」批准插件的写操作。
+   * 管理员在私聊里回「待批 / 同意 / 拒绝」批准插件的写操作。
    * @returns {{handled:boolean, reply?:string}} handled=true 表示这条消息被吃掉（不进模型）
    */
   handleOwnerApprovalText(text, fromUserId) {
     const owner = readOwnerUin(this.getConfig());
     if (!owner || String(fromUserId || '') !== owner) return { handled: false };
     const t = String(text || '').trim();
+    const listText = (list) => {
+      const now = Date.now();
+      return list.slice(0, 10).map((item, index) => {
+        const mins = Math.max(1, Math.round((Number(item.expiresAt) - now) / 60000));
+        return `${index + 1}. ${item.id} · ${item.pluginName || item.pluginId} · ${item.label || item.action}`
+          + `${item.target ? ` → ${item.target}` : ''} · 剩 ${mins} 分`;
+      }).join('\n');
+    };
+    // 「待批」：不批准任何东西，只把编号列出来（多条时通知里只有自己那条，列表要能一次看全）
+    if (/^待批(?:列表)?$/.test(t)) {
+      const list = listPendingApprovals(this.dataDir);
+      if (!list.length) return { handled: true, reply: '现在没有待批准的插件操作。' };
+      return {
+        handled: true,
+        reply: `有 ${list.length} 条待批：\n${listText(list)}\n`
+          + `回复「同意 ${list[0].id}」批准一次，或「同意 ${list[0].id} 5」批准 5 次；拒绝用「拒绝 ${list[0].id}」。`
+      };
+    }
     // 支持「同意 ap_xxx」指定具体一条；不带编号时只在**恰好一条**待批时生效。
-    // 原来无条件批"最新一条"：多条待批时会批错，而且 owner 对别的事情回一句"同意"也会误批。
-    const match = /^(同意|批准|拒绝)(?:[\s,.，。!！]+(ap_[\w-]+))?[\s,.，。!！]*$/.exec(t);
+    // 可选次数：「同意 ap_xxx 5」。原来无条件批"最新一条"：多条待批时会批错，
+    // 而且 owner 对别的事情回一句"同意"也会误批。
+    const match = /^(同意|批准|拒绝)(?:[\s,.，。!！]+(ap_[\w-]+))?(?:[\s,.，。!！]+(\d{1,2}))?[\s,.，。!！]*$/.exec(t);
     if (!match) return { handled: false };
     const pending = listPendingApprovals(this.dataDir);
     if (!pending.length) return { handled: true, reply: '现在没有待批准的插件操作。' };
     let hit = null;
     if (match[2]) {
       hit = pending.find((item) => item.id === match[2]);
-      if (!hit) return { handled: true, reply: '没有找到这个待批编号（可能已过期或已处理）。' };
+      if (!hit) return { handled: true, reply: '没有找到这个待批编号（可能已过期或已处理）；回复「待批」查看当前队列。' };
     } else if (pending.length === 1) {
       hit = pending[0];
     } else {
       return {
         handled: true,
-        reply: `现在有 ${pending.length} 条待批，请回复「同意 <待批编号>」指定一条（编号在通知里），或在控制台处理。`
+        reply: `现在有 ${pending.length} 条待批，请带编号指定一条：\n${listText(pending)}`
       };
     }
     if (match[1] === '拒绝') {
@@ -902,13 +961,15 @@ export class PluginRegistry {
         reply: `已拒绝：${rejected.label || rejected.action}${rejected.target ? ` → ${rejected.target}` : ''}`
       };
     }
+    const uses = Math.min(20, Math.max(1, Number(match[3]) || 1));
     const approved = approvePendingApproval(this.dataDir, hit.id, {
+      uses,
       manifestHash: hashManifest(this.hosts.get(hit.pluginId)?.manifest)
     });
     return {
       handled: true,
       reply: `已批准：${approved.pending.label || approved.pending.action}${approved.pending.target ? ` → ${approved.pending.target}` : ''}`
-        + `，一次有效，${new Date(approved.grant.expiresAt).toLocaleTimeString()} 前使用。让刚才那位再试一次即可。`
+        + `，${uses} 次有效，${new Date(approved.grant.expiresAt).toLocaleTimeString()} 前使用。让刚才那位再试一次即可。`
     };
   }
 

@@ -25,17 +25,7 @@ import {
   toggleWriteSwitch, decidePendingApproval, clearPluginSecretField, probePlugin,
   startQrLogin, pollQrOnce, setSettingsStatus, stopQrPoll
 } from './plugin-settings.js';
-/** 全局待批红点：侧栏「插件」按钮上的未批请求计数（跨插件汇总，审批是全局状态）。 */
-async function refreshPendingBadge() {
-  try {
-    const data = await api('/api/plugins/pending-count');
-    const n = Number(data?.count) || 0;
-    document.querySelectorAll('[data-pending-badge]').forEach((node) => {
-      node.textContent = n > 99 ? '99+' : String(n);
-      node.style.display = n > 0 ? '' : 'none';
-    });
-  } catch { /* 计数失败不影响页面 */ }
-}
+import { loadPendingBanner } from './plugin-pending.js';
 
 const CAP_LABELS = {
   tools: '给模型加工具',
@@ -155,6 +145,8 @@ const pluginFilter = { q: '', tag: '', sort: 'updated', onlyInstalled: false, vi
 let pluginPane = 'catalog';
 /** 详情页当前打开的插件 id（空 = 看目录）。市场要有"点进去看清楚再装"这一步。 */
 let pluginDetailId = '';
+// 从顶部待批条进入详情后，滚到「待你批准」区块（hydrate 完成后才有效）
+let pendingJumpTarget = '';
 /**
  * 窄屏（≤900px）时左侧筛选栏是否展开。那个宽度下它不能常驻 —— 否则整条筛选
  * （范围 / 分类 / 标签 / 其他）会堆在卡片上方，把列表推到屏幕外（2026-10-17 用户反馈的
@@ -305,6 +297,8 @@ function renderPluginsPage() {
         <div class="hint plugin-source-chip" id="plugins-source-chip"></div>
       </div>
     </div>
+
+    <div class="plugin-pending-banner" id="plugins-pending-banner" hidden></div>
 
     <div class="plugin-tabs" role="tablist">
       <button type="button" class="plugin-tab is-on" data-plugin-pane="catalog" role="tab" aria-selected="true">目录<span class="plugin-tab-n" id="plugins-tab-catalog"></span></button>
@@ -1049,7 +1043,11 @@ function renderIndex(index, installed) {
     box.className = '';                       // 详情不是网格（否则内容宽度会被网格列裁窄）
     box.innerHTML = renderPluginDetail(detail, installed, skipped);
     // 设置面板的数据挂在装机记录里（schema 是 manifest 的一部分）：详情先渲染骨架，再异步填表单。
-    void hydratePluginSettings(detail.id);
+    const hydrating = Promise.resolve(hydratePluginSettings(detail.id));
+    if (pendingJumpTarget === detail.id) {
+      const targetId = pendingJumpTarget; pendingJumpTarget = '';
+      void hydrating.then(() => { if (pluginDetailId === targetId) document.querySelector('.pd-approval-row.is-pending')?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, () => {});
+    }
     return;
   }
   if (facetsBox) facetsBox.style.display = '';
@@ -1555,6 +1553,7 @@ function bindPluginsSection() {
         return;
       }
       if (opener?.dataset?.pluginOpen && $('#plugins-page')) {
+        if (opener.dataset.pendingJump) pendingJumpTarget = opener.dataset.pluginOpen;
         openPluginDetail(opener.dataset.pluginOpen);
         return;
       }
@@ -1792,9 +1791,10 @@ async function loadPluginsPage({ force = false } = {}) {
       btn.classList.toggle('is-on', btn.dataset.pluginView === pluginFilter.view);
     });
   }
+  void loadPendingBanner();
   return refreshPlugins();
 }
 
 // 导出统一放末尾（本仓 ui/ 的约定：test/ui-module-graph.test.mjs 按 ExportNamedDeclaration 的
 // specifiers 收集名字，而 export function 那种写法没有 specifiers，它收不到）
-export { renderPluginsPage, loadPluginsPage, refreshPendingBadge, refreshPlugins, bindPluginsSection, capText };
+export { renderPluginsPage, loadPluginsPage, refreshPlugins, bindPluginsSection, capText };

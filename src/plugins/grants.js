@@ -296,6 +296,22 @@ export function listPendingApprovals(dataDir, { now = Date.now() } = {}) {
   return list;
 }
 
+/**
+ * 记录待批通知是否真的送达 owner：控制台据此显示「通知未送达，请手动来批」。
+ * 通知失败不影响待批本身（TTL 内仍然有效）；只是不能再让管理员以为 QQ 里收到了。
+ */
+export function markPendingNotified(dataDir, id, { ok = false, error = '', now = Date.now() } = {}) {
+  const list = loadPending(dataDir);
+  const index = list.findIndex((item) => item.id === id);
+  if (index < 0) return false;
+  list[index] = {
+    ...list[index],
+    notify: { ok: ok === true, error: String(error || '').slice(0, 240), at: now }
+  };
+  savePending(dataDir, list);
+  return true;
+}
+
 /** 批准一条待批请求：生成对象级通行证并移出队列。返回通行证信息。 */
 export function approvePendingApproval(dataDir, id, { uses = 1, ttlMs = 10 * 60_000, manifestHash = '', now = Date.now() } = {}) {
   if (!PENDING_ID_RE.test(String(id || ''))) throw fail('E_ARGS', '待批 id 不合法');

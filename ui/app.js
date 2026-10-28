@@ -45,7 +45,8 @@ import {
 } from './pages/features.js';
 import { loadMemoryView, renderMemoryList } from './pages/memory.js';
 import { loadLivingMemoryPage } from './pages/living-memory.js';
-import { loadPluginsPage, refreshPendingBadge } from './pages/plugins.js';
+import { loadPluginsPage } from './pages/plugins.js';
+import { refreshPendingBadge } from './pages/plugin-pending.js';
 import { loadSkillsPage } from './pages/skills.js';
 import { renderExperimentalSettingsSectionImpl } from './pages/moments.js';
 import { loadSessionDetail, loadSessions } from './pages/sessions.js';
@@ -1326,6 +1327,12 @@ function modelModalShell({ head, body, foot = '', danger = false }) {
 //    两条路径各维护一份必然再次分叉，所以这里只准调 switchTab。
 $$('.tab').forEach((tab) => {
   tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+});
+// 侧栏待批徽标：点它进插件页，并让插件页自动打开第一条待批。
+document.querySelector('[data-pending-badge]')?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  try { sessionStorage.setItem('qa-plugin-pending-jump', '1'); } catch { /* 隐私模式：只少一次自动跳转 */ }
+  switchTab('plugins');
 });
 
 // ── 启动 ──

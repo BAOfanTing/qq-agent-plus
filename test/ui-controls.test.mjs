@@ -142,3 +142,19 @@ test('QQ空间：内容来源与草稿/自动发布接到保存端', () => {
   assert.match(moments, /id="cfg-moments-source"/);
   assert.match(moments, /id="cfg-moments-autopublish"/);
 });
+
+test('插件待批徽标：绝对定位不占行高、带 aria、可点进待批', () => {
+  const html = read('ui/index.html');
+  const css = read('ui/style.css');
+  const pendingUi = read('ui/pages/plugin-pending.js');
+  const pluginPage = read('ui/pages/plugins.js');
+  // 徽标必须在 .tab-label 外面：放进 flex column 会多出一行，把左侧导航撑高
+  assert.match(html, /<span class="tab-label"><b>插件<\/b><i>市场与已装的扩展<\/i><\/span><em class="pending-badge" data-pending-badge/);
+  assert.match(css, /\.pending-badge \{ position: absolute; top: 6px; right: 8px;/);
+  assert.match(css, /data-side-rail='1'[\s\S]{0,120}\.pending-badge/);
+  assert.match(pendingUi, /aria-label/, '徽标要有可读标签');
+  assert.match(pendingUi, /loadPendingBanner/, '插件页顶部汇总条要复用全量待批');
+  assert.match(pendingUi, /data-pending-jump/, '点徽标要能自动跳到第一条待批');
+  assert.match(pluginPage, /plugins-pending-banner/, '插件页要有待批汇总容器');
+  assert.match(pluginPage, /scrollIntoView/, '进入详情后要滚到待批区块');
+});

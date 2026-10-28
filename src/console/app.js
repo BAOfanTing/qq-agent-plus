@@ -3366,6 +3366,33 @@ export function createApp({
     }
   });
 
+  // 全量待批列表：侧栏徽标/顶部提示用它一次看全（跨插件）。
+  // 与逐插件详情里的 pending 同一份数据；不含凭据，只有动作、目标、预览与通知状态。
+  router.add('GET', '/api/plugins/pending', async (_req, res) => {
+    try {
+      const pending = listPendingApprovals(DATA_DIR)
+        .map((item) => ({
+          id: item.id,
+          pluginId: item.pluginId,
+          pluginName: item.pluginName || item.pluginId,
+          action: item.action,
+          label: item.label || item.action,
+          target: item.target || '',
+          preview: String(item.preview || '').slice(0, 300),
+          previewLength: Number(item.previewLength) || 0,
+          createdAt: Number(item.createdAt) || 0,
+          expiresAt: Number(item.expiresAt) || 0,
+          notify: item.notify && typeof item.notify === 'object'
+            ? { ok: item.notify.ok === true, error: String(item.notify.error || ''), at: Number(item.notify.at) || 0 }
+            : null
+        }))
+        .sort((a, b) => a.expiresAt - b.expiresAt);
+      return json(res, 200, { ok: true, pending });
+    } catch (error) {
+      return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+
   // 应用层自检（"检测登录"按钮）：懒启动的插件会顺手把进程带起来
   router.add('POST', '/api/plugins/probe', async (req, res) => {
     const body = await readBody(req).catch(() => ({}));

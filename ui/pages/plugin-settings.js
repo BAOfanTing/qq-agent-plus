@@ -2,6 +2,7 @@
 // 写动作开关、待批请求与写审计。从 plugins.js 拆出来只为别让那个文件突破行数上限。
 import { api } from '../core/api.js';
 import { esc } from '../core/dom.js';
+import { pendingTargetHref } from './plugin-pending.js';
 
 function hasPluginSettings(own) {
   const m = own?.manifest;
@@ -78,12 +79,18 @@ function settingsFormHtml(data) {
   const pendingHtml = pendingList.length ? `
     <div class="pd-settings-group">
       <div class="pd-settings-group-title">待你批准（${pendingList.length}）</div>
-      ${pendingList.map((item) => `
+      ${pendingList.map((item) => {
+        const href = pendingTargetHref(item.target);
+        return `
         <div class="pd-approval-row is-pending">
           <div class="pd-approval-main">
             <strong>${esc(item.label || item.action)}</strong>
-            <span>目标：${esc(item.target || '(未指明)')}</span>
+            <span>目标：${href
+              ? `<a href="${esc(href)}" target="_blank" rel="noreferrer">${esc(item.target)}</a>`
+              : esc(item.target || '(未指明)')}</span>
+            <span class="muted">待批编号：${esc(item.id)}</span>
             ${item.preview ? `<span>内容：${esc(item.preview.slice(0, 160))}${Number(item.previewLength) > 160 ? ` …（共 ${Number(item.previewLength)} 字，批准绑定完整正文）` : ''}</span>` : ''}
+            ${item.notify?.ok === false ? `<span class="plugin-warn bad">QQ 通知未送达${item.notify.error ? `：${esc(String(item.notify.error).slice(0, 120))}` : ''}；请直接在这里批准。</span>` : ''}
           </div>
           <div class="pd-approval-state">${esc(new Date(Number(item.expiresAt)).toLocaleTimeString())} 前有效</div>
           <div class="pd-approval-actions">
@@ -91,7 +98,8 @@ function settingsFormHtml(data) {
             <button type="button" class="btn btn-small" data-pd-approve-pending="${esc(item.id)}" data-pd-decision="approve" data-pd-uses="5">批准 5 次</button>
             <button type="button" class="btn btn-small" data-pd-approve-pending="${esc(item.id)}" data-pd-decision="reject">拒绝</button>
           </div>
-        </div>`).join('')}
+        </div>`;
+      }).join('')}
     </div>` : '';
   // 写审计：这个插件最近干过什么（宿主侧记录，不是插件自报）
   const allWrites = Array.isArray(data.writes) ? data.writes : [];
