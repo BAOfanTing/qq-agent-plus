@@ -2459,8 +2459,10 @@ describe('finish 同批屏障（issue #58）', () => {
   it('前置工具失败时拒绝 finish；finish 成功后拒绝后续副作用', () => {
     assert.equal(finishBarrierBlock('finish', {}), '');
     assert.match(finishBarrierBlock('finish', { priorFailure: true }), /失败项/);
+    assert.match(finishBarrierBlock('finish', { unsentDeliveryFailure: true }), /改用 send_message/);
     assert.match(finishBarrierBlock('send_message', { finished: true }), /终止边界/);
     assert.equal(finishBarrierBlock('send_message', { priorFailure: true }), '', '失败只挡 finish，不挡其它工具');
+    assert.equal(finishBarrierBlock('finish', { unsentDeliveryFailure: false }), '', '已有送达或无发送失败时不拦截 finish');
   });
 });
 
