@@ -2596,7 +2596,7 @@ export class Orchestrator {
           && (result.errorCode === 'action-cooldown' || /这个动作刚刚用过/.test(contentStr))
           && session.sent.length === 0
           && session.visibleReply !== true) {
-          // 表情被冷却拦下且本轮还什么都不没送到：拦住"只 finish 不回复"（PR #65）。
+          // 表情被冷却拦下且本轮还什么都没有送到：拦住"只 finish 不回复"（PR #65）。
           // visibleReply（拍一拍/点赞/传相册等）已算"回过"，不必再逼一条文字。
           unsentDeliveryFailure = true;
         }
