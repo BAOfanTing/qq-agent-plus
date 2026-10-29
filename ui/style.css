@@ -3569,6 +3569,93 @@ input[type=checkbox], input[type=radio] {
 .group-checklist-stale { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--orange); }
 .group-checklist-empty { margin-top: 4px; font-size: var(--fs-sm); }
 
+/* ── 见闻候选卡片（生活层）──
+   候选以前是一行内联 flex：44×32 缩略图 + 一行塞满来源/UP/播放/时长/分数的 <small>，
+   三颗按钮挤在右侧，窗口一窄就换行错位。改成固定栅格的卡片：左封面、右正文、
+   底部独立操作条，字段分行，长标题两行截断。 */
+#lifefeed-candidates { display: grid; gap: 10px; margin-top: 12px; }
+.feed-card {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  grid-template-areas:
+    "cover body"
+    "actions actions";
+  gap: 12px 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: var(--bg-2);
+}
+.feed-card:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.feed-card-cover {
+  grid-area: cover;
+  display: block;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  background: var(--bg-3);
+}
+.feed-card-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.feed-card-cover-empty {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 100%;
+  background: linear-gradient(135deg, var(--bg-3), color-mix(in srgb, var(--accent) 12%, var(--bg-3)));
+  color: var(--faint); font-size: var(--fs-xs);
+}
+.feed-card-body { grid-area: body; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.feed-card-badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.feed-badge {
+  display: inline-flex; align-items: center;
+  max-width: 220px; padding: 1px 8px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.feed-badge--bilibili { color: #fb7299; background: color-mix(in srgb, #fb7299 14%, transparent); }
+/* 亮色下 B 站粉直接做正文只有 2 点几的对比度，换成同色相深色。 */
+[data-theme='light'] .feed-badge--bilibili { color: #b3234c; background: color-mix(in srgb, #fb7299 18%, transparent); }
+.feed-badge--plugin { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.feed-badge--rss { color: var(--orange); background: color-mix(in srgb, var(--orange) 16%, transparent); }
+.feed-badge--muted { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.feed-card-score { margin-left: auto; color: var(--faint); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.feed-card-title {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--text); font-size: var(--fs-md); font-weight: 600; line-height: 1.45;
+  text-decoration: none;
+}
+.feed-card-title:hover { color: var(--accent); text-decoration: underline; }
+.feed-card-meta { color: var(--muted); font-size: var(--fs-xs); line-height: 1.5; }
+.feed-card-desc {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted); font-size: var(--fs-sm); line-height: 1.55;
+}
+.feed-card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.feed-tag {
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--muted);
+  font-size: var(--fs-2xs); line-height: 18px;
+}
+.feed-card-actions {
+  grid-area: actions;
+  display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 760px) {
+  .feed-card { grid-template-columns: 132px minmax(0, 1fr); padding: 12px; gap: 10px 12px; }
+  .feed-card-score { margin-left: 0; }
+}
+@media (max-width: 560px) {
+  .feed-card { grid-template-columns: minmax(0, 1fr); grid-template-areas: "cover" "body" "actions"; }
+  .feed-card-cover { aspect-ratio: 16 / 7; }
+  .feed-card-actions .btn { flex: 1 1 auto; }
+}
+
 /* 定时提醒页的列表行（待触发 / 最近完成） */
 .reminder-row {
   display: flex; align-items: baseline; gap: 10px;

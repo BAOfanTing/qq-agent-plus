@@ -405,3 +405,26 @@ test('好友管理 / 人物印象 / 异常处理整块内容居中，宽度取 1
   assert.match(block[1], /justify-content: center;/);
   assert.match(block[1], /align-content: start;/);
 });
+
+test('见闻候选：卡片式栅格，不再用内联缩略图 + 单行小字', () => {
+  const lifeFeedUi = fs.readFileSync(new URL('../ui/pages/life-feed.js', import.meta.url), 'utf8');
+  assert.match(lifeFeedUi, /class="feed-card"/);
+  assert.match(lifeFeedUi, /class="feed-card-cover"/);
+  assert.match(lifeFeedUi, /class="feed-card-actions"/);
+  assert.doesNotMatch(lifeFeedUi, /class="asset-row"/, '旧的 asset-row 没有样式，候选卡片必须用专用结构');
+  assert.doesNotMatch(lifeFeedUi, /style="display:flex;gap:8px/, '卡片里不能再靠内联样式排版');
+  assert.match(css, /\.feed-card \{[^}]*grid-template-columns: 168px minmax\(0, 1fr\);[^}]*grid-template-areas:/s);
+  assert.match(css, /\.feed-card-cover \{[^}]*aspect-ratio: 16 \/ 9;/s);
+  assert.match(css, /@media \(max-width: 560px\) \{\s*\.feed-card \{ grid-template-columns: minmax\(0, 1fr\);/);
+});
+
+test('分享设置：自动/手动模式与独立目标群都进保存补丁', () => {
+  const lifeFeedUi = fs.readFileSync(new URL('../ui/pages/life-feed.js', import.meta.url), 'utf8');
+  const save = fs.readFileSync(new URL('../ui/pages/settings-save.js', import.meta.url), 'utf8');
+  assert.match(lifeFeedUi, /id="cfg-lifefeed-sharemode"/);
+  assert.match(lifeFeedUi, /value="auto"/);
+  assert.match(lifeFeedUi, /id="cfg-lifefeed-sharegroups-box"/);
+  assert.match(save, /shareMode: String\(val\('#cfg-lifefeed-sharemode'/);
+  assert.match(save, /pickedGroups\('cfg-lifefeed-sharegroups-box'\)/);
+  assert.match(save, /shareGroups/);
+});

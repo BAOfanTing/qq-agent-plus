@@ -1899,9 +1899,15 @@ export function buildToolDefs() {
         try {
           const feed = ctx.getLifeFeed?.();
           if (!feed) return err('生活层没有开启');
+          // 自主节奏（paced）唤醒带 manual:true 派发，但不是人工：不能绕过手动模式/目标群/额度。
+          const humanShare = ctx.session?.manual === true && ctx.paced !== true;
+          if (!humanShare) {
+            if (feed.shareMode?.() === 'manual') return err('生活层当前是手动分享模式，等管理员在控制台点分享。', { reportIncident: false });
+            if (feed.isShareTarget?.(ctx.chatKey) === false) return err('当前群不在见闻分享白名单里。', { reportIncident: false });
+          }
           const count = Math.max(1, Math.min(3, Math.round(Number(args.count) || 2)));
           const topic = safeSlice(String(args.topic ?? ''), 20);
-          const result = feed.next({ count, topic, manual: false });
+          const result = feed.next({ count, topic, manual: humanShare });
           if (result.error) return err(result.error);
           return ok({
             items: result.items.map((item) => ({
@@ -1969,9 +1975,12 @@ export function buildToolDefs() {
           if (!item) return err('这条见闻不在候选队列里（可能已过期或已分享）');
           // 手动分享（控制台/管理员触发）不占自动额度；模型自己分享时在发送前再查一次，
           // 防止一次领取 3 条后连续分享超过 maxOffersPerDay。
-          if (ctx.session?.manual !== true) {
+          const humanShare = ctx.session?.manual === true && ctx.paced !== true;
+          if (!humanShare) {
+            if (feed.shareMode?.() === 'manual') return err('生活层当前是手动分享模式，等管理员在控制台点分享。', { reportIncident: false });
+            if (feed.isShareTarget?.(ctx.chatKey) === false) return err('当前群不在见闻分享白名单里。', { reportIncident: false });
             const left = feed.shareQuotaLeft?.();
-            if (Number.isFinite(left) && left <= 0) return err('今天的自动分享额度用完了，明天再继续');
+            if (Number.isFinite(left) && left <= 0) return err('今天的自动分享额度已经用完，明天再继续');
           }
           const comment = safeSlice(String(args.comment ?? ''), 300);
           const text = buildShareText(item, comment);
@@ -2008,7 +2017,7 @@ export function buildToolDefs() {
             });
             ctx.emit('session-update', ctx.session.id);
           });
-          feed.feedback({ id: item.id, action: 'shared', chatKey: ctx.chatKey, messageId: result.sent[0]?.messageId });
+          feed.feedback({ id: item.id, action: 'shared', chatKey: ctx.chatKey, messageId: result.sent[0]?.messageId, manual: humanShare });
           return ok({ sent: result.sent.length, cover: coverSent, note: '已发标题链接和封面；不要再重复发同一条。' });
         } catch (error) {
           return sendErr(error);

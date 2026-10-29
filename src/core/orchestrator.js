@@ -2106,6 +2106,15 @@ export class Orchestrator {
     // 每轮现建一份：工具描述里有随配置变化的文案（例如 get_message_images 会写"抽 4 帧"或
     // "视频画面看不到"）。构造函数里建一次的话，控制台改完设置（不重启）后提示词已经变了、
     // 工具描述还是旧的，模型会收到互相矛盾的两段（2026-10-17 审查 P2）。
+    // 生活层没开：工具与提示词一起撤（与 schedule_wake / generate_image 同一口径）。
+    // 开了但当前是"仅手动"或本群不在分享目标里：自动轮次同样撤掉，避免模型调用必然被拒的工具；
+    // 控制台手动唤醒（manual）仍然放行 —— 那是管理员明确指定的一次分享。
+    const lifeFeed = this.getLifeFeed?.();
+    // 自主节奏（paced）唤醒虽然带着 manual:true 派发，但它不是人工触发：不能借这个标记
+    // 绕过"仅手动"、分享目标群和分享额度。只有控制台手动唤醒才算 human。
+    const humanShare = manual && !paced;
+    const lifeFeedUsable = cfg.lifeFeed?.enabled === true
+      && (humanShare || (lifeFeed?.shareMode?.() !== 'manual' && lifeFeed?.isShareTarget?.(chatKey) !== false));
     const toolDefs = buildToolDefs().filter((d) => {
       if (!viewMessageImages && d.name === 'get_message_images') return false;
       if (!viewLibraryStickers && d.name === 'get_sticker_image') return false;
@@ -2126,8 +2135,7 @@ export class Orchestrator {
       if (cfg.reminders?.enabled === false && d.name === 'remind') return false;
       if (!searchEnabled && (d.name === 'web_search' || d.name === 'web_fetch')) return false;
       if (!selfWakeEnabled && d.name === 'schedule_wake') return false;
-      // 生活层没开：工具与提示词一起撤（与 schedule_wake / generate_image 同一口径）
-      if (cfg.lifeFeed?.enabled !== true
+      if (!lifeFeedUsable
         && (d.name === 'life_feed_next' || d.name === 'life_feed_feedback' || d.name === 'share_bilibili')) return false;
       // 群游戏引擎关掉：group_game 工具一并摘掉 —— 提示词侧（prompt.js 玩法与工具箱）
       // 只在开启时教"主持小游戏"，工具表却恒在，模型仍会去调一个必然报错的工具
@@ -2351,11 +2359,11 @@ export class Orchestrator {
       : (privateChat
         ? '你可以主动找个由头说一句（分享点见闻、接着上次的话题、或单纯问候一下），也可以判断现在不该打扰就安静结束。'
           + proactiveVariety
-          + (getConfig().lifeFeed?.enabled === true
+          + (lifeFeedUsable
             ? '想分享点具体的见闻，可以调用 life_feed_next 看看队列里有什么。' : '')
         : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。'
           + proactiveVariety
-          + (getConfig().lifeFeed?.enabled === true
+          + (lifeFeedUsable
             ? '今天想分享点见闻的话，可以调用 life_feed_next 看看队列里有什么。' : ''));
     // 手动唤醒（控制台「见闻→分享」、手动触发）也可能带 wakeNote；此前只有 paced 分支
     // 使用 note，manual 的提醒被丢掉，用户点了分享却什么都没发生。

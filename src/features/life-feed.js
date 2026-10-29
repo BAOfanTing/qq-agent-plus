@@ -70,6 +70,8 @@ export function normalizedLifeFeedConfig(raw = {}) {
     maxPerForage: clampInt(cfg.maxPerForage, B.maxPerForage.min, B.maxPerForage.max, 30),
     maxOffersPerDay: clampInt(cfg.maxOffersPerDay, B.maxOffersPerDay.min, B.maxOffersPerDay.max, 2),
     maxPicksPerDay: clampInt(cfg.maxPicksPerDay, B.maxPicksPerDay.min, B.maxPicksPerDay.max, 10),
+    shareMode: cfg.shareMode === 'manual' ? 'manual' : 'auto',
+    shareGroups: cleanList(cfg.shareGroups, B.groups.max, 32),
     rssUrls: cleanList(cfg.rssUrls, 10, 500).filter((url) => /^https?:\/\//i.test(url)),
     rssPerForage: clampInt(cfg.rssPerForage, B.rssPerForage.min, B.rssPerForage.max, 10),
     cooldownDays: clampInt(cfg.cooldownDays, B.cooldownDays.min, B.cooldownDays.max, 7),
@@ -295,6 +297,8 @@ export class LifeFeedManager {
         enabled: false,
         graduated: cfg.graduated,
         started: false,
+        shareMode: cfg.shareMode,
+        shareGroups: cfg.shareGroups,
         candidates: [],
         candidateCount: 0,
         todayOffers: 0,
@@ -335,6 +339,8 @@ export class LifeFeedManager {
       enabled: true,
       graduated: cfg.graduated,
       started: this.started,
+      shareMode: cfg.shareMode,
+      shareGroups: cfg.shareGroups,
       candidates: this.state.candidates
         .slice()
         .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
@@ -344,7 +350,7 @@ export class LifeFeedManager {
       todayOffers: todayOffers.length,
       todayAutoOffers,
       todayManualOffers,
-      todayPicks: todayOffers.length,
+      todayPicks: todayAutoOffers,
       todayShares: this.state.records.filter((item) => item.day === day && item.action === 'shared').length,
       // 手动分享的真实回执：manual-share = 已排队；shared = 已发送（带 messageId）
       lastShare: lastShare ? {
@@ -655,6 +661,19 @@ export class LifeFeedManager {
     return this.#quotaLeft(cfg, dayKey(this.now())).shareLeft;
   }
 
+  /** auto = 主动轮次可自行分享；manual = 只有控制台手动唤醒能分享。 */
+  shareMode() {
+    return this.#cfg().shareMode;
+  }
+
+  /** 分享目标白名单：空 = 沿用聊天白名单；配置后只允许这些群。 */
+  isShareTarget(chatKey) {
+    const groups = this.#cfg().shareGroups || [];
+    if (!groups.length) return true;
+    const key = String(chatKey || '');
+    return groups.some((id) => (String(id).startsWith('group:') ? String(id) : `group:${id}`) === key);
+  }
+
   next({ count = 2, topic = '', manual = false } = {}) {
     this.drainInbox();
     return this.#pick({ count, topic, manual });
@@ -693,7 +712,7 @@ export class LifeFeedManager {
     return { ok: true };
   }
 
-  feedback({ id, action = 'skip', chatKey = '', messageId = null } = {}) {
+  feedback({ id, action = 'skip', chatKey = '', messageId = null, manual = false } = {}) {
     const key = String(id || '').trim();
     const verb = ['shared', 'skip', 'more_like_this'].includes(action) ? action : 'skip';
     this.#load();
@@ -721,6 +740,7 @@ export class LifeFeedManager {
     this.state.records.unshift({
       at: this.now(), action: verb, id: key, chatKey, day: dayKey(this.now()),
       source: item.source || '',
+      ...(manual === true ? { manual: true } : {}),
       ...(messageId === null || messageId === undefined ? {} : { messageId })
     });
     this.#prune(this.now());

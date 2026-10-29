@@ -409,6 +409,16 @@ test('生活层设置页可渲染、可保存，窄屏无横向溢出', async ({
   const read = async () => (await (await page.request.get('/api/config')).json()).lifeFeed.forageIntervalMinutes;
   await expect.poll(read).toBe(300);
 
+  const shareMode = page.locator('#cfg-lifefeed-sharemode');
+  await expect(shareMode).toHaveValue('auto');
+  await expect(page.locator('#cfg-lifefeed-sharegroups-box')).toBeVisible();
+  await shareMode.selectOption('manual');
+  await page.click('#save-cfg-btn');
+  await expect.poll(async () => (await (await page.request.get('/api/config')).json()).lifeFeed.shareMode).toBe('manual');
+  await shareMode.selectOption('auto');
+  await page.click('#save-cfg-btn');
+  await expect.poll(async () => (await (await page.request.get('/api/config')).json()).lifeFeed.shareMode).toBe('auto');
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(200);
   const metrics = await page.evaluate(() => ({
@@ -420,6 +430,61 @@ test('生活层设置页可渲染、可保存，窄屏无横向溢出', async ({
   await interval.fill('360');
   await page.click('#save-cfg-btn');
   await expect.poll(read).toBe(360);
+});
+
+test('生活层候选卡片：真实长文/多标签在 390px 下不溢出，操作条不出卡', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="life-feed"]');
+  await expect(page.locator('#settings-lifefeed')).toBeVisible();
+
+  const keys = await page.evaluate(async () => {
+    const { groupKeys } = await import('/pages/life-feed.js');
+    return groupKeys(['123', 'group:456', ' 789 ', 'weird']);
+  });
+  expect(keys).toEqual(['group:123', 'group:456', 'group:789', 'weird']);
+
+  const cardCount = await page.evaluate(async () => {
+    const { candidateCard } = await import('/pages/life-feed.js');
+    const items = [
+      {
+        id: 'BVlong', source: 'bilibili', cover: '',
+        title: '一个非常长的标题用来检查两行截断是否生效以及会不会把右侧操作按钮挤出去或者把卡片撑破导致横向滚动条出现',
+        up: '一个名字也不短的 UP 主', play: 1234567, duration: 3660, score: 42,
+        desc: '这是一段同样很长的简介，用来检查两行截断。里面故意放了很多字，确保在窄屏下正文不会把卡片撑宽，也不会把底部操作条推到卡片外面。',
+        tags: ['深海', '潜水', '第一视角', '户外', '长标签测试', '再来一个'],
+        url: 'https://www.bilibili.com/video/BVlong', offeredAt: 1
+      },
+      { id: 'BVempty', source: 'rss', title: '没有封面也没有摘要', url: 'https://example.com/a', tags: [] }
+    ];
+    const list = document.querySelector('#lifefeed-candidates');
+    list.innerHTML = items.map(candidateCard).join('');
+    return list.querySelectorAll('.feed-card').length;
+  });
+  expect(cardCount).toBe(2);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(200);
+  const metrics = await page.evaluate(() => {
+    const cards = [...document.querySelectorAll('#lifefeed-candidates .feed-card')];
+    return {
+      docOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      cards: cards.map((card) => {
+        const box = card.getBoundingClientRect();
+        const actions = card.querySelector('.feed-card-actions').getBoundingClientRect();
+        return {
+          overflow: card.scrollWidth - card.clientWidth,
+          actionsInside: actions.left >= box.left - 1 && actions.right <= box.right + 1
+        };
+      })
+    };
+  });
+  expect(metrics.docOverflow).toBeLessThanOrEqual(1);
+  for (const card of metrics.cards) {
+    expect(card.overflow).toBeLessThanOrEqual(1);
+    expect(card.actionsInside).toBe(true);
+  }
 });
 
 test('好友设置保存：改入站待批上限后落盘，再还原', async ({ page }) => {

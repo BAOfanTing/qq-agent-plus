@@ -254,11 +254,14 @@ async function saveConfig({ quiet = false } = {}) {
       const number = Number(val(selector, fallback));
       return Number.isFinite(number) ? number : fallback;
     };
+    const shareGroups = pickedGroups('cfg-lifefeed-sharegroups-box');
     patch.lifeFeed = {
       ...(c.lifeFeed || {}),
       enabled: chk('#cfg-lifefeed-enabled', c.lifeFeed?.enabled === true),
       sources: ['bilibili', 'plugin', 'rss'].filter((id) =>
         chk(`#cfg-lifefeed-src-${id}`, (c.lifeFeed?.sources || ['bilibili']).includes(id))),
+      shareMode: String(val('#cfg-lifefeed-sharemode', c.lifeFeed?.shareMode || 'auto')) === 'manual' ? 'manual' : 'auto',
+      ...(shareGroups ? { shareGroups } : {}),
       rssUrls: splitKeywords('#cfg-lifefeed-rss-urls'),
       forageIntervalMinutes: lifeNum('#cfg-lifefeed-interval', c.lifeFeed?.forageIntervalMinutes ?? 360),
       maxCandidates: lifeNum('#cfg-lifefeed-max-candidates', c.lifeFeed?.maxCandidates ?? 200),

@@ -450,6 +450,8 @@ export const DEFAULT_CONFIG = {
     maxPerForage: 30,
     maxOffersPerDay: 2,           // 每天最多真正分享几次（防刷屏）
     maxPicksPerDay: 10,           // 每天最多从候选队列领取几次（筛选/跳过不占分享额度）
+    shareMode: 'auto',            // auto=模型在主动轮次自行决定；manual=只允许控制台手动分享
+    shareGroups: [],              // 分享目标群；空 = 沿用聊天白名单（与兴趣来源群分开）
     cooldownDays: 7,              // 已分享/跳过的 UP 和标签冷却天数
     minDurationSec: 60,           // 太短的（切片/广告）不要
     maxDurationSec: 3600,         // 超过 1 小时的看不完，不要

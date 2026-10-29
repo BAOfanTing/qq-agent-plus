@@ -185,7 +185,7 @@ test('管理器：觅食入库、每日配额、手动分享、状态持久化',
   assert.equal(status2.candidateCount, status.candidateCount);
 });
 
-test('手动分享不占自动额度：点过手动分享，自动 next 仍可用', async (t) => {
+test('手动分享占位不占自动领取额度：未发送时自动 next 仍可用', async (t) => {
   const dir = tempDir(t);
   const cfg = { lifeFeed: { enabled: true, maxPerForage: 10, maxOffersPerDay: 1, maxPicksPerDay: 1, minDurationSec: 60, maxDurationSec: 3600 } };
   const manager = new LifeFeedManager({
@@ -199,7 +199,7 @@ test('手动分享不占自动额度：点过手动分享，自动 next 仍可�
   const manual = manager.takeForShare(all[0].id, { manual: true });
   assert.ok(manual.item, manual.error);
   const auto = manager.next({ count: 1 });
-  assert.ok(auto.items?.length, '手动分享不能把自动额度一起吃掉');
+  assert.ok(auto.items?.length, '只是点了手动分享（还没发送）不能把自动领取额度一起吃掉');
   const blocked = manager.next({ count: 1 });
   assert.match(blocked.error, /今天/);
 });
@@ -388,3 +388,108 @@ test('share_bilibili：先发标题链接再发封面，并把候选标记为 sh
   assert.equal(ctx.session.lastShare.messageId, 1, '分享消息 id 要记下来');
   assert.equal(manager.candidate('BV1share'), null, '分享后应从候选队列移除');
 });
+
+test('分享配置：模式默认自动，目标群与兴趣来源群相互独立', () => {
+  const cfg = normalizedLifeFeedConfig({
+    enabled: true,
+    shareMode: 'manual',
+    shareGroups: ['group:1', 'group:2', 'group:1'],
+    groups: ['group:9']
+  });
+  assert.equal(cfg.shareMode, 'manual');
+  assert.deepEqual(cfg.shareGroups, ['group:1', 'group:2']);
+  assert.deepEqual(cfg.groups, ['group:9'], '分享目标不能写回兴趣来源群');
+  assert.equal(normalizedLifeFeedConfig({ shareMode: 'weird' }).shareMode, 'auto');
+
+  const defaultManager = new LifeFeedManager({
+    dataDir: tempDirForOnly(),
+    config: () => ({ lifeFeed: { enabled: false } }),
+    now: () => NOW
+  });
+  assert.equal(defaultManager.shareMode(), 'auto');
+  assert.equal(defaultManager.isShareTarget('group:123'), true, '空目标 = 交给聊天白名单判断');
+});
+
+test('分享目标白名单：配置后只允许列出的群，手动会话仍可分享', async (t) => {
+  const dir = tempDir(t);
+  const cfg = {
+    lifeFeed: { enabled: true, shareMode: 'manual', shareGroups: ['group:1'] }
+  };
+  // 候选可以从状态文件里预置，避免为了两个守卫跑一次完整觅食。
+  fs.writeFileSync(path.join(dir, 'life-feed.json'), JSON.stringify({
+    version: 1,
+    candidates: [{
+      id: 'BVguard', source: 'bilibili', title: '守卫测试', up: 'UP', upMid: 1,
+      duration: 600, play: 1000, tags: [], cover: '', url: 'https://www.bilibili.com/video/BVguard',
+      desc: '', score: 10, addedAt: NOW
+    }],
+    offers: [], records: [], seen: []
+  }));
+  const manager = new LifeFeedManager({ dataDir: dir, config: () => cfg, now: () => NOW });
+  assert.equal(manager.shareMode(), 'manual');
+  assert.equal(manager.isShareTarget('group:1'), true);
+  assert.equal(manager.isShareTarget('group:2'), false);
+  assert.equal(manager.isShareTarget('private:9'), false);
+  assert.deepEqual(manager.status().shareGroups, ['group:1']);
+  assert.equal(manager.status().shareMode, 'manual');
+
+  const { buildToolDefs, executeTool } = await import('../src/tools/tools.js');
+  const tool = buildToolDefs().find((item) => item.name === 'share_bilibili');
+  const baseCtx = {
+    chatKey: 'group:1',
+    session: { id: 's1', leaseId: 'lease', sent: [] },
+    getLifeFeed: () => manager,
+    sender: {
+      sendTextBatch: async (_chatKey, messages) => ({
+        sent: messages.map((text, i) => ({ text, messageId: i + 1 })), failed: []
+      }),
+      sendImage: async () => ({ message_id: 1 })
+    },
+    emit: () => {}
+  };
+
+  const autoResult = await executeTool([tool], baseCtx, 'share_bilibili', JSON.stringify({ bvid: 'BVguard' }));
+  assert.equal(autoResult.isError, true, '手动模式不能由自动轮次分享');
+  assert.match(autoResult.content, /手动分享模式/);
+  assert.equal(manager.candidate('BVguard')?.id, 'BVguard', '被拒后候选要保留');
+
+  const targetCtx = {
+    ...baseCtx,
+    chatKey: 'group:2',
+    getLifeFeed: () => ({
+      candidate: (id) => manager.candidate(id),
+      shareMode: () => 'auto',
+      isShareTarget: () => false,
+      shareQuotaLeft: () => 1,
+      feedback: (args) => manager.feedback(args)
+    })
+  };
+  const wrongGroup = await executeTool([tool], targetCtx, 'share_bilibili', JSON.stringify({ bvid: 'BVguard' }));
+  assert.equal(wrongGroup.isError, true, '不在分享目标里的群不能自动分享');
+  assert.match(wrongGroup.content, /白名单/);
+
+  // paced 唤醒带着 manual:true 派发，但它是机器人自己醒的，不是人工，不能绕过手动模式。
+  const pacedCtx = { ...baseCtx, paced: true, session: { ...baseCtx.session, manual: true } };
+  const pacedResult = await executeTool([tool], pacedCtx, 'share_bilibili', JSON.stringify({ bvid: 'BVguard' }));
+  assert.equal(pacedResult.isError, true, '自主节奏唤醒不能借 manual 标记分享');
+  assert.match(pacedResult.content, /手动分享模式/);
+
+  const nextTool = buildToolDefs().find((item) => item.name === 'life_feed_next');
+  const autoNext = await executeTool([nextTool], baseCtx, 'life_feed_next', JSON.stringify({ count: 1 }));
+  assert.equal(autoNext.isError, true, '手动模式下自动轮次也不能领取候选');
+  assert.match(autoNext.content, /手动分享模式/);
+
+  const manualCtx = { ...baseCtx, session: { ...baseCtx.session, manual: true } };
+  const manualResult = await executeTool([tool], manualCtx, 'share_bilibili', JSON.stringify({ bvid: 'BVguard' }));
+  assert.equal(manualResult.isError, undefined, manualResult.content);
+  assert.equal(manager.candidate('BVguard'), null);
+  const sharedRecord = manager.status();
+  assert.equal(sharedRecord.todayShares, 1);
+  assert.equal(manager.shareQuotaLeft(), 1, '真正发送成功的分享仍占每日防刷屏额度');
+});
+
+function tempDirForOnly() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qq-life-feed-'));
+  process.once('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
+  return dir;
+}

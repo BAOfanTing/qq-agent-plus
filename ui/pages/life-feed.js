@@ -25,6 +25,72 @@ function fmtPlay(count) {
   return String(value);
 }
 
+function sourceLabel(source) {
+  const value = String(source || '');
+  if (value.startsWith('plugin:')) return `插件 · ${value.slice('plugin:'.length)}`;
+  if (value === 'rss') return 'RSS';
+  if (value === 'bilibili' || !value) return 'B站';
+  return value;
+}
+
+function clip(text, max = 120) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+// 配置文件里可能存裸群号（手写 config.json / 旧版本），群清单只认 group:<id>。
+// 不归一化的话这些行会显示成"不在当前群列表"的未勾选项，保存一次就把白名单清空。
+function groupKeys(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((id) => String(id ?? '').trim())
+    .filter(Boolean)
+    .map((id) => (id.startsWith('group:') || !/^\d+$/.test(id) ? id : `group:${id}`));
+}
+
+function candidateMeta(item) {
+  const parts = [];
+  if (item.up) parts.push(`UP ${item.up}`);
+  if (Number(item.play) > 0) parts.push(`播放 ${fmtPlay(item.play)}`);
+  if (Number(item.duration) > 0) parts.push(fmtDuration(item.duration));
+  return parts.join(' · ');
+}
+
+function candidateCard(item) {
+  const source = String(item.source || '');
+  const badgeClass = source.startsWith('plugin:')
+    ? 'feed-badge--plugin'
+    : (source === 'rss' ? 'feed-badge--rss' : 'feed-badge--bilibili');
+  const meta = candidateMeta(item);
+  const desc = clip(item.desc);
+  const tags = (Array.isArray(item.tags) ? item.tags : [])
+    .map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 4);
+  const score = Number(item.score) || 0;
+  return `
+      <article class="feed-card" data-lifefeed-row="${esc(item.id)}">
+        <a class="feed-card-cover" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer" tabindex="-1" aria-hidden="true">
+          ${item.cover
+            ? `<img src="${esc(item.cover)}" alt="" loading="lazy" />`
+            : '<span class="feed-card-cover-empty">无封面</span>'}
+        </a>
+        <div class="feed-card-body">
+          <div class="feed-card-badges">
+            <span class="feed-badge ${badgeClass}">${esc(sourceLabel(source))}</span>
+            ${item.offeredAt ? '<span class="feed-badge feed-badge--muted">已领取</span>' : ''}
+            ${score > 0 ? `<span class="feed-card-score" title="候选评分">评分 ${score}</span>` : ''}
+          </div>
+          <a class="feed-card-title" href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>
+          ${meta ? `<div class="feed-card-meta">${esc(meta)}</div>` : ''}
+          ${desc ? `<p class="feed-card-desc">${esc(desc)}</p>` : ''}
+          ${tags.length ? `<div class="feed-card-tags">${tags.map((tag) => `<span class="feed-tag">${esc(tag)}</span>`).join('')}</div>` : ''}
+        </div>
+        <div class="feed-card-actions">
+          <button type="button" class="btn btn-small" data-lifefeed-share="${esc(item.id)}">分享</button>
+          <button type="button" class="btn btn-small" data-lifefeed-more="${esc(item.id)}">多来点类似</button>
+          <button type="button" class="btn btn-small" data-lifefeed-dismiss="${esc(item.id)}">丢弃</button>
+        </div>
+      </article>`;
+}
+
 function setResult(text, error = false) {
   const node = $('#lifefeed-action-result');
   if (!node) return;
@@ -55,6 +121,7 @@ async function loadStatus() {
     box.textContent = data.enabled
       ? `已开启 · 候选 ${data.candidateCount} 条 · 今日分享 ${data.todayShares ?? 0}/${data.maxOffersPerDay}`
         + ` · 领取 ${data.todayPicks ?? data.todayOffers ?? 0}/${data.maxPicksPerDay ?? 10}`
+        + ` · 分享模式 ${data.shareMode === 'manual' ? '仅手动' : '自动'}`
         + `${data.todayManualOffers ? ` · 手动 ${data.todayManualOffers}` : ''}`
         + ` · 上次觅食 ${fmtTime(data.lastForageAt)} · 下次 ${fmtTime(data.nextForageAt)}`
         + (data.lastShare ? ` · 最近分享 ${data.lastShare.action === 'shared' ? '已发送' : '排队中'}` : '')
@@ -64,29 +131,9 @@ async function loadStatus() {
     const list = $('#lifefeed-candidates');
     if (!list) return;
     const rows = Array.isArray(data.candidates) ? data.candidates : [];
-    list.innerHTML = rows.length ? rows.map((item) => {
-      const source = String(item.source || '');
-      const label = source.startsWith('plugin:')
-        ? `插件：${source.slice('plugin:'.length)}`
-        : (source === 'bilibili' || !source ? 'B站' : source);
-      return `
-      <div class="asset-row" data-lifefeed-row="${esc(item.id)}">
-        <div class="asset-row-main">
-          <div style="display:flex;gap:8px;align-items:flex-start">
-            ${item.cover ? `<img src="${esc(item.cover)}" alt="" loading="lazy" style="width:44px;height:32px;object-fit:cover;border-radius:6px;flex:none" />` : ''}
-            <div>
-              <a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>
-              <small>${esc(label)} · ${esc(item.up || '未知 UP')} · 播放 ${fmtPlay(item.play)} · ${fmtDuration(item.duration)} · 分数 ${Number(item.score) || 0}${item.offeredAt ? ' · 已领取' : ''}</small>
-            </div>
-          </div>
-        </div>
-        <div class="asset-row-actions">
-          <button type="button" class="btn btn-small" data-lifefeed-share="${esc(item.id)}">分享</button>
-          <button type="button" class="btn btn-small" data-lifefeed-more="${esc(item.id)}">多来点类似</button>
-          <button type="button" class="btn btn-small" data-lifefeed-dismiss="${esc(item.id)}">丢弃</button>
-        </div>
-      </div>`;
-    }).join('') : '<div class="hint">队列是空的：开启后等一次觅食，或点「立刻觅食」。</div>';
+    list.innerHTML = rows.length
+      ? rows.map(candidateCard).join('')
+      : '<div class="hint">队列是空的：开启后等一次觅食，或点「立刻觅食」。</div>';
   } catch (error) {
     box.textContent = `读取失败：${error?.message || error}`;
   }
@@ -159,10 +206,16 @@ async function onAction(event) {
   }
   if (share) {
     const manualGroup = String($('#cfg-lifefeed-chat-manual')?.value || '').trim();
-    const chatKey = String($('#cfg-lifefeed-chat')?.value || '')
-      || (/^\d+$/.test(manualGroup) ? `group:${manualGroup}` : '');
+    if (manualGroup && !/^\d+$/.test(manualGroup)) {
+      setResult('群号只能是数字；也可以清空后从下拉框选群', true);
+      return;
+    }
+    // 手填优先：下拉框只要有一个群就恒非空，若以下拉框优先，"或填群号"永远不生效。
+    const chatKey = manualGroup
+      ? `group:${manualGroup}`
+      : String($('#cfg-lifefeed-chat')?.value || '');
     if (!chatKey) {
-      setResult('没有可分享的群：先在「聊天白名单」里加群，或在下方填群号', true);
+      setResult('没有可分享的群：先选一个群，或在下方填群号', true);
       return;
     }
     if (!(await askForConfirmation(`让机器人现在在 ${chatKey} 分享这条见闻？会走一次主动发言。`))) return;
@@ -184,7 +237,8 @@ async function onAction(event) {
 
 function renderLifeFeedSection(c) {
   const cfg = c.lifeFeed || {};
-  const selectedGroups = Array.isArray(cfg.groups) ? cfg.groups : [];
+  const selectedGroups = groupKeys(cfg.groups);
+  const selectedShareGroups = groupKeys(cfg.shareGroups);
   const allowedGroups = Array.isArray(c.allow?.groups) ? c.allow.groups : [];
   const chatOptions = allowedGroups.length
     ? allowedGroups.map((id) => `<option value="group:${esc(id)}">群 ${esc(id)}</option>`).join('')
@@ -198,6 +252,7 @@ function renderLifeFeedSection(c) {
       root.addEventListener('click', onAction);
     }
     void renderGroupChecklist('cfg-lifefeed-groups-box', selectedGroups);
+    void renderGroupChecklist('cfg-lifefeed-sharegroups-box', selectedShareGroups);
     void loadStatus();
   });
 
@@ -232,6 +287,12 @@ function renderLifeFeedSection(c) {
         <div class="field"><label>RSS / Atom 地址（逗号或换行分隔，最多 10 个）</label>
           <input type="text" id="cfg-lifefeed-rss-urls" value="${esc((cfg.rssUrls || []).join(', '))}" placeholder="https://example.com/feed.xml" />
         </div>
+        <div class="field"><label>分享模式</label>
+          <select id="cfg-lifefeed-sharemode">
+            <option value="auto" ${cfg.shareMode !== 'manual' ? 'selected' : ''}>自动（主动轮次自行决定）</option>
+            <option value="manual" ${cfg.shareMode === 'manual' ? 'selected' : ''}>仅手动（控制台点分享）</option>
+          </select>
+        </div>
       </div>
 
       <div class="field-row">
@@ -262,12 +323,16 @@ function renderLifeFeedSection(c) {
         <label>从哪些群提炼兴趣（不勾 = 沿用聊天白名单）</label>
         <div id="cfg-lifefeed-groups-box" class="group-checklist"><span class="muted">正在读取群列表…</span></div>
       </div>
+      <div class="field">
+        <label>允许自动分享到哪些群（不勾 = 沿用聊天白名单；与兴趣来源独立）</label>
+        <div id="cfg-lifefeed-sharegroups-box" class="group-checklist"><span class="muted">正在读取群列表…</span></div>
+      </div>
 
       <div class="field-row">
         <div class="field"><label>手动分享到</label>
           <select id="cfg-lifefeed-chat">${chatOptions}</select>
         </div>
-        <div class="field"><label>或填群号</label>
+        <div class="field"><label>或填群号（优先于下拉框）</label>
           <input type="text" id="cfg-lifefeed-chat-manual" placeholder="例如 123456789" />
         </div>
       </div>
@@ -283,4 +348,4 @@ function renderLifeFeedSection(c) {
     </div>`;
 }
 
-export { renderLifeFeedSection };
+export { renderLifeFeedSection, candidateCard, groupKeys };
