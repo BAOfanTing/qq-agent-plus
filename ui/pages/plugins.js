@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- 插件页的目录/台账/详情动作集中；批量升级与分页已拆到 plugin-batch.js / plugin-pagination.js */
 // 插件页（左侧顶层「插件」）：目录 / 已装 / 手动安装三个面 + 左侧分面栏。
 //
 // **它不是一个设置分区**（2026-10-16 从「设置 → 插件」搬出来）：
@@ -15,6 +16,7 @@
 import { api } from '../core/api.js';
 import { $, esc } from '../core/dom.js';
 import { PLUGIN_PAGE_SIZE, pluginPaginationHtml } from './plugin-pagination.js';
+import { upgradeAllPlugins } from './plugin-batch.js';
 import { askForConfirmation } from '../core/dom-util.js';
 import { iconSvg } from '../core/icons.js';
 // README 是作者写的 markdown：与 Release 说明共用同一条"先整体转义、再换少量样式"的通路
@@ -344,6 +346,7 @@ function renderPluginsPage() {
     <div data-plugin-pane-body="installed" hidden>
       <div class="plugin-pane-head">
         <span class="plugin-sec-sub" id="plugins-installed-sub"></span>
+        <button class="btn btn-small" type="button" id="plugins-upgrade-all">全部更新</button>
       </div>
       <div id="plugins-installed" class="plugin-ledger"><div class="plugin-empty">正在读取…</div></div>
       <div id="plugins-trust" class="plugin-trust"></div>
@@ -1369,6 +1372,13 @@ let closingDetail = false;
 
 /** 绑定这一页的控件（渲染后调用一次；按钮走事件委托，刷新表格不用重绑）。 */
 function bindPluginsSection() {
+  const upgradeAll = $('#plugins-upgrade-all');
+  if (upgradeAll && upgradeAll.dataset.bound !== '1') {
+    upgradeAll.dataset.bound = '1';
+    upgradeAll.addEventListener('click', () => upgradeAllPlugins({
+      post, setStatus, refreshPlugins, askForConfirmation
+    }));
+  }
   // 总开关那个复选框每次渲染都重建 → 每次都要绑（旧节点连同监听一起被丢弃）
   $('#cfg-plugins-enabled')?.addEventListener('change', async (event) => {
     const enabled = event.currentTarget.checked;

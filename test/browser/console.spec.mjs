@@ -165,6 +165,28 @@ test('插件详情在打开过技能市场后仍占满主区（回归：同名 .
   expect(widths.main).toBeGreaterThan(500);
 });
 
+test('控制页：运行指标与最近审计可加载', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'control');
+  await page.click('#control-observability-refresh');
+  await expect(page.locator('#control-observability')).toContainText('进程 RSS');
+  await expect(page.locator('#control-observability')).not.toContainText('读取失败');
+  await expect(page.locator('#control-backup-status')).toContainText('目录：');
+  await expect(page.locator('#control-backup-status')).not.toContainText('读取失败');
+});
+
+test('会话页：搜索、状态和模式筛选可用', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'sessions');
+  await expect(page.locator('#session-search')).toBeVisible();
+  await page.fill('#session-search', '不存在的会话');
+  await page.selectOption('#session-filter-status', 'done');
+  await page.selectOption('#session-filter-mode', 'legacy');
+  await expect(page.locator('#session-more')).toBeAttached();
+});
+
 test('人物记忆：控制台按关键词检索记忆', async ({ page }) => {
   await login(page);
   await page.goto('/');

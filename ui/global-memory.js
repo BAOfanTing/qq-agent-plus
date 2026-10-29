@@ -3,7 +3,7 @@
 
 import { api } from './core/api.js';
 import { esc } from './core/dom.js';
-import { setBoxError, setHtmlIfChanged } from './core/dom-util.js';
+import { askForConfirmation, setBoxError, setHtmlIfChanged } from './core/dom-util.js';
 import { state } from './core/state.js';
 import { saveMemberNote } from './pages/memory.js';
 (function globalPersonMemoryConsole() {
@@ -244,7 +244,9 @@ import { saveMemberNote } from './pages/memory.js';
           const at = Number(item.lastObservedAt) || Number(item.createdAt) || 0;
           return `<div class="gm-memory">
             <div class="gm-memory-content">${esc(item.content)}</div>
-            <div class="gm-memory-meta">最近确认 ${esc(fmtTime(at))}</div>
+            <div class="gm-memory-meta">最近确认 ${esc(fmtTime(at))}
+              <button class="btn btn-small" type="button" data-gm-delete-memory="${esc(item.content)}">删除这条</button>
+            </div>
             <div>${sources || '<span class="muted">无来源</span>'}</div>
           </div>`;
         }).join('')
@@ -323,7 +325,7 @@ import { saveMemberNote } from './pages/memory.js';
       }
     });
     box.querySelector('#gm-delete')?.addEventListener('click', async (event) => {
-      if (!window.confirm(`确定删除 ${person.name || person.userId} 的全部全局人物记忆？她在所有会话里的印象都会删掉（服务端会留一份可回滚快照），聊天记录不受影响。`)) return;
+      if (!await askForConfirmation(`确定删除 ${person.name || person.userId} 的全部全局人物记忆？她在所有会话里的印象都会删掉（服务端会留一份可回滚快照），聊天记录不受影响。`)) return;
       const button = event.currentTarget;
       button.disabled = true;
       if (status) status.textContent = '正在删除…';
@@ -335,6 +337,24 @@ import { saveMemberNote } from './pages/memory.js';
         if (status) status.textContent = `删除失败：${error?.message || error}`;
         button.disabled = false;
       }
+    });
+    box.querySelectorAll('[data-gm-delete-memory]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const content = button.dataset.gmDeleteMemory || '';
+        if (!content || !await askForConfirmation('删除这条长期印象？服务端会留一份可回滚快照。')) return;
+        button.disabled = true;
+        if (status) status.textContent = '正在删除这条印象…';
+        try {
+          await api(`/api/memory-files/global/members/${person.userId}`, {
+            method: 'DELETE',
+            body: JSON.stringify({ confirm: true, content })
+          });
+          await loadGlobalMemory(true);
+        } catch (error) {
+          if (status) status.textContent = `删除失败：${error?.message || error}`;
+          button.disabled = false;
+        }
+      });
     });
   }
 

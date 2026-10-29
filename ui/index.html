@@ -199,6 +199,24 @@
     <section id="view-sessions" class="view" data-page-node-id="EfuI6TFTs4KY9veb0pkva1">
       <aside id="session-list" class="list-pane" data-page-node-id="NNTSUz4evxhvLGzuY26viB">
         <div class="list-head muted" data-page-node-id="aSFyF0LvBNUq4BH2sydWl0"><span id="session-count"></span></div>
+        <div class="archive-filter">
+          <input type="text" id="session-search" placeholder="搜索会话 / 触发原因" aria-label="搜索会话或触发原因" />
+          <select id="session-filter-status" aria-label="筛选会话状态">
+            <option value="all">全部状态</option>
+            <option value="running">运行中</option>
+            <option value="waiting">等待中</option>
+            <option value="done">完成</option>
+            <option value="noreply">未回复</option>
+            <option value="error">失败</option>
+            <option value="aborted">中止</option>
+          </select>
+          <select id="session-filter-mode" aria-label="筛选会话模式">
+            <option value="all">全部模式</option>
+            <option value="legacy">单轮</option>
+            <option value="threaded">续接</option>
+            <option value="lifecycle">生命周期</option>
+          </select>
+        </div>
         <div id="session-items" data-page-node-id="q9NIG3lrlhe4Pg8LqGJIuV"></div>
         <div id="session-more" class="list-more muted" data-page-node-id="sm1"></div>
       </aside>
@@ -432,6 +450,7 @@
     <script type="module" src="/pages/plugin-settings.js"></script>
   <script type="module" src="/pages/plugin-pending.js"></script>
     <script type="module" src="/pages/plugin-pagination.js"></script>
+    <script type="module" src="/pages/plugin-batch.js"></script>
     <script type="module" src="/pages/plugins.js"></script>
   <script type="module" src="/pages/persona-per-chat.js"></script>
   <script type="module" src="/pages/persona.js"></script>

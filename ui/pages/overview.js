@@ -116,13 +116,14 @@ async function loadOverview() {
     box.innerHTML = '<div class="hint" style="padding:24px">正在读取总览…</div>';
   }
   // 六个数据源各自独立：任何一个失败都不该让整页空着
-  const [status, usage, incidents, snowluma, host, config] = await Promise.all([
+  const [status, usage, incidents, snowluma, host, config, health] = await Promise.all([
     api('/api/status').catch(() => null),
     api('/api/usage/stats?range=7d').catch(() => null),
     api('/api/incidents?limit=5').catch(() => null),
     api('/api/snowluma/version').catch(() => null),
     api('/api/host').catch(() => null),
-    api('/api/config').catch(() => null)
+    api('/api/config').catch(() => null),
+    api('/api/health').catch(() => null)
   ]);
 
   const onebot = status?.onebot || {};
@@ -193,6 +194,20 @@ async function loadOverview() {
       </li>`).join('')}</ul>`,
     { icon: 'sparkles' }
   );
+  const healthResults = Array.isArray(health?.health?.lastResults) ? health.health.lastResults : [];
+  const healthFailed = healthResults.filter((item) => item?.ok === false);
+  const healthPanel = healthFailed.length ? panel(
+    '运行体检',
+    `${healthFailed.length} 项异常 · 最近一次巡检结果`,
+    `<ul class="setup-list">${healthFailed.slice(0, 6).map((item) => `
+      <li class="setup-row">
+        <span class="setup-mark">${iconSvg('plus', { size: 14 })}</span>
+        <span class="setup-main"><span class="setup-label">${esc(item.name || '检查项')}</span>
+          <span class="setup-detail">${esc(item.detail || '异常')}</span></span>
+        <span class="setup-action"><button type="button" class="btn btn-small" data-setup-tab="control">去处理</button></span>
+      </li>`).join('')}</ul>`,
+    { icon: 'sparkles' }
+  ) : '';
 
   const incidentList = Array.isArray(incidents?.incidents) ? incidents.incidents : [];
   // 计数字段在 status.counts 里（open / acknowledged / resolved / critical）—— 别猜扁平键名
@@ -248,6 +263,8 @@ async function loadOverview() {
     </div>
 
     ${setupPanel}
+
+    ${healthPanel}
 
     <div class="kpi-grid">
       ${kpi({

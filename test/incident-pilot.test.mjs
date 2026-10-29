@@ -208,6 +208,8 @@ test('disabled existing pilot remains readable but cannot mutate or capture', as
   assert.equal(status.active, false);
   assert.equal(status.exists, true);
   assert.equal(reader.list().length, 1);
+  assert.equal(reader.list({ query: 'saved' }).length, 1);
+  assert.equal(reader.list({ query: '不存在' }).length, 0);
   assert.equal(reader.get(incident.id).message, 'saved');
   assert.equal(reader.capture(new Error('ignored')), null);
   assert.throws(() => reader.setChatControl('group:1', { mode: 'blocked' }), /未启用/);

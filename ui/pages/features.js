@@ -1511,6 +1511,7 @@ function renderIncidentFeaturePageImpl(c, status, incidents = [], options = {}) 
       <div class="control-section-title">
         <div><h3>异常日志</h3><span class="muted">删除日志不会解除未知写入或改变会话状态</span></div>
         <div class="settings-actions" style="margin:0">
+          <input type="text" id="incident-search" placeholder="搜索异常 / 会话 / 代码" aria-label="搜索异常" value="${esc(state.incidentQuery || '')}" />
           <select id="incident-state-filter" aria-label="异常状态">
             <option value="">全部状态</option>
             ${Object.entries(INCIDENT_STATE_LABELS).map(([value, label]) =>
@@ -1554,6 +1555,10 @@ function renderIncidentFeaturePageImpl(c, status, incidents = [], options = {}) 
   $('#incident-feature-save')?.addEventListener('click', saveIncidentFeatureConfig);
   // force：选完筛选项焦点还在这个 <select> 上，不 force 的话表格不刷新 —— 用户看到的是
   // "筛选完全没反应"，而这一屏此刻正把没筛选的那批行当筛选结果看（2026-10-04 复审 P1）
+  $('#incident-search')?.addEventListener('change', (event) => {
+    state.incidentQuery = String(event.target.value || '').trim();
+    loadIncidentFeaturePage({ force: true });
+  });
   $('#incident-state-filter')?.addEventListener('change', (event) => {
     state.incidentState = event.target.value;
     loadIncidentFeaturePage({ force: true });

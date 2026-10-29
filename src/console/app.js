@@ -1,6 +1,7 @@
 // Linux 服务总装：OneBot 事件接入 → 存储 → 编排器；HTTP API + SSE 给 UI。
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
@@ -4050,8 +4051,12 @@ export function createApp({
   router.add('DELETE', /^\/api\/memory-files\/global\/members\/(\d{1,15})$/, async (req, res, params) => {
     // 破坏性操作统一 confirm 门槛（与全站口径一致）：global 版跨所有会话删除。
     const body = await readBody(req).catch(() => ({}));
-    if (body?.confirm !== true) return json(res, 409, { ok: false, error: '删除全部人物记忆需要 body.confirm === true' });
-    const removed = memory.removeMember('', params[1]);
+    if (body?.confirm !== true) return json(res, 409, { ok: false, error: '删除人物记忆需要 body.confirm === true' });
+    const content = String(body?.content ?? '').trim();
+    // 带 content = 只删这一条；不带 = 删除这个人的全部印象（原有语义）。
+    const removed = content
+      ? memory.remove('', 'memberImpression', { userId: params[1], content })
+      : memory.removeMember('', params[1]);
     emit('memory-update', { chatKey: '' });
     return json(res, 200, { ok: true, removed });
   });
@@ -5740,6 +5745,87 @@ export function createApp({
     return json(res, 200, { ok: true, status: 'queued', item });
   });
 
+  // ── 数据备份（控制台只做状态/立即备份/恢复前校验；真正恢复仍走 SSH CLI）──
+  const backupDirPath = () => process.env.QQ_AGENT_BACKUP_DIR
+    || path.join(os.homedir(), 'qq-agent', 'backups');
+  const backupKeyPath = () => process.env.QQ_AGENT_BACKUP_KEY_FILE
+    || path.join(os.homedir(), '.config', 'qq-agent', 'backup.key');
+  const runOpsCommand = (args, timeoutMs = 15 * 60 * 1000) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(ROOT, 'src', 'ops.js'), ...args], {
+      cwd: ROOT,
+      env: { ...process.env, QQ_AGENT_DATA_DIR: DATA_DIR }
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM'); } catch { /* ignore */ }
+      finish({ ok: false, code: null, timedOut: true, stdout, stderr });
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => { stdout = (stdout + chunk.toString()).slice(-20000); });
+    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-20000); });
+    child.on('error', (error) => finish({ ok: false, code: null, stdout, stderr: `${stderr}${error?.message || error}` }));
+    child.on('close', (code) => finish({ ok: code === 0, code, timedOut: false, stdout, stderr }));
+  });
+  router.add('GET', '/api/backup/status', async (req, res) => {
+    const dir = backupDirPath();
+    let files = [];
+    try {
+      files = fs.readdirSync(dir)
+        .filter((name) => /\.tar\.gz(?:\.enc)?$/.test(name))
+        .map((name) => {
+          const full = path.join(dir, name);
+          const stat = fs.statSync(full);
+          return { name, bytes: stat.size, mtime: stat.mtimeMs };
+        })
+        .sort((a, b) => b.mtime - a.mtime)
+        .slice(0, 20);
+    } catch { /* 目录不存在时返回空列表 */ }
+    return json(res, 200, {
+      ok: true,
+      dir,
+      keyExists: fs.existsSync(backupKeyPath()),
+      files,
+      restoreCli: files[0]
+        ? `node src/ops.js restore --from ${path.join(dir, files[0].name)} --confirm`
+        : ''
+    });
+  });
+  router.add('POST', '/api/backup/run', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    if (body?.confirm !== true) return json(res, 400, { ok: false, error: '执行备份需要 confirm:true' });
+    const dir = backupDirPath();
+    try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* 失败交给 ops 报 */ }
+    const result = await runOpsCommand(['backup', '--confirm', '--data', DATA_DIR, '--backup-dir', dir]);
+    auditWrite('backup.run', dir, { req, ok: result.ok });
+    return json(res, result.ok ? 200 : 500, {
+      ok: result.ok,
+      code: result.code,
+      timedOut: result.timedOut,
+      output: `${result.stdout}${result.stderr}`.slice(-4000)
+    });
+  });
+  router.add('POST', '/api/backup/verify', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const name = path.basename(String(body?.file || ''));
+    if (!/\.tar\.gz(?:\.enc)?$/.test(name)) return json(res, 400, { ok: false, error: '备份文件名不合法' });
+    const full = path.join(backupDirPath(), name);
+    if (!fs.existsSync(full)) return json(res, 404, { ok: false, error: '备份文件不存在' });
+    const result = await runOpsCommand(['restore', '--from', full, '--dry-run', '--data', DATA_DIR], 5 * 60 * 1000);
+    return json(res, result.ok ? 200 : 500, {
+      ok: result.ok,
+      code: result.code,
+      timedOut: result.timedOut,
+      output: `${result.stdout}${result.stderr}`.slice(-4000)
+    });
+  });
+
   router.add('GET', '/api/incidents', async (req, res, params, url) => {
     return json(res, 200, {
       status: incidentPilotStatus(),
@@ -5747,6 +5833,7 @@ export function createApp({
         state: url.searchParams.get('state') || '',
         severity: url.searchParams.get('severity') || '',
         chatKey: url.searchParams.get('chatKey') || '',
+        query: url.searchParams.get('query') || '',
         limit: url.searchParams.get('limit') || 100
       }) || []
     });
@@ -5873,14 +5960,18 @@ export function createApp({
     }
   });
   router.add('GET', '/api/sessions', async (req, res, params, url) => {
-    // 上限 2^20（Kondius 钦定 1048576）：约等于不限，但拦得住真正的失控请求。
-    // 前端靠分页（一次渲染 50 条）避免卡顿，后端不截断。
-    const limit = Math.min(1048576, Math.max(1, Number(url.searchParams.get('limit')) || 1048576));
+    // 单次最多 2000 条；支持 offset 游标，避免控制台一次拉走全部历史。
+    const limit = Math.min(2000, Math.max(1, Number(url.searchParams.get('limit')) || 200));
+    const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0));
     const now = Date.now();
     const threadCache = new Map();
+    const rows = sessions.listSummaries(offset + limit).slice(offset);
     return json(res, 200, {
-      sessions: sessions.listSummaries(limit)
-        .map((session) => buildSessionView(session, store, { now, threadCache }))
+      sessions: rows.map((session) => buildSessionView(session, store, { now, threadCache })),
+      offset,
+      limit,
+      nextOffset: offset + rows.length,
+      hasMore: rows.length >= limit
     });
   });
   router.add('GET', '/api/chats', async (req, res) => {

@@ -102,8 +102,8 @@ function renderSessionThreadTimeline(s) {
 // ── 会话视图 ──
 async function loadSessions({ quiet = false } = {}) {
   try {
-    // 一次全取：后端上限 2^20（约等于不限），前端靠分页渲染（SESSION_PAGE）避免卡顿
-    const data = await api('/api/sessions?limit=1048576');
+    // 最近 2000 条封顶：会话索引可能很大，前端再有筛选和分页渲染；不再一次拉 100 万条。
+    const data = await api('/api/sessions?limit=2000');
     state.sessions = data.sessions || [];
     renderSessionList();
     // 自动跟随最新运行中的会话
@@ -118,7 +118,13 @@ async function loadSessions({ quiet = false } = {}) {
         loadSessionDetail(state.currentSessionId, { quiet: true });
       }
     }
-  } catch (e) { if (!quiet) console.error(e); }
+  } catch (e) {
+    if (!quiet) {
+      console.error(e);
+      const more = $('#session-more');
+      if (more) more.textContent = `会话加载失败：${e?.message || e}（稍后自动重试）`;
+    }
+  }
 }
 
 function buildSessionDisplayItems(sessions = []) {
@@ -182,10 +188,31 @@ function buildSessionDisplayItems(sessions = []) {
 function renderSessionList() {
   const box = $('#session-items');
   state.seenSessionIds = state.seenSessionIds || new Set();
+  // 筛选控件是 index.html 的静态元素，绑一次即可；筛选变化时退回第一页。
+  if (box && !box.__sessionFilterBound) {
+    box.__sessionFilterBound = true;
+    for (const selector of ['#session-search', '#session-filter-status', '#session-filter-mode']) {
+      const el = $(selector);
+      if (!el) continue;
+      el.addEventListener(selector === '#session-search' ? 'input' : 'change', () => {
+        state.sessionLimit = SESSION_PAGE;
+        renderSessionList();
+      });
+    }
+  }
   // 分页：一次只渲染 sessionLimit 条，滚到底部再加载下一批（见 SESSION_PAGE 常量）。
   // 会话可能积累到几百条，全量渲染会让列表变卡。
   state.sessionLimit = Math.max(SESSION_PAGE, Number(state.sessionLimit) || SESSION_PAGE);
-  const all = state.sessions || [];
+  const q = String($('#session-search')?.value || '').trim().toLowerCase();
+  const status = String($('#session-filter-status')?.value || 'all');
+  const modeFilter = String($('#session-filter-mode')?.value || 'all');
+  const all = (state.sessions || []).filter((s) => {
+    if (status !== 'all' && String(s.status || '') !== status) return false;
+    if (modeFilter !== 'all' && String(s.conversationMode || 'legacy') !== modeFilter) return false;
+    if (!q) return true;
+    return `${s.chatKey || ''} ${chatNameOf(s.chatKey) || ''} ${s.trigger || ''} ${s.triggerSummary || ''} ${s.triggerReason || ''}`
+      .toLowerCase().includes(q);
+  });
   const displayItems = buildSessionDisplayItems(all);
   const shown = displayItems.slice(0, state.sessionLimit);
   const rest = displayItems.length - shown.length;

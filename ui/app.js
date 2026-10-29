@@ -399,6 +399,24 @@ function renderControlHub(data = {}) {
     </section>
     <section class="settings-card">
       <div class="control-section-title">
+        <div><h3>运行指标与审计</h3><span class="muted">进程 / HTTP / 队列 / LLM / 最近写操作</span></div>
+        <button type="button" class="btn btn-small" id="control-observability-refresh">刷新指标</button>
+      </div>
+      <div id="control-observability" class="control-result muted" role="status" aria-live="polite">点「刷新指标」加载当前运行指标与最近审计。</div>
+    </section>
+    <section class="settings-card">
+      <div class="control-section-title">
+        <div><h3>数据备份</h3><span class="muted">只显示备份与校验；真正恢复需 SSH 执行命令</span></div>
+        <div class="settings-actions" style="margin:0">
+          <button type="button" class="btn btn-small" id="control-backup-refresh">刷新</button>
+          <button type="button" class="btn btn-primary btn-small" id="control-backup-run">立即备份</button>
+        </div>
+      </div>
+      <div id="control-backup-status" class="control-result muted" role="status" aria-live="polite">正在读取备份状态…</div>
+      <div id="control-backup-output" class="control-result muted" role="status" aria-live="polite"></div>
+    </section>
+    <section class="settings-card">
+      <div class="control-section-title">
         <div><h3>更新部署</h3><span class="muted">${esc(update.repository || '-')} · ${esc(update.branch || 'main')}</span></div>
         <span class="control-service-state ${update.status === 'failed' ? 'offline' : update.enabled ? 'online' : ''}" data-hub-deploy-state>${esc(updateState)}</span>
       </div>
@@ -557,12 +575,132 @@ async function runControlHealth() {
   }
 }
 
+async function loadControlObservability() {
+  const btn = $('#control-observability-refresh');
+  const box = $('#control-observability');
+  if (!btn || !box) return;
+  btn.disabled = true;
+  box.className = 'control-result muted';
+  box.textContent = '正在读取指标与审计…';
+  const mb = (n) => `${(Number(n || 0) / 1048576).toFixed(1)} MB`;
+  try {
+    const [metrics, audit] = await Promise.all([
+      api('/api/metrics'),
+      api('/api/audit?limit=20')
+    ]);
+    const http = metrics.http || {};
+    const statuses = http.requests?.byStatus || {};
+    const queues = metrics.queues?.byState || {};
+    const outbox = metrics.outbox?.byState || {};
+    const entries = Array.isArray(audit.entries) ? audit.entries : [];
+    box.className = 'control-result';
+    box.innerHTML = `
+      <div class="update-deploy-summary">
+        <div><span>进程 RSS</span><strong>${esc(mb(metrics.process?.rssBytes))}</strong></div>
+        <div><span>堆内存</span><strong>${esc(mb(metrics.process?.heapUsedBytes))}</strong></div>
+        <div><span>HTTP 请求 / p95</span><strong>${Number(http.requests?.total) || 0} / ${Number(http.latencyMs?.p95) || 0} ms</strong></div>
+        <div><span>HTTP 5xx</span><strong>${Number(statuses['5xx']) || 0}</strong></div>
+        <div><span>LLM 请求 / 兜底 / 失败</span><strong>${Number(metrics.llm?.requests) || 0} / ${Number(metrics.llm?.fallbackUses) || 0} / ${Number(metrics.llm?.failures) || 0}</strong></div>
+        <div><span>入站队列 pending / leased / held</span><strong>${Number(queues.pending) || 0} / ${Number(queues.leased) || 0} / ${Number(queues.held) || 0}</strong></div>
+        <div><span>出站 pending / failed</span><strong>${Number(outbox.pending) || 0} / ${Number(outbox.failed) || 0}</strong></div>
+        <div><span>OneBot</span><strong>${metrics.onebot?.connected ? '已连接' : '未连接'}</strong></div>
+      </div>
+      <div class="table-wrap" style="margin-top:10px"><table class="usage-table">
+        <thead><tr><th>时间</th><th>操作</th><th>目标</th><th>结果</th></tr></thead>
+        <tbody>${entries.length ? entries.map((entry) => `<tr>
+          <td>${esc(fmtTime(entry.ts))}</td>
+          <td>${esc(entry.action || '-')}</td>
+          <td>${esc(entry.target || '-')}</td>
+          <td>${entry.ok === false ? `<span class="chip bad">失败</span> ${esc(String(entry.error || '').slice(0, 80))}` : '<span class="chip">成功</span>'}</td>
+        </tr>`).join('') : '<tr><td colspan="4" class="muted">还没有审计记录</td></tr>'}</tbody>
+      </table></div>`;
+  } catch (error) {
+    box.className = 'control-result error';
+    box.textContent = `指标读取失败：${error.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadBackupStatus() {
+  const box = $('#control-backup-status');
+  if (!box) return;
+  box.className = 'control-result muted';
+  box.textContent = '正在读取备份状态…';
+  try {
+    const data = await api('/api/backup/status');
+    const files = Array.isArray(data.files) ? data.files : [];
+    const mb = (bytes) => `${(Number(bytes || 0) / 1048576).toFixed(1)} MB`;
+    box.className = 'control-result';
+    box.innerHTML = `
+      <div class="muted">目录：${esc(data.dir || '-')} · 密钥：${data.keyExists ? '已找到' : '未找到'}</div>
+      <div class="table-wrap" style="margin-top:8px"><table class="usage-table">
+        <thead><tr><th>备份文件</th><th>大小</th><th>时间</th><th></th></tr></thead>
+        <tbody>${files.length ? files.map((file) => `<tr>
+          <td>${esc(file.name)}</td>
+          <td>${esc(mb(file.bytes))}</td>
+          <td>${esc(fmtTime(file.mtime))}</td>
+          <td><button type="button" class="btn btn-small" data-backup-verify="${esc(file.name)}">校验</button></td>
+        </tr>`).join('') : '<tr><td colspan="4" class="muted">还没有备份文件</td></tr>'}</tbody>
+      </table></div>
+      ${data.restoreCli ? `<div class="hint" style="margin-top:8px">恢复（SSH）：<code>${esc(data.restoreCli)}</code></div>` : ''}`;
+    box.querySelectorAll('[data-backup-verify]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        const out = $('#control-backup-output');
+        if (out) { out.className = 'control-result muted'; out.textContent = '正在校验备份（dry-run）…'; }
+        try {
+          const result = await api('/api/backup/verify', {
+            method: 'POST', body: JSON.stringify({ file: button.dataset.backupVerify })
+          });
+          if (out) {
+            out.className = `control-result ${result.ok ? 'success' : 'error'}`;
+            out.textContent = String(result.output || (result.ok ? '校验通过' : '校验失败')).slice(0, 4000);
+          }
+        } catch (error) {
+          if (out) { out.className = 'control-result error'; out.textContent = `校验失败：${error.message}`; }
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+  } catch (error) {
+    box.className = 'control-result error';
+    box.textContent = `备份状态读取失败：${error.message}`;
+  }
+}
+
+async function runBackupNow() {
+  const btn = $('#control-backup-run');
+  const out = $('#control-backup-output');
+  if (!btn) return;
+  if (!await askForConfirmation('立即执行一次加密备份？大实例可能需要几分钟，期间控制台仍可用。')) return;
+  btn.disabled = true;
+  if (out) { out.className = 'control-result muted'; out.textContent = '正在备份…'; }
+  try {
+    const result = await api('/api/backup/run', { method: 'POST', body: JSON.stringify({ confirm: true }) });
+    if (out) {
+      out.className = `control-result ${result.ok ? 'success' : 'error'}`;
+      out.textContent = String(result.output || (result.ok ? '备份完成' : '备份失败')).slice(0, 4000);
+    }
+    await loadBackupStatus();
+  } catch (error) {
+    if (out) { out.className = 'control-result error'; out.textContent = `备份失败：${error.message}`; }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // 首次建结构后绑定一次事件即可（DOM 不再重建，不需要重复绑）
 function bindControlHubHandlers() {
   const box = $('#control-page');
   if (!box) return;
   $('#control-refresh')?.addEventListener('click', () => loadControlHub({ force: true }));
   $('#control-health-run')?.addEventListener('click', runControlHealth);
+  $('#control-observability-refresh')?.addEventListener('click', loadControlObservability);
+  $('#control-backup-refresh')?.addEventListener('click', loadBackupStatus);
+  $('#control-backup-run')?.addEventListener('click', runBackupNow);
+  void loadBackupStatus();
   $('#auto-update-save')?.addEventListener('click', () => saveAutoUpdateSettings(false));
   $('#auto-update-run')?.addEventListener('click', runManualUpdate);
   $('#auto-update-resume')?.addEventListener('click', () => saveAutoUpdateSettings(true));
@@ -1220,6 +1358,7 @@ async function loadIncidentFeaturePage(options = {}) {
     const params = new URLSearchParams({ limit: '200' });
     if (state.incidentState) params.set('state', state.incidentState);
     if (state.incidentSeverity) params.set('severity', state.incidentSeverity);
+    if (state.incidentQuery) params.set('query', state.incidentQuery);
     const [cfg, data] = await Promise.all([
       api('/api/config'),
       api(`/api/incidents?${params}`)

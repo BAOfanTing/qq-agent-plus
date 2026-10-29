@@ -408,10 +408,16 @@ export class IncidentPilotManager {
     return incident;
   }
 
-  list({ state = '', severity = '', chatKey = '', limit = 100 } = {}) {
+  list({ state = '', severity = '', chatKey = '', query = '', limit = 100 } = {}) {
     if (!this.db) return [];
     const clauses = [];
     const params = [];
+    const text = String(query || '').trim().slice(0, 100);
+    if (text) {
+      const like = `%${text.replace(/[%_]/g, (ch) => `\\${ch}`)}%`;
+      clauses.push("(safe_message LIKE ? ESCAPE '\\' OR code LIKE ? ESCAPE '\\' OR chat_key LIKE ? ESCAPE '\\' OR source LIKE ? ESCAPE '\\')");
+      params.push(like, like, like, like);
+    }
     if (INCIDENT_STATES.has(state)) {
       clauses.push('state=?');
       params.push(state);
