@@ -7,7 +7,10 @@ import { getConfig, DEFAULT_CONFIG } from '../core/config.js';
 import { sleep, sleepAbortable, randInt, createSendChain, formatClockTime, todayKey } from '../core/util.js';
 import { mdToPlain, splitForQQ } from '../llm/md-to-plain.js';
 import { shapeBubbles } from '../llm/bubble-shape.js';
-import { assertCanSend } from '../core/access.js';
+import { assertCanSend, chatAllowed } from '../core/access.js';
+import { isTimeActive } from '../core/time-gate.js';
+import { platformToolAllowed, privateFileMaxKiB } from '../core/platform-gates.js';
+import { preparePrivateTextFile, privateTextFileError } from './private-text-file.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('sender');
@@ -557,6 +560,65 @@ export class SendQueue {
         this.onSent?.({ chatKey, text: '[QQ语音]', messageId: data?.message_id ?? null });
       });
       return { message_id: data?.message_id ?? null };
+    });
+  }
+
+  /**
+   * 当前私聊的纯文本资料：不接受路径/URL/接收人，权限与未知投递沿用发送队列。
+   */
+  privateTextFile(chatKey, args, options = {}) {
+    if (!/^private:[1-9]\d*$/.test(String(chatKey))) throw new Error('文本文件只能发给当前私聊');
+    const id = Number(String(chatKey).slice('private:'.length));
+    if (!Number.isSafeInteger(id)) throw new Error('私聊标识无效');
+    const { file, name, bytes } = preparePrivateTextFile(args, getConfig().platform);
+    const check = () => {
+      if (!platformToolAllowed('send_private_file', getConfig().platform, chatKey)) {
+        throw privateTextFileError('PRIVATE_FILE_DISABLED');
+      }
+      if (bytes > privateFileMaxKiB(getConfig().platform) * 1024) throw privateTextFileError('PRIVATE_FILE_SIZE_LIMIT');
+      // 不接受群游戏的私聊豁免，排队后与真正上传前都重新检查。
+      try {
+        assertCanSend(chatKey, options.signal);
+      } catch {
+        // 只解释原访问检查的拒绝原因，不代替或放宽它。
+        const cfg = getConfig();
+        const code = options.signal?.aborted ? 'PRIVATE_FILE_CANCELLED'
+          : !isTimeActive(chatKey) ? 'PRIVATE_FILE_INACTIVE'
+          : cfg.runtime?.paused ? 'PRIVATE_FILE_PAUSED'
+          : cfg.runtime?.mode !== 'active' ? 'PRIVATE_FILE_MODE_BLOCKED'
+          : !chatAllowed(chatKey, cfg) ? 'PRIVATE_FILE_ACCESS_DENIED' : 'PRIVATE_FILE_BLOCKED';
+        throw privateTextFileError(code);
+      }
+    };
+    check();
+    return this.#chain(chatKey)(async () => {
+      check();
+      if (this.store.getChatMeta(chatKey).held || (options.runId && this.store.hasUncertainEffects(options.runId))) {
+        throw privateTextFileError('PRIVATE_FILE_HELD');
+      }
+      try { this.#checkRate(chatKey); } catch (error) {
+        if (String(error?.message || '').startsWith('发送频率超限')) throw privateTextFileError('PRIVATE_FILE_RATE_LIMITED');
+        throw error;
+      }
+      const data = await this.#deliver(chatKey, { ...options, gameScoped: false }, { type: 'file', name }, async () => {
+        check();
+        try {
+          return await this.onebot.call('upload_private_file', { user_id: id, file, name }, 120000, options.signal);
+        } catch (error) {
+          // 协议端可能回显 file/正文，不能把原错误存进台账或 incident。
+          // 私聊文件保守地不自动重试；仅保留原有 failed/unknown 定性供人工核对。
+          const { definite, uncertain } = classifyTransportFailure(error);
+          const outcome = error?.outcome === 'failed' || error?.outcome === 'unknown'
+            ? error.outcome : (definite && !uncertain ? 'failed' : 'unknown');
+          throw privateTextFileError(outcome === 'failed' ? 'PRIVATE_FILE_REJECTED' : 'PRIVATE_FILE_UNCONFIRMED');
+        }
+      });
+      this.#afterSent(() => {
+        this.store.appendSelf(chatKey, { text: `[私聊文件]${name}`, ts: Date.now(),
+          mid: data?.message_id ?? null, targetUserId: String(id), eventKind: 'message' });
+        this.onSent?.({ chatKey, text: '[私聊文件]', messageId: data?.message_id ?? null });
+      });
+      return { file_id: data?.file_id ?? null, message_id: data?.message_id ?? null };
     });
   }
 

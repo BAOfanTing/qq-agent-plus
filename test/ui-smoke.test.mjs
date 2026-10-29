@@ -482,10 +482,11 @@ test('真实 DOM 冒烟：「平台能力」页的开关/配额/按群覆盖能�
     const offKeys = [...(offBlock?.[1] || '').matchAll(/'([A-Za-z]+)'/g)].map((m) => m[1]).sort();
     assert.deepEqual(offKeys, [...PLATFORM_DEFAULT_OFF].sort(), 'UI 的"默认关"集合要与服务端 PLATFORM_DEFAULT_OFF 一致');
 
-    // 按群覆盖编辑器：白名单的群可切换，且每个门控键都有三态下拉
+    // 按群覆盖编辑器：白名单的群可切换；仅私聊的能力不应出现在本群设置里。
     assert.ok(window.document.querySelector('#pergroup-group'), '按群覆盖要有"选择群"下拉');
     const perIds = [...window.document.querySelectorAll('[data-pergroup-key]')].map((el) => el.dataset.pergroupKey).sort();
-    assert.deepEqual(perIds, [...PLATFORM_GATE_KEYS].sort(), '按群覆盖要覆盖全部门控键');
+    assert.deepEqual(perIds, PLATFORM_GATE_KEYS.filter((key) => key !== 'privateFileSend').sort(), '按群覆盖要覆盖全部适用门控键');
+    assert.equal(window.document.querySelector('#pergroup-privateFileSend'), null, '私聊能力没有群覆盖控件');
     // 行之间不许有游离字符：外层 map 返回数组、忘了 flat() 的话 join 会塞进逗号（真机踩过）
     const perText = window.document.querySelector('#pergroup-rows')?.textContent || '';
     assert.ok(!perText.includes(','), `按群覆盖区出现了游离的逗号：${perText.slice(0, 60)}`);
@@ -549,6 +550,8 @@ test('真实 DOM 冒烟：「平台能力」页的开关/配额/按群覆盖能�
     assert.equal(patch.platform?.reactions, true, '没动过的读开关按当前值存');
     assert.equal(patch.platform?.readReceipts, false, '默认关的项没勾 = false');
     assert.equal(patch.platform?.avatarWrites, false, '换头像默认关（没勾就是 false）');
+    assert.equal(patch.platform?.privateFileSend, false, '新增私聊文本文件默认关，保存不能扩权');
+    assert.equal(patch.platform?.privateFileMaxKiB, 64, '缺失大小设置时默认仍为 64 KiB');
     assert.equal(patch.platform?.qqVoiceCharacter, 'lucy-voice-daji', '选中的音色要跟着保存');
     assert.deepEqual(patch.platform?.quotas?.__replace__, { reactionsPerHour: 10, albumWritesPerHour: 5, profilePerDay: 1, avatarsPerWeek: 5 },
       '配额用 __replace__ 整表替换：留空的那项不写（回落服务端默认），改过的按界面值写');
@@ -556,7 +559,7 @@ test('真实 DOM 冒烟：「平台能力」页的开关/配额/按群覆盖能�
     assert.deepEqual(patch.platform?.perGroup, { __replace__: { '10001': { albumWrites: true } } },
       '按群覆盖要带 __replace__ 存下去（普通深合并删不掉旧覆盖）');
     assert.deepEqual(Object.keys(patch.platform || {}).sort(),
-      [...PLATFORM_GATE_KEYS, 'qqVoiceCharacter', 'quotas', 'perGroup', 'readReceipts', 'forwardCards'].sort(),
+      [...PLATFORM_GATE_KEYS, 'privateFileMaxKiB', 'qqVoiceCharacter', 'quotas', 'perGroup', 'readReceipts', 'forwardCards'].sort(),
       '这一页的每个控件都要进 patch（漏一个 = 下次的"配了不生效"）');
     assert.equal(patch.send?.typingIndicator, true, '「正在输入」也归这一页保存');
     // 保存后右列必须重拉（否则一直挂着旧上限，看起来像"改了没生效"）

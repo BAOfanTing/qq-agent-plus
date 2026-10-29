@@ -27,12 +27,13 @@ const GATE_SECTIONS = [
     ['avatarWrites', '换 QQ 头像'],
     ['nicknameWrites', '改 QQ 昵称 / 个性说明']
   ]],
-  ['信息与素材', '读群里的资料与文件，或往群里发东西', [
+  ['信息与素材', '群资料与素材，以及当前私聊的文本资料', [
     ['groupTools', '看群资料：简介 / 公告 / 荣誉'],
     ['groupWrites', '群签到 / 把消息设成群待办'],
     ['ocr', '服务端 OCR：读图上的文字'],
     ['groupFiles', '群文件：看目录 / 取下载直链'],
     ['groupFileSend', '群文件：发文件到群'],
+    ['privateFileSend', '私聊文件：发送纯文本资料（不读本机文件或网址）'],
     ['albumRead', '群相册：看相册与照片'],
     ['albumWrites', '群相册：点赞 / 评论'],
     ['albumUpload', '群相册：把图传进相册']
@@ -68,9 +69,15 @@ const GATE_LABELS = new Map(GATE_SECTIONS.flatMap(([, , rows]) => rows.map(([key
  */
 function gateRowHtml(key, label) {
   const id = gateCheckboxId(key);
-  const extra = key === 'qqVoice' ? voiceSelectRowHtml() : '';
+  const extra = key === 'qqVoice' ? voiceSelectRowHtml()
+    : key === 'privateFileSend' ? `<div class="plat-tools-empty" id="${id}-note">仅向当前私聊发送本轮文字，正文上限按下方设置（默认 64 KiB，硬上限 256 KiB），支持 TXT/MD/CSV/JSON；不读取本机资料或下载网址内容。投递结果未知时需人工核对，不自动重试。</div>
+            <div class="plat-sub">
+              <label for="cfg-platform-privatefilemaxkib">正文大小上限（KiB）</label>
+              <input type="number" id="cfg-platform-privatefilemaxkib" min="1" max="256" step="1" value="${privateFileMaxKiBValue(state.config?.platform?.privateFileMaxKiB)}" aria-describedby="${id}-note" style="width:90px;min-width:0" />
+            </div>` : '';
+  const describedBy = key === 'privateFileSend' ? ` aria-describedby="${id}-note"` : '';
   return `        <div class="plat-row">
-          <input type="checkbox" id="${id}" ${keyDefaultOn(key) ? 'checked' : ''} />
+          <input type="checkbox" id="${id}"${describedBy} ${keyDefaultOn(key) ? 'checked' : ''} />
           <div class="plat-row-main">
             <label class="plat-label" for="${id}">${esc(label)}${gateDefaultOn(key) ? '' : ' <span class="chip warn">默认关</span>'}</label>
             <div class="plat-tools" data-gate-tools="${esc(key)}"><span class="plat-tools-empty">工具清单加载中…</span></div>
@@ -105,7 +112,12 @@ function behaviorRowHtml(id, label, note, checked) {
 
 // 默认取向：只用于"首次渲染时复选框是否勾上"。真正的默认值在服务端（config-legacy），
 // 页面渲染拿的是已保存配置，这里只兜"配置里没有这个键"的老配置。
-const DEFAULT_OFF_KEYS = new Set(['avatarWrites', 'nicknameWrites', 'albumUpload']);
+const DEFAULT_OFF_KEYS = new Set(['avatarWrites', 'nicknameWrites', 'albumUpload', 'privateFileSend']);
+// 与服务端范围一致；真实 DOM 用例核对默认值、硬上限与保存值，后端仍独立执行硬限制。
+function privateFileMaxKiBValue(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.max(1, Math.min(256, Math.floor(value))) : 64;
+}
 /** 键的内置默认取向（"默认关"= 未显式 true 就不放行）。渲染与保存兜底共用。 */
 function gateDefaultOn(key) {
   return !DEFAULT_OFF_KEYS.has(key);
@@ -245,6 +257,7 @@ function renderPerGroupRows() {
   // 两列网格：15 项排成一屏能扫完的长度（单列要滚很久，真机反馈"好丑"的成因之一）。
   // 标签取 GATE_LABELS（与开关行同一份），不用再各写一遍。
   const rowOf = ([key]) => {
+    if (key === 'privateFileSend') return ''; // 只作用于私聊，没有按群覆盖。
     // 三态：'' 跟随全局 / 'on' 本群开 / 'off' 本群关（草稿里存的是布尔值，这里换算成下拉值）
     const cur = overrides[key] === undefined ? '' : (overrides[key] ? 'on' : 'off');
     const sel = (v, text) => `<option value="${v}" ${cur === v ? 'selected' : ''}>${text}</option>`;
@@ -389,5 +402,5 @@ async function hydratePlatformGates() {
 
 export {
   ALL_GATE_KEYS, QUOTA_ROWS, gateCheckboxId, gateDefaultOn, hydratePlatformGates,
-  hydratePlatformVoiceSelect, renderPlatformSection
+  hydratePlatformVoiceSelect, renderPlatformSection, privateFileMaxKiBValue
 };

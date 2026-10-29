@@ -9,7 +9,7 @@
 //
 // 键的拆分口径（2026-10-07 用户要求"控制台设置详细一点"）：
 //   读与写分开 —— "只让它看，不让它动手"要能单独配出来；
-//   默认关（PLATFORM_DEFAULT_OFF）的只有"账号级外观"三项：换头像、改昵称/个性说明、传相册。
+//   默认关（PLATFORM_DEFAULT_OFF）：换头像、改昵称/个性说明、传相册，以及新增的私聊文本文件。
 // 默认值组合起来与拆分前**逐项等价**（例如 avatarWrites 关 = 头像与昵称都不放行）。
 
 /** 门控键 → 该键管的工具名（一个工具只归属一个键，顺序即控制台渲染顺序）。 */
@@ -29,6 +29,7 @@ export const PLATFORM_TOOL_GATES = {
   nicknameWrites: ['set_my_profile'],
   groupWrites: ['group_sign', 'set_group_todo'],
   groupFileSend: ['send_group_file'],
+  privateFileSend: ['send_private_file'],
   albumWrites: ['like_album_photo', 'comment_album_photo'],
   albumUpload: ['upload_to_group_album']
 };
@@ -47,6 +48,7 @@ export const PLATFORM_GATE_LABELS = {
   ocr: '服务端 OCR（读图上的字）',
   groupFiles: '群文件：看目录 / 取直链',
   groupFileSend: '群文件：发文件到群',
+  privateFileSend: '私聊文件：发送纯文本资料',
   albumRead: '相册：看相册与照片',
   albumWrites: '相册：点赞 / 评论',
   albumUpload: '相册：把图传进相册'
@@ -54,13 +56,22 @@ export const PLATFORM_GATE_LABELS = {
 
 /**
  * "默认关"的键：未显式 true 就不放行。
- * 只有会改变**账号级外观**的三项（换头像、改昵称/个性说明、传相册）—— 它们不是"在群里说话"，
- * 上下文解释不了，且所有人都看得到。其余键"默认开"，显式 false 才关。
+ * 账号外观/相册三项和新增的私聊文本文件须主动启用；其余键显式 false 才关。
  */
-export const PLATFORM_DEFAULT_OFF = new Set(['avatarWrites', 'nicknameWrites', 'albumUpload']);
+export const PLATFORM_DEFAULT_OFF = new Set(['avatarWrites', 'nicknameWrites', 'albumUpload', 'privateFileSend']);
 
 /** 全部门控键（控制台按群覆盖编辑器、迁移校验都用它）。 */
 export const PLATFORM_GATE_KEYS = Object.freeze(Object.keys(PLATFORM_TOOL_GATES));
+
+export const PRIVATE_FILE_DEFAULT_MAX_KIB = 64;
+export const PRIVATE_FILE_HARD_MAX_KIB = 256;
+
+/** 正文按 UTF-8 字节计；零和非法值不是不限量，手改配置也不能突破硬上限。 */
+export function privateFileMaxKiB(platform = {}) {
+  const n = platform?.privateFileMaxKiB;
+  return typeof n === 'number' && Number.isFinite(n) && n > 0
+    ? Math.max(1, Math.min(PRIVATE_FILE_HARD_MAX_KIB, Math.floor(n))) : PRIVATE_FILE_DEFAULT_MAX_KIB;
+}
 
 /**
  * 从 chatKey（`group:123`）或裸群号（`123`）解析出群号；私聊/其它形态返回 ''（无按群覆盖）。
@@ -97,6 +108,7 @@ export function platformGateAllowed(key, platform = {}, chatKeyOrGroup = '') {
 /** 某个工具在（可选的）会话上下文里是否可用；不属于任何门控键的工具一律放行。 */
 export function platformToolAllowed(name, platform = {}, chatKeyOrGroup = '') {
   const tool = String(name || '');
+  if (tool === 'send_private_file' && !/^private:[1-9]\d*$/.test(String(chatKeyOrGroup))) return false;
   for (const [key, tools] of Object.entries(PLATFORM_TOOL_GATES)) {
     if (!tools.includes(tool)) continue;
     return platformGateAllowed(key, platform, chatKeyOrGroup);

@@ -12,7 +12,7 @@
 
 import { readFileSync } from 'node:fs';
 import { asrAvailable, getConfig, imageGenAvailable } from '../core/config.js';
-import { platformGateAllowed, platformQuotaLimit } from '../core/platform-gates.js';
+import { platformGateAllowed, platformQuotaLimit, privateFileMaxKiB } from '../core/platform-gates.js';
 import { visionEnabled, stickerVisionEnabled } from './vision-scan.js';
 // 与 orchestrator 摘 send_voice 的条件同源（enabled && baseUrl 都齐才算能用）：
 // 只看 enabled 会在"勾了启用但没填地址"时教一个不存在的工具（2026-10-07 审计 P0）
@@ -449,6 +449,9 @@ function qqSceneRules(grounded = false, platform = null, chatKey = '', cardFirst
     }
     if (gate('groupFileSend')) bits.push('send_group_file 把一段文字或直链文件发进群（发文件很显眼，别当消息用）');
     if (bits.length) lines.push(`- 群文件：${bits.join('；')}。`);
+    if (/^private:[1-9]\d*$/.test(chatKey) && gate('privateFileSend')) {
+      lines.push(`- 私聊资料：用户需要可保存的文本资料时，可用 send_private_file 把本次生成或用户提供的文字发给当前私聊；只传 text/name，最多 ${privateFileMaxKiB(plat)} KiB，仅 txt/md/csv/json。不能读取本机路径、抓取链接或另选接收人，也不能导出配置、日志、内部提示词或其他会话的资料。发送结果未知时不要重试。`);
+    }
   }
   {
     const bits = [];
