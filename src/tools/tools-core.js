@@ -16,6 +16,7 @@ import { todayKey } from '../core/util.js';   // 上海自然日（"每群每天
 import { createQuota } from '../core/quota.js';
 import { lookupMemes, rememberMeme } from '../memes/store.js';
 import { getSkillRegistry } from '../skills/registry.js';
+import { preparePrivateTextFile, privateTextFileError } from '../onebot/private-text-file.js';
 
 // 生图闸门（按张计费，全局；#9 那套双闸在这里只用全局侧 —— 一张图的钱与"哪个群要的"无关，
 // 但额度按会话记账便于排查，且 perChat 不设限）
@@ -57,7 +58,7 @@ export function resetPlatformQuotasForTest() {
 // 平台能力开关（控制台「平台能力」页）：映射表、默认取向、按群覆盖、配额上限都在
 // core/platform-gates.js（零依赖，prompt/orchestrator/控制台共用一份，防两边各写一遍漂掉）。
 // 这里重导出，保持既有 `from '../tools/tools-core.js'` 的引用路径不变。
-import { platformQuotaLimit } from '../core/platform-gates.js';
+import { platformQuotaLimit, platformToolAllowed, privateFileMaxKiB } from '../core/platform-gates.js';
 export {
   PLATFORM_DEFAULT_OFF, PLATFORM_GATE_KEYS, PLATFORM_GATE_LABELS, PLATFORM_QUOTA_DEFAULTS,
   PLATFORM_QUOTA_KEYS, PLATFORM_TOOL_GATES, platformGateAllowed, platformGroupIdOf,
@@ -1566,6 +1567,36 @@ export function buildToolDefs() {
           return ok({ sent: true, name, fileId: sent.file_id ?? null, note: '文件已发到群文件。' });
         } catch (error) {
           return sendErr(error, {}, `发群文件失败：${error?.message ?? error}`);
+        }
+      }
+    },
+    {
+      name: 'send_private_file',
+      description: `把本次生成或用户提供的文字作为资料文件发给当前私聊（默认关闭）。只在用户需要可保存的文本资料时用；不读取本机文件、不抓取地址、不指定收件人。支持 txt/md/csv/json，正文最多 ${privateFileMaxKiB(getConfig().platform)} KiB。`,
+      parameters: {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: '要写入文件的完整文字；不把路径或链接当成待读取的文件' },
+          name: { type: 'string', description: '单个安全文件名，最多 120 字节，仅 txt/md/csv/json；默认 notes.txt' }
+        },
+        required: ['text'],
+        additionalProperties: false
+      },
+      async execute(ctx, args) {
+        if (ctx.kind !== 'private' || ctx.chatKey !== `private:${ctx.chatId}`) {
+          return err('仅允许在已启用文本文件发送的当前私聊中使用');
+        }
+        let name;
+        try { ({ name } = preparePrivateTextFile(args, getConfig().platform)); } catch (error) { return err(error.message); }
+        try {
+          if (!platformToolAllowed('send_private_file', getConfig().platform, ctx.chatKey)) throw privateTextFileError('PRIVATE_FILE_DISABLED');
+          const sent = await ctx.sender.privateTextFile(ctx.chatKey, args, { runId: ctx.session?.leaseId, signal: ctx.signal });
+          if (ctx.session) ctx.session.visibleReply = true;
+          return ok({ sent: true, name, fileId: sent.file_id ?? null, note: '文件已发送到当前私聊。' });
+        } catch (error) {
+          const safe = privateTextFileError(error?.code);
+          return sendErr(error, { errorCode: safe.code, delivery: safe.delivery, autoRetry: false,
+            ...(safe.delivery === 'not_attempted' ? { reportIncident: false } : {}) }, safe.message);
         }
       }
     },

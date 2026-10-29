@@ -21,7 +21,7 @@ import { pickedGroups, state } from '../core/state.js';
 import { buildPerChatPatch } from './persona-per-chat.js';
 // 「平台能力」页的键表与配额行：渲染在 platform.js，这里只按同一份键名读控件
 // （键名与 id 约定只维护一处；改名不同步时源码锚点用例会红）。
-import { ALL_GATE_KEYS, QUOTA_ROWS, gateCheckboxId, gateDefaultOn, hydratePlatformGates } from './platform.js';
+import { ALL_GATE_KEYS, QUOTA_ROWS, gateCheckboxId, gateDefaultOn, hydratePlatformGates, privateFileMaxKiBValue } from './platform.js';
 import { currentPersonaId } from './persona.js';
 import { captureTimeControlRule } from './settings-bind.js';
 import { syncThinkingUi } from './settings.js';
@@ -1069,6 +1069,7 @@ async function saveConfig({ quiet = false } = {}) {
     }
     // 音色（下拉；列表由 platform.js 异步补全）：缺控件时按已保存值回退
     platform.qqVoiceCharacter = String(val('#cfg-platform-voicechar', c.platform?.qqVoiceCharacter || '')).trim();
+    platform.privateFileMaxKiB = privateFileMaxKiBValue(Number(val('#cfg-platform-privatefilemaxkib', privateFileMaxKiBValue(c.platform?.privateFileMaxKiB))));
     // 写入闸门上限：**留空/非法 = 不写这一项**，让服务端的内置默认真正生效。
     // （原来写的是 ui 里那份 dflt —— 那是第二份真源：服务端以后收紧默认值，
     //   点过一次保存的实例就会把旧数字固化进 config，永远不跟着变。2026-10-07 审计 P2）

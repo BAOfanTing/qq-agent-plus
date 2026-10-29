@@ -14,7 +14,7 @@ import {
 import { DEFAULT_TIME_CONTROL, normalizeTimeControl } from './time-control.js';
 import { normalizeTokenSaverMode } from './token-saver.js';   // 零依赖模块，避免循环依赖
 import { normalizeMomentWindows } from '../features/moment-schedule.js';
-import { PLATFORM_GATE_KEYS } from './platform-gates.js';   // 零依赖模块：按群覆盖的键名校验
+import { PLATFORM_GATE_KEYS, PRIVATE_FILE_DEFAULT_MAX_KIB, privateFileMaxKiB } from './platform-gates.js';
 import { LIVING_MEMORY_DEFAULTS, normalizeLivingMemoryConfig } from '../living-memory/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -669,6 +669,8 @@ export const DEFAULT_CONFIG = {
     ocr: true,              // 服务端 OCR（读图上的文字）
     groupFiles: true,       // 【读】群文件：看目录 / 取下载链
     groupFileSend: true,    // 【写】发文件到群
+    privateFileSend: false, // 【写】仅当前私聊的纯文本文件，须显式开启
+    privateFileMaxKiB: PRIVATE_FILE_DEFAULT_MAX_KIB, // 正文上限，可调但不能取消硬上限
     albumRead: true,        // 【读】群相册：看相册与照片
     albumWrites: true,      // 【写】相册点赞 / 评论
     albumUpload: false,     // 【写】把图传进相册（默认关：会往群里发布内容）
@@ -1374,6 +1376,7 @@ function migrateConfig(parsed) {
   // 显式开过 avatarWrites=true 的实例，昵称也保持开着 —— 否则用户"开过换头像/改资料"的
   // 意图会被拆细静默收掉一半（保存一次控制台即固化）。
   if (isPlainObject(out.platform)) {
+    out.platform.privateFileMaxKiB = privateFileMaxKiB(out.platform);
     if (out.platform.nicknameWrites === undefined && out.platform.avatarWrites === true) {
       out.platform.nicknameWrites = true;
     }

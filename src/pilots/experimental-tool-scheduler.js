@@ -82,6 +82,7 @@ export const EXPERIMENTAL_SAME_ROUND_ACTION_TOOLS = new Set([
   'set_remark',       // 对外写：给好友/群设备注（有每日闸门）
   'set_member_note',  // 本地持久化写入：设"称呼/代号"（不影响后续动作的参数）
   'send_group_file',  // 对外写：发文件到群
+  'send_private_file', // 对外写：当前私聊的文本文件（默认关）
   'like_album_photo', // 对外写：相册点赞
   'comment_album_photo', // 对外写：相册评论
   'upload_to_group_album', // 对外写：传图进群相册（默认关，控制台开）

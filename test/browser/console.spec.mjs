@@ -61,6 +61,61 @@ test('设置保存：改发送频率后落盘，再还原', async ({ page }) => 
   await expect.poll(read).toBe(80);
 });
 
+test('私聊文本文件：默认关闭、保存回显、关闭回退与窄屏显示', async ({ page }) => {
+  const errors = collectPageErrors(page);
+  // 测试服务不连接真实 QQ；此页附带的音色目录用只读桩，配置保存仍走真实接口。
+  await page.route('**/api/onebot/ai-characters', (route) => route.fulfill({ json: { characters: [] } }));
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="platform"]');
+  const checkbox = page.locator('#cfg-platform-privatefilesend');
+  await expect(checkbox).not.toBeChecked();
+  await expect(checkbox).toHaveAttribute('aria-describedby', 'cfg-platform-privatefilesend-note');
+  const note = page.locator('#cfg-platform-privatefilesend-note');
+  await expect(note).toContainText('64 KiB');
+  await expect(note).toContainText('TXT/MD/CSV/JSON');
+  await expect(note).toContainText('当前私聊');
+  await expect(note).toContainText('投递结果未知时需人工核对');
+  const size = page.locator('#cfg-platform-privatefilemaxkib');
+  await expect(size).toHaveValue('64');
+  await expect(size).toHaveAttribute('min', '1');
+  await expect(size).toHaveAttribute('max', '256');
+  const read = async () => (await (await page.request.get('/api/config')).json()).platform.privateFileSend;
+  for (const enabled of [true, false]) {
+    await checkbox.setChecked(enabled);
+    await page.click('#save-cfg-btn');
+    await expect(page.locator('#cfg-save-result')).toHaveText('已保存 ✓');
+    await expect.poll(read).toBe(enabled);
+    await page.reload();
+    await switchTo(page, 'settings');
+    await page.click('.settings-menu-item[data-section="platform"]');
+    await expect(checkbox).toBeChecked({ checked: enabled });
+  }
+  await expect(page.locator('#pergroup-privateFileSend')).toHaveCount(0);
+  const readSize = async () => (await (await page.request.get('/api/config')).json()).platform.privateFileMaxKiB;
+  for (const limit of [128, 256, 64]) {
+    await size.fill(String(limit));
+    await page.click('#save-cfg-btn');
+    await expect(page.locator('#cfg-save-result')).toHaveText('已保存 ✓');
+    await expect.poll(readSize).toBe(limit);
+    await page.reload();
+    await switchTo(page, 'settings');
+    await page.click('.settings-menu-item[data-section="platform"]');
+    await expect(size).toHaveValue(String(limit));
+    await expect(checkbox).not.toBeChecked();
+  }
+  await checkbox.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'test-results/private-text-file-desktop.png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await checkbox.scrollIntoViewIfNeeded();
+  await expect(checkbox).toBeVisible();
+  await expect(note).toBeVisible();
+  await page.screenshot({ path: 'test-results/private-text-file-mobile.png' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+  expect(errors, errors.join('\n')).toEqual([]);
+});
+
 test('图片生成：自定义请求参数保存后回显', async ({ page }) => {
   await login(page);
   await page.goto('/');
