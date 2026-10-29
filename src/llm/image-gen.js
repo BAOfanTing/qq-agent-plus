@@ -257,35 +257,62 @@ async function modelscopeImage({ base, body, model, size, extra, auth, controlle
   if (!taskId) throw new Error(`魔搭图片生成没有返回 task_id：${String(text).slice(0, 200)}`);
 
   // 官方要求任务查询携带该类型；成功响应才包含 output_images，不能把创建任务的 SUCCEED 当成图片结果。
-  while (true) {
-    if (controller.signal.aborted) throw controller.signal.reason ?? new Error('图片生成超时');
-    await sleepWithSignal(Math.max(0, Number(pollMs) || 0), controller.signal);
-    const taskRes = await fetchFn(`${base}/tasks/${encodeURIComponent(taskId)}`, {
-      method: 'GET',
-      headers: {
-        ...(auth.key ? { authorization: `Bearer ${auth.key}` } : {}),
-        'X-ModelScope-Task-Type': 'image_generation'
-      },
-      signal: controller.signal
-    });
-    const taskText = await readTextBounded(taskRes, IMAGE_RESPONSE_MAX_BYTES);
-    let task = null;
-    try { task = JSON.parse(taskText); } catch { /* 按原文带出 */ }
-    if (!taskRes.ok) {
-      const detail = String(task?.error?.message || task?.message || taskText || '').slice(0, 300);
-      throw new Error(`魔搭图片任务查询失败 HTTP ${taskRes.status}${detail ? `：${detail}` : ''}`);
+  let lastTaskText = '';
+  try {
+    while (true) {
+      if (controller.signal.aborted) throw controller.signal.reason ?? new Error('图片生成超时');
+      await sleepWithSignal(Math.max(0, Number(pollMs) || 0), controller.signal);
+      const taskRes = await fetchFn(`${base}/tasks/${encodeURIComponent(taskId)}`, {
+        method: 'GET',
+        headers: {
+          ...(auth.key ? { authorization: `Bearer ${auth.key}` } : {}),
+          'X-ModelScope-Task-Type': 'image_generation'
+        },
+        signal: controller.signal
+      });
+      const taskText = await readTextBounded(taskRes, IMAGE_RESPONSE_MAX_BYTES);
+      lastTaskText = taskText;
+      let task = null;
+      try { task = JSON.parse(taskText); } catch { /* 按原文带出 */ }
+      if (!taskRes.ok) {
+        const detail = String(task?.error?.message || task?.message || taskText || '').slice(0, 300);
+        throw new Error(`魔搭图片任务查询失败 HTTP ${taskRes.status}${detail ? `：${detail}` : ''}`);
+      }
+      const status = String(task?.task_status || '').toUpperCase();
+      // 终态失败要立刻停：FAILED / CANCELED 都不会再产出图片，继续轮询只会拖到外层超时。
+      // PENDING / RUNNING 以及不认识的中间态继续轮询，最终由 controller 的 timeoutMs 兜底。
+      if (['FAILED', 'CANCELED', 'CANCELLED'].includes(status)) {
+        const detail = String(task?.message || task?.error?.message || taskText || '').slice(0, 300);
+        const reason = status === 'FAILED' ? '失败' : `已终止（${status}）`;
+        const terminal = new Error(`魔搭图片生成任务${reason}${detail ? `：${detail}` : ''}`);
+        terminal.code = 'MODELSCOPE_TASK_TERMINAL';
+        throw terminal;
+      }
+      if (status !== 'SUCCEED') continue;
+      const url = String(task?.output_images?.[0] || '').trim();
+      if (!url) throw new Error(`魔搭图片生成任务已完成但没有返回 output_images：${String(taskText).slice(0, 300)}`);
+      const { buffer } = await safeFetchBinary(url, MAX_IMAGE_BYTES, controller.signal);
+      if (!buffer?.length) throw new Error('从魔搭生成结果 URL 下载到的图片为空');
+      return { buffer, revisedPrompt: '' };
     }
-    const status = String(task?.task_status || '').toUpperCase();
-    if (status === 'FAILED') {
-      const detail = String(task?.message || task?.error?.message || taskText || '').slice(0, 300);
-      throw new Error(`魔搭图片生成任务失败${detail ? `：${detail}` : ''}`);
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    // 只有服务商明确返回的终态（FAILED / CANCELED）不需要再补"可能计费"：
+    // 用 code 而不是文案前缀判断，避免以后改提示语时静默改变控制流。
+    if (error?.code === 'MODELSCOPE_TASK_TERMINAL') throw error;
+    if (controller.signal.aborted) {
+      const reason = controller.signal.reason;
+      // 除了图片自身的 timeoutMs，orchestrator 还会用 api.runTimeoutMs 截断整个 run；
+      // 后者抛的是 "Run deadline exceeded"，同样属于"任务已创建、但本地不再等"的场景。
+      const timedOut = reason?.name === 'TimeoutError'
+        || /超时|timed? ?out|deadline|time limit/i.test(String(reason?.message || reason || message));
+      if (!timedOut) throw error;
+      const last = lastTaskText ? `（最后一次任务响应：${lastTaskText.slice(0, 300)}）` : '';
+      throw new Error(`魔搭图片生成超时${last}；任务可能已在服务商侧继续执行并计费，请勿立即重试`);
     }
-    if (status !== 'SUCCEED') continue;
-    const url = String(task?.output_images?.[0] || '').trim();
-    if (!url) throw new Error(`魔搭图片生成任务已完成但没有返回 output_images：${String(taskText).slice(0, 300)}`);
-    const { buffer } = await safeFetchBinary(url, MAX_IMAGE_BYTES, controller.signal);
-    if (!buffer?.length) throw new Error('从魔搭生成结果 URL 下载到的图片为空');
-    return { buffer, revisedPrompt: '' };
+    // 轮询网络错误/任务查询 5xx：任务已经创建，重试可能再建一个计费任务。
+    // cause 要原样带上：undici 的网络错误外层常只有 "fetch failed"，真因在 cause 上。
+    throw new Error(`${message}；任务可能已在服务商侧继续执行并计费，请勿立即重试`, { cause: error });
   }
 }
 

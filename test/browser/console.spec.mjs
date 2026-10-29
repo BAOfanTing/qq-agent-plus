@@ -318,6 +318,55 @@ test('图片生成切换预设：没有内置模型的预设不能沿用上一�
   await expect(page.locator('#cfg-img-model')).toHaveValue('Tongyi-MAI/Z-Image-Turbo');
 });
 
+test('兜底模型：控制台可见、可保存，Key 不回显', async ({ page }) => {
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+
+  const enabled = page.locator('#cfg-fallback-enabled');
+  await expect(enabled).toBeVisible();
+  await expect(page.locator('#cfg-fallback-model')).toBeVisible();
+  await page.fill('#cfg-fallback-baseurl', 'https://token-plan-cn.xiaomimimo.com/v1');
+  await page.fill('#cfg-fallback-model', 'mimo-v2.6-flash');
+  await page.fill('#cfg-fallback-apikey', 'fallback-e2e-key');
+  await enabled.check();
+  await page.click('#save-cfg-btn');
+  await expect(page.locator('#cfg-save-result')).toHaveText('已保存 ✓');
+
+  const read = async () => (await (await page.request.get('/api/config')).json()).api.fallback;
+  await expect.poll(read).toMatchObject({
+    enabled: true,
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/v1',
+    model: 'mimo-v2.6-flash'
+  });
+  const saved = await read();
+  expect(saved.apiKey).toBeUndefined();
+  expect(saved.hasApiKey).toBe(true);
+  expect(saved.keyHost).toBe('token-plan-cn.xiaomimimo.com');
+
+  await page.reload();
+  await switchTo(page, 'settings');
+  await expect(page.locator('#cfg-fallback-model')).toHaveValue('mimo-v2.6-flash');
+  await expect(page.locator('#cfg-fallback-apikey')).toHaveValue('******');
+  // 「显示」必须真的取回已保存的 Key（曾经没有前端分支/后端端点，点了只会清空并说没存过）
+  await page.click('#cfg-fallback-apikey-toggle');
+  await expect(page.locator('#cfg-fallback-apikey')).toHaveValue('fallback-e2e-key');
+  await page.click('#cfg-fallback-apikey-toggle');
+  await expect(page.locator('#cfg-fallback-apikey')).toHaveValue('******');
+
+  // 换主机但 Key 保持掩码：保存要当场拒绝，不能把旧 Key 留在新地址上
+  await page.fill('#cfg-fallback-baseurl', 'https://api.example-other.com/v1');
+  await page.click('#save-cfg-btn');
+  await expect(page.locator('#cfg-save-result')).toContainText('换了主机');
+  expect((await read()).baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/v1');
+
+  // 启用兜底却没模型 id：也不能谎报「已保存」
+  await page.fill('#cfg-fallback-baseurl', 'https://token-plan-cn.xiaomimimo.com/v1');
+  await page.fill('#cfg-fallback-model', '');
+  await page.click('#save-cfg-btn');
+  await expect(page.locator('#cfg-save-result')).toContainText('模型 id');
+});
+
 test('生活层设置页可渲染、可保存，窄屏无横向溢出', async ({ page }) => {
   await login(page);
   await page.goto('/');

@@ -93,7 +93,9 @@ export const IMAGEGEN_SERVICES = [
     keyUrl: 'https://modelscope.cn/my/myaccesstoken',
     models: [],
     note: '按公开口径 API-Inference 有每日免费额度（以官网为准）；Token 在「访问令牌」页拿，'
-      + '模型名填魔搭上支持推理的图模型 id（必填）。'
+      + '模型名填魔搭上支持推理的图模型 id（必填）。异步任务排队可能超过默认 120 秒，'
+      + '生成慢/排队久时把 imageGen.timeoutMs 调大；整轮还受 api.runTimeoutMs 限制（默认 180 秒、上限 240 秒）。'
+      + '任务创建后超时或取消，服务商侧可能仍在执行并计费，别立刻重试。'
   },
   {
     id: 'custom',

@@ -39,6 +39,10 @@ async function fetchRealKey(inputId) {
     const r = await api('/api/api-key');
     return String(r.apiKey || '');
   }
+  if (inputId === 'cfg-fallback-apikey') {
+    const r = await api('/api/fallback-key');
+    return String(r.apiKey || '');
+  }
   if (inputId === 'cfg-asr-key' || inputId === 'cfg-asr-secretid' || inputId === 'cfg-asr-secretkey') {
     const field = { 'cfg-asr-key': 'apiKey', 'cfg-asr-secretid': 'secretId', 'cfg-asr-secretkey': 'secretKey' }[inputId];
     // 带上表单**当前选中**的槽位（与切换预设时的掩码同源）：刚切换、还没保存时，
@@ -88,6 +92,7 @@ async function fetchRealKey(inputId) {
  */
 const KEY_TOGGLES = [
   { btn: 'cfg-apikey-toggle', input: 'cfg-apikey' },
+  { btn: 'cfg-fallback-apikey-toggle', input: 'cfg-fallback-apikey' },
   { btn: 'cfg-ds-searchkey-toggle', input: 'cfg-ds-searchkey' },
   { btn: 'cfg-zhipu-key-toggle', input: 'cfg-zhipu-key' },
   { btn: 'cfg-bocha-key-toggle', input: 'cfg-bocha-key' },

@@ -296,11 +296,20 @@ function pickFallback(args) {
   if (!fb || fb.enabled === false || !String(fb.model || '').trim()) return null;
   const api = effectiveApi();
   const fbBase = String(fb.baseUrl || '').trim();
+  const fbKey = String(fb.apiKey || '').trim();
+  const fbHost = hostOf(fbBase || api.baseUrl);
+  const keyHost = String(fb.apiKeyHost || '').trim().toLowerCase();
   // 备用地址换了主机、却没单独给 Key 时**绝不沿用主渠道那把** —— 那等于把 A 家的密钥发给 B 家
   // （这类事故本项目在 asr / 生图 / tts 上都修过，兜底模型是最后一个漏口）。
   // 文档里 api.fallback.apiKey 本就是"另一个服务商的 key"；留空就当"没配兜底"，退回主渠道的错。
-  if (fbBase && hostOf(fbBase) !== hostOf(api.baseUrl) && !String(fb.apiKey || '').trim()) {
-    log.warn(`[llm] 兜底地址 ${hostOf(fbBase)} 与主渠道不同却没配 api.fallback.apiKey，本次不切兜底`);
+  if (fbBase && fbHost !== hostOf(api.baseUrl) && !fbKey) {
+    log.warn(`[llm] 兜底地址 ${fbHost} 与主渠道不同却没配 api.fallback.apiKey，本次不切兜底`);
+    return null;
+  }
+  // Key 是给某一家存的（apiKeyHost）：地址换了主机就绝不把它发过去，哪怕字段里还留着旧值。
+  // 控制台保存时已拒绝这种组合；这里是绕过控制台直接改配置时的最后一道闸。
+  if (fbKey && keyHost && fbHost && keyHost !== fbHost) {
+    log.warn(`[llm] 兜底 Key 绑定的是 ${keyHost}，当前地址是 ${fbHost}；本次不切兜底，请重填 Key`);
     return null;
   }
   return {

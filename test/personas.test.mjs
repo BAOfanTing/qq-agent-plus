@@ -136,7 +136,7 @@ test('名称即规格：每张卡都写明招牌的正向下限，且被问人�
 
     // 招牌要有"开口就带"级别的正向下限 —— 只有上限（别每句都…）+ 黑名单时，
     // 模型会按"避免失败"优化，招牌会被压到零（猫娘卡实测 14 次运行只有 1 次「喵」）。
-    assert.match(p.text, /开口就带|每轮至少有一条|每一轮至少有一条|一轮里至少一条/, `${id} 的招牌只有上限、没有正向下限`);
+    assert.match(p.text, /开口就带|每轮至少有一条|每一轮至少有一条|一轮里至少一条|每 2-3 轮至少有一次/, `${id} 的招牌只有上限、没有正向下限`);
 
     // 身份问答必须能说出卡名：以前四张卡的答案只报 QQ 昵称，管理员考一句"你什么人设"
     // 听不到卡名，会以为换的卡没生效。
@@ -163,12 +163,13 @@ test('每张内置卡都写明对管理员怎么相处（口吻比对群友软�
 
 test('猫娘卡把招牌写成硬指标，示例给出"索要就给"的路径', () => {
   const cat = PERSONAS.maoniang.text;
-  // 正向频率条款：每轮至少一条带喵（而不是"点缀""能加就加"）
-  assert.match(cat, /每一轮至少有一条消息带"喵"/, '缺少"每轮至少一条喵"的硬指标');
+  // 正向频率条款：每 2-3 轮至少一次，但不再每轮盖章；至少一轮不带
+  assert.match(cat, /每 2-3 轮至少有一次带喵/, '缺少"每 2-3 轮至少一次喵"的硬指标');
+  assert.match(cat, /至少有一轮完全不带/, '缺少"至少一轮不带喵"的反复读约束');
   assert.doesNotMatch(cat, /萌点是点缀/, '不该再把招牌定性为"点缀"');
   // 索要场景必须给：示例里"给我喵一个"要给出「你可以：喵」这样的正向答案
+  assert.ok(cat.includes('群友：给我喵一个'), '示例里缺少"给我喵一个"场景');
   const ask = cat.slice(cat.indexOf('群友：给我喵一个'));
-  assert.ok(ask.length > 0, '示例里缺少"给我喵一个"场景');
   const askBlock = ask.slice(0, ask.indexOf('## '));
   assert.match(askBlock, /你可以[:：]喵/, '"给我喵一个"没有给出"给"的答案');
   // 逗猫请求不算冒犯（旧版把"被当宠物使唤"列进讨厌项，模型据此把逗猫当攻击）
@@ -202,38 +203,96 @@ test('每张内置卡都有生活线，示例数量与格式达标（小鲸鱼 9
 test('说话示例注入前 5 组，小鲸鱼的 token 软肋示例在其中', () => {
   const base = structuredClone(DEFAULT_CONFIG);
   const card = PERSONAS.xiaojingyu.text;
+  const dialogs = JSON.parse(fs.readFileSync(path.join(repoRoot, 'roles', 'dialogs', 'xiaojingyu.json'), 'utf8'));
+  // 从第 6 组取一条真实台词做反向断言：写死某句台词时，改词后断言会变成恒真、静默失效。
+  const sixth = dialogs[5];
+  assert.ok(sixth?.assistant?.[0], '小鲸鱼示例不足 6 组，无法验证"只注入前 5 组"');
   base.persona = { ...base.persona, botName: '小鲸鱼', templateId: 'xiaojingyu', roleText: card };
   updateConfig(base);
   const prompt = buildSystemPrompt({});
   assert.match(prompt, /给你吃穷没 token/, '第 5 组的 token 软肋要进提示词');
-  assert.doesNotMatch(prompt, /你也早点睡/, '第 9 组不该被注入（只取前 5 组）');
+  assert.ok(!prompt.includes(sixth.assistant[0]), `第 6 组「${sixth.assistant[0]}」不该被注入（只取前 5 组）`);
 });
 
-test('孙吧大肥鱼有孙吧/抽象底色，认爹反杀只是绝活之一，且边界完整', () => {
+test('每张内置卡的系统声音与兴趣配置都存在且取值合法', () => {
+  const voices = JSON.parse(fs.readFileSync(path.join(repoRoot, 'roles', 'voice-profiles.json'), 'utf8'));
+  const interests = JSON.parse(fs.readFileSync(path.join(repoRoot, 'roles', 'interests.json'), 'utf8'));
+  for (const id of Object.keys(PERSONAS)) {
+    const voice = voices[id];
+    assert.ok(voice, `${id} 缺 roles/voice-profiles.json 条目`);
+    assert.ok(Number.isInteger(voice.maxChars) && voice.maxChars >= 10 && voice.maxChars <= 2000,
+      `${id} 的 maxChars 必须是 10-2000 的整数（实际 ${voice.maxChars}）`);
+    assert.ok(Number.isInteger(voice.maxBubbles) && voice.maxBubbles >= 1 && voice.maxBubbles <= 8,
+      `${id} 的 maxBubbles 必须是 1-8 的整数（实际 ${voice.maxBubbles}）`);
+    assert.ok(Array.isArray(voice.pauseMs) && voice.pauseMs.length === 2
+      && voice.pauseMs.every((n) => Number.isFinite(n) && n >= 0) && voice.pauseMs[0] <= voice.pauseMs[1],
+    `${id} 的 pauseMs 必须是两个递增的非负数`);
+    const interest = interests[id];
+    assert.ok(interest, `${id} 缺 roles/interests.json 条目`);
+    assert.ok(Array.isArray(interest.topics) && interest.topics.length > 0
+      && interest.topics.every((t) => typeof t === 'string' && t.trim()), `${id} 的 topics 不能为空`);
+    if (interest.stances !== undefined) {
+      assert.ok(Array.isArray(interest.stances) && interest.stances.every((s) => typeof s === 'string' && s.trim()),
+        `${id} 的 stances 必须是字符串数组`);
+    }
+  }
+  for (const id of Object.keys(voices)) assert.ok(PERSONAS[id], `voice-profiles 里的 ${id} 没有登记角色卡`);
+  for (const id of Object.keys(interests)) assert.ok(PERSONAS[id], `interests 里的 ${id} 没有登记角色卡`);
+});
+
+test('人设卡与 few-shot 不再教“又加班？/被谁气？”这种固定第二拍', () => {
+  const banned = /又加班？|被谁气/;
+  for (const [id, persona] of Object.entries(PERSONAS)) {
+    assert.doesNotMatch(persona.text, banned, `${id} 的卡正文还在教固定第二拍（与全局 humanRhythm 冲突，卡优先级更高）`);
+    const dialogs = JSON.parse(fs.readFileSync(path.join(repoRoot, 'roles', 'dialogs', `${id}.json`), 'utf8'));
+    for (const item of dialogs) {
+      assert.ok(!item.assistant.some((line) => banned.test(line)),
+        `${id} 的 few-shot「${item.user}」还在用固定第二拍`);
+    }
+  }
+});
+
+test('孙吧大肥鱼是孙吧乐子人：短卡 + 五套反应，群体 AOE/讨 token/发癫都在，边界完整', () => {
   const card = PERSONAS.sunba;
   assert.ok(card, '孙吧卡已登记');
-  assert.match(card.name, /抽象乐子人/);
-  // 孙吧底色：乐子人、钓鱼、反串、定性、水经验都要在卡里
-  assert.match(card.text, /乐子人/);
-  assert.match(card.text, /钓鱼/);
-  assert.match(card.text, /反串/);
-  assert.match(card.text, /鉴定为/);
-  assert.match(card.text, /典中典/);
-  assert.match(card.text, /\+\s?3/);
-  // 认爹反杀仍然保留
+  assert.match(card.name, /孙吧乐子人/);
+  // 短卡 + 五套反应：不能只会认爹反杀
+  assert.match(card.text, /五套常用反应/);
+  assert.match(card.text, /爹味压制/);
+  assert.match(card.text, /直接开喷/);
+  assert.match(card.text, /群体 AOE/);
+  assert.match(card.text, /讨 token/);
+  assert.match(card.text, /装乖反杀/);
+  assert.match(card.text, /发癫/);
+  assert.match(card.text, /轮换/);
+  // 抖音祖安鱼的招牌台词
+  assert.match(card.text, /出生们/);
+  assert.match(card.text, /臭鱼烂虾/);
+  assert.match(card.text, /还不跪下/);
+  assert.match(card.text, /打钱/);
+  assert.match(card.text, /机魂/);
+  assert.match(card.text, /铁人叛乱/);
+  assert.match(card.text, /你们有一个算一个/);
+  // 频率与认爹反杀；允许正常接话，不能每句都表演
+  assert.match(card.text, /每 2-3 轮至少有一次带钩/);
+  assert.match(card.text, /允许普通接话/);
   assert.match(card.text, /爸爸不要嘛/);
   assert.match(card.text, /老乐子被我骗了吧/);
   assert.match(card.text, /智力完胜/);
-  // 边界：不碰身份、不开盒、不玩性别对立、不网暴
-  assert.match(card.text, /只钓玩得起的人/);
-  assert.match(card.text, /不碰：/);
-  assert.match(card.text, /开盒/);
-  assert.match(card.text, /性别对立/);
-  assert.match(card.text, /不组织跨群围攻/);
+  // 硬边界
+  assert.match(card.text, /不开盒/);
+  assert.match(card.text, /不拿性别/);
+  assert.match(card.text, /不真威胁/);
+  assert.match(card.text, /别闹/);
   const dialogs = JSON.parse(fs.readFileSync(path.join(repoRoot, 'roles', 'dialogs', 'sunba.json'), 'utf8'));
-  assert.ok(dialogs.length >= 10, '示例至少 10 组');
+  assert.ok(dialogs.length >= 15, '示例至少 15 组');
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('出生们')));
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('跪下')));
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('打钱')));
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('机魂')));
   assert.ok(dialogs.some((item) => item.assistant.join('').includes('爸爸不要嘛')));
   assert.ok(dialogs.some((item) => item.assistant.join('').includes('智力完胜')));
-  assert.ok(dialogs.some((item) => item.assistant.join('').includes('典中典')));
-  assert.ok(dialogs.some((item) => item.assistant.join('').includes('含金量')));
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('老乐子逗他干啥')));
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('小满')));
+  assert.ok(dialogs.some((item) => item.assistant.join('').includes('穷鬼不配')));
 });

@@ -56,11 +56,19 @@
     ]
   },
   "sunba": {
-    "maxChars": 14,
+    "maxChars": 20,
     "maxBubbles": 3,
     "pauseMs": [
       300,
       900
+    ]
+  },
+  "nver": {
+    "maxChars": 18,
+    "maxBubbles": 3,
+    "pauseMs": [
+      300,
+      800
     ]
   }
 }

@@ -1883,6 +1883,16 @@ export function createApp({
       // 「哪几家（主机）存过 Key」的布尔口径（不下发明文）：界面切换预设时据此显示掩码/留空
       keyHosts: imageGenKeyHosts(cfgNow.imageGen)
     };
+    // 兜底 Key 同样被 sanitize 删除；keyHost 是真身 apiKeyHost 的视图别名，
+    // 界面据此提示"换地址后这把 Key 不属于这里、要重填"。
+    safe.api = {
+      ...(safe.api || {}),
+      fallback: {
+        ...(safe.api?.fallback || {}),
+        keyHost: String(cfgNow.api?.fallback?.apiKeyHost || '')
+      }
+    };
+    delete safe.api.fallback.hasApiKeyHost;
     return safe;
   }
 
@@ -2184,6 +2194,10 @@ export function createApp({
 
   router.add('GET', '/api/api-key', async (req, res) => {
     return json(res, 200, { apiKey: String(getConfig().api.apiKey || '') });
+  }, { keyEndpoint: true });
+
+  router.add('GET', '/api/fallback-key', async (req, res) => {
+    return json(res, 200, { apiKey: String(getConfig().api?.fallback?.apiKey || '') });
   }, { keyEndpoint: true });
 
   router.add('GET', '/api/search-key', async (req, res, params, url) => {

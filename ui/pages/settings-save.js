@@ -531,6 +531,38 @@ async function saveConfig({ quiet = false } = {}) {
       // 同样需要整体替换，否则 delete 掉的那一项会在合并时复活
       patch.api.modelPrices = { __replace__: nextMap };
     }
+    // 兜底模型：掩码/留空表示保持原 Key；不要把 GET 视图里的 hasApiKey 写回配置。
+    const fb = c.api?.fallback || {};
+    const fbEnabled = chk('#cfg-fallback-enabled', fb.enabled === true);
+    const fbBaseUrl = val('#cfg-fallback-baseurl', fb.baseUrl || '').trim();
+    const fbModel = val('#cfg-fallback-model', fb.model || '').trim();
+    const fbKeyInput = (document.querySelector('#cfg-fallback-apikey')?.value || '').trim();
+    const fbKeyEntered = Boolean(fbKeyInput) && fbKeyInput !== '******';
+    if (fbEnabled && !fbModel) {
+      throw new Error('启用兜底模型需要先填模型 id');
+    }
+    if (fbEnabled) {
+      // 留空 Base URL = 跟随主渠道；Key 归属按"这次要发的地址"判断。
+      const primaryHost = hostOfUrl(c.api?.baseUrl || '');
+      const targetHost = fbBaseUrl ? hostOfUrl(fbBaseUrl) : primaryHost;
+      const savedHost = String(fb.keyHost || '').trim().toLowerCase();
+      const crossHost = Boolean(targetHost && primaryHost && targetHost !== primaryHost);
+      // 存过 Key，但它是给旧主机存的：换地址后必须重填，不能把旧 Key 发给新主机。
+      if (fb.hasApiKey && savedHost && targetHost && targetHost !== savedHost && !fbKeyEntered) {
+        throw new Error('兜底地址换了主机，请重新填这一家的 API Key');
+      }
+      // 跨服务商且没有可用的独立 Key：运行期本来就不会切兜底，保存时别谎报成功。
+      if (crossHost && !fbKeyEntered && (!fb.hasApiKey || !savedHost || targetHost !== savedHost)) {
+        throw new Error('跨服务商使用兜底模型必须单独填 API Key');
+      }
+    }
+    patch.api.fallback = {
+      enabled: fbEnabled,
+      baseUrl: fbBaseUrl,
+      model: fbModel,
+      ...(Number(fb.timeoutMs) > 0 ? { timeoutMs: Number(fb.timeoutMs) } : {}),
+      ...(fbKeyEntered ? { apiKey: fbKeyInput } : {})
+    };
     // 当前 API Key：只有用户在框里输入了非掩码的新值才走 /api/providers/set-key；
     // 掩码/留空都表示不改。
     const apiKeyInput = $('#cfg-apikey');

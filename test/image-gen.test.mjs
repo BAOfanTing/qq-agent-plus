@@ -314,6 +314,7 @@ test('魔搭异步生图：创建任务后必须轮询任务结果，不能把 t
       apiCfg: { baseUrl: 'https://gateway.example.com/v1' },
       prompt: '一只橘猫',
       modelscopePollMs: 0,
+      signal: AbortSignal.timeout(200),
       fetchFn: async (url, req) => {
         calls.push({ url: String(url), method: req.method, headers: req.headers, body: req.body && JSON.parse(req.body) });
         if (req.method === 'POST') {
@@ -331,6 +332,159 @@ test('魔搭异步生图：创建任务后必须轮询任务结果，不能把 t
   assert.equal(calls[0].body.model, 'Qwen/Qwen-Image-2.1-Turbo');
   assert.equal(calls[1].url, 'https://api-inference.modelscope.cn/v1/tasks/task-123');
   assert.equal(calls[1].headers['X-ModelScope-Task-Type'], 'image_generation');
+  assert.equal(calls[1].headers.authorization, 'Bearer ms-token');
+});
+
+test('魔搭异步生图：任务成功后下载 output_images 并原样返回字节', async () => {
+  // 结果 URL 由适配器内部的 safeFetchBinary 下载，所以真起一个本地 HTTP 服务；
+  // 内网地址要开 security.allowPrivateImageHosts（与 url 形态的既有用例同款）。
+  const httpMod = await import('node:http');
+  const server = httpMod.default.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'image/png' });
+    res.end(PNG);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const { updateConfig } = await import('../src/core/config.js');
+  updateConfig({ security: { allowPrivateImageHosts: true } });
+  try {
+    const calls = [];
+    const out = await generateImage({
+      cfg: { imageGen: { enabled: true, baseUrl: 'https://api-inference.modelscope.cn/v1', model: 'Qwen/Qwen-Image-2.1-Turbo', apiKey: 'ms-token' } },
+      apiCfg: { baseUrl: 'https://gateway.example.com/v1' },
+      prompt: '一只橘猫',
+      modelscopePollMs: 0,
+      // 成功用例含一次真实本地 HTTP 下载，给 2 秒余量；其他纯 mock 用例保持 200ms
+      signal: AbortSignal.timeout(2000),
+      fetchFn: async (url, req) => {
+        calls.push({ url: String(url), method: req.method });
+        if (req.method === 'POST') {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ task_id: 'task-ok' }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            task_status: 'SUCCEED',
+            task_id: 'task-ok',
+            output_images: [`http://127.0.0.1:${port}/out.png`]
+          })
+        };
+      }
+    });
+    assert.equal(out.buffer.toString('hex'), PNG.toString('hex'), '下载到的字节要原样返回');
+    assert.equal(out.revisedPrompt, '');
+    assert.equal(calls.length, 2);
+  } finally {
+    updateConfig({ security: { allowPrivateImageHosts: false } });
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('魔搭异步生图：CANCELED 是终态，立即失败而不是轮询到超时', async () => {
+  const calls = [];
+  await assert.rejects(
+    generateImage({
+      cfg: { imageGen: { enabled: true, baseUrl: 'https://api-inference.modelscope.cn/v1', model: 'Qwen/Qwen-Image-2.1-Turbo', apiKey: 'ms-token' } },
+      apiCfg: { baseUrl: 'https://gateway.example.com/v1' },
+      prompt: '一只橘猫',
+      modelscopePollMs: 0,
+      signal: AbortSignal.timeout(200),
+      fetchFn: async (url, req) => {
+        calls.push({ url: String(url), method: req.method });
+        if (req.method === 'POST') {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ task_id: 'task-cancel' }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ task_status: 'CANCELED', message: 'user cancelled' })
+        };
+      }
+    }),
+    /已终止（CANCELED）.*user cancelled/s
+  );
+  assert.equal(calls.length, 2, '终态后不该继续轮询');
+});
+
+test('魔搭异步生图：任务查询 401 带出服务商原文与计费提示', async () => {
+  await assert.rejects(
+    generateImage({
+      cfg: { imageGen: { enabled: true, baseUrl: 'https://api-inference.modelscope.cn/v1', model: 'Qwen/Qwen-Image-2.1-Turbo', apiKey: 'bad-token' } },
+      apiCfg: { baseUrl: 'https://gateway.example.com/v1' },
+      prompt: '一只橘猫',
+      modelscopePollMs: 0,
+      signal: AbortSignal.timeout(200),
+      fetchFn: async (url, req) => {
+        if (req.method === 'POST') {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ task_id: 'task-auth' }) };
+        }
+        return {
+          ok: false,
+          status: 401,
+          text: async () => JSON.stringify({ error: { message: 'invalid token' } })
+        };
+      }
+    }),
+    /任务查询失败 HTTP 401.*invalid token.*可能已在服务商侧继续执行并计费/s
+  );
+});
+
+test('魔搭异步生图：output_images 仍走安全下载器，内网地址被拒', async () => {
+  const { updateConfig } = await import('../src/core/config.js');
+  updateConfig({ security: { allowPrivateImageHosts: false } });
+  await assert.rejects(
+    generateImage({
+      cfg: { imageGen: { enabled: true, baseUrl: 'https://api-inference.modelscope.cn/v1', model: 'Qwen/Qwen-Image-2.1-Turbo', apiKey: 'ms-token' } },
+      apiCfg: { baseUrl: 'https://gateway.example.com/v1' },
+      prompt: '一只橘猫',
+      modelscopePollMs: 0,
+      signal: AbortSignal.timeout(200),
+      fetchFn: async (url, req) => {
+        if (req.method === 'POST') {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ task_id: 'task-ssrf' }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            task_status: 'SUCCEED',
+            output_images: ['http://127.0.0.1:9/out.png']
+          })
+        };
+      }
+    }),
+    /内网/
+  );
+});
+
+test('魔搭异步生图：轮询超时带出最后一次任务响应与计费提示', async () => {
+  const ac = new AbortController();
+  let polls = 0;
+  await assert.rejects(
+    generateImage({
+      cfg: { imageGen: { enabled: true, baseUrl: 'https://api-inference.modelscope.cn/v1', model: 'Qwen/Qwen-Image-2.1-Turbo', apiKey: 'ms-token' } },
+      apiCfg: { baseUrl: 'https://gateway.example.com/v1' },
+      prompt: '一只橘猫',
+      modelscopePollMs: 10,
+      signal: ac.signal,
+      fetchFn: async (url, req) => {
+        if (req.method === 'POST') {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ task_id: 'task-slow' }) };
+        }
+        polls += 1;
+        // 第一次查询拿到 PENDING 后立刻制造 orchestrator 的 run deadline：
+        // 它和图片自身的 timeoutMs 一样属于"任务已创建但本地不再等"，必须同样带计费提示。
+        if (polls === 1) setTimeout(() => ac.abort(new Error('Run deadline exceeded')), 0);
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ task_status: 'PENDING' })
+        };
+      }
+    }),
+    /超时.*最后一次任务响应.*PENDING.*可能已在服务商侧继续执行并计费/s
+  );
 });
 
 test('配置访问器：imageGenAvailable 的三态与闸门默认值', async () => {

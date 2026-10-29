@@ -375,6 +375,8 @@ function renderSettingsSection(c) {
 function renderApiSection(c) {
   const currentProvider = (state.providers || []).find((p) => p.id === c.api.provider);
   const currentModelDisplay = (currentProvider?.modelNames || {})[c.api.model] || c.api.model;
+  const fb = c.api?.fallback || {};
+  const fbHasKey = Boolean(fb.hasApiKey || fb.apiKey);
   return `
     <h3 id="settings-api">模型 API</h3>
     <div class="field"><label>当前模型（点击切换）</label>
@@ -416,6 +418,26 @@ function renderApiSection(c) {
       <div class="field"><button class="btn btn-danger" id="delete-model-btn">删除模型…</button></div>
     </div>
     <div class="hint" id="provider-action-hint">${esc(state.lastProviderHint || '')}</div>
+
+    <div class="settings-divider"></div>
+    <h3>兜底模型</h3>
+    <div class="hint">主模型鉴权失败、额度耗尽、可重试错误用尽，或两轮都被服务商审核拦截时，自动改用这里的模型再试一次；主模型正常时不会触发。切换服务商时必须单独填 Key，宿主不会把主渠道的 Key 发给另一家。</div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-fallback-enabled" ${fb.enabled === true ? 'checked' : ''} />
+      <label for="cfg-fallback-enabled">启用兜底模型</label></div>
+    <div class="field-row">
+      <div class="field"><label>Base URL</label>
+        <input type="text" id="cfg-fallback-baseurl" placeholder="留空 = 与主模型相同" value="${esc(fb.baseUrl || '')}" /></div>
+      <div class="field"><label>模型 id</label>
+        <input type="text" id="cfg-fallback-model" placeholder="例如 mimo-v2.6-flash" value="${esc(fb.model || '')}" /></div>
+    </div>
+    <div class="field"><label>API Key</label>
+      <div style="display:flex;gap:8px">
+        <input type="password" id="cfg-fallback-apikey" value="${fbHasKey ? '******' : ''}" placeholder="跨服务商时必填；留空/掩码 = 保持原 Key" autocomplete="new-password" style="flex:1" />
+        <button class="btn btn-small" id="cfg-fallback-apikey-toggle" type="button">显示</button>
+      </div>
+      <div class="hint">小米 MiMo 当前可用对话模型为 <code>mimo-v2.6-flash</code> / <code>mimo-v2.6-pro</code>；<code>mimo-v2.5</code> 对话模型已下线，继续填会在兜底时收到 400。</div>
+    </div>
+
     <div class="field-row">
       <div class="field"><label>温度</label><input type="number" id="cfg-temperature" step="0.1" min="0" max="2" value="${esc(c.api.temperature)}" /></div>
       <div class="field"><label>单次运行最大工具轮数</label><input type="number" id="cfg-maxrounds" min="1" max="40" value="${esc(c.api.maxRounds)}" /></div>

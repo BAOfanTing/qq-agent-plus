@@ -46,6 +46,10 @@ export const DEFAULT_CONFIG = {
     apiKey: '',
     model: '',                              // UI 里选择/填写
     provider: '',                           // 当前模型所属提供商（多提供商目录的选中项）
+    // 兜底模型：主模型鉴权失败/额度耗尽/可重试错误用尽/两轮被审核拦截时再试一次。
+    // 跨服务商必须单独配 apiKey；同主机可留空沿用主渠道 Key。
+    // apiKeyHost 是"这把 Key 存给哪家地址"的归属钉：换了主机就不再用它，绝不把 A 家的 Key 发给 B 家。
+    fallback: { enabled: false, baseUrl: '', apiKey: '', apiKeyHost: '', model: '' },
     vision: true,                           // 模型是否支持图片输入（关掉则移除看图工具）
     // 思考控制（语义层，见 src/core/provider-presets.js 的渠道形状翻译）：
     //   'on'（默认，不干预）/ 'off'（尽力关闭；渠道关不掉时按最低档近似并提示）
@@ -1029,6 +1033,27 @@ export function asrEndpointHost(baseUrl) {
   try { return new URL(raw).host.toLowerCase(); } catch { return ''; }
 }
 
+/** 兜底 Key 的目标主机：留空 baseUrl 表示跟随主渠道。 */
+function fallbackTargetHost(api) {
+  return asrEndpointHost(api?.fallback?.baseUrl || api?.baseUrl || '');
+}
+
+/**
+ * 老配置只有 api.fallback.apiKey、没有 apiKeyHost：
+ * 读盘时按"当前配的地址"补记归属，升级后"换主机不沿用旧 Key"的防线立刻生效。
+ * 只在读盘补，不在 migrateConfig 里补 —— 保存路径要靠"改动前"的归属判断这次是否换了家。
+ */
+function pinUnboundFallbackKey(api) {
+  const fb = api?.fallback;
+  if (!isPlainObject(fb)) return;
+  if (!String(fb.apiKey || '').trim()) {
+    fb.apiKeyHost = '';
+    return;
+  }
+  const bound = String(fb.apiKeyHost || '').trim().toLowerCase();
+  fb.apiKeyHost = bound || fallbackTargetHost(api);
+}
+
 /**
  * /api/config 在 asr 上附加的"运行时结论"：客户端不该回传、更不该落盘。
  * 控制台保存时 patch 是 `{...c.asr, 真配置}`，不剔掉就会把陈旧副本写进 config.json，
@@ -1517,6 +1542,14 @@ function migrateConfig(parsed) {
       for (const key of Object.keys(out[sec])) if (/^has[A-Z]/.test(key)) delete out[sec][key];
     }
   }
+  // api.fallback 是嵌套对象，上面的逐段循环只剥到 api 顶层：
+  // 手写客户端把 GET 视图展开回传时，fallback.hasApiKey / keyHost（视图别名）会跟着落盘。
+  // apiKeyHost 是真配置（归属钉），必须保留；只剥派生位和视图别名。
+  if (isPlainObject(out.api?.fallback)) {
+    for (const key of Object.keys(out.api.fallback)) {
+      if (/^has[A-Z]/.test(key) || key === 'keyHost') delete out.api.fallback[key];
+    }
+  }
   if (Array.isArray(out.providers)) {
     for (const item of out.providers) {
       if (isPlainObject(item)) for (const key of Object.keys(item)) if (/^has[A-Z]/.test(key)) delete item[key];
@@ -1794,6 +1827,8 @@ export function loadConfig() {
     // 图片生成同款：老配置只有单槽 apiKey、没有 apiKeyHost，不补记的话升级后"换个预设"就拿旧
     // Key 去撞新地址 —— 而那在升级前一直是好用的。只在读盘补，合并路径不补（见 migrateConfig）
     pinUnboundImageGenKey(merged.imageGen, merged.api?.baseUrl);
+    // 兜底模型同款：老配置只有 api.fallback.apiKey，按当前地址补记归属；换主机后运行期据此拒用旧 Key
+    pinUnboundFallbackKey(merged.api);
     applyPersonaTemplate(merged);
     applyPersonaPerChatTemplates(merged);   // 绑了内置卡就按 roles/*.md 刷新正文（卡文件是唯一来源）
     return merged;
@@ -1909,7 +1944,59 @@ export function updateConfig(patch) {
   for (const sec of ['api', 'conversation', 'dailyMoments', 'qzoneInteractions']) {
     if (sec in safePatch && !isPlainObject(safePatch[sec])) delete safePatch[sec];
   }
+  // 兜底 Key 的归属钉只由服务端算：客户端送来的 apiKeyHost / keyHost 一律不认，
+  // 否则可以把存给 A 家的旧 Key 改绑到 B 家，绕过下面运行期的同主机校验。
+  const patchApi = isPlainObject(safePatch.api) ? safePatch.api : null;
+  const patchApiBody = patchApi && isPlainObject(patchApi.__replace__) ? patchApi.__replace__ : patchApi;
+  const patchFbRaw = isPlainObject(patchApiBody?.fallback) ? patchApiBody.fallback : null;
+  const patchFbBody = patchFbRaw && isPlainObject(patchFbRaw.__replace__) ? patchFbRaw.__replace__ : patchFbRaw;
+  const patchFbKeyRaw = patchFbBody && Object.hasOwn(patchFbBody, 'apiKey')
+    ? String(patchFbBody.apiKey ?? '').trim()
+    : null;
+  if (patchFbBody) {
+    delete patchFbBody.apiKeyHost;
+    delete patchFbBody.keyHost;
+    delete patchFbBody.hasApiKey;
+    delete patchFbBody.hasApiKeyHost;
+    // 掩码 = 保持原 Key：不能把字面量 ****** 存成新 Key
+    if (patchFbKeyRaw === '******') delete patchFbBody.apiKey;
+  }
+  // 归属钉的基准必须用"改动前"的值：保存路径里 next 已经被合并成新地址了。
+  const prevFallback = getConfig().api?.fallback || {};
+  const prevFallbackHost = String(prevFallback.apiKeyHost || '').trim().toLowerCase();
   const next = migrateConfig(deepMerge(getConfig(), safePatch));
+  // ── 兜底模型的凭据归属与可用性 ──
+  // Key 只在"这次提交了新的非掩码 Key"时改绑到本次目标主机；其他保存只沿用旧绑定。
+  // 换了主机却没重填 Key 时保留旧绑定，运行期会因主机不一致拒绝切兜底（见 llm.js 的 pickFallback），
+  // 这样切回原地址时旧 Key 还能用，也不会静默把旧 Key 发给新主机。
+  if (isPlainObject(next.api?.fallback)) {
+    const fb = next.api.fallback;
+    const targetHost = fallbackTargetHost(next.api);
+    const key = String(fb.apiKey || '').trim();
+    const submittedNewKey = Boolean(patchFbKeyRaw && patchFbKeyRaw !== '******');
+    if (!key) {
+      fb.apiKeyHost = '';
+    } else if (submittedNewKey) {
+      fb.apiKeyHost = targetHost;
+    } else {
+      fb.apiKeyHost = prevFallbackHost || String(fb.apiKeyHost || '').trim().toLowerCase() || targetHost;
+    }
+    fb.model = String(fb.model || '').trim();
+    // 只在这次确实改了 api 段时校验：别的页面保存（插件、技能、外观）不该被一份
+    // 早已失效的兜底配置挡住；而改地址/开关/Key 时必须当场把"看起来生效、实际不兜底"挡下。
+    if (fb.enabled === true && Object.hasOwn(safePatch, 'api')) {
+      if (!fb.model) throw invalidConfig('api.fallback.model is required when fallback is enabled');
+      const primaryHost = asrEndpointHost(next.api?.baseUrl);
+      // 跨服务商却没有独立 Key：运行期本来就会拒绝（绝不沿用主渠道 Key），保存时就别谎报成功。
+      if (targetHost && primaryHost && targetHost !== primaryHost && !key) {
+        throw invalidConfig('api.fallback.apiKey is required when the fallback host differs from the primary host');
+      }
+      // 旧 Key 绑在另一家：换地址后没重填，切兜底也不会生效（运行期同口径）。
+      if (key && targetHost && fb.apiKeyHost && targetHost !== String(fb.apiKeyHost).toLowerCase()) {
+        throw invalidConfig('api.fallback.apiKey belongs to another host; re-enter it after changing the base URL');
+      }
+    }
+  }
   // 目录优先：当前选中的 provider 在 providerKeys 里有 Key 时，顶层 api.apiKey（手动模式遗留字段）
   // 已经没有任何用处 —— 留着它就是"换过主模型 API，config.json 里却还躺着旧 Key"的来源
   //（2026-10-13 用户反馈：换过 API 之后仍能读到那把没额度的旧 Key）。任何一次保存都会走这里，于是自愈。

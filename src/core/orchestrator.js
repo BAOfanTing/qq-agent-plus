@@ -2246,13 +2246,18 @@ export class Orchestrator {
           + (selfWakeOn
             ? '，并用 schedule_wake 给自己安排下一次醒来的时间（比如几分钟后、或二三十分钟后）。'
             : '。（自安排唤醒已关闭，不用安排下次唤醒，系统会按配置的节奏再唤醒你。）'));
+    const proactiveVariety = '先看【过去状态】里你自己最近几次主动发言：不要重复它们的主题、开头或时间点'
+      + '（刚说过“群里没人/几点了/吃饭”，这次就换一个来源）。可以换：群友最近提过的事、你刚看到的具体东西、'
+      + '一个具体问题、自己的怪念头；每次只选一个。没有新东西就安静。';
     const wakeTail = String(wakeNote).startsWith('【系统提醒】')
       ? '就按上面那条提醒处理：想补就补一句很短的，补完就放下；不想补就安静结束。'
       : (privateChat
         ? '你可以主动找个由头说一句（分享点见闻、接着上次的话题、或单纯问候一下），也可以判断现在不该打扰就安静结束。'
+          + proactiveVariety
           + (getConfig().lifeFeed?.enabled === true
             ? '想分享点具体的见闻，可以调用 life_feed_next 看看队列里有什么。' : '')
         : '你可以主动抛一个自然的话题（像随口说的，不要像播报），也可以判断没必要说话就安静结束。'
+          + proactiveVariety
           + (getConfig().lifeFeed?.enabled === true
             ? '今天想分享点见闻的话，可以调用 life_feed_next 看看队列里有什么。' : ''));
     // 手动唤醒（控制台「见闻→分享」、手动触发）也可能带 wakeNote；此前只有 paced 分支
