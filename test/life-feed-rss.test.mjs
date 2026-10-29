@@ -30,6 +30,26 @@ test('Atom：link href 也能解析', () => {
   assert.deepEqual(items[0].tags, ['生活']);
 });
 
+test('Atom 优先选 rel=alternate，不把 enclosure 音频当文章链接', () => {
+  const xml = `<feed><entry><title>播客</title>
+    <link rel="enclosure" href="https://cdn.example.com/a.mp3" />
+    <link rel="alternate" href="https://example.com/episode" />
+    <summary>简介</summary></entry></feed>`;
+  const items = parseRssFeed(xml, { feedUrl: 'https://example.com/feed.xml' });
+  assert.equal(items[0].url, 'https://example.com/episode');
+});
+
+test('畸形 feed 不会因为大量未闭合 item 卡死，超长字段被截断', () => {
+  const xml = '<item'.repeat(5000);
+  assert.deepEqual(parseRssFeed(xml), []);
+  const longTitle = '标'.repeat(400);
+  const normal = `<rss><channel><item><title>${longTitle}</title><link>https://example.com/x</link></item></channel></rss>`;
+  const [item] = parseRssFeed(normal, { feedUrl: 'https://example.com/feed.xml' });
+  assert.equal(item.title.length, 200);
+  const tooLongUrl = `<rss><channel><item><title>x</title><link>https://example.com/${'a'.repeat(1200)}</link></item></channel></rss>`;
+  assert.deepEqual(parseRssFeed(tooLongUrl), []);
+});
+
 test('一个 feed 失败不影响其它 feed，且结果受 limit 约束', async () => {
   const calls = [];
   const items = await forageRss({

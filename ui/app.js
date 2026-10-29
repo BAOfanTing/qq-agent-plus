@@ -707,18 +707,17 @@ async function runBackupNow() {
   const btn = $('#control-backup-run');
   const out = $('#control-backup-output');
   if (!btn) return;
-  if (!await askForConfirmation('立即执行一次加密备份？大实例可能需要几分钟，期间控制台仍可用。')) return;
+  if (!await askForConfirmation('立即执行一次加密备份？\n\n备份会短暂停止服务再重新拉起，控制台可能断开几秒；大实例需要几分钟。')) return;
   btn.disabled = true;
-  if (out) { out.className = 'control-result muted'; out.textContent = '正在备份…'; }
+  if (out) { out.className = 'control-result muted'; out.textContent = '正在提交备份任务…'; }
   try {
     const result = await api('/api/backup/run', { method: 'POST', body: JSON.stringify({ confirm: true }) });
     if (out) {
       out.className = `control-result ${result.ok ? 'success' : 'error'}`;
-      out.textContent = String(result.output || (result.ok ? '备份完成' : '备份失败')).slice(0, 4000);
+      out.textContent = String(result.note || (result.ok ? '备份已排队' : '备份失败')).slice(0, 4000);
     }
-    await loadBackupStatus();
   } catch (error) {
-    if (out) { out.className = 'control-result error'; out.textContent = `备份失败：${error.message}`; }
+    if (out) { out.className = 'control-result error'; out.textContent = `备份请求中断（可能已开始）：${error.message}`; }
   } finally {
     btn.disabled = false;
   }

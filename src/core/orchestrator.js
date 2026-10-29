@@ -55,11 +55,12 @@ export function followUpPlan({
   if (unread > 0) return { schedule: false, reason: '有人刚说话，走正常回复' };
   if (hasScheduledWake) return { schedule: false, reason: '已有唤醒安排' };
   if (!windowActive) return { schedule: false, reason: '不在可主动发言的时段' };
-  const cooldownMs = Math.max(60000, (Number(followUpCooldownMinutes) || 20) * 60000);
+  const base = Math.max(1, Number(followUpDelayMinutes) || 10);
+  // 冷却必须长于「实际补话延迟 + 最大抖动」，否则把 delay 调大后条件恒成立，会无限补话。
+  const cooldownMs = Math.max((base + 3) * 60000, (Number(followUpCooldownMinutes) || 20) * 60000);
   if (now - Number(lastFollowUpAt || 0) < cooldownMs) {
     return { schedule: false, reason: `${Math.round(cooldownMs / 60000)} 分钟内已经给过机会` };
   }
-  const base = Math.max(1, Number(followUpDelayMinutes) || 10);
   return { schedule: true, minutes: base + Math.floor(random() * 3), reason: '发言后没人接话' };
 }
 
@@ -591,6 +592,7 @@ export class Orchestrator {
     clearTimeout(this.wakeTimers.get(chatKey));
     this.wakeTimers.delete(chatKey);
     this.pendingWake.delete(chatKey);
+    this.directPending.delete(chatKey);
     this.firstPendingAt.delete(chatKey);
     const waiting = this.pendingSessions.get(chatKey);
     if (waiting) this.#discardWaiting(waiting);
@@ -609,6 +611,7 @@ export class Orchestrator {
       clearTimeout(this.wakeTimers.get(chatKey));
       this.wakeTimers.delete(chatKey);
       this.pendingWake.delete(chatKey);
+      this.directPending.delete(chatKey);
       this.firstPendingAt.delete(chatKey);
       const waiting = this.pendingSessions.get(chatKey);
       if (waiting) this.#discardWaiting(waiting);
@@ -699,6 +702,8 @@ export class Orchestrator {
   #maybeScheduleFollowUp(chatKey, session) {
     try {
       const cfgNow = getConfig();
+      // 主动私聊默认关闭：补话也不能绕过这个范围开关。
+      if (chatKey.startsWith('private:') && cfgNow.proactive?.privateEnabled !== true) return;
       const window = proactiveWindowState(cfgNow.proactive?.activeHours, Date.now());
       const now = Date.now();
       const plan = followUpPlan({
@@ -738,8 +743,12 @@ export class Orchestrator {
     if (!this.#chatRuntimeDecision(chatKey).allowed) return;
     if (this.runningChats.has(chatKey)) return;   // 运行结束后 drain 会接管
     // 直接互动（私聊 / @ / 拍一拍 / 引用机器人）走短聚批；普通群消息仍按 8-12 秒攒批。
+    // 拍一拍/贴表情等事件调用方可能不传 payload，此时从当前未读里判断是否直接互动。
     const direct = chatKey.startsWith('private:')
-      || Boolean(incoming && mentionsOrPokesBot(incoming, this.onebot.selfId));
+      || (incoming
+        ? mentionsOrPokesBot(incoming, this.onebot.selfId)
+        : (this.store.peekUnread(chatKey, this.#unreadScanLimit()) || [])
+          .some((message) => mentionsOrPokesBot(message, this.onebot.selfId)));
     // 自主节奏：不即时唤醒，攒着等"自己安排的醒来"统一处理；被 @ 时例外
     if (this.#pacingApplies(chatKey)) {
       // 窗口与 #wake / #budgetWouldDrop 同口径（#unreadScanLimit）：@ 落在窗口后半段时同样
@@ -1237,6 +1246,7 @@ export class Orchestrator {
     clearTimeout(this.wakeTimers.get(chatKey));
     this.wakeTimers.delete(chatKey);
     this.pendingWake.delete(chatKey);
+    this.directPending.delete(chatKey);
     this.firstPendingAt.delete(chatKey);
     const waitingSessionId = this.pendingSessions.get(chatKey) || null;
     this.pendingSessions.delete(chatKey);
@@ -2840,7 +2850,7 @@ export class Orchestrator {
           || pending.some((m) => mentionsOrPokesBot(m, this.onebot.selfId));
         const directDelay = Math.max(0, Math.min(2000, Number(cfgNow.directWakeDelayMs) || 300));
         log.info(`[wake] ${chatKey} 已有未读，主动唤醒改为普通回复`);
-        this.scheduleWake(chatKey, direct ? directDelay : null);
+        this.scheduleWake(chatKey, direct ? directDelay : null, { direct });
         continue;
       }
       if (!item.paced) {

@@ -426,8 +426,8 @@ export class LifeFeedManager {
       } else {
         sourceStatus.rss = { enabled: cfg.sources.includes('rss'), lastCount: 0, lastError: '' };
       }
-      if (!items.length && errors.length) throw errors[0];
       this.state.sourceStatus = sourceStatus;
+      if (!items.length && errors.length) throw errors[0];
       const added = (this.state.sourceStatus.plugin?.lastCount || 0) + this.#merge(items, cfg, profile, now);
       this.state.lastForageAt = now;
       this.state.lastForageCount = added;
@@ -637,6 +637,10 @@ export class LifeFeedManager {
   drainInbox() {
     const cfg = this.#cfg();
     if (!cfg.enabled || !cfg.sources.includes('plugin')) return 0;
+    try {
+      const inbox = path.join(this.dataDir, 'life-feed-inbox');
+      if (!fs.readdirSync(inbox).some((name) => name.endsWith('.json'))) return 0;
+    } catch { return 0; }
     this.#load();
     const now = this.now();
     const added = this.#ingestPluginInbox(this.#profileFor(cfg, now), cfg, now);

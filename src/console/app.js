@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createRouter } from './router.js';
 import { createMetrics } from './metrics.js';
 
-import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCredentialResolve, asrCredentialSlot, asrCredentialSlotOf, asrCredentials, asrEndpointHost, asrKeyHost, asrKeySlots, asrKeySource, asrLocalBin, asrLocalModel, asrSecretId, asrSecretKey, ASR_PROVIDERS, conversationConfigForChat, findWhisperBinSync, getConfig, identityPilotEnabled, imageGenAvailable, imageGenKeyHosts, imageGenKeyOwnedBy, imageGenKeyResolve, incidentPilotEnabled, slangPilotEnabled, updateConfig, onTimeControlChange, pinImageGenKeyHost, DATA_DIR, ROOT } from '../core/config.js';
+import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCredentialResolve, asrCredentialSlot, asrCredentialSlotOf, asrCredentials, asrEndpointHost, asrKeyHost, asrKeySlots, asrKeySource, asrLocalBin, asrLocalModel, asrSecretId, asrSecretKey, ASR_PROVIDERS, conversationConfigForChat, findWhisperBinSync, getConfig, identityPilotEnabled, imageGenAvailable, imageGenKeyHosts, imageGenKeyOwnedBy, imageGenKeyResolve, incidentPilotEnabled, slangPilotEnabled, storeConfigForChat, updateConfig, onTimeControlChange, pinImageGenKeyHost, DATA_DIR, ROOT } from '../core/config.js';
 import { tokenSaverEffective } from '../core/token-saver.js';
 import { redactText } from '../core/redact.js';
 import { getSkillRegistry } from '../skills/registry.js';
@@ -5731,9 +5731,12 @@ export function createApp({
     const item = taken.item;
     // 不直接发：交给主动发言链路，由模型用自己的语气说，人设/分条/限速/安静时段全部生效。
     // B 站标题/UP 是第三方页面内容，必须去掉“【…】”这类段头伪装后再进【系统提醒】。
-    const source = String(item.source || '').startsWith('plugin:') ? '插件见闻' : 'B 站见闻';
+    const itemSource = String(item.source || '');
+    const source = itemSource.startsWith('plugin:')
+      ? '插件见闻'
+      : (itemSource === 'rss' ? 'RSS 见闻' : 'B 站见闻');
     const note = `【系统提醒】可以分享这条${source}：${sanitizeUserText(String(item.title ?? ''))}`
-      + `（UP：${sanitizeUserText(String(item.up ?? ''))}）${item.url}。`
+      + `（UP：${sanitizeUserText(String(item.up ?? ''))}）${sanitizeUserText(String(item.url ?? ''))}。`
       + `请调用 share_bilibili（bvid=${item.id}，comment=你的一句话）发送标题链接和封面，不要用 send_message 重复发链接。`
       .slice(0, 600);
     const wake = orchestrator.requestManualWake(chatKey, { wakeNote: note });
@@ -5746,7 +5749,8 @@ export function createApp({
     return json(res, 200, { ok: true, status: 'queued', item });
   });
 
-  // ── 数据备份（控制台只做状态/立即备份/恢复前校验；真正恢复仍走 SSH CLI）──
+  // ── 数据备份/恢复：真正停服的动作都放到 user manager 的 transient unit 里 ──
+  let maintenanceTask = '';
   const backupDirPath = () => process.env.QQ_AGENT_BACKUP_DIR
     || path.join(os.homedir(), 'qq-agent', 'backups');
   const backupKeyPath = () => process.env.QQ_AGENT_BACKUP_KEY_FILE
@@ -5774,6 +5778,48 @@ export function createApp({
     child.on('error', (error) => finish({ ok: false, code: null, stdout, stderr: `${stderr}${error?.message || error}` }));
     child.on('close', (code) => finish({ ok: code === 0, code, timedOut: false, stdout, stderr }));
   });
+  /**
+   * 把会 stop 自身服务的 ops 命令排进独立 transient unit：
+   * 直接用 spawn 时 console 和 ops 在同一个 service cgroup，stop 会把自己一起杀掉。
+   * 延迟 3 秒执行，给 HTTP 响应留返回时间；transient service 不继承环境，关键变量显式 setenv。
+   */
+  const queueTransientOps = (kind, opsArgs) => {
+    if (process.platform !== 'linux') {
+      return { ok: false, error: '控制台执行只支持 Linux + systemd；请用 SSH 执行 ops 命令' };
+    }
+    const probe = spawnSync('systemd-run', ['--version'], { encoding: 'utf8' });
+    if (probe.status !== 0) {
+      return { ok: false, error: '本机没有可用的 systemd-run；请用 SSH 执行 ops 命令' };
+    }
+    const dataDirAbs = path.resolve(DATA_DIR);
+    const service = process.env.QQ_AGENT_SERVICE || 'qq-agent-linux.service';
+    const unit = `qq-agent-${kind}-${Date.now()}`;
+    const setenv = (key, value) => `--setenv=${key}=${value}`;
+    const args = [
+      '--user', '--unit', unit, '--collect', '--on-active=3',
+      `--working-directory=${ROOT}`,
+      setenv('QQ_AGENT_DATA_DIR', dataDirAbs),
+      setenv('QQ_AGENT_SERVICE', service),
+      setenv('QQ_AGENT_BACKUP_DIR', backupDirPath()),
+      ...(process.env.QQ_AGENT_BACKUP_KEY_FILE
+        ? [setenv('QQ_AGENT_BACKUP_KEY_FILE', process.env.QQ_AGENT_BACKUP_KEY_FILE)]
+        : []),
+      ...(process.env.QQ_AGENT_BACKUP_KEY ? [setenv('QQ_AGENT_BACKUP_KEY', process.env.QQ_AGENT_BACKUP_KEY)] : []),
+      process.execPath, path.join(ROOT, 'src', 'ops.js'),
+      ...opsArgs.map((arg) => (arg === DATA_DIR ? dataDirAbs : arg))
+    ];
+    const queued = spawnSync('systemd-run', args, { cwd: ROOT, encoding: 'utf8', timeout: 10000 });
+    if (queued.status !== 0) {
+      return {
+        ok: false,
+        error: `任务排队失败：${String(queued.stderr || queued.stdout || '').trim().slice(0, 300) || 'systemd-run 失败'}`
+      };
+    }
+    maintenanceTask = unit;
+    const clear = setTimeout(() => { if (maintenanceTask === unit) maintenanceTask = ''; }, 60 * 60 * 1000);
+    if (clear.unref) clear.unref();
+    return { ok: true, unit };
+  };
   router.add('GET', '/api/backup/status', async (req, res) => {
     const dir = backupDirPath();
     let files = [];
@@ -5799,17 +5845,26 @@ export function createApp({
     });
   });
   router.add('POST', '/api/backup/run', async (req, res) => {
+    if (maintenanceTask) return json(res, 409, { ok: false, error: `已有备份/恢复任务在排队（${maintenanceTask}）` });
     const body = await readBody(req).catch(() => ({}));
     if (body?.confirm !== true) return json(res, 400, { ok: false, error: '执行备份需要 confirm:true' });
+    if (maintenanceTask) return json(res, 409, { ok: false, error: `已有备份/恢复任务在排队（${maintenanceTask}）` });
     const dir = backupDirPath();
     try { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { /* 失败交给 ops 报 */ }
-    const result = await runOpsCommand(['backup', '--confirm', '--data', DATA_DIR, '--backup-dir', dir]);
-    auditWrite('backup.run', dir, { req, ok: result.ok });
-    return json(res, result.ok ? 200 : 500, {
-      ok: result.ok,
-      code: result.code,
-      timedOut: result.timedOut,
-      output: `${result.stdout}${result.stderr}`.slice(-4000)
+    maintenanceTask = 'pending';
+    const queued = queueTransientOps('backup', [
+      'backup', '--confirm', '--data', DATA_DIR, '--backup-dir', dir
+    ]);
+    if (!queued.ok) {
+      maintenanceTask = '';
+      return json(res, 500, { ok: false, error: queued.error });
+    }
+    auditWrite('backup.run', dir, { req, unit: queued.unit });
+    return json(res, 202, {
+      ok: true,
+      status: 'queued',
+      unit: queued.unit,
+      note: '备份已排队，约 3 秒后开始。服务会短暂停止并重启，控制台可能断开几秒，完成后刷新页面。'
     });
   });
   router.add('POST', '/api/backup/verify', async (req, res) => {
@@ -5828,38 +5883,32 @@ export function createApp({
   });
 
   router.add('POST', '/api/backup/restore', async (req, res) => {
+    if (maintenanceTask) {
+      return json(res, 409, { ok: false, error: `已有备份/恢复任务在排队（${maintenanceTask}），不要重复提交` });
+    }
     const body = await readBody(req).catch(() => ({}));
     if (body?.confirm !== true) return json(res, 400, { ok: false, error: '恢复需要 confirm:true' });
+    if (maintenanceTask) {
+      return json(res, 409, { ok: false, error: `已有备份/恢复任务在排队（${maintenanceTask}），不要重复提交` });
+    }
     const name = path.basename(String(body?.file || ''));
     if (!/\.tar\.gz(?:\.enc)?$/.test(name)) return json(res, 400, { ok: false, error: '备份文件名不合法' });
     const full = path.join(backupDirPath(), name);
     if (!fs.existsSync(full)) return json(res, 404, { ok: false, error: '备份文件不存在' });
-    if (process.platform !== 'linux') {
-      return json(res, 409, { ok: false, error: '控制台恢复只支持 Linux + systemd；请用 SSH 执行 ops restore' });
-    }
-    const probe = spawnSync('systemd-run', ['--version'], { encoding: 'utf8' });
-    if (probe.status !== 0) {
-      return json(res, 409, { ok: false, error: '本机没有可用的 systemd-run；请用 SSH 执行 ops restore' });
-    }
-    const unit = `qq-agent-restore-${Date.now()}`;
-    // 必须放到 user manager 的独立 transient unit：直接 spawn 会跟着本服务一起被 systemctl stop 杀掉。
-    const child = spawn('systemd-run', [
-      '--user', '--unit', unit, '--collect', '--property=Type=oneshot',
-      process.execPath, path.join(ROOT, 'src', 'ops.js'),
+    maintenanceTask = 'pending';
+    const queued = queueTransientOps('restore', [
       'restore', '--from', full, '--confirm', '--data', DATA_DIR
-    ], {
-      cwd: ROOT,
-      env: { ...process.env, QQ_AGENT_SERVICE: process.env.QQ_AGENT_SERVICE || 'qq-agent-linux.service' },
-      detached: true,
-      stdio: 'ignore'
-    });
-    child.unref();
-    auditWrite('backup.restore', name, { req, unit });
+    ]);
+    if (!queued.ok) {
+      maintenanceTask = '';
+      return json(res, 500, { ok: false, error: queued.error });
+    }
+    auditWrite('backup.restore', name, { req, unit: queued.unit });
     return json(res, 202, {
       ok: true,
       status: 'queued',
-      unit,
-      note: '恢复已排队。服务会短暂停止并重启，控制台可能断开几秒，完成后刷新页面。'
+      unit: queued.unit,
+      note: '恢复已排队，约 3 秒后开始。服务会短暂停止并重启，控制台可能断开几秒，完成后刷新页面。'
     });
   });
 
@@ -5871,13 +5920,11 @@ export function createApp({
       .map((chatKey) => ({
         chatKey,
         allowed: chatAllowed(chatKey, cfgNow),
-        randomPercent: Number(cfgNow.store?.randomPercent) || 0,
+        randomPercent: Number(storeConfigForChat(chatKey)?.randomPercent) || 0,
         conversationMode: conversationConfigForChat(chatKey).mode,
         timeControl: timeControlState(cfgNow.timeControl, chatKey),
         groupGame: gameChats.has(chatKey),
-        dailyMoments: Array.isArray(cfgNow.dailyMoments?.groups) && cfgNow.dailyMoments.groups.length
-          ? cfgNow.dailyMoments.groups.includes(chatKey.slice(6))
-          : true
+        dailyMoments: cfgNow.dailyMoments?.enabled === true
       }));
     return json(res, 200, { ok: true, rows });
   });

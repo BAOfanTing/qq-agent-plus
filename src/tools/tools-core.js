@@ -1914,7 +1914,7 @@ export function buildToolDefs() {
               durationSec: item.duration,
               play: item.play,
               tags: (Array.isArray(item.tags) ? item.tags : []).map((tag) => sanitizeUserText(String(tag))),
-              url: item.url,
+              url: sanitizeUserText(String(item.url ?? '')),
               summary: sanitizeUserText(safeSlice(String(item.desc ?? ''), 200))
             })),
             note: '选好后用 share_bilibili 分享（会先发标题+链接+你的话，再补封面），别念标题；不要用 send_message 重复发链接。不想发就用 life_feed_feedback 标记 skip。'
@@ -2121,6 +2121,9 @@ export function buildToolDefs() {
           const entry = ctx.store?.findByMid?.(ctx.chatKey, mid);
           const sentThisRun = (ctx.session?.sent || []).some((item) =>
             item?.messageId != null && String(item.messageId) === String(mid));
+          // 只允许撤当前会话里能定位到的消息：delete_msg 是全局 message id，
+          // 不校验归属时管理员口令可被利用去删别的群里的消息。
+          if (!entry && !sentThisRun) return err('当前会话里找不到这条消息（可能不是本群消息，或已经撤回）。');
           const own = entry?.self === true || sentThisRun;
           if (!own) {
             if (ctx.kind !== 'group') return err('撤回别人的消息只能在群聊里执行');
@@ -2128,6 +2131,7 @@ export function buildToolDefs() {
             if (!admin.ok) return err(admin.reason, { reportIncident: false });
           }
           await ctx.onebot.deleteMessage(Number(mid), ctx.signal);
+          // 保留 sent 记录但标 recalled：reply-guard 仍有"确实发过"的证据，不会误补兜底。
           for (const item of ctx.session?.sent || []) {
             if (item?.messageId != null && String(item.messageId) === String(mid)) item.recalled = true;
           }

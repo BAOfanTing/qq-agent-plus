@@ -513,7 +513,7 @@ export function createCapabilities({
         const title = sanitizeUserText(String(item?.title ?? '')).slice(0, 200);
         const url = String(item?.url ?? '').trim();
         const cover = String(item?.cover ?? '').trim();
-        if (!id || !title || !/^https?:\/\/\S+$/i.test(url) || existing.has(id) || state.items.length >= 20) {
+        if (!id || !title || url.length > 1000 || !/^https?:\/\/\S+$/i.test(url) || existing.has(id) || state.items.length >= 20) {
           rejected += 1;
           continue;
         }

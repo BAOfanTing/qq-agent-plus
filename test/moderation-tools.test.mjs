@@ -29,6 +29,7 @@ function context({ senderId = OWNER, entries = null } = {}) {
       selfId: '888',
       triggerEntries: entries || [{ senderId, senderName: 'x', self: false, text: '禁言 踢人 撤回 设置管理员' }],
       session: { id: 's', leaseId: 'l', sent: [] },
+      store: { findByMid: () => ({ mid: '123', self: false }) },
       onebot: {
         selfId: '888',
         setGroupBan: async (...args) => { calls.push(['ban', ...args]); return {}; },
@@ -78,6 +79,15 @@ it('撤回与设置管理员走对应 OneBot 接口', async () => {
   assert.equal(calls[0][1], 123);
   assert.equal(calls[1][0], 'admin');
   assert.equal(calls[1][3], true);
+});
+
+it('撤回目标必须能在当前会话定位，不能拿别的群的 message id 删', async () => {
+  const { ctx, calls } = context();
+  ctx.store = { findByMid: () => null };
+  const result = await tool('recall_message').execute(ctx, { messageId: '#999' });
+  assert.equal(result.isError, true);
+  assert.match(result.content, /当前会话/);
+  assert.equal(calls.length, 0);
 });
 
 it('机器人撤回自己刚发的消息不需要管理员指令', async () => {

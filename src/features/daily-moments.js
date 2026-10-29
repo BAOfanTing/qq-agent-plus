@@ -1324,8 +1324,9 @@ export class DailyMomentsManager {
       ? (this.getLifeFeed?.()?.status?.().candidates || []).slice(0, 3)
       : [];
     const lifeFeedLine = lifeFeedIdeas.length
-      ? `【可参考的见闻（不是必须发）】${lifeFeedIdeas.map((item) =>
-        `${sanitizeUserText(String(item.title || ''))}（${item.source === 'bilibili' ? 'B站' : item.source || '见闻'}）${item.url}`).join('；')}。`
+      ? `【可参考的见闻（不是必须发）】${lifeFeedIdeas.map((item) => sanitizeUserText(
+        `${String(item.title || '')}（${item.source === 'bilibili' ? 'B站' : item.source || '见闻'}）${item.url}`
+      )).join('；')}。`
         + '只借一个点写自己的感受，不要复述标题、不要写成播报；没兴趣就忽略。'
       : '';
     const materialLines = source === 'self'

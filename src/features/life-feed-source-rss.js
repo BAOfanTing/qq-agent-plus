@@ -13,8 +13,14 @@ function decodeEntities(text) {
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)));
+    .replace(/&#(\d+);/g, (_, n) => {
+      const cp = Number(n);
+      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => {
+      const cp = parseInt(n, 16);
+      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+    });
 }
 
 function stripTags(text) {
@@ -29,13 +35,19 @@ function tag(block, name) {
 }
 
 function atomLink(block) {
-  const m = /<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\/?>/i.exec(block);
-  return m ? decodeEntities(m[1]).trim() : '';
+  const links = [...block.matchAll(/<link\b[^>]*>/gi)].map((m) => {
+    const tag = m[0];
+    const href = /\bhref=["']([^"']+)["']/i.exec(tag);
+    const rel = /\brel=["']([^"']+)["']/i.exec(tag);
+    return { href: href ? decodeEntities(href[1]).trim() : '', rel: rel ? rel[1].toLowerCase() : '' };
+  }).filter((link) => link.href);
+  const preferred = links.find((link) => !link.rel || link.rel === 'alternate');
+  return (preferred || links[0] || {}).href || '';
 }
 
 function safeHttpUrl(raw) {
   const text = String(raw || '').trim();
-  if (!/^https?:\/\/\S+$/i.test(text)) return '';
+  if (text.length > 1000 || !/^https?:\/\/\S+$/i.test(text)) return '';
   try {
     const url = new URL(text);
     if (url.username || url.password) return '';
@@ -43,11 +55,35 @@ function safeHttpUrl(raw) {
   } catch { return ''; }
 }
 
+/** 线性切块：惰性正则会在每个未闭合 <item 起点扫到串尾，畸形 feed 可退化成 O(n²) 卡死事件循环。 */
+function extractBlocks(source, tagName) {
+  const lower = source.toLowerCase();
+  const open = `<${tagName}`;
+  const close = `</${tagName}>`;
+  const blocks = [];
+  let pos = 0;
+  while (blocks.length < 500) {
+    const start = lower.indexOf(open, pos);
+    if (start < 0) break;
+    const boundary = lower[start + open.length] || '';
+    if (boundary && !/[\s>]/.test(boundary)) {
+      pos = start + open.length;
+      continue;
+    }
+    const gt = lower.indexOf('>', start);
+    if (gt < 0) break;
+    const end = lower.indexOf(close, gt);
+    if (end < 0) break;
+    blocks.push(source.slice(start, end + close.length));
+    pos = end + close.length;
+  }
+  return blocks;
+}
+
 export function parseRssFeed(xml, { feedUrl = '' } = {}) {
   const source = String(xml || '');
-  const blocks = source.match(/<item\b[\s\S]*?<\/item>/gi)
-    || source.match(/<entry\b[\s\S]*?<\/entry>/gi)
-    || [];
+  let blocks = extractBlocks(source, 'item');
+  if (!blocks.length) blocks = extractBlocks(source, 'entry');
   const channelTitle = tag(source.slice(0, source.search(/<item\b|<entry\b/i) >>> 0), 'title');
   let host = '';
   try { host = new URL(feedUrl).host.toLowerCase(); } catch { /* 保留空 */ }
@@ -59,14 +95,14 @@ export function parseRssFeed(xml, { feedUrl = '' } = {}) {
     const published = tag(block, 'pubDate') || tag(block, 'published') || tag(block, 'updated');
     const pubMs = Date.parse(published) || 0;
     const tags = [...block.matchAll(/<category\b[^>]*(?:term=["']([^"']+)["']|>([\s\S]*?)<\/category>)/gi)]
-      .map((m) => stripTags(m[1] || m[2] || ''))
+      .map((m) => stripTags(m[1] || m[2] || '').slice(0, 30))
       .filter(Boolean)
       .slice(0, 6);
     return {
       id: `rss-${crypto.createHash('sha1').update(url).digest('hex').slice(0, 20)}`,
-      title,
-      desc,
-      up: channelTitle || host,
+      title: title.slice(0, 200),
+      desc: desc.slice(0, 300),
+      up: (channelTitle || host).slice(0, 60),
       upMid: '',
       duration: 0,
       play: 0,
@@ -80,24 +116,32 @@ export function parseRssFeed(xml, { feedUrl = '' } = {}) {
   }).filter(Boolean);
 }
 
-export async function forageRss({ urls = [], limit = 10, fetchImpl = safeFetch, log = () => {} } = {}) {
+export async function forageRss(options = {}) {
+  // 显式取值而不是解构参数：ops scan 的未定义调用扫描不认识解构默认值，会把 log() 误报。
+  const urls = Array.isArray(options.urls) ? options.urls : [];
+  const limit = Number(options.limit) || 10;
+  const fetchImpl = typeof options.fetchImpl === 'function' ? options.fetchImpl : safeFetch;
+  const log = typeof options.log === 'function' ? options.log : (() => {});
   const feeds = [...new Set((Array.isArray(urls) ? urls : [])
     .map((url) => String(url || '').trim())
     .filter((url) => /^https?:\/\//i.test(url)))].slice(0, 10);
   if (!feeds.length) return [];
   const perFeed = Math.max(1, Math.ceil(Math.max(1, limit) / feeds.length));
+  // 并行抓取：单 feed 30 秒总截止，10 个源最多一起等 30 秒，而不是串行 300 秒。
+  const settled = await Promise.allSettled(feeds.map(async (feedUrl) => {
+    const response = await fetchImpl(feedUrl, {
+      maxBytes: MAX_FEED_BYTES,
+      // 整次抓取总截止：safeFetch 默认只有空闲超时，慢速滴流源会把觅食卡到永远。
+      signal: AbortSignal.timeout(30000),
+      headers: { accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' }
+    });
+    if (response?.statusCode !== 200) throw new Error(`HTTP ${response?.statusCode || '?'}`);
+    return parseRssFeed(response.body || '', { feedUrl }).slice(0, perFeed);
+  }));
   const all = [];
-  for (const feedUrl of feeds) {
-    try {
-      const response = await fetchImpl(feedUrl, {
-        maxBytes: MAX_FEED_BYTES,
-        headers: { accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' }
-      });
-      if (response?.statusCode !== 200) throw new Error(`HTTP ${response?.statusCode || '?'}`);
-      all.push(...parseRssFeed(response.body || '', { feedUrl }).slice(0, perFeed));
-    } catch (error) {
-      log(`[life-feed] RSS ${feedUrl} 读取失败：${error?.message ?? error}`);
-    }
+  for (const result of settled) {
+    if (result.status === 'fulfilled') all.push(...result.value);
+    else log(`[life-feed] RSS 读取失败：${result.reason?.message ?? result.reason}`);
   }
   return all.slice(0, Math.max(1, limit));
 }
