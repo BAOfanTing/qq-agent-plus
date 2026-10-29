@@ -153,7 +153,7 @@ function bindCrossSectionControls() {
         if (!btn) return;
         const row = btn.closest('.gg-row');
         if (!row) return;
-        if (!window.confirm('结束这一局？会往群里发一句"游戏到此为止"（身份与进行中的行动一并作废）。')) return;
+        if (!await askForConfirmation('结束这一局？会往群里发一句"游戏到此为止"（身份与进行中的行动一并作废）。')) return;
         btn.disabled = true;
         btn.textContent = '结束中…';
         try {

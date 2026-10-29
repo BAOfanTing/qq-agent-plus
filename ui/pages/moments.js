@@ -210,6 +210,8 @@ function renderDailyMomentsSection(c) {
         <option value="group" ${moments.source === 'group' ? 'selected' : ''}>群聊见闻（从群里挑一个瞬间）</option>
         <option value="mixed" ${moments.source === 'mixed' ? 'selected' : ''}>混合（人设为主，群聊作灵感）</option>
       </select></div>
+    <div class="checkbox-row"><input type="checkbox" id="cfg-moments-lifefeed" ${moments.useLifeFeed === true ? 'checked' : ''} />
+      <label for="cfg-moments-lifefeed">人设动态可参考生活层见闻（只作灵感，不强制发）</label></div>
     <div class="field"><label for="cfg-moments-autopublish">发布方式</label>
       <select id="cfg-moments-autopublish">
         <option value="draft" ${moments.autoPublish !== true ? 'selected' : ''}>只生成草稿，等我确认</option>

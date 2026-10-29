@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildInterestProfile } from './life-feed-interest.js';
 import { forageBilibili, scoreCandidate } from './life-feed-source-bilibili.js';
+import { forageRss } from './life-feed-source-rss.js';
 
 const STATE_FILE = 'life-feed.json';
 const CANDIDATE_TTL_MS = 7 * 86400000;
@@ -21,6 +22,7 @@ export const LIFE_FEED_BOUNDS = Object.freeze({
   maxPerForage: { min: 1, max: 500 },
   maxOffersPerDay: { min: 1, max: 500 },
   maxPicksPerDay: { min: 1, max: 100 },
+  rssPerForage: { min: 1, max: 50 },
   cooldownDays: { min: 1, max: 30 },
   minDurationSec: { min: 0, max: 86400 },
   maxDurationSec: { min: 1, max: 86400 },
@@ -58,13 +60,18 @@ export function normalizedLifeFeedConfig(raw = {}) {
   return {
     enabled: cfg.enabled === true,
     graduated: cfg.graduated === true,
-    sources: cleanList(cfg.sources, 4, 20).filter((source) => source === 'bilibili').length
-      ? ['bilibili'] : ['bilibili'],
+    sources: (() => {
+      const list = [...new Set(cleanList(cfg.sources, 4, 20)
+        .filter((source) => ['bilibili', 'plugin', 'rss'].includes(source)))];
+      return list.length ? list : ['bilibili', 'plugin'];
+    })(),
     forageIntervalMinutes: clampInt(cfg.forageIntervalMinutes, B.forageIntervalMinutes.min, B.forageIntervalMinutes.max, 360),
     maxCandidates: clampInt(cfg.maxCandidates, B.maxCandidates.min, B.maxCandidates.max, 200),
     maxPerForage: clampInt(cfg.maxPerForage, B.maxPerForage.min, B.maxPerForage.max, 30),
     maxOffersPerDay: clampInt(cfg.maxOffersPerDay, B.maxOffersPerDay.min, B.maxOffersPerDay.max, 2),
     maxPicksPerDay: clampInt(cfg.maxPicksPerDay, B.maxPicksPerDay.min, B.maxPicksPerDay.max, 10),
+    rssUrls: cleanList(cfg.rssUrls, 10, 500).filter((url) => /^https?:\/\//i.test(url)),
+    rssPerForage: clampInt(cfg.rssPerForage, B.rssPerForage.min, B.rssPerForage.max, 10),
     cooldownDays: clampInt(cfg.cooldownDays, B.cooldownDays.min, B.cooldownDays.max, 7),
     minDurationSec: Math.min(minDurationSec, maxDurationSec),
     maxDurationSec: Math.max(minDurationSec, maxDurationSec),
@@ -310,6 +317,20 @@ export class LifeFeedManager {
     const todayManualOffers = todayOffers.filter((item) => item.manual === true).length;
     const todayAutoOffers = todayOffers.length - todayManualOffers;
     const lastShare = this.state.records.find((item) => item.action === 'shared' || item.action === 'manual-share');
+    const summarize = (days) => {
+      const since = now - days * 86400000;
+      const stats = { shared: 0, skipped: 0, moreLike: 0, bySource: {} };
+      for (const record of this.state.records) {
+        if (Number(record.at) < since) continue;
+        if (record.action === 'shared') stats.shared += 1;
+        else if (record.action === 'skip') stats.skipped += 1;
+        else if (record.action === 'more-like-this') stats.moreLike += 1;
+        else continue;
+        const source = String(record.source || 'unknown');
+        stats.bySource[source] = (stats.bySource[source] || 0) + 1;
+      }
+      return stats;
+    };
     return {
       enabled: true,
       graduated: cfg.graduated,
@@ -341,6 +362,8 @@ export class LifeFeedManager {
       lastForageAt: this.state.lastForageAt,
       nextForageAt: this.state.nextForageAt,
       lastForageCount: this.state.lastForageCount,
+      shareStats: { '7d': summarize(7), '30d': summarize(30) },
+      sourceStatus: { ...(this.state.sourceStatus || {}) },
       failStreak: this.state.failStreak,
       lastError: this.state.lastError
     };
@@ -357,17 +380,55 @@ export class LifeFeedManager {
     const now = this.now();
     try {
       const profile = this.#profileFor(cfg, now);
-      const pluginAdded = this.#ingestPluginInbox(profile, cfg, now);
-      const items = await forageBilibili({
-        profile,
-        limit: cfg.maxPerForage,
-        minDurationSec: cfg.minDurationSec,
-        maxDurationSec: cfg.maxDurationSec,
-        excludeKeywords: cfg.excludeKeywords,
-        fetchImpl: this.fetchImpl,
-        log: this.log
-      });
-      const added = pluginAdded + this.#merge(items, cfg, profile, now);
+      const items = [];
+      const errors = [];
+      const sourceStatus = { ...(this.state.sourceStatus || {}) };
+      if (cfg.sources.includes('plugin')) {
+        const pluginAdded = this.#ingestPluginInbox(profile, cfg, now);
+        sourceStatus.plugin = { enabled: true, lastCount: pluginAdded, lastError: '' };
+      } else {
+        sourceStatus.plugin = { enabled: false, lastCount: 0, lastError: '' };
+      }
+      if (cfg.sources.includes('bilibili')) {
+        try {
+          const bili = await forageBilibili({
+            profile,
+            limit: cfg.maxPerForage,
+            minDurationSec: cfg.minDurationSec,
+            maxDurationSec: cfg.maxDurationSec,
+            excludeKeywords: cfg.excludeKeywords,
+            fetchImpl: this.fetchImpl,
+            log: this.log
+          });
+          items.push(...bili);
+          sourceStatus.bilibili = { enabled: true, lastCount: bili.length, lastError: '' };
+        } catch (error) {
+          errors.push(error);
+          sourceStatus.bilibili = { enabled: true, lastCount: 0, lastError: String(error?.message ?? error) };
+        }
+      } else {
+        sourceStatus.bilibili = { enabled: false, lastCount: 0, lastError: '' };
+      }
+      if (cfg.sources.includes('rss') && cfg.rssUrls.length) {
+        try {
+          const rss = await forageRss({
+            urls: cfg.rssUrls,
+            limit: cfg.rssPerForage,
+            fetchImpl: this.fetchImpl,
+            log: this.log
+          });
+          items.push(...rss);
+          sourceStatus.rss = { enabled: true, lastCount: rss.length, lastError: '' };
+        } catch (error) {
+          errors.push(error);
+          sourceStatus.rss = { enabled: true, lastCount: 0, lastError: String(error?.message ?? error) };
+        }
+      } else {
+        sourceStatus.rss = { enabled: cfg.sources.includes('rss'), lastCount: 0, lastError: '' };
+      }
+      if (!items.length && errors.length) throw errors[0];
+      this.state.sourceStatus = sourceStatus;
+      const added = (this.state.sourceStatus.plugin?.lastCount || 0) + this.#merge(items, cfg, profile, now);
       this.state.lastForageAt = now;
       this.state.lastForageCount = added;
       this.state.nextForageAt = now + this.#intervalMs(cfg);
@@ -575,7 +636,7 @@ export class LifeFeedManager {
   /** 立即吸收插件 inbox（不只等下一次 6 小时觅食）；控制台刷新和模型取候选前都会走。 */
   drainInbox() {
     const cfg = this.#cfg();
-    if (!cfg.enabled) return 0;
+    if (!cfg.enabled || !cfg.sources.includes('plugin')) return 0;
     this.#load();
     const now = this.now();
     const added = this.#ingestPluginInbox(this.#profileFor(cfg, now), cfg, now);
@@ -609,7 +670,7 @@ export class LifeFeedManager {
     if (!item) return { error: '这条候选不在队列里（可能已过期或已被分享）' };
     item.offeredAt = now;
     this.state.offers.push({ day, id: item.id, upMid: item.upMid, tags: item.tags || [], at: now, manual: manual === true });
-    this.state.records.unshift({ at: now, action: 'manual-share', id: item.id, day });
+    this.state.records.unshift({ at: now, action: 'manual-share', id: item.id, day, source: item.source || '' });
     this.#prune(now);
     this.#save();
     return { item: publicCandidate(item) };
@@ -638,7 +699,7 @@ export class LifeFeedManager {
       for (const tag of item.tags || []) {
         this.state.tagWeights[tag] = Math.min(50, (Number(this.state.tagWeights[tag]) || 0) + 1);
       }
-      this.state.records.unshift({ at: this.now(), action: 'more-like-this', id: key, chatKey });
+      this.state.records.unshift({ at: this.now(), action: 'more-like-this', id: key, chatKey, source: item.source || '' });
       this.#save();
       return { ok: true, action: verb };
     }
@@ -655,6 +716,7 @@ export class LifeFeedManager {
     });
     this.state.records.unshift({
       at: this.now(), action: verb, id: key, chatKey, day: dayKey(this.now()),
+      source: item.source || '',
       ...(messageId === null || messageId === undefined ? {} : { messageId })
     });
     this.#prune(this.now());

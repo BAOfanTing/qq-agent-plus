@@ -257,6 +257,9 @@ async function saveConfig({ quiet = false } = {}) {
     patch.lifeFeed = {
       ...(c.lifeFeed || {}),
       enabled: chk('#cfg-lifefeed-enabled', c.lifeFeed?.enabled === true),
+      sources: ['bilibili', 'plugin', 'rss'].filter((id) =>
+        chk(`#cfg-lifefeed-src-${id}`, (c.lifeFeed?.sources || ['bilibili']).includes(id))),
+      rssUrls: splitKeywords('#cfg-lifefeed-rss-urls'),
       forageIntervalMinutes: lifeNum('#cfg-lifefeed-interval', c.lifeFeed?.forageIntervalMinutes ?? 360),
       maxCandidates: lifeNum('#cfg-lifefeed-max-candidates', c.lifeFeed?.maxCandidates ?? 200),
       maxPerForage: lifeNum('#cfg-lifefeed-max-per-forage', c.lifeFeed?.maxPerForage ?? 30),
@@ -299,6 +302,7 @@ async function saveConfig({ quiet = false } = {}) {
       source: ['self', 'group', 'mixed'].includes(String(val('#cfg-moments-source', c.dailyMoments?.source || 'self')))
         ? String(val('#cfg-moments-source', c.dailyMoments?.source || 'self'))
         : 'self',
+      useLifeFeed: chk('#cfg-moments-lifefeed', c.dailyMoments?.useLifeFeed === true),
       autoPublish: String(val('#cfg-moments-autopublish', c.dailyMoments?.autoPublish === true ? 'auto' : 'draft')) === 'auto',
       startupCatchup: chk('#cfg-moments-catchup', c.dailyMoments?.startupCatchup !== false),
       hour: clampInt(val('#cfg-moments-hour', c.dailyMoments?.hour), 0, 23, 23),

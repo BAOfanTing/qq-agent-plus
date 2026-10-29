@@ -649,7 +649,9 @@ export function buildToolDefs() {
             atUserId: normalizeMid(target.atUserId) || null
           });
           afterSent(() => {
-            ctx.session.sent.push(...result.sent.map((s) => ({ type: 'text', text: s.text, at: s.at })));
+            ctx.session.sent.push(...result.sent.map((s) => ({
+              type: 'text', text: s.text, at: s.at, messageId: s.messageId
+            })));
             ctx.emit('session-update', ctx.session.id);
           });
           const note = ['已发送。不要输出"已发送"类汇报，继续思考下一步或直接结束。'];
@@ -2106,7 +2108,7 @@ export function buildToolDefs() {
     {
       name: 'recall_message',
       feature: 'moderation',
-      description: '撤回一条消息（仅全局管理员在群里明确要求时可用）。messageId 用聊天记录里的 #数字。不要主动撤回别人的话。',
+      description: '撤回一条消息。可以随时撤回你自己刚发的；撤回别人的消息只能由全局管理员在群里明确要求时执行。messageId 用 send_message 返回的 messageIds，或聊天记录里的 #数字。',
       parameters: {
         type: 'object',
         properties: { messageId: { type: ['integer', 'string'], description: '要撤回的消息 id' } },
@@ -2114,13 +2116,22 @@ export function buildToolDefs() {
       },
       async execute(ctx, args) {
         try {
-          if (ctx.kind !== 'group') return err('撤回只能在群聊里执行');
-          const admin = adminRequest(ctx, [/撤回|撤掉|删掉|删除消息/]);
-          if (!admin.ok) return err(admin.reason, { reportIncident: false });
           const mid = normalizeMid(args.messageId);
           if (!/^-?\d+$/.test(mid)) return err('messageId 要是消息 id（聊天记录里的 #数字）');
+          const entry = ctx.store?.findByMid?.(ctx.chatKey, mid);
+          const sentThisRun = (ctx.session?.sent || []).some((item) =>
+            item?.messageId != null && String(item.messageId) === String(mid));
+          const own = entry?.self === true || sentThisRun;
+          if (!own) {
+            if (ctx.kind !== 'group') return err('撤回别人的消息只能在群聊里执行');
+            const admin = adminRequest(ctx, [/撤回|撤掉|删掉|删除消息/]);
+            if (!admin.ok) return err(admin.reason, { reportIncident: false });
+          }
           await ctx.onebot.deleteMessage(Number(mid), ctx.signal);
-          return ok({ messageId: mid, note: '已撤回。' });
+          for (const item of ctx.session?.sent || []) {
+            if (item?.messageId != null && String(item.messageId) === String(mid)) item.recalled = true;
+          }
+          return ok({ messageId: mid, note: '已撤回。不要解释撤回原因，除非对方问。' });
         } catch (error) {
           return sendErr(error, {}, `撤回失败：${String(error?.message ?? error).slice(0, 120)}`);
         }

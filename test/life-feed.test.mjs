@@ -52,10 +52,11 @@ const POPULAR = {
   }
 };
 
-test('配置归一化：夹紧数值、清洗关键词、只保留 bilibili', () => {
+test('配置归一化：夹紧数值、清洗关键词、只保留已知来源', () => {
   const cfg = normalizedLifeFeedConfig({
     enabled: true,
-    sources: ['douyin', 'bilibili'],
+    sources: ['douyin', 'bilibili', 'rss', 'bilibili'],
+    rssUrls: ['https://example.com/feed.xml', 'ftp://bad', 'https://example.com/feed.xml'],
     forageIntervalMinutes: 5,
     maxCandidates: 99999,
     maxOffersPerDay: 99,
@@ -69,7 +70,9 @@ test('配置归一化：夹紧数值、清洗关键词、只保留 bilibili', ()
   assert.equal(cfg.maxOffersPerDay, 99);
   assert.equal(cfg.minDurationSec, 5000);
   assert.equal(cfg.maxDurationSec, 5000);
-  assert.deepEqual(cfg.sources, ['bilibili']);
+  assert.deepEqual(cfg.sources, ['bilibili', 'rss']);
+  assert.deepEqual(cfg.rssUrls, ['https://example.com/feed.xml']);
+  assert.equal(cfg.rssPerForage, 10);
   assert.deepEqual(cfg.extraKeywords, ['深海']);
   assert.deepEqual(cfg.excludeKeywords, []);
 });

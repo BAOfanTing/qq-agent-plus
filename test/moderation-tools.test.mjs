@@ -80,6 +80,15 @@ it('撤回与设置管理员走对应 OneBot 接口', async () => {
   assert.equal(calls[1][3], true);
 });
 
+it('机器人撤回自己刚发的消息不需要管理员指令', async () => {
+  const { ctx, calls } = context({ senderId: '42' });
+  ctx.store = { findByMid: () => ({ mid: '124', self: true }) };
+  const result = await tool('recall_message').execute(ctx, { messageId: '#124' });
+  assert.ok(!result.isError);
+  assert.equal(calls[0][0], 'recall');
+  assert.equal(calls[0][1], 124);
+});
+
 it('管理员只回“收到”不算授权具体管理动作', async () => {
   const { ctx, calls } = context({ entries: [
     { senderId: '42', senderName: 'member', self: false, text: '把 43 踢了' },

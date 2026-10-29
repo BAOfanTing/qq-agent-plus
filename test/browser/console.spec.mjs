@@ -174,6 +174,8 @@ test('控制页：运行指标与最近审计可加载', async ({ page }) => {
   await expect(page.locator('#control-observability')).not.toContainText('读取失败');
   await expect(page.locator('#control-backup-status')).toContainText('目录：');
   await expect(page.locator('#control-backup-status')).not.toContainText('读取失败');
+  await expect(page.locator('#control-group-policy')).not.toContainText('正在读取');
+  await expect(page.locator('#control-group-policy')).not.toContainText('读取失败');
 });
 
 test('会话页：搜索、状态和模式筛选可用', async ({ page }) => {

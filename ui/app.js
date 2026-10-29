@@ -417,6 +417,13 @@ function renderControlHub(data = {}) {
     </section>
     <section class="settings-card">
       <div class="control-section-title">
+        <div><h3>群策略总览</h3><span class="muted">只读；修改仍走各自设置页</span></div>
+        <button type="button" class="btn btn-small" id="control-group-policy-refresh">刷新</button>
+      </div>
+      <div class="table-wrap" id="control-group-policy"><div class="muted" style="padding:8px">点「刷新」加载已入库群的策略。</div></div>
+    </section>
+    <section class="settings-card">
+      <div class="control-section-title">
         <div><h3>更新部署</h3><span class="muted">${esc(update.repository || '-')} · ${esc(update.branch || 'main')}</span></div>
         <span class="control-service-state ${update.status === 'failed' ? 'offline' : update.enabled ? 'online' : ''}" data-hub-deploy-state>${esc(updateState)}</span>
       </div>
@@ -640,7 +647,10 @@ async function loadBackupStatus() {
           <td>${esc(file.name)}</td>
           <td>${esc(mb(file.bytes))}</td>
           <td>${esc(fmtTime(file.mtime))}</td>
-          <td><button type="button" class="btn btn-small" data-backup-verify="${esc(file.name)}">校验</button></td>
+          <td><div class="settings-actions" style="margin:0">
+            <button type="button" class="btn btn-small" data-backup-verify="${esc(file.name)}">校验</button>
+            <button type="button" class="btn btn-small btn-danger" data-backup-restore="${esc(file.name)}">恢复</button>
+          </div></td>
         </tr>`).join('') : '<tr><td colspan="4" class="muted">还没有备份文件</td></tr>'}</tbody>
       </table></div>
       ${data.restoreCli ? `<div class="hint" style="margin-top:8px">恢复（SSH）：<code>${esc(data.restoreCli)}</code></div>` : ''}`;
@@ -659,6 +669,29 @@ async function loadBackupStatus() {
           }
         } catch (error) {
           if (out) { out.className = 'control-result error'; out.textContent = `校验失败：${error.message}`; }
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+    box.querySelectorAll('[data-backup-restore]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const file = button.dataset.backupRestore;
+        const out = $('#control-backup-output');
+        if (!await askForConfirmation(`恢复会用「${file}」覆盖当前数据目录。\n\n恢复前数据会留档到 data.pre-restore-*；服务会短暂停止并重启，控制台可能断开几秒。继续？`)) return;
+        if (!await askForConfirmation('最后确认：真的执行恢复？恢复期间机器人离线，完成后刷新控制台。')) return;
+        button.disabled = true;
+        if (out) { out.className = 'control-result muted'; out.textContent = '恢复已排队，等待服务重启…'; }
+        try {
+          const result = await api('/api/backup/restore', {
+            method: 'POST', body: JSON.stringify({ confirm: true, file })
+          });
+          if (out) { out.className = 'control-result success'; out.textContent = result.note || '恢复已排队'; }
+        } catch (error) {
+          if (out) {
+            out.className = 'control-result error';
+            out.textContent = `恢复请求中断（可能已开始）：${error.message}。完成后刷新页面确认服务状态。`;
+          }
         } finally {
           button.disabled = false;
         }
@@ -691,6 +724,31 @@ async function runBackupNow() {
   }
 }
 
+async function loadGroupPolicy() {
+  const box = $('#control-group-policy');
+  if (!box) return;
+  box.innerHTML = '<div class="muted" style="padding:8px">正在读取群策略…</div>';
+  try {
+    const data = await api('/api/group-policy');
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    box.innerHTML = rows.length
+      ? `<table class="usage-table"><thead><tr><th>群</th><th>白名单</th><th>响应概率</th><th>会话模式</th><th>时间控制</th><th>群游戏</th><th>说说</th></tr></thead><tbody>
+        ${rows.map((row) => `<tr>
+          <td>${esc(row.chatKey)}</td>
+          <td>${row.allowed ? '是' : '否'}</td>
+          <td>${Number(row.randomPercent) || 0}%</td>
+          <td>${esc(row.conversationMode || 'legacy')}</td>
+          <td>${row.timeControl?.enabled ? (row.timeControl.active ? '活跃中' : '非活跃') : '未启用'}</td>
+          <td>${row.groupGame ? '开' : '关'}</td>
+          <td>${row.dailyMoments ? '开' : '关'}</td>
+        </tr>`).join('')}
+      </tbody></table>`
+      : '<div class="muted" style="padding:8px">还没有已入库的群。</div>';
+  } catch (error) {
+    box.innerHTML = `<div class="control-result error">群策略读取失败：${esc(error.message)}</div>`;
+  }
+}
+
 // 首次建结构后绑定一次事件即可（DOM 不再重建，不需要重复绑）
 function bindControlHubHandlers() {
   const box = $('#control-page');
@@ -700,7 +758,9 @@ function bindControlHubHandlers() {
   $('#control-observability-refresh')?.addEventListener('click', loadControlObservability);
   $('#control-backup-refresh')?.addEventListener('click', loadBackupStatus);
   $('#control-backup-run')?.addEventListener('click', runBackupNow);
+  $('#control-group-policy-refresh')?.addEventListener('click', loadGroupPolicy);
   void loadBackupStatus();
+  void loadGroupPolicy();
   $('#auto-update-save')?.addEventListener('click', () => saveAutoUpdateSettings(false));
   $('#auto-update-run')?.addEventListener('click', runManualUpdate);
   $('#auto-update-resume')?.addEventListener('click', () => saveAutoUpdateSettings(true));

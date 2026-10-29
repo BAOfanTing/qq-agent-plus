@@ -8,6 +8,7 @@
 
 import { api } from '../core/api.js';
 import { esc } from '../core/dom.js';
+import { askForConfirmation } from '../core/dom-util.js';
 
 let lastStatus = null;
 
@@ -88,7 +89,7 @@ function bindSnowlumaActions() {
     const head = outdated
       ? `确定更新协议端吗？\n\n会把镜像换成项目基线${target}并重建容器：`
       : '当前已经是项目基线版本。\n\n这会重新拉取镜像并让 compose 对齐配置（镜像没变时不会白重启容器）：';
-    if (!window.confirm(`${head}\n· 端口/数据卷不动，QQ 登录态保留\n· 更新期间机器人会短暂离线（约 10~30 秒）\n· 拉取失败只还原配置，起不来会自动回滚\n\n镜像备份与日志会留在协议端目录的 backups/ 下。`)) return;
+    if (!await askForConfirmation(`${head}\n· 端口/数据卷不动，QQ 登录态保留\n· 更新期间机器人会短暂离线（约 10~30 秒）\n· 拉取失败只还原配置，起不来会自动回滚\n\n镜像备份与日志会留在协议端目录的 backups/ 下。`)) return;
     btn.disabled = true;
     say('正在更新协议端…（拉镜像 + 对齐容器，通常 10~60 秒）');
     try {
@@ -110,7 +111,7 @@ function bindSnowlumaActions() {
       say('容器部署请在宿主机把镜像 tag 改回上一版后重建容器。');
       return;
     }
-    if (!window.confirm('回滚到上一次更新前的镜像？（同样会重启协议端容器，登录态保留）')) return;
+    if (!await askForConfirmation('回滚到上一次更新前的镜像？（同样会重启协议端容器，登录态保留）')) return;
     btn.disabled = true;
     say('正在回滚…');
     try {

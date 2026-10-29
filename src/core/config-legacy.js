@@ -442,7 +442,9 @@ export const DEFAULT_CONFIG = {
   lifeFeed: {
     enabled: false,
     graduated: false,
-    sources: ['bilibili'],
+    sources: ['bilibili', 'plugin'],
+    rssUrls: [],                  // 可选 RSS/Atom feed，显式加入 sources: ['rss'] 才拉取
+    rssPerForage: 10,
     forageIntervalMinutes: 360,   // 6 小时 ±20% 抖动
     maxCandidates: 200,
     maxPerForage: 30,
@@ -531,6 +533,8 @@ export const DEFAULT_CONFIG = {
     enabled: false,
     // self=只写人设自己的观点/兴趣；group=从群聊候选瞬间取材；mixed=人设为主、群聊作灵感
     source: 'self',
+    // 人设动态是否可参考生活层高分见闻（只作灵感，不强制发、不复述标题）
+    useLifeFeed: false,
     // false=定时只生成草稿，等管理员在控制台点发布；true=定时直接发空间
     autoPublish: false,
     hour: 23,                    // 上海时间

@@ -525,7 +525,8 @@ function bindExtensionSettings() {
     memesBox.addEventListener('click', async (event) => {
       const button = event.target.closest('.meme-remove');
       if (!button) return;
-      if (typeof window !== 'undefined' && !window.confirm(`删除「${button.dataset.term || '这条梗'}」？`)) return;
+      const { askForConfirmation } = await import('../core/dom-util.js');
+      if (!await askForConfirmation(`删除「${button.dataset.term || '这条梗'}」？`)) return;
       button.disabled = true;
       try {
         await api('/api/memes', { method: 'DELETE', body: JSON.stringify({ id: button.dataset.id }) });

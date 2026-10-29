@@ -58,6 +58,7 @@ async function loadStatus() {
         + `${data.todayManualOffers ? ` · 手动 ${data.todayManualOffers}` : ''}`
         + ` · 上次觅食 ${fmtTime(data.lastForageAt)} · 下次 ${fmtTime(data.nextForageAt)}`
         + (data.lastShare ? ` · 最近分享 ${data.lastShare.action === 'shared' ? '已发送' : '排队中'}` : '')
+        + (data.shareStats?.['7d'] ? ` · 近7天分享 ${data.shareStats['7d'].shared}/跳过 ${data.shareStats['7d'].skipped}` : '')
         + (data.lastError ? ` · 上次错误：${data.lastError}` : '')
       : '未开启（保存开关后才会创建状态与定时器）';
     const list = $('#lifefeed-candidates');
@@ -218,6 +219,18 @@ function renderLifeFeedSection(c) {
         </div>
         <div class="field"><label>每天最多领取</label>
           <input type="number" id="cfg-lifefeed-picks" value="${esc(cfg.maxPicksPerDay ?? 10)}" />
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field"><label>内容来源</label>
+          <div class="settings-actions" style="flex-wrap:wrap;gap:10px">
+            ${[['bilibili', 'B站'], ['plugin', '插件'], ['rss', 'RSS']].map(([id, label]) =>
+              `<label class="checkbox-row"><input type="checkbox" id="cfg-lifefeed-src-${id}"${(cfg.sources || ['bilibili']).includes(id) ? ' checked' : ''} /> <span>${label}</span></label>`).join('')}
+          </div>
+        </div>
+        <div class="field"><label>RSS / Atom 地址（逗号或换行分隔，最多 10 个）</label>
+          <input type="text" id="cfg-lifefeed-rss-urls" value="${esc((cfg.rssUrls || []).join(', '))}" placeholder="https://example.com/feed.xml" />
         </div>
       </div>
 

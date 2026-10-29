@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createRouter } from './router.js';
 import { createMetrics } from './metrics.js';
@@ -728,6 +728,7 @@ export function createApp({
     onebot,
     sessions,
     resolveChatName: (groupId) => orchestrator.getChatName(groupId),
+    getLifeFeed: () => lifeFeed,
     setProactiveSuppressed: (suppressed) =>
       orchestrator.setProactiveSuppressed('daily-moments', suppressed),
     emit,
@@ -5824,6 +5825,61 @@ export function createApp({
       timedOut: result.timedOut,
       output: `${result.stdout}${result.stderr}`.slice(-4000)
     });
+  });
+
+  router.add('POST', '/api/backup/restore', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    if (body?.confirm !== true) return json(res, 400, { ok: false, error: '恢复需要 confirm:true' });
+    const name = path.basename(String(body?.file || ''));
+    if (!/\.tar\.gz(?:\.enc)?$/.test(name)) return json(res, 400, { ok: false, error: '备份文件名不合法' });
+    const full = path.join(backupDirPath(), name);
+    if (!fs.existsSync(full)) return json(res, 404, { ok: false, error: '备份文件不存在' });
+    if (process.platform !== 'linux') {
+      return json(res, 409, { ok: false, error: '控制台恢复只支持 Linux + systemd；请用 SSH 执行 ops restore' });
+    }
+    const probe = spawnSync('systemd-run', ['--version'], { encoding: 'utf8' });
+    if (probe.status !== 0) {
+      return json(res, 409, { ok: false, error: '本机没有可用的 systemd-run；请用 SSH 执行 ops restore' });
+    }
+    const unit = `qq-agent-restore-${Date.now()}`;
+    // 必须放到 user manager 的独立 transient unit：直接 spawn 会跟着本服务一起被 systemctl stop 杀掉。
+    const child = spawn('systemd-run', [
+      '--user', '--unit', unit, '--collect', '--property=Type=oneshot',
+      process.execPath, path.join(ROOT, 'src', 'ops.js'),
+      'restore', '--from', full, '--confirm', '--data', DATA_DIR
+    ], {
+      cwd: ROOT,
+      env: { ...process.env, QQ_AGENT_SERVICE: process.env.QQ_AGENT_SERVICE || 'qq-agent-linux.service' },
+      detached: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+    auditWrite('backup.restore', name, { req, unit });
+    return json(res, 202, {
+      ok: true,
+      status: 'queued',
+      unit,
+      note: '恢复已排队。服务会短暂停止并重启，控制台可能断开几秒，完成后刷新页面。'
+    });
+  });
+
+  router.add('GET', '/api/group-policy', async (req, res) => {
+    const cfgNow = getConfig();
+    const gameChats = new Set((cfgNow.groupGame?.chats || []).map((id) => `group:${id}`));
+    const rows = store.listChats()
+      .filter((key) => String(key).startsWith('group:'))
+      .map((chatKey) => ({
+        chatKey,
+        allowed: chatAllowed(chatKey, cfgNow),
+        randomPercent: Number(cfgNow.store?.randomPercent) || 0,
+        conversationMode: conversationConfigForChat(chatKey).mode,
+        timeControl: timeControlState(cfgNow.timeControl, chatKey),
+        groupGame: gameChats.has(chatKey),
+        dailyMoments: Array.isArray(cfgNow.dailyMoments?.groups) && cfgNow.dailyMoments.groups.length
+          ? cfgNow.dailyMoments.groups.includes(chatKey.slice(6))
+          : true
+      }));
+    return json(res, 200, { ok: true, rows });
   });
 
   router.add('GET', '/api/incidents', async (req, res, params, url) => {

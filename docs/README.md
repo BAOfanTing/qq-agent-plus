@@ -46,6 +46,7 @@
 | [PLUGINS.md](PLUGINS.md) | 插件机制：目录与 manifest 契约、NDJSON 协议、能力白名单、隔离实测与信任声明（含分期）；apiVersion 2 的设置面板/加密凭据/授权与配额/媒体边界；作者向的写插件三条命令与上架流程（控制台「插件 → 发布插件」是同一份路线的界面版） |
 | [BILIBILI.md](BILIBILI.md) | 官方 B 站插件：读/观看/互动范围、Cookie 配置、批准与配额、视频下载合流的限制 |
 | [LIFE-FEED.md](LIFE-FEED.md) | 生活层（见闻）：B 站觅食、兴趣画像、候选队列、主动分享与插件 `feed` 数据源 |
+| [WAVE3-DESIGN.md](WAVE3-DESIGN.md) | 第三波设计：多来源 adapter、内容池、说说互通、群策略总览与统一确认 |
 | [UI-SMOKE.md](UI-SMOKE.md) | 改了 `ui/` 之后的手工烟测清单（自动化只覆盖「渲染不抛 + 钩子接上了」） |
 | [adr/](adr/) | 架构决策记录（已定决策 + 理由 + 后果）：无构建工具、人物记忆全局共享、systemd user 托管、跨文件接管走 QARegistry、ui/ 全量转 ES module |
 | [../AGENTS.md](../AGENTS.md) | 面向 AI 协作者的约定：代码风格、验证方式、提交要求 |

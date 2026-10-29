@@ -446,6 +446,7 @@ export class DailyMomentsManager {
     validateImage = validateImageUrl,
     fetchBinary = safeFetchBinary,
     setProactiveSuppressed = () => {},
+    getLifeFeed = null,
     now = () => Date.now(),
     random = Math.random,
     log = console.log,
@@ -464,6 +465,7 @@ export class DailyMomentsManager {
     this.validateImage = validateImage;
     this.fetchBinary = fetchBinary;
     this.setProactiveSuppressed = setProactiveSuppressed;
+    this.getLifeFeed = typeof getLifeFeed === 'function' ? getLifeFeed : (() => null);
     this.now = now;
     this.random = random;
     this.log = log;
@@ -1318,16 +1320,26 @@ export class DailyMomentsManager {
     const source = snapshot.source === 'self' ? 'self' : (snapshot.source === 'mixed' ? 'mixed' : 'group');
     // self 的素材引擎：人设兴趣库（roles/interests.json）＋ 可选研究由头（配置里开了搜索就允许搜一个真实话题再写观点）
     const interests = loadPersonaInterests();
+    const lifeFeedIdeas = source !== 'group' && rootConfig.dailyMoments?.useLifeFeed === true
+      ? (this.getLifeFeed?.()?.status?.().candidates || []).slice(0, 3)
+      : [];
+    const lifeFeedLine = lifeFeedIdeas.length
+      ? `【可参考的见闻（不是必须发）】${lifeFeedIdeas.map((item) =>
+        `${sanitizeUserText(String(item.title || ''))}（${item.source === 'bilibili' ? 'B站' : item.source || '见闻'}）${item.url}`).join('；')}。`
+        + '只借一个点写自己的感受，不要复述标题、不要写成播报；没兴趣就忽略。'
+      : '';
     const materialLines = source === 'self'
       ? [
         '【自己的动态】（不引用群聊；从你的兴趣、观点或此刻在想的事里挑一件。可以表达感受、观察、疑问或吐槽，不虚构现实行动和现场。）',
         `【你的兴趣与立场（参考，不是任务）】${JSON.stringify(interests)}`,
+        ...(lifeFeedLine ? [lifeFeedLine] : []),
         rootConfig.webSearch?.enabled !== false ? '可以先用一次搜索找一个今天真实发生的话题当由头（搜到的事实照实写，别编）。' : '没有外部素材也没关系，一条想法就够。'
       ]
       : source === 'mixed'
         ? [
           '【自己的动态】以人设为主：写你自己的兴趣、观点或此刻在想的事。',
           `【你的兴趣与立场（参考）】${JSON.stringify(interests)}`,
+          ...(lifeFeedLine ? [lifeFeedLine] : []),
           '【群聊材料】最多点缀一句（比如"群里今天聊到X，我倒觉得…"），禁止转述或汇总群聊。',
           JSON.stringify({ candidates: snapshot.momentCandidates.slice(0, 3), groups: groupsForPrompt })
         ]
