@@ -127,7 +127,8 @@ export const PLATFORM_QUOTA_DEFAULTS = Object.freeze({
   profilePerDay: 1,       // 签名 / 在线状态（一天改一次都算勤）
   remarksPerDay: 1,       // 备注（认识新人时打一次标签，不是日常动作）
   avatarsPerWeek: 1,      // 换头像：**窗口是 7 天**（真人按周/月换；"每天 1 次"一周也能换 7 次）
-  albumWritesPerHour: 5   // 相册点赞/评论：每小时（评论所有人都看得到，比贴表情更容易变成噪音）
+  albumWritesPerHour: 5,  // 相册点赞/评论：每小时（评论所有人都看得到，比贴表情更容易变成噪音）
+  privateFilesPerDay: 10  // 私聊文本文件：每天（防模型把聊天变成文件下载器）
 });
 
 export const PLATFORM_QUOTA_KEYS = Object.freeze(Object.keys(PLATFORM_QUOTA_DEFAULTS));

@@ -7,7 +7,7 @@
 //   ① 读 / 写拆开（"只让它看，不让它动手"要能单独配）；
 //   ② 每个开关旁边列出它管的工具名 —— 从 /api/platform/gates 拉（**不在 ui 里再抄一份**，
 //      抄一份就会在下次拆键时漏掉一半；拉失败只影响这行说明，不影响开关本身）；
-//   ③ 四个写入闸门（贴表情/资料/备注/换头像）的每日上限可改、并显示当前用量；
+//   ③ 写入闸门（贴表情/资料/备注/换头像/私聊文件）的上限可改、并显示当前用量；
 //   ④ 按群覆盖（config.platform.perGroup）：某个群单独开/关某项，其余群跟随全局。
 'use strict';
 
@@ -55,7 +55,8 @@ const QUOTA_ROWS = [
   ['albumWritesPerHour', '相册点赞 / 评论（每小时）', 5],
   ['profilePerDay', '签名 / 在线状态（每天）', 1],
   ['remarksPerDay', '备注（每天）', 1],
-  ['avatarsPerWeek', '换头像（每周）', 1]
+  ['avatarsPerWeek', '换头像（每周）', 1],
+  ['privateFilesPerDay', '私聊文本文件（每天）', 10]
 ];
 
 const gateCheckboxId = (key) => `cfg-platform-${key.toLowerCase()}`;

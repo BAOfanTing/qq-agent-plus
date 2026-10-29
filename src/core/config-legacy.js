@@ -703,7 +703,8 @@ export const DEFAULT_CONFIG = {
       profilePerDay: 1,       // 签名 + 在线状态（共享一个额度）
       remarksPerDay: 1,       // 备注
       avatarsPerWeek: 1,      // 换头像（窗口 7 天：真人按周/月换）
-      albumWritesPerHour: 5   // 相册点赞 / 评论（评论是公开内容，卡得比贴表情紧）
+      albumWritesPerHour: 5,  // 相册点赞 / 评论（评论是公开内容，卡得比贴表情紧）
+      privateFilesPerDay: 10  // 私聊文本文件：每天
     },
     // 按群覆盖：{ "<群号>": { "<门控键>": true|false } }。只认显式布尔值，
     // 其余键/坏值一律回落全局开关；键名合法性在控制台与 migrateConfig 两处校验。

@@ -6,11 +6,13 @@
 ## platform.privateFileSend：当前私聊的纯文本资料（默认关闭）
 
 ```json
-"platform": { "privateFileSend": false, "privateFileMaxKiB": 64 }
+"platform": { "privateFileSend": false, "privateFileMaxKiB": 64, "quotas": { "privateFilesPerDay": 10 } }
 ```
 
 控制台「平台能力 → 信息与素材」可显式开启，仅作用于允许访问的当前私聊，不受按群覆盖影响。
 旧配置缺失该键、或值不是布尔 `true` 时关闭；群文件现有开关和行为不变。
+每日额度 `platform.quotas.privateFilesPerDay` 默认 10 个（与其它平台写入闸门同一套 1–200 配置），
+达到上限后不再上传；控制台「平台能力」的写入闸门表可查看用量和修改上限。
 
 开启后提供 `send_private_file(text, name?)`：把本次生成或用户提供的文字在内存中编码为 base64，
 经 `upload_private_file` 发送给 `ctx.chatKey` 绑定的私聊。正文默认最多 64 KiB（UTF-8），文件名最多

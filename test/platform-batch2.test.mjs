@@ -62,7 +62,7 @@ it('工具表：第二批工具都在；平台开关默认值正确', () => {
   }
   assert.deepEqual(DEFAULT_CONFIG.platform.perGroup, {}, '按群覆盖默认空');
   assert.deepEqual(DEFAULT_CONFIG.platform.quotas,
-    { reactionsPerHour: 10, albumWritesPerHour: 5, profilePerDay: 1, remarksPerDay: 1, avatarsPerWeek: 1 },
+    { reactionsPerHour: 10, albumWritesPerHour: 5, profilePerDay: 1, remarksPerDay: 1, avatarsPerWeek: 1, privateFilesPerDay: 10 },
     '写入闸门的默认上限（2026-10-07 收紧：按"真人会怎么做"定；albumWrites 是审计后补的漏网）');
 });
 

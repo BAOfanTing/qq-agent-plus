@@ -1,6 +1,6 @@
 // 控制台「平台能力」页第二批（2026-10-07，设置细化）新增的两个数据源：
 //   GET /api/platform/gates       —— 键/标签/工具/默认取向/配额默认（UI 不再手抄一份表）
-//   GET /api/platform/quota-usage —— 四个写入闸门的当前用量（"已用 x / 上限 y"）
+//   GET /api/platform/quota-usage —— 平台写入闸门的当前用量（"已用 x / 上限 y"）
 // 断言都对着 src/core/platform-gates.js 的键表做（同源），而不是抄一份期望值 ——
 // 抄一份就失去了"服务端加键、UI 没跟上要红"的意义。
 import assert from 'node:assert/strict';

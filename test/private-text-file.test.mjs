@@ -13,7 +13,7 @@ process.on('exit', () => rmDirBestEffort(root));
 const { SendQueue } = await import('../src/onebot/sender.js');
 const { ChatStore } = await import('../src/core/store.js');
 const { DEFAULT_CONFIG, setRuntimeConfig, updateConfig, getConfig } = await import('../src/core/config.js');
-const { buildToolDefs, executeTool } = await import('../src/tools/tools-core.js');
+const { buildToolDefs, executeTool, resetPlatformQuotasForTest, platformQuotaUsage } = await import('../src/tools/tools-core.js');
 const { platformToolAllowed, privateFileMaxKiB } = await import('../src/core/platform-gates.js');
 const { buildSystemPrompt } = await import('../src/llm/prompt.js');
 const { OneBotClient } = await import('../src/onebot/onebot.js');
@@ -23,6 +23,7 @@ const { experimentalToolClass } = await import('../src/pilots/experimental-tool-
 
 let cfg;
 beforeEach(() => {
+  resetPlatformQuotasForTest();
   cfg = structuredClone(DEFAULT_CONFIG);
   cfg.runtime.mode = 'active';
   cfg.allow.private = ['2'];
@@ -148,6 +149,7 @@ test('安全回执：限流和待核对写入分别说明原因，没有第二�
   assert.equal(held.delivery, 'not_attempted');
   assert.equal(held.autoRetry, false);
   assert.equal(calls.length, 1);
+  assert.equal(platformQuotaUsage().privateFiles.used, 0, '未上传的分支要退还额度');
 });
 
 for (const [delivery, failure] of [
@@ -163,6 +165,8 @@ for (const [delivery, failure] of [
     assert.ok(!result.content.includes('synthetic-private-marker'));
     assert.equal(store.db.prepare('SELECT state FROM outbox').get().state, delivery);
     assert.equal(calls.length, 1);
+    assert.equal(platformQuotaUsage().privateFiles.used, delivery === 'failed' ? 0 : 1,
+      delivery === 'failed' ? '确定未送达退额度' : '结果未知保留额度');
   });
 }
 
@@ -173,6 +177,7 @@ test('安全回执：未识别的内部错误使用保守回执，不信任错�
   assert.equal(result.errorCode, 'PRIVATE_FILE_UNCONFIRMED');
   assert.equal(result.delivery, 'unknown');
   assert.equal(result.autoRetry, false);
+  assert.equal(platformQuotaUsage().privateFiles.used, 0, '无 code 的内部异常发生在真正上传前，要退还额度');
   assert.ok(!result.content.includes('synthetic-private-marker'));
   assert.equal(calls.length, 0);
 });
@@ -326,6 +331,57 @@ test('限流沿用发送队列，超过上限不再上传', async (t) => {
   await sender.privateTextFile('private:2', { text: '合成正文' });
   await assert.rejects(() => sender.privateTextFile('private:2', { text: '合成正文' }), /频率/);
   assert.equal(calls.length, 1);
+});
+
+test('每日额度：达到上限后不再上传，回执不写异常面板', async (t) => {
+  const { ctx, calls } = setup(t);
+  cfg.platform.quotas.privateFilesPerDay = 2; setRuntimeConfig(cfg);
+  for (let i = 0; i < 2; i += 1) {
+    const result = await invoke(ctx, { text: `合成正文${i}` });
+    assert.equal(result.isError, undefined, result.content);
+  }
+  const third = await invoke(ctx, { text: '合成正文3' });
+  assert.equal(third.isError, true);
+  assert.match(third.content, /上限（2 个）/);
+  assert.equal(third.reportIncident, false);
+  assert.equal(calls.length, 2);
+  assert.equal(platformQuotaUsage().privateFiles.used, 2);
+  assert.equal(platformQuotaUsage().privateFiles.limit, 2);
+});
+
+test('参数校验失败只回给模型，不写异常面板', async (t) => {
+  const { ctx, calls } = setup(t);
+  const result = await invoke(ctx, { text: '合成正文', name: 'notes.exe' });
+  assert.equal(result.isError, true);
+  assert.equal(result.reportIncident, false);
+  assert.equal(calls.length, 0);
+  assert.equal(platformQuotaUsage().privateFiles.used, 0, '参数校验失败不占额度');
+});
+
+test('每日额度：明确未送达退还，结果未知继续占用', async (t) => {
+  let mode = 'failed';
+  const { ctx, calls } = setup(t, async () => {
+    if (mode === 'failed') throw Object.assign(new Error('synthetic failure'), { outcome: 'failed' });
+    if (mode === 'unknown') throw new Error('HTTP 502 synthetic');
+    return { file_id: 'synthetic-file', message_id: 7 };
+  });
+  cfg.platform.quotas.privateFilesPerDay = 1; setRuntimeConfig(cfg);
+
+  const failed = await invoke(ctx, { text: '合成正文' });
+  assert.equal(failed.delivery, 'failed');
+  assert.equal(platformQuotaUsage().privateFiles.used, 0, '确定未送达要退还额度');
+
+  mode = 'ok';
+  const success = await invoke(ctx, { text: '合成正文' });
+  assert.equal(success.isError, undefined, success.content);
+  assert.equal(platformQuotaUsage().privateFiles.used, 1);
+
+  resetPlatformQuotasForTest();
+  mode = 'unknown';
+  const unknown = await invoke(ctx, { text: '合成正文' });
+  assert.equal(unknown.delivery, 'unknown');
+  assert.equal(platformQuotaUsage().privateFiles.used, 1, '结果未知可能已送达，额度不能退回');
+  assert.equal(calls.length, 3);
 });
 
 test('结果未知不自动重试；后续同租约发送阻断，聊天挂起待核对', async (t) => {

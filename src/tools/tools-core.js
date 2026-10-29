@@ -38,6 +38,8 @@ const avatarQuota = createQuota({ windowMs: 7 * 24 * 3600_000 }); // 换头像�
 // 所以卡得更紧（2026-10-07 独立审计发现：点赞/评论此前既不走发送队列也没有任何闸门 ——
 // 模型一轮里连刷 N 次会全部落到 QQ）。
 const albumWriteQuota = createQuota({ windowMs: 3600_000 });
+// 私聊文本文件：文件比消息显眼，且内容可能很大；默认每天 10 个。
+const privateFileQuota = createQuota({ windowMs: 24 * 3600_000 });
 // "每群每天一次"类动作的去重表（群签到：重复签没有意义；群待办：同一条消息重复设也没意义）。
 // dayKey 是上海自然日，跨日自然失效，不需要定时器。resetPlatformQuotasForTest 会一起清。
 const signedDayByChat = new Map();     // chatKey -> 'YYYY-MM-DD'
@@ -51,6 +53,7 @@ export function resetPlatformQuotasForTest() {
   remarkQuota.reset();
   avatarQuota.reset();
   albumWriteQuota.reset();
+  privateFileQuota.reset();
   signedDayByChat.clear();
   todoDayByChat.clear();
 }
@@ -65,7 +68,7 @@ export {
   platformQuotaLimit, platformToolAllowed
 } from '../core/platform-gates.js';
 
-/** 四个平台写入闸门的当前用量（控制台「平台能力」页展示；滑动窗口内计数）。 */
+/** 平台写入闸门的当前用量（控制台「平台能力」页展示；滑动窗口内计数）。 */
 export function platformQuotaUsage(now = Date.now()) {
   const cfg = getConfig();
   const pack = (quota, key) => {
@@ -89,7 +92,8 @@ export function platformQuotaUsage(now = Date.now()) {
     profile: pack(profileQuota, 'profilePerDay'),
     remarks: pack(remarkQuota, 'remarksPerDay'),
     avatars: pack(avatarQuota, 'avatarsPerWeek'),
-    albumWrites: pack(albumWriteQuota, 'albumWritesPerHour')
+    albumWrites: pack(albumWriteQuota, 'albumWritesPerHour'),
+    privateFiles: pack(privateFileQuota, 'privateFilesPerDay')
   };
 }
 
@@ -1668,10 +1672,32 @@ export function buildToolDefs() {
           return err('仅允许在已启用文本文件发送的当前私聊中使用');
         }
         let name;
-        try { ({ name } = preparePrivateTextFile(args, getConfig().platform)); } catch (error) { return err(error.message); }
+        try { ({ name } = preparePrivateTextFile(args, getConfig().platform)); } catch (error) {
+          // 参数问题是模型可修正的输入错误，不是运行故障，不刷异常面板。
+          return err(error.message, { reportIncident: false });
+        }
         try {
-          if (!platformToolAllowed('send_private_file', getConfig().platform, ctx.chatKey)) throw privateTextFileError('PRIVATE_FILE_DISABLED');
-          const sent = await ctx.sender.privateTextFile(ctx.chatKey, args, { runId: ctx.session?.leaseId, signal: ctx.signal });
+          const cfg = getConfig();
+          if (!platformToolAllowed('send_private_file', cfg.platform, ctx.chatKey)) throw privateTextFileError('PRIVATE_FILE_DISABLED');
+          const limit = platformQuotaLimit(cfg, 'privateFilesPerDay');
+          privateFileQuota.configure({ globalMax: limit, perChatMax: Infinity });
+          const reservedAt = Date.now();
+          const quota = privateFileQuota.tryConsume(ctx.chatKey, reservedAt);
+          if (!quota.ok) {
+            return err(`今天发送的私聊文本文件达到上限（${limit} 个），明天再继续`, { reportIncident: false });
+          }
+          let sent;
+          try {
+            sent = await ctx.sender.privateTextFile(ctx.chatKey, args, { runId: ctx.session?.leaseId, signal: ctx.signal });
+          } catch (error) {
+            const safe = privateTextFileError(error?.code);
+            // 只有 sender 明确标成 unknown 的才保留额度（可能已送达）；无 code 的
+            // 排队/存储异常都发生在真正上传之前，退还额度，避免基础设施抖动吃掉当天份额。
+            if (!(safe.delivery === 'unknown' && error?.delivery === 'unknown')) {
+              privateFileQuota.refund(ctx.chatKey, reservedAt);
+            }
+            throw error;
+          }
           if (ctx.session) ctx.session.visibleReply = true;
           return ok({ sent: true, name, fileId: sent.file_id ?? null, note: '文件已发送到当前私聊。' });
         } catch (error) {

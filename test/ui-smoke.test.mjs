@@ -440,7 +440,7 @@ test('真实 DOM 冒烟：QARegistry 的 transform / after / override 真的接�
 // 断言 POST 体里真的有这一页的控件 —— 纯渲染断言（"不抛"）咬不住这类"存不下去"。
 //
 // 2026-10-07 第二批（设置细化）：读/写拆开（15 个门控键）+ 每项的工具清单占位 +
-// 四个闸门配额可改 + 按群覆盖编辑器。这条用例同时钉住"UI 的键表 == 服务端的键表"：
+// 写入闸门配额可改 + 按群覆盖编辑器。这条用例同时钉住"UI 的键表 == 服务端的键表"：
 // 在服务端加一个门控键而 UI 没跟上（或反过来），下面第一个 deepEqual 就会红。
 test('真实 DOM 冒烟：「平台能力」页的开关/配额/按群覆盖能真的存下去（保存块不许挂错分区）', { skip: SKIP }, async () => {
   const { window } = loadPage();
@@ -472,7 +472,7 @@ test('真实 DOM 冒烟：「平台能力」页的开关/配额/按群覆盖能�
     const quotaIds = [...window.document.querySelectorAll('#settings-form input[type="number"]')]
       .map((el) => el.id).filter((id) => id.startsWith('cfg-platform-quota-')).sort();
     assert.deepEqual(quotaIds, PLATFORM_QUOTA_KEYS.map((k) => `cfg-platform-quota-${k}`).sort(),
-      '四个闸门配额都要有输入框');
+      '每个写入闸门配额都要有输入框');
     // UI 里那两份"硬编码副本"必须与服务端表一致（否则渲染的默认值/默认关取向会漂）
     const platSrc = fs.readFileSync(path.join(UI, 'pages', 'platform.js'), 'utf8');
     const quotaRows = [...platSrc.matchAll(/\['([a-zA-Z]+)', '[^']*', (\d+)\]/g)].map((m) => [m[1], Number(m[2])]);
@@ -553,7 +553,7 @@ test('真实 DOM 冒烟：「平台能力」页的开关/配额/按群覆盖能�
     assert.equal(patch.platform?.privateFileSend, false, '新增私聊文本文件默认关，保存不能扩权');
     assert.equal(patch.platform?.privateFileMaxKiB, 64, '缺失大小设置时默认仍为 64 KiB');
     assert.equal(patch.platform?.qqVoiceCharacter, 'lucy-voice-daji', '选中的音色要跟着保存');
-    assert.deepEqual(patch.platform?.quotas?.__replace__, { reactionsPerHour: 10, albumWritesPerHour: 5, profilePerDay: 1, avatarsPerWeek: 5 },
+    assert.deepEqual(patch.platform?.quotas?.__replace__, { reactionsPerHour: 10, albumWritesPerHour: 5, profilePerDay: 1, avatarsPerWeek: 5, privateFilesPerDay: 10 },
       '配额用 __replace__ 整表替换：留空的那项不写（回落服务端默认），改过的按界面值写');
     assert.equal(patch.platform?.quotas?.__replace__?.remarksPerDay, undefined, '留空的配额不许把界面上的默认数字固化进配置');
     assert.deepEqual(patch.platform?.perGroup, { __replace__: { '10001': { albumWrites: true } } },
