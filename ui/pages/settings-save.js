@@ -261,6 +261,7 @@ async function saveConfig({ quiet = false } = {}) {
       maxCandidates: lifeNum('#cfg-lifefeed-max-candidates', c.lifeFeed?.maxCandidates ?? 200),
       maxPerForage: lifeNum('#cfg-lifefeed-max-per-forage', c.lifeFeed?.maxPerForage ?? 30),
       maxOffersPerDay: lifeNum('#cfg-lifefeed-offers', c.lifeFeed?.maxOffersPerDay ?? 2),
+      maxPicksPerDay: lifeNum('#cfg-lifefeed-picks', c.lifeFeed?.maxPicksPerDay ?? 10),
       minDurationSec: lifeNum('#cfg-lifefeed-min-duration', c.lifeFeed?.minDurationSec ?? 60),
       maxDurationSec: lifeNum('#cfg-lifefeed-max-duration', c.lifeFeed?.maxDurationSec ?? 3600),
       extraKeywords: splitKeywords('#cfg-lifefeed-extra'),

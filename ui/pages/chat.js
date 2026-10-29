@@ -731,7 +731,7 @@ function renderChatList() {
           ${showIncidentControl ? `<button type="button" class="icon-btn chat-runtime-control" data-chat-runtime="${esc(c.key)}" title="${esc(incidentControl.label)}" aria-label="${esc(incidentControl.label)}">${incidentControl.icon}</button>` : ''}
         </div>
         <div class="chat-item-sub">${esc(c.lastText || '（空）')}</div>
-        <div class="session-meta"><span>${c.total} 条 · 失败 ${c.failed || 0} · 待确认 ${c.held || 0}${c.thread ? ` · 线程 v${c.thread.version}` : ''}</span><span>${fmtTime(c.lastTs)}</span></div>
+        <div class="session-meta"><span>${c.total} 条 · 失败 ${c.failed || 0} · 待确认 ${c.held || 0}${c.thread ? ` · 线程 v${c.thread.version}` : ''}</span><span>${c.lastDecision ? `未回 ${esc(c.lastDecision.reason)} ${Number(c.lastDecision.percent) || 0}% · ` : ''}${fmtTime(c.lastTs)}</span></div>
       </div>`;
   }).map((html, index) => ({ key: String(visibleChats[index].key), html }));
   // 空状态也必须作为"带 key 的行"交给 patchKeyedList：这层提示没有 data-key，直接写

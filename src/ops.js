@@ -750,7 +750,7 @@ const AUDIT_MARKERS = [
   // `export` 前缀可省：这条从 CJS 时代留下，文件改成 ESM 后 `^function` 永远匹配不上，
   // 体检就会常驻一条假 NG（2026-10-01 在服务器上实测到）。锚点保留，仍只认定义那一行。
   ['normalizeMid 定义', 1, 'src/tools/tools-core.js', '^(?:export )?function normalizeMid\\(value\\)'],
-  ['normalizeMid 调用点', 3, 'src/tools/tools-core.js', 'replyToMessageId: normalizeMid\\(args'],
+  ['normalizeMid 调用点', 3, 'src/tools/tools-core.js', 'replyToMessageId: normalizeMid\\('],
   ['store.findByMid 归一化', 1, 'src/core/store.js', 'normalizeMid\\(mid\\)'],
   ['贴纸同步防清空守卫', 1, 'src/onebot/stickers.js', 'if \\(!fetchedIds\\.size\\) return out'],
   ['主动间隔守卫', 1, 'src/core/orchestrator.js', 'minGapMs'],

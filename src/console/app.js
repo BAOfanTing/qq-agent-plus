@@ -59,7 +59,7 @@ import { resolvePersona } from '../personas.js';
 import { scanModelsVision, visionResults } from '../llm/vision-scan.js';
 import { builtinVisionResults } from '../llm/model-vision-docs.js';
 import { createEventBus, todayKey, shanghaiDayStart, isSelfSender, safeSlice, sanitizeUserText, textWithQuote } from '../core/util.js';
-import { assertCanSend } from '../core/access.js';
+import { assertCanSend, chatAllowed } from '../core/access.js';
 import { idList } from '../core/list.js';
 import { isTimeActive } from '../core/time-gate.js';
 import { timeControlState, TIME_ZONE } from '../core/time-control.js';
@@ -1346,7 +1346,7 @@ export function createApp({
     // 解析不了的消息返回 false，照常走下面的普通链路落到模型手里兜底。
     if (!isSelf && kind === 'private' && groupGame?.consumePrivateAction
       && await groupGame.consumePrivateAction(chatKey, stored)) return;
-    if (!isSelf) orchestrator.onIncoming(chatKey);
+    if (!isSelf) orchestrator.onIncoming(chatKey, stored);
   }
 
   // ── 启动/重连补齐 ──
@@ -1361,17 +1361,30 @@ export function createApp({
   async function catchUpMissedMessages() {
     const cfgNow = getConfig();
     const windowMs = catchupReplyWindowMs(cfgNow);
-    const targets = [
-      ...idList(cfgNow.allow?.groups).map((g) => ({ kind: 'group', id: g })),
-      ...idList(cfgNow.allow?.private).map((p) => ({ kind: 'private', id: p }))
-    ];
+    const targetMap = new Map();
+    for (const g of idList(cfgNow.allow?.groups)) targetMap.set(`group:${g}`, { kind: 'group', id: g });
+    for (const p of idList(cfgNow.allow?.private)) targetMap.set(`private:${p}`, { kind: 'private', id: p });
+    // allowAllWhenEmpty 时 allow 名单是空的，旧逻辑一个群都不补；从已入库会话补，
+    // 仍过一遍 chatAllowed（deny / 移出白名单的会话不会被补回来）。
+    if (cfgNow.allowAllWhenEmpty) {
+      for (const chatKey of store.listChats()) {
+        if (!chatAllowed(chatKey, cfgNow)) continue;
+        const m = /^(group|private):(\d+)$/.exec(chatKey);
+        if (m) targetMap.set(chatKey, { kind: m[1], id: m[2] });
+      }
+    }
+    const targets = [...targetMap.values()];
+    const count = Math.max(1, Math.min(500, Number(cfgNow.onebot?.catchupHistoryCount) || 100));
     for (const { kind, id } of targets) {
       const chatKey = `${kind}:${id}`;
       try {
         const data = kind === 'group'
-          ? await onebot.call('get_group_msg_history', { group_id: Number(id), count: 20 }, 20000, null)
-          : await onebot.call('get_friend_msg_history', { user_id: Number(id), count: 20 }, 20000, null);
+          ? await onebot.call('get_group_msg_history', { group_id: Number(id), count }, 20000, null)
+          : await onebot.call('get_friend_msg_history', { user_id: Number(id), count }, 20000, null);
         const list = Array.isArray(data?.messages) ? data.messages : [];
+        if (list.length >= count) {
+          console.log(`[catchup] ${chatKey} 已拉满 ${count} 条，更早的消息可能未补（可调大 onebot.catchupHistoryCount）`);
+        }
         let added = 0;
         let recordedOnly = 0;
         for (const item of list) {
@@ -5670,6 +5683,7 @@ export function createApp({
   });
   // ── 生活层（见闻）────────────────────────────────────────────────────
   router.add('GET', '/api/life-feed/status', async (req, res) => {
+    lifeFeed.drainInbox?.();
     return json(res, 200, { ok: true, ...lifeFeed.status() });
   });
   router.add('POST', '/api/life-feed/forage', async (req, res) => {
@@ -5685,6 +5699,13 @@ export function createApp({
     const id = String(body?.bvid || body?.id || '').trim();
     if (!id) return json(res, 400, { ok: false, error: '缺少 bvid' });
     const result = lifeFeed.dismiss(id);
+    return json(res, result.ok ? 200 : 404, result);
+  });
+  router.add('POST', '/api/life-feed/more', async (req, res) => {
+    const body = await readBody(req).catch(() => ({}));
+    const id = String(body?.bvid || body?.id || '').trim();
+    if (!id) return json(res, 400, { ok: false, error: '缺少 bvid' });
+    const result = lifeFeed.feedback({ id, action: 'more_like_this' });
     return json(res, result.ok ? 200 : 404, result);
   });
   router.add('POST', '/api/life-feed/clear', async (req, res) => {
@@ -5704,15 +5725,19 @@ export function createApp({
     const item = taken.item;
     // 不直接发：交给主动发言链路，由模型用自己的语气说，人设/分条/限速/安静时段全部生效。
     // B 站标题/UP 是第三方页面内容，必须去掉“【…】”这类段头伪装后再进【系统提醒】。
-    const note = `【系统提醒】可以分享这条 B 站见闻：${sanitizeUserText(String(item.title ?? ''))}`
+    const source = String(item.source || '').startsWith('plugin:') ? '插件见闻' : 'B 站见闻';
+    const note = `【系统提醒】可以分享这条${source}：${sanitizeUserText(String(item.title ?? ''))}`
       + `（UP：${sanitizeUserText(String(item.up ?? ''))}）${item.url}。`
-      + `请调用 share_bilibili（bvid=${item.id}，comment=你的一句话）发送封面和标题链接，不要用 send_message 重复发链接。`
+      + `请调用 share_bilibili（bvid=${item.id}，comment=你的一句话）发送标题链接和封面，不要用 send_message 重复发链接。`
       .slice(0, 600);
-    orchestrator.wake(chatKey, { manual: true, wakeNote: note }).catch((error) => {
-      log(`[life-feed] 手动分享唤醒失败：${error?.message ?? error}`);
-    });
+    const wake = orchestrator.requestManualWake(chatKey, { wakeNote: note });
+    if (!wake.ok) {
+      // 没有真正进入发送链路：撤回 offer/排队记录，允许用户稍后重试。
+      lifeFeed.releaseShare(item.id);
+      return json(res, 409, { ok: false, error: wake.reason || '无法安排这次分享' });
+    }
     auditWrite('life-feed.share', chatKey, { req, bvid: item.id });
-    return json(res, 200, { ok: true, item });
+    return json(res, 200, { ok: true, status: 'queued', item });
   });
 
   router.add('GET', '/api/incidents', async (req, res, params, url) => {
@@ -5865,6 +5890,7 @@ export function createApp({
       return {
         key,
         ...meta,
+        lastDecision: orchestrator.decisionFor(key),
         incidentControl: incidentPilot?.getChatControl(key) || null,
         incidentDecision: incidentPilot?.chatDecision(key, meta) || null,
         ...(cfgNow.timeControl?.enabled

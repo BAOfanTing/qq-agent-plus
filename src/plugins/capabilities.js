@@ -512,7 +512,8 @@ export function createCapabilities({
         const id = String(item?.id ?? '').trim().slice(0, 100);
         const title = sanitizeUserText(String(item?.title ?? '')).slice(0, 200);
         const url = String(item?.url ?? '').trim();
-        if (!id || !title || !/^https?:\/\//i.test(url) || existing.has(id) || state.items.length >= 20) {
+        const cover = String(item?.cover ?? '').trim();
+        if (!id || !title || !/^https?:\/\/\S+$/i.test(url) || existing.has(id) || state.items.length >= 20) {
           rejected += 1;
           continue;
         }
@@ -525,6 +526,8 @@ export function createCapabilities({
           tags: Array.isArray(item?.tags)
             ? item.tags.map((tag) => sanitizeUserText(String(tag)).slice(0, 30)).slice(0, 6) : [],
           summary: sanitizeUserText(String(item?.summary ?? '')).slice(0, 200),
+          // 封面只收 https；下载仍由宿主发送层走 safeFetchBinary，插件拿不到网络能力。
+          cover: /^https:\/\//i.test(cover) ? cover.slice(0, 500) : '',
           source: `plugin:${pluginId}`,
           addedAt: nowFn()
         });

@@ -866,6 +866,22 @@ export function cardToText(seg, selfId = '') {
   }
 
   if (!videoUrl) videoUrl = videoUrlInText(source);
+  // 非视频卡片（公众号/音乐/商品/小红书等）也要让模型拿到可引用的链接：
+  // 只做文本抽取，不额外发网络请求；图片/头像类 URL 跳过，避免把缩略图当正文链接。
+  if (!videoUrl) {
+    const scan = source.replace(/\\\//g, '/').replace(/&amp;/gi, '&');
+    for (const match of scan.matchAll(/https?:\/\/[^\s<>"'\\]+/gi)) {
+      const candidate = match[0].replace(/[)\]}.,!，。！？、）】”’]+$/u, '');
+      try {
+        const url = new URL(candidate);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+        if (url.username || url.password) continue;
+        if (/\.(?:png|jpe?g|gif|webp|bmp|ico|svg|avif)$/i.test(url.pathname)) continue;
+        videoUrl = candidate;
+        break;
+      } catch { /* 非法 URL：继续找下一个 */ }
+    }
+  }
   const body = [title, desc, videoUrl].filter(Boolean).join(' — ');
   const mine = selfId && uin && String(uin) === String(selfId);
   const tags = [prompt, mine ? '你自己的动态' : (nick ? `来自 ${nick}` : '')].filter(Boolean).join(' · ');

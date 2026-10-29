@@ -205,6 +205,18 @@ test('视频分享卡片递归查找嵌套对象和数组，采用第一个合�
     '[卡片：嵌套视频 — https://www.bilibili.com/video/BV1xx411c7mD/?p=2&share_source=qq]');
 });
 
+test('非视频卡片也保留通用链接（公众号/商品/音乐等）', async () => {
+  const { cardToText } = await import('../src/onebot/onebot.js');
+  const data = { meta: { detail_1: {
+    title: '一篇文章', desc: '公众号', url: 'https://mp.weixin.qq.com/s/example'
+  } } };
+  assert.equal(cardToText({ type: 'json', data: { data } }),
+    '[卡片：一篇文章 — 公众号 — https://mp.weixin.qq.com/s/example]');
+  // 纯图片地址不能当正文链接
+  const imageOnly = { meta: { detail_1: { title: '一张图', url: 'https://example.com/a.png' } } };
+  assert.equal(cardToText({ type: 'json', data: { data: imageOnly } }), '[卡片：一张图]');
+});
+
 test('视频分享卡片支持白名单平台及子域名', async () => {
   const { cardToText } = await import('../src/onebot/onebot.js');
   for (const url of [
@@ -247,16 +259,17 @@ test('纯视频 URL 卡片也有非空正文', async () => {
   }
 });
 
-test('普通分享卡片输出保持原样，不追加新闻或不支持主机', async () => {
+test('普通分享卡片保留通用链接，不再只认视频主机', async () => {
   const { cardToText } = await import('../src/onebot/onebot.js');
   for (const url of ['', 'https://example.com/news', 'https://news.example.org/article']) {
     const data = { app: 'com.tencent.structmsg', prompt: '[分享]',
       meta: { news: { title: '标题', desc: '摘要', url } } };
-    assert.equal(cardToText({ type: 'json', data: { data } }), '[卡片 [分享]：标题 — 摘要]');
+    const base = '[卡片 [分享]：标题 — 摘要';
+    assert.equal(cardToText({ type: 'json', data: { data } }), url ? `${base} — ${url}]` : `${base}]`);
   }
 });
 
-test('视频 URL 校验拒绝仿冒域名、凭据和非 HTTP 协议', async () => {
+test('卡片链接只保留 http(s)，拒绝凭据与非 HTTP 协议', async () => {
   const { cardToText } = await import('../src/onebot/onebot.js');
   for (const url of [
     'https://evilbilibili.com/video/x', 'https://bilibili.com.example.org/video/x',
@@ -264,11 +277,14 @@ test('视频 URL 校验拒绝仿冒域名、凭据和非 HTTP 协议', async () 
     'https://b23.tv.example.org/x', 'https://user:password@b23.tv/x',
     'https://user@www.youtube.com/watch?v=x', 'ftp://b23.tv/x', 'javascript:alert(1)'
   ]) {
+    const expected = /^https?:\/\//.test(url) && !/\/\/[^/]*@/.test(url)
+      ? `[卡片：普通标题 — ${url}]`
+      : '[卡片：普通标题]';
     for (const [type, data] of [
       ['json', { meta: { detail_1: { title: '普通标题', url } } }],
       ['xml', `<msg url="${url}"><title>普通标题</title></msg>`]
     ]) {
-      assert.equal(cardToText({ type, data: { data } }), '[卡片：普通标题]', url);
+      assert.equal(cardToText({ type, data: { data } }), expected, url);
     }
   }
 });

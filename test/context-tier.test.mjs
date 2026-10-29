@@ -89,6 +89,23 @@ test('被 @ 或命中关键词一定回，不受概率影响', () => {
   assert.equal(kw.tier, 2);
 });
 
+test('引用机器人自己的发言也是必回，引用别人不算', () => {
+  const cfg = { ...BASE, randomPercent: 0 };
+  const names = { selfNickname: '小鲸鱼', botName: '小鲸鱼', selfId: '888' };
+  const quoted = resolveContextTier({
+    triggerEntries: [entry('那你刚才说的那个呢', { reply: { senderId: '888', sender: '小鲸鱼', text: '刚才说的' } })],
+    ...names, cfg, roll: 99
+  });
+  assert.equal(quoted.shouldRespond, true, '低概率档位下引用机器人也不能漏');
+  assert.equal(quoted.reason, '被引用');
+  assert.equal(quoted.tier, 1);
+  const other = resolveContextTier({
+    triggerEntries: [entry('你觉得呢', { reply: { senderId: '999', sender: '别人', text: '原话' } })],
+    ...names, cfg, roll: 99
+  });
+  assert.equal(other.shouldRespond, false, '引用别人不触发');
+});
+
 test('@ 的判定：文本认得出，也认存档里的 mentionsSelf', () => {
   const cfg = { ...BASE, randomPercent: 0 };
   const names = { selfNickname: '登录昵称', botName: '小鲸鱼', selfId: '888' };

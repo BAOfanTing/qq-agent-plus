@@ -60,6 +60,17 @@ test('系统提示开场白不冒充角色卡：名字归名字，人格指向�
   assert.ok(!bare.includes('看下面的【角色设定】'), '没有卡时不要指向不存在的角色设定段');
 });
 
+test('私聊系统提示不再沿用群聊身份和主持人规则', () => {
+  const base = structuredClone(DEFAULT_CONFIG);
+  base.persona = { ...base.persona, botName: '小鲸鱼', templateId: 'xiaojingyu', roleText: PERSONAS.xiaojingyu.text };
+  updateConfig(base);
+  const group = buildSystemPrompt({}).split('\n')[0];
+  const priv = buildSystemPrompt({ chatKey: 'private:1' }).split('\n')[0];
+  assert.match(group, /混在 QQ 群里/, '群聊保持原开场白');
+  assert.doesNotMatch(priv, /混在 QQ 群里/, '私聊开场白不该自称混在群里');
+  assert.match(priv, /私聊/, '私聊要有明确的场景说明');
+});
+
 test('roles/ 下的每个文件都已登记（新增卡忘了登记会失败）', () => {
   const files = roleFiles();
   assert.ok(files.length >= 2, 'roles/ 目录里没有角色卡');

@@ -293,7 +293,9 @@ export const DEFAULT_CONFIG = {
     // （NapCat 的实测行为，Issue #22）；on 始终发；off 从不发。改完要重启才生效。
     wsHeartbeat: 'auto',
     // 断线/重启后补回的消息超过这个时长只入库不回复（0 = 一律只补记录，不唤醒模型）。默认 30 分钟。
-    catchupReplyWindowMs: 30 * 60 * 1000
+    catchupReplyWindowMs: 30 * 60 * 1000,
+    // 每次补课从协议端拉多少条历史（1-500）。长停机时可调大；只补窗口内可回复的，更早的只入库。
+    catchupHistoryCount: 100
   },
   // 人设与行为
   persona: {
@@ -321,8 +323,12 @@ export const DEFAULT_CONFIG = {
   wakeDelayMs: 10000,
   wakeDelayMinMs: 8000,
   wakeDelayMaxMs: 12000,
-  drainDelayMs: 10000,
+  // 被 @ / 私聊 / 引用机器人时的短聚批：不再等 8-12 秒，但仍留一点窗口合并连发
+  directWakeDelayMs: 300,
+  drainDelayMs: 1000,
   maxBatchWaitMs: 20000,
+  // 模型最终失败时，直接互动（@/私聊/引用）给一句短兜底；普通群消息不发
+  failureNotice: { enabled: true, cooldownMinutes: 8 },
   runtime: { mode: 'observe', paused: false },
   timeControl: DEFAULT_TIME_CONTROL,
   maxConcurrentRuns: 2,     // 全局同时进行的 agent 运行数
@@ -426,6 +432,8 @@ export const DEFAULT_CONFIG = {
     // 补话与模型自安排唤醒在引入开关之前一直是常开，默认 true 保持升级前后行为一致；
     // 只想关掉它们的人各关各的，不想主动开口的几个一起关。
     followUpEnabled: true,      // 发言后没人接话，过十来分钟补一句
+    followUpDelayMinutes: 10,   // 补话的基准延迟（实际会加 0-2 分钟抖动）
+    followUpCooldownMinutes: 20,// 同一会话两次补话机会的最小间隔
     selfWakeEnabled: true       // 模型用 schedule_wake 给自己安排稍后的主动发言
   },
   // 生活层（见闻）：定期觅食 B 站公开内容，存候选队列，供主动发言轮次挑选分享。
@@ -438,7 +446,9 @@ export const DEFAULT_CONFIG = {
     forageIntervalMinutes: 360,   // 6 小时 ±20% 抖动
     maxCandidates: 200,
     maxPerForage: 30,
-    maxOffersPerDay: 2,           // 每天最多领取/分享几次（防刷屏）
+    maxOffersPerDay: 2,           // 每天最多真正分享几次（防刷屏）
+    maxPicksPerDay: 10,           // 每天最多从候选队列领取几次（筛选/跳过不占分享额度）
+    cooldownDays: 7,              // 已分享/跳过的 UP 和标签冷却天数
     minDurationSec: 60,           // 太短的（切片/广告）不要
     maxDurationSec: 3600,         // 超过 1 小时的看不完，不要
     extraKeywords: [],

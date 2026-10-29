@@ -419,7 +419,7 @@ test('入站投递的接线：位置在唤醒之前、只投别人的消息、�
   const app = fs.readFileSync(path.join(process.cwd(), 'src', 'console', 'app.js'), 'utf8');
   const observeAt = app.indexOf('pluginRegistry.observe({');
   assert.ok(observeAt > 0, '入站要把消息投给插件');
-  const wakeAt = app.indexOf('orchestrator.onIncoming(chatKey)');
+  const wakeAt = app.indexOf('orchestrator.onIncoming(chatKey, stored)');
   assert.ok(wakeAt > 0 && observeAt < wakeAt, '投递要在唤醒之前（否则插件看到的消息已经进过模型了）');
   // 只投别人发的：自己发的不投（v1 插件发不了言，但 send 能力开了之后会形成自问自答的环）
   assert.match(app.slice(Math.max(0, observeAt - 200), observeAt), /if \(!isSelf\)/,

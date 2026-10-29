@@ -191,7 +191,13 @@ export class GroupDigestManager {
     const since = this.now() - WINDOW_MS;
     const rows = this.store.recent(chatKey, { limit: 400, includeSelf: true, readOnly: true })
       .filter((m) => Number(m?.ts) >= since);
-    const speakable = rows.filter((m) => String(m?.text || '').trim() !== '' && !/^\[/.test(String(m.text).trim()));
+    // 媒体/分享占位不是系统噪声：日报里保留它们，才能看到群里发过图、卡片、转发和分享。
+    const mediaPlaceholder = /^\[(?:图片|表情包|卡片|合并转发|视频|语音|B站分享|插件分享)/;
+    const speakable = rows.filter((m) => {
+      const text = String(m?.text || '').trim();
+      if (!text) return false;
+      return !/^\[/.test(text) || mediaPlaceholder.test(text);
+    });
     if (rows.length < MIN_MESSAGES) return { ok: false, error: `消息太少（${rows.length} 条），跳过` };
     // 参与者统计（含机器人自己的发言）
     const byUser = new Map();

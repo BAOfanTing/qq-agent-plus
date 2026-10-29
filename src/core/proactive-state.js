@@ -15,6 +15,11 @@ function readState(file) {
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     const value = raw?.lastAttemptAt;
+    const followUps = raw?.followUps && typeof raw.followUps === 'object' && !Array.isArray(raw.followUps)
+      ? raw.followUps : {};
+    const followUpMap = Object.fromEntries(Object.entries(followUps)
+      .map(([key, ts]) => [key, Number(ts) || 0])
+      .filter(([key, ts]) => /^(group|private):\d+$/.test(key) && ts > 0));
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       const chats = value.chats && typeof value.chats === 'object' && !Array.isArray(value.chats) ? value.chats : {};
       return {
@@ -22,13 +27,14 @@ function readState(file) {
         private: Number(value.private) || 0,
         chats: Object.fromEntries(Object.entries(chats)
           .map(([key, ts]) => [key, Number(ts) || 0])
-          .filter(([key, ts]) => /^(group|private):\d+$/.test(key) && ts > 0))
+          .filter(([key, ts]) => /^(group|private):\d+$/.test(key) && ts > 0)),
+        followUps: followUpMap
       };
     }
     const legacy = Number(value) || 0;
-    return { group: legacy, private: legacy, chats: {} };
+    return { group: legacy, private: legacy, chats: {}, followUps: followUpMap };
   } catch {
-    return { group: 0, private: 0, chats: {} };
+    return { group: 0, private: 0, chats: {}, followUps: {} };
   }
 }
 
@@ -39,9 +45,14 @@ function writeState(file, state) {
       .filter(([, ts]) => now - Number(ts) < CHAT_RETENTION_MS)
       .sort((a, b) => Number(b[1]) - Number(a[1]))
       .slice(0, MAX_CHAT_ENTRIES);
+    const followUps = Object.entries(state.followUps || {})
+      .filter(([, ts]) => now - Number(ts) < CHAT_RETENTION_MS)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .slice(0, MAX_CHAT_ENTRIES);
     const tmp = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify({
-      lastAttemptAt: { group: Number(state.group) || 0, private: Number(state.private) || 0, chats: Object.fromEntries(chats) }
+      lastAttemptAt: { group: Number(state.group) || 0, private: Number(state.private) || 0, chats: Object.fromEntries(chats) },
+      followUps: Object.fromEntries(followUps)
     }), { mode: 0o600 });
     fs.renameSync(tmp, file);
   } catch { /* 写不进去也不影响正常发言 */ }
@@ -82,5 +93,21 @@ export function writeProactiveChatAttempts(file, chatKeys, ts) {
   const state = readState(file);
   const at = Number(ts) || Date.now();
   for (const key of keys) state.chats[key] = at;
+  writeState(file, state);
+}
+
+/** 补话上次安排时间：落盘，避免重启后 20 分钟冷却被清零、马上又补一句。 */
+export function readFollowUpAt(file, chatKey) {
+  const key = String(chatKey || '').trim();
+  if (!/^(group|private):\d+$/.test(key)) return 0;
+  return Number(readState(file).followUps?.[key] || 0);
+}
+
+export function writeFollowUpAt(file, chatKey, ts) {
+  const key = String(chatKey || '').trim();
+  if (!/^(group|private):\d+$/.test(key)) return;
+  const state = readState(file);
+  if (!state.followUps) state.followUps = {};
+  state.followUps[key] = Number(ts) || Date.now();
   writeState(file, state);
 }

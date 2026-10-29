@@ -133,6 +133,7 @@ test('管理器：觅食入库、每日配额、手动分享、状态持久化',
       enabled: true,
       maxPerForage: 10,
       maxOffersPerDay: 1,
+      maxPicksPerDay: 1,
       minDurationSec: 60,
       maxDurationSec: 3600,
       groups: []
@@ -183,7 +184,7 @@ test('管理器：觅食入库、每日配额、手动分享、状态持久化',
 
 test('手动分享不占自动额度：点过手动分享，自动 next 仍可用', async (t) => {
   const dir = tempDir(t);
-  const cfg = { lifeFeed: { enabled: true, maxPerForage: 10, maxOffersPerDay: 1, minDurationSec: 60, maxDurationSec: 3600 } };
+  const cfg = { lifeFeed: { enabled: true, maxPerForage: 10, maxOffersPerDay: 1, maxPicksPerDay: 1, minDurationSec: 60, maxDurationSec: 3600 } };
   const manager = new LifeFeedManager({
     dataDir: dir, store: null, config: () => cfg,
     fetchImpl: fakeFetch([['popular', POPULAR], ['search/type', { code: 0, data: { result: [] } }]]),
@@ -327,7 +328,7 @@ test('候选入库：同一 UP 与同一标签在队列里也限流', async (t) 
   for (const count of byUp.values()) assert.ok(count <= 3);
 });
 
-test('share_bilibili：先发封面再发标题链接，并把候选标记为 shared', async (t) => {
+test('share_bilibili：先发标题链接再发封面，并把候选标记为 shared', async (t) => {
   const dir = tempDir(t);
   const list = [{
     bvid: 'BV1share', title: '深海潜水第一视角', desc: '海底',
@@ -374,8 +375,13 @@ test('share_bilibili：先发封面再发标题链接，并把候选标记为 sh
   assert.equal(images[0].url, 'https://i0.hdslb.com/bfs/archive/cover.jpg');
   assert.equal(sent.length, 1);
   assert.match(sent[0], /【B站】深海潜水第一视角/);
+  assert.match(sent[0], /UP：潜水员/);
+  assert.match(sent[0], /时长 10:00/);
+  assert.match(sent[0], /海底/);
   assert.match(sent[0], /BV1share/);
   assert.match(sent[0], /这个潜水视角很稳/);
   assert.equal(ctx.session.sent.length, 1);
+  assert.equal(ctx.session.lastShare.bvid, 'BV1share', '分享后要记住 bvid，供补话追问');
+  assert.equal(ctx.session.lastShare.messageId, 1, '分享消息 id 要记下来');
   assert.equal(manager.candidate('BV1share'), null, '分享后应从候选队列移除');
 });

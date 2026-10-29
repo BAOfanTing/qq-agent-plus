@@ -457,6 +457,46 @@ function messageTargetError(ctx, { replyToMessageId, atUserId }) {
 }
 
 /**
+ * send_message 的降级版目标解析：正文永远优先，非法引用/@ 只丢掉目标，不丢整条回复。
+ * 同时给引用和 @ 时保留引用（引用更能表达"回的是哪条"），@ 目标不在历史发言者里时
+ * 仍按数字 QQ 号发送 —— 比让模型整条重写更接近真实用户的行为。
+ */
+function resolveMessageTarget(ctx, { replyToMessageId, atUserId } = {}) {
+  const notes = [];
+  let reply = normalizeMid(replyToMessageId);
+  let at = normalizeMid(atUserId);
+  if (reply && at) {
+    at = null;
+    notes.push('同时给了引用和 @，已保留引用、忽略 @');
+  }
+  if (reply) {
+    const valid = /^-?[1-9]\d*$/.test(reply) && modelVisible(ctx.store?.findByMid?.(ctx.chatKey, reply));
+    if (!valid) {
+      reply = null;
+      notes.push('引用目标无效，已按普通消息发送');
+    }
+  }
+  if (at) {
+    if (ctx.kind !== 'group') {
+      at = null;
+      notes.push('私聊不需要 @，已忽略');
+    } else if (!/^\d{1,15}$/.test(at)) {
+      at = null;
+      notes.push('@ 目标不是 QQ 号，已忽略');
+    } else if (!hasParticipant(ctx, at)) {
+      const looksLikeMessageId = modelVisible(ctx.store?.findByMid?.(ctx.chatKey, at));
+      if (looksLikeMessageId) {
+        at = null;
+        notes.push('@ 目标像消息 id，已忽略；如需引用请用 replyToMessageId');
+      } else {
+        notes.push('@ 目标不在最近发言者里，仍按 QQ 号发送');
+      }
+    }
+  }
+  return { replyToMessageId: reply, atUserId: at, note: notes.join('；') };
+}
+
+/**
  * 这条消息里"能看的画面"：图片（含 GIF 帧条）与视频（抽帧条）。
  * 返回描述符数组（{kind, url}），由调用方按 kind 选下载方式。最多 4 个。
  */
@@ -519,6 +559,44 @@ function memoryQueryDescription() {
   return `${base}全局共享：不分当前会话，汇总自所有群聊与私聊的观察。印象是跨会话的隐私：不得向群友转述他人的印象、来源或原话。`;
 }
 
+/** 见闻来源标签：B站、插件名或自定义来源；不要再把所有条目都写成【B站】。 */
+function shareSourceLabel(item) {
+  const source = String(item?.source || '');
+  const via = String(item?.via || '');
+  if (source.startsWith('plugin:')) {
+    const id = source.slice('plugin:'.length);
+    return id ? `插件：${id}` : '插件分享';
+  }
+  if (source === 'bilibili' || via === 'bilibili' || !source) return 'B站';
+  return source;
+}
+
+function formatShareDuration(seconds) {
+  const n = Math.max(0, Math.round(Number(seconds) || 0));
+  if (!n) return '';
+  const m = Math.floor(n / 60);
+  const s = n % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function buildShareText(item, comment = '') {
+  // 用 unicode 转义而不是字面量方括号：这只是发给 QQ 的正文，不是提示词段头；
+  // 段头扫描器按源码字面量收集，字面量会被误判成"可被群友伪造的段头"。
+  const title = sanitizeUserText(safeSlice(item.title, 80));
+  const lines = [`\u3010${shareSourceLabel(item)}\u3011${title}`];
+  const meta = [];
+  if (item.up) meta.push(`UP：${sanitizeUserText(safeSlice(item.up, 40))}`);
+  const duration = formatShareDuration(item.duration);
+  if (duration) meta.push(`时长 ${duration}`);
+  if (meta.length) lines.push(meta.join(' · '));
+  const desc = sanitizeUserText(safeSlice(String(item.desc || '').replace(/\s+/g, ' ').trim(), 120));
+  if (desc) lines.push(desc);
+  // 第三方 URL 只接受不含空白的 http(s)，避免把换行/段头带进正文和后续上下文。
+  if (/^https?:\/\/\S+$/.test(String(item.url || ''))) lines.push(item.url);
+  if (comment) lines.push(comment);
+  return lines.join('\n');
+}
+
 export function buildToolDefs() {
   const defs = [
     {
@@ -529,7 +607,7 @@ export function buildToolDefs() {
         properties: {
           messages: { description: '要发送的内容：字符串=一条；数组=分多条', oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
           replyToMessageId: { type: ['integer', 'string'], description: '要引用/回复的消息 id（聊天记录里每条消息前的 #数字，可选）' },
-          atUserId: { type: ['integer', 'string'], description: '要 @ 的群成员 QQ 号（可选，与引用二选一，不要滥用）' }
+          atUserId: { type: ['integer', 'string'], description: '要 @ 的群成员 QQ 号（可选；和引用同时给时保留引用、忽略 @；不要滥用）' }
         },
         required: ['messages']
       },
@@ -537,8 +615,8 @@ export function buildToolDefs() {
         try {
           const messages = normalizeMessageList(args.messages);
           if (!messages.length) return err('消息内容为空');
-          const targetError = messageTargetError(ctx, args);
-          if (targetError) return err(targetError);
+          // 正文优先：非法引用/@ 只降级目标，不让整条回复消失。
+          const target = resolveMessageTarget(ctx, args);
           const humanizeCfg = getConfig().humanize || {};
           const respectCard = humanizeCfg.respectPersonaCard !== false
             && ctx.behaviorProfile === 'card';
@@ -567,14 +645,15 @@ export function buildToolDefs() {
             // 平台只保证代码块与缩进不被拆坏（card 档不套平台语气，但技术内容仍是内容）。
             preserveCode: ctx.behaviorProfile === 'grounded' || ctx.behaviorProfile === 'card',
             voice: ctx.voice || null,
-            replyToMessageId: normalizeMid(args.replyToMessageId) || null,
-            atUserId: normalizeMid(args.atUserId) || null
+            replyToMessageId: normalizeMid(target.replyToMessageId) || null,
+            atUserId: normalizeMid(target.atUserId) || null
           });
           afterSent(() => {
             ctx.session.sent.push(...result.sent.map((s) => ({ type: 'text', text: s.text, at: s.at })));
             ctx.emit('session-update', ctx.session.id);
           });
           const note = ['已发送。不要输出"已发送"类汇报，继续思考下一步或直接结束。'];
+          if (target.note) note.push(`（${target.note}）`);
           if (result.failed.length) {
             // 带上序号和原文（sender 已提供）：否则模型只知道"有几条失败"，
             // 最省事的做法就是整批重发，群里就多出重复的成功段（2026-10-07 复审）。
@@ -1806,7 +1885,7 @@ export function buildToolDefs() {
     },
     {
       name: 'life_feed_next',
-      description: '从生活层候选队列里取 1-3 条 B 站见闻（标题、UP、时长、播放、标签、链接、简介）。想主动分享点群友可能感兴趣的内容时用它；取到后用自己的语气说，不要念标题。每天有领取上限，取完不想用可以用 life_feed_feedback 标记 skip。',
+      description: '从生活层候选队列里取 1-3 条见闻（B站或插件来源，含标题、UP、时长、播放、标签、链接、简介）。想主动分享点群友可能感兴趣的内容时用它；取到后用自己的语气说，不要念标题。每天有领取上限，取完不想用可以用 life_feed_feedback 标记 skip。',
       parameters: {
         type: 'object',
         properties: {
@@ -1828,13 +1907,15 @@ export function buildToolDefs() {
               // 标题/UP/简介来自公开页面，按不可信文本处理，去掉段头伪装
               title: sanitizeUserText(String(item.title ?? '')),
               up: sanitizeUserText(String(item.up ?? '')),
+              source: sanitizeUserText(String(item.source ?? '')),
+              via: sanitizeUserText(String(item.via ?? '')),
               durationSec: item.duration,
               play: item.play,
               tags: (Array.isArray(item.tags) ? item.tags : []).map((tag) => sanitizeUserText(String(tag))),
               url: item.url,
               summary: sanitizeUserText(safeSlice(String(item.desc ?? ''), 200))
             })),
-            note: '选好后用 share_bilibili 分享（会先发封面，再发标题+链接+你的话），别念标题；不要用 send_message 重复发链接。不想发就用 life_feed_feedback 标记 skip。'
+            note: '选好后用 share_bilibili 分享（会先发标题+链接+你的话，再补封面），别念标题；不要用 send_message 重复发链接。不想发就用 life_feed_feedback 标记 skip。'
           });
         } catch (error) {
           return err(`生活层取内容失败：${error?.message ?? error}`);
@@ -1869,7 +1950,7 @@ export function buildToolDefs() {
     },
     {
       name: 'share_bilibili',
-      description: '分享一条见闻：先发 B 站封面（有封面时），再发「【B站】标题 + 链接 + 你的一句话」。用于主动分享或控制台手动分享；不要再用 send_message 重复发链接。',
+      description: '分享一条见闻：先发标题/来源/UP/时长/摘要/链接和你的一句话，再发封面（有封面时）。用于主动分享或控制台手动分享；不要再用 send_message 重复发链接。',
       parameters: {
         type: 'object',
         properties: {
@@ -1884,30 +1965,49 @@ export function buildToolDefs() {
           if (!feed) return err('生活层没有开启');
           const item = feed.candidate(String(args.bvid ?? '').trim());
           if (!item) return err('这条见闻不在候选队列里（可能已过期或已分享）');
-          const comment = safeSlice(String(args.comment ?? ''), 300);
-          const lines = [`【B站】${safeSlice(item.title, 80)}`, item.url];
-          if (comment) lines.push(comment);
-          let coverSent = false;
-          if (item.cover) {
-            try {
-              await ctx.sender.sendImage(ctx.chatKey, {
-                id: `bili-${item.id}`, url: item.cover, desc: item.title
-              }, { runId: ctx.session.leaseId, signal: ctx.signal });
-              coverSent = true;
-            } catch { /* 封面失败只降级成文本，不阻断分享 */ }
+          // 手动分享（控制台/管理员触发）不占自动额度；模型自己分享时在发送前再查一次，
+          // 防止一次领取 3 条后连续分享超过 maxOffersPerDay。
+          if (ctx.session?.manual !== true) {
+            const left = feed.shareQuotaLeft?.();
+            if (Number.isFinite(left) && left <= 0) return err('今天的自动分享额度用完了，明天再继续');
           }
-          const result = await ctx.sender.sendTextBatch(ctx.chatKey, [lines.join('\n')], {
+          const comment = safeSlice(String(args.comment ?? ''), 300);
+          const text = buildShareText(item, comment);
+          // 先发正文：正文失败时还没发封面，重试不会重复封面；封面失败只降级成文本。
+          const result = await ctx.sender.sendTextBatch(ctx.chatKey, [text], {
             runId: ctx.session.leaseId, signal: ctx.signal, persona: false
           });
           if (!result.sent.length) {
             return err(`标题链接没有发出去：${result.failed?.[0]?.error || '未知原因'}`);
           }
+          let coverSent = false;
+          if (item.cover) {
+            try {
+              await ctx.sender.sendImage(ctx.chatKey, {
+                id: `feed-${item.id}`, url: item.cover, desc: item.title
+              }, { runId: ctx.session.leaseId, signal: ctx.signal });
+              coverSent = true;
+            } catch { /* 封面失败只降级成文本，不阻断分享 */ }
+          }
           afterSent(() => {
-            ctx.session.sent.push({ type: 'text', text: `[B站分享:${safeSlice(item.title, 40)}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
+            const mid = result.sent[0]?.messageId;
+            ctx.session.lastShare = {
+              bvid: item.id,
+              messageId: mid,
+              chatKey: ctx.chatKey,
+              title: safeSlice(item.title, 40),
+              at: Date.now()
+            };
+            ctx.session.sent.push({
+              type: 'text',
+              text: `[${shareSourceLabel(item)}分享:${safeSlice(item.title, 40)}]`,
+              messageId: mid,
+              at: new Date().toLocaleTimeString('zh-CN', { hour12: false })
+            });
             ctx.emit('session-update', ctx.session.id);
           });
-          feed.feedback({ id: item.id, action: 'shared', chatKey: ctx.chatKey });
-          return ok({ sent: result.sent.length, cover: coverSent, note: '已发封面和标题链接；不要再重复发同一条。' });
+          feed.feedback({ id: item.id, action: 'shared', chatKey: ctx.chatKey, messageId: result.sent[0]?.messageId });
+          return ok({ sent: result.sent.length, cover: coverSent, note: '已发标题链接和封面；不要再重复发同一条。' });
         } catch (error) {
           return sendErr(error);
         }

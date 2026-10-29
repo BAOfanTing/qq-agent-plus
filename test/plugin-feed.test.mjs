@@ -25,7 +25,7 @@ test('cap.feed.publish：只收公开元数据、按 id 去重、每插件每天
   });
   const result = caps.methods[CAP_METHODS.feedPublish]({
     items: [
-      { id: 'p1', title: '插件见闻', url: 'https://example.com/p1', up: 'UP', durationSec: 120, tags: ['游戏'], summary: '摘要' },
+      { id: 'p1', title: '插件见闻', url: 'https://example.com/p1', up: 'UP', durationSec: 120, tags: ['游戏'], summary: '摘要', cover: 'https://example.com/c.jpg' },
       { id: 'p1', title: '重复', url: 'https://example.com/dup' },
       { id: 'bad', title: '没有链接', url: 'ftp://example.com/x' }
     ]
@@ -36,6 +36,7 @@ test('cap.feed.publish：只收公开元数据、按 id 去重、每插件每天
   assert.equal(saved.pluginId, 'demo');
   assert.equal(saved.items[0].source, 'plugin:demo');
   assert.equal(saved.items[0].title, '插件见闻');
+  assert.equal(saved.items[0].cover, 'https://example.com/c.jpg', 'https 封面要保留');
 
   // 同一天再发同一个 id：不重复收
   const again = caps.methods[CAP_METHODS.feedPublish]({ items: [{ id: 'p1', title: 'x', url: 'https://example.com/p1' }] });
@@ -49,7 +50,7 @@ test('生活层会吸收插件的见闻候选，并参与正常的分享选择',
     pluginId: 'demo', dataDir: dir, manifest: { capabilities: ['feed'] }, now: () => NOW
   });
   caps.methods[CAP_METHODS.feedPublish]({
-    items: [{ id: 'p1', title: '插件提交的见闻', url: 'https://example.com/p1', tags: ['游戏'], summary: '来自插件' }]
+    items: [{ id: 'p1', title: '插件提交的见闻', url: 'https://example.com/p1', tags: ['游戏'], summary: '来自插件', cover: 'https://example.com/p1.jpg' }]
   });
 
   const cfg = {
@@ -75,7 +76,18 @@ test('生活层会吸收插件的见闻候选，并参与正常的分享选择',
   const item = status.candidates.find((candidate) => candidate.id === 'p1');
   assert.ok(item, '插件候选应进入队列');
   assert.equal(item.source, 'plugin:demo');
+  assert.equal(item.cover, 'https://example.com/p1.jpg', '插件封面要透传到候选');
 
   const picked = manager.next({ count: 1 });
   assert.equal(picked.items[0].id, 'p1');
+
+  // inbox 文件同时是插件的"当天 20 条/去重"状态，吸收后不能删；新实例读到它应仍认为 p1 已提交。
+  assert.ok(fs.existsSync(path.join(dir, 'life-feed-inbox', 'demo.json')), '吸收后要保留插件配额状态文件');
+  const caps2 = createCapabilities({
+    pluginId: 'demo', dataDir: dir, manifest: { capabilities: ['feed'] }, now: () => NOW
+  });
+  const duplicate = caps2.methods[CAP_METHODS.feedPublish]({
+    items: [{ id: 'p1', title: '重复', url: 'https://example.com/p1' }]
+  });
+  assert.equal(duplicate.accepted, 0, '插件当天的去重状态不能因为宿主吸收而丢失');
 });

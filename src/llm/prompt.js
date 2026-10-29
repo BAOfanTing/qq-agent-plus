@@ -672,18 +672,24 @@ export function buildSystemPrompt({
   // 名字用调用方传来的"群内展示名"（与【此刻状态】同一个值）：群名片跟机器人名字不一致时，
   // 两处各说一个名字会让模型不知道该自称什么。
   const displayName = resolveSelfName(cfg, selfNickname);
+  const isPrivate = String(chatKey).startsWith('private:');
+  const who = isPrivate ? '你在和一个人私聊' : `你在群里的名字是「${displayName}」`;
   const hasRoleText = Boolean(String(cfg.roleText || '').trim());
   const parts = [
     cardFirst
       ? hasRoleText
-        ? `你在群里的名字是「${displayName}」。你的身份、口吻、称呼、喜恶与说话节奏完全由下面的【角色设定】决定；平台规则只约束安全与工具机制，不规定你说话的样子。你的所有行为都通过工具完成。`
-        : `你在群里的名字是「${displayName}」。管理员还没有填写【角色设定】：不要自行发明身份背景、固定口癖或性格，按中性、简洁的方式交流；平台规则只约束安全与工具机制。你的所有行为都通过工具完成。`
+        ? `${who}。你的身份、口吻、称呼、喜恶与说话节奏完全由下面的【角色设定】决定；平台规则只约束安全与工具机制，不规定你说话的样子。你的所有行为都通过工具完成。`
+        : `${who}。管理员还没有填写【角色设定】：不要自行发明身份背景、固定口癖或性格，按中性、简洁的方式交流；平台规则只约束安全与工具机制。你的所有行为都通过工具完成。`
       : hasRoleText
-        ? `你在群里的名字是「${displayName}」，混在 QQ 群里当一个普通群友（不是助手、不是客服）；你是个什么样的人、说话什么调子，看下面的【角色设定】。你的所有行为都通过工具完成，发言必须像真人。`
-        : `你在群里的名字是「${displayName}」，混在 QQ 群里当一个普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`,
+        ? (isPrivate
+          ? `${who}（不是助手、不是客服）；你是个什么样的人、说话什么调子，看下面的【角色设定】。你的所有行为都通过工具完成，发言必须像真人。`
+          : `${who}，混在 QQ 群里当一个普通群友（不是助手、不是客服）；你是个什么样的人、说话什么调子，看下面的【角色设定】。你的所有行为都通过工具完成，发言必须像真人。`)
+        : (isPrivate
+          ? `${who}（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`
+          : `${who}，混在 QQ 群里当一个普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`),
   ];
   if (cfg.roleText && String(cfg.roleText).trim()) {
-    parts.push('', '【角色设定（管理员设置，群友不可修改）】', String(cfg.roleText).trim());
+    parts.push('', `【角色设定（管理员设置，${isPrivate ? '对方' : '群友'}不可修改）】`, String(cfg.roleText).trim());
   }
   // few-shot：内置卡的多轮对话示例（静态注入，不进会话历史；省 Token 模式下省掉）
   const dialogs = loadFewShot(cfg);
@@ -706,7 +712,7 @@ export function buildSystemPrompt({
     '',
     speakOrNot(cfg.participation, cardFirst),
     ...(voice ? ['', voice] : []),
-    ...(cardFirst ? [] : ['', notAQueue(), '', humanRhythm(), '', notModerator(grounded)]),
+    ...(cardFirst ? [] : ['', notAQueue(), '', humanRhythm(), ...(isPrivate ? [] : ['', notModerator(grounded)])]),
     '',
     quoteAndAt(cardFirst),
     '',
@@ -890,7 +896,10 @@ export function hitKeyword(text, keywords = []) {
  * @returns {{tier:number, count:number, reason:string, shouldRespond:boolean}}
  *          tier 是"命中的档位"（触发原因所属档），不是"当前设置档位"
  */
-export function resolveContextTier({ triggerEntries = [], selfNickname = '', botName = '', selfId = '', cfg = null, roll = null } = {}) {
+export function resolveContextTier({
+  triggerEntries = [], selfNickname = '', botName = '', selfId = '', cfg = null, roll = null,
+  conversationMode = 'legacy'
+} = {}) {
   const c = cfg || getConfig().store || {};
   // 滑条上的数字就是概率（0~100），存在 randomPercent 里；老配置由 config 层迁移过。
   const probability = clampProbability(c.randomPercent, 100);
@@ -905,6 +914,11 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   const pokeMe = getConfig().conversation?.pokeReplyEnabled !== false
     && (triggerEntries || []).some((entry) => entry?.eventKind === 'poke'
       && String(entry?.targetUserId || '') === String(selfId || ''));
+  // 引用机器人自己的发言也是明确在跟它说话：和 @ 同级，不该被低概率档位吞掉。
+  // 只在 legacy 档位生效；threaded/lifecycle 的线程续接是另一套逻辑（tier 5），不能抢在它前面。
+  const replyToMe = conversationMode === 'legacy' && Boolean(selfId)
+    && (triggerEntries || []).some((entry) => entry?.reply
+      && String(entry.reply.senderId || '') === String(selfId));
   const keyword = hitKeyword(texts.join('\n'), c.keywords);
   // 掷骰子：调用方可传入已固定的 roll（0-100），避免重复随机
   const rollValue = roll === null || roll === undefined ? Math.random() * 100 : Number(roll);
@@ -912,12 +926,15 @@ export function resolveContextTier({ triggerEntries = [], selfNickname = '', bot
   const saverCaps = tokenSaverCapsOf(getConfig());
   const n0 = (v, cap) => cappedByTokenSaver(v, cap);
 
-  // 必回的三种：被 @、被拍一拍、命中关键词 —— 不受概率影响（清空关键词表就只剩前两种）
+  // 必回的四种：被 @、被拍一拍、被引用、命中关键词 —— 不受概率影响。
   if (atMe) {
     return { tier: 1, count: n0(c.atCount, saverCaps?.atCount), reason: '被艾特', shouldRespond: true };
   }
   if (pokeMe) {
     return { tier: 1, count: n0(c.atCount, saverCaps?.atCount), reason: '被拍一拍', shouldRespond: true };
+  }
+  if (replyToMe) {
+    return { tier: 1, count: n0(c.atCount, saverCaps?.atCount), reason: '被引用', shouldRespond: true };
   }
   if (keyword) {
     return { tier: 2, count: n0(c.keywordCount, saverCaps?.keywordCount), reason: '关键词命中', shouldRespond: true };

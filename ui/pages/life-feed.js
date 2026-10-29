@@ -53,25 +53,39 @@ async function loadStatus() {
       node.max = String(bound.max);
     }
     box.textContent = data.enabled
-      ? `已开启 · 候选 ${data.candidateCount} 条 · 今日自动 ${data.todayAutoOffers ?? data.todayOffers}/${data.maxOffersPerDay}`
+      ? `已开启 · 候选 ${data.candidateCount} 条 · 今日分享 ${data.todayShares ?? 0}/${data.maxOffersPerDay}`
+        + ` · 领取 ${data.todayPicks ?? data.todayOffers ?? 0}/${data.maxPicksPerDay ?? 10}`
         + `${data.todayManualOffers ? ` · 手动 ${data.todayManualOffers}` : ''}`
         + ` · 上次觅食 ${fmtTime(data.lastForageAt)} · 下次 ${fmtTime(data.nextForageAt)}`
+        + (data.lastShare ? ` · 最近分享 ${data.lastShare.action === 'shared' ? '已发送' : '排队中'}` : '')
         + (data.lastError ? ` · 上次错误：${data.lastError}` : '')
       : '未开启（保存开关后才会创建状态与定时器）';
     const list = $('#lifefeed-candidates');
     if (!list) return;
     const rows = Array.isArray(data.candidates) ? data.candidates : [];
-    list.innerHTML = rows.length ? rows.map((item) => `
+    list.innerHTML = rows.length ? rows.map((item) => {
+      const source = String(item.source || '');
+      const label = source.startsWith('plugin:')
+        ? `插件：${source.slice('plugin:'.length)}`
+        : (source === 'bilibili' || !source ? 'B站' : source);
+      return `
       <div class="asset-row" data-lifefeed-row="${esc(item.id)}">
         <div class="asset-row-main">
-          <a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>
-          <small>${esc(item.up || '未知 UP')} · 播放 ${fmtPlay(item.play)} · ${fmtDuration(item.duration)} · 分数 ${Number(item.score) || 0}${item.offeredAt ? ' · 已领取' : ''}</small>
+          <div style="display:flex;gap:8px;align-items:flex-start">
+            ${item.cover ? `<img src="${esc(item.cover)}" alt="" loading="lazy" style="width:44px;height:32px;object-fit:cover;border-radius:6px;flex:none" />` : ''}
+            <div>
+              <a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.title)}</a>
+              <small>${esc(label)} · ${esc(item.up || '未知 UP')} · 播放 ${fmtPlay(item.play)} · ${fmtDuration(item.duration)} · 分数 ${Number(item.score) || 0}${item.offeredAt ? ' · 已领取' : ''}</small>
+            </div>
+          </div>
         </div>
         <div class="asset-row-actions">
           <button type="button" class="btn btn-small" data-lifefeed-share="${esc(item.id)}">分享</button>
+          <button type="button" class="btn btn-small" data-lifefeed-more="${esc(item.id)}">多来点类似</button>
           <button type="button" class="btn btn-small" data-lifefeed-dismiss="${esc(item.id)}">丢弃</button>
         </div>
-      </div>`).join('') : '<div class="hint">队列是空的：开启后等一次觅食，或点「立刻觅食」。</div>';
+      </div>`;
+    }).join('') : '<div class="hint">队列是空的：开启后等一次觅食，或点「立刻觅食」。</div>';
   } catch (error) {
     box.textContent = `读取失败：${error?.message || error}`;
   }
@@ -82,6 +96,7 @@ async function onAction(event) {
   const refresh = event.target?.closest?.('#lifefeed-refresh');
   const clear = event.target?.closest?.('#lifefeed-clear');
   const share = event.target?.closest?.('[data-lifefeed-share]');
+  const more = event.target?.closest?.('[data-lifefeed-more]');
   const dismiss = event.target?.closest?.('[data-lifefeed-dismiss]');
 
   if (refresh) {
@@ -117,6 +132,18 @@ async function onAction(event) {
     }
     return;
   }
+  if (more) {
+    try {
+      await api('/api/life-feed/more', {
+        method: 'POST', body: JSON.stringify({ bvid: more.dataset.lifefeedMore })
+      });
+      setResult('已记下：以后多找类似的');
+      await loadStatus();
+    } catch (error) {
+      setResult(`记录失败：${error?.message || error}`, true);
+    }
+    return;
+  }
   if (dismiss) {
     try {
       await api('/api/life-feed/dismiss', {
@@ -130,9 +157,11 @@ async function onAction(event) {
     return;
   }
   if (share) {
-    const chatKey = String($('#cfg-lifefeed-chat')?.value || '');
+    const manualGroup = String($('#cfg-lifefeed-chat-manual')?.value || '').trim();
+    const chatKey = String($('#cfg-lifefeed-chat')?.value || '')
+      || (/^\d+$/.test(manualGroup) ? `group:${manualGroup}` : '');
     if (!chatKey) {
-      setResult('没有可分享的白名单群：先在「聊天白名单」里加群', true);
+      setResult('没有可分享的群：先在「聊天白名单」里加群，或在下方填群号', true);
       return;
     }
     if (!(await askForConfirmation(`让机器人现在在 ${chatKey} 分享这条见闻？会走一次主动发言。`))) return;
@@ -142,7 +171,7 @@ async function onAction(event) {
         method: 'POST',
         body: JSON.stringify({ confirm: true, chatKey, bvid: share.dataset.lifefeedShare })
       });
-      setResult('已交给主动发言链路；模型会用自己的语气说，不想说也会照常沉默');
+      setResult('已交给主动发言链路（排队中）；发送成功后可刷新查看最近分享状态');
       await loadStatus();
     } catch (error) {
       setResult(`分享失败：${error?.message || error}`, true);
@@ -184,8 +213,11 @@ function renderLifeFeedSection(c) {
         <div class="field"><label>觅食间隔（分钟）</label>
           <input type="number" id="cfg-lifefeed-interval" value="${esc(cfg.forageIntervalMinutes ?? 360)}" />
         </div>
-        <div class="field"><label>每天最多领取/分享</label>
+        <div class="field"><label>每天最多分享</label>
           <input type="number" id="cfg-lifefeed-offers" value="${esc(cfg.maxOffersPerDay ?? 2)}" />
+        </div>
+        <div class="field"><label>每天最多领取</label>
+          <input type="number" id="cfg-lifefeed-picks" value="${esc(cfg.maxPicksPerDay ?? 10)}" />
         </div>
       </div>
 
@@ -221,6 +253,9 @@ function renderLifeFeedSection(c) {
       <div class="field-row">
         <div class="field"><label>手动分享到</label>
           <select id="cfg-lifefeed-chat">${chatOptions}</select>
+        </div>
+        <div class="field"><label>或填群号</label>
+          <input type="text" id="cfg-lifefeed-chat-manual" placeholder="例如 123456789" />
         </div>
       </div>
 

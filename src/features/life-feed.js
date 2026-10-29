@@ -20,6 +20,8 @@ export const LIFE_FEED_BOUNDS = Object.freeze({
   maxCandidates: { min: 10, max: 10000 },
   maxPerForage: { min: 1, max: 500 },
   maxOffersPerDay: { min: 1, max: 500 },
+  maxPicksPerDay: { min: 1, max: 100 },
+  cooldownDays: { min: 1, max: 30 },
   minDurationSec: { min: 0, max: 86400 },
   maxDurationSec: { min: 1, max: 86400 },
   extraKeywords: { min: 1, max: 200 },
@@ -62,6 +64,8 @@ export function normalizedLifeFeedConfig(raw = {}) {
     maxCandidates: clampInt(cfg.maxCandidates, B.maxCandidates.min, B.maxCandidates.max, 200),
     maxPerForage: clampInt(cfg.maxPerForage, B.maxPerForage.min, B.maxPerForage.max, 30),
     maxOffersPerDay: clampInt(cfg.maxOffersPerDay, B.maxOffersPerDay.min, B.maxOffersPerDay.max, 2),
+    maxPicksPerDay: clampInt(cfg.maxPicksPerDay, B.maxPicksPerDay.min, B.maxPicksPerDay.max, 10),
+    cooldownDays: clampInt(cfg.cooldownDays, B.cooldownDays.min, B.cooldownDays.max, 7),
     minDurationSec: Math.min(minDurationSec, maxDurationSec),
     maxDurationSec: Math.max(minDurationSec, maxDurationSec),
     extraKeywords: cleanList(cfg.extraKeywords, B.extraKeywords.max, 20),
@@ -305,6 +309,7 @@ export class LifeFeedManager {
     const todayOffers = this.state.offers.filter((item) => item.day === day);
     const todayManualOffers = todayOffers.filter((item) => item.manual === true).length;
     const todayAutoOffers = todayOffers.length - todayManualOffers;
+    const lastShare = this.state.records.find((item) => item.action === 'shared' || item.action === 'manual-share');
     return {
       enabled: true,
       graduated: cfg.graduated,
@@ -318,7 +323,20 @@ export class LifeFeedManager {
       todayOffers: todayOffers.length,
       todayAutoOffers,
       todayManualOffers,
+      todayPicks: todayOffers.length,
+      todayShares: this.state.records.filter((item) => item.day === day && item.action === 'shared').length,
+      // 手动分享的真实回执：manual-share = 已排队；shared = 已发送（带 messageId）
+      lastShare: lastShare ? {
+        id: lastShare.id,
+        action: lastShare.action,
+        messageId: lastShare.messageId || null,
+        chatKey: lastShare.chatKey || '',
+        at: lastShare.at
+      } : null,
       maxOffersPerDay: cfg.maxOffersPerDay,
+      maxPicksPerDay: cfg.maxPicksPerDay,
+      // 控制台可解释"为什么最近总推/不推某类"：正向、负向权重都下发（不含内部候选正文）
+      tagWeights: { ...(this.state.tagWeights || {}) },
       limits: LIFE_FEED_BOUNDS,
       lastForageAt: this.state.lastForageAt,
       nextForageAt: this.state.nextForageAt,
@@ -338,13 +356,7 @@ export class LifeFeedManager {
     this.#save();
     const now = this.now();
     try {
-      const profile = buildInterestProfile({
-        store: this.store,
-        chatKeys: this.#chatKeys(cfg),
-        personaTemplateId: this.#personaTemplateId(),
-        extraKeywords: cfg.extraKeywords,
-        now
-      });
+      const profile = this.#profileFor(cfg, now);
       const pluginAdded = this.#ingestPluginInbox(profile, cfg, now);
       const items = await forageBilibili({
         profile,
@@ -378,6 +390,16 @@ export class LifeFeedManager {
     }
   }
 
+  #profileFor(cfg, now) {
+    return buildInterestProfile({
+      store: this.store,
+      chatKeys: this.#chatKeys(cfg),
+      personaTemplateId: this.#personaTemplateId(),
+      extraKeywords: cfg.extraKeywords,
+      now
+    });
+  }
+
   /**
    * 插件提交的见闻候选（cap.feed.publish 写到 data/life-feed-inbox/<id>.json）。
    * 插件不能调模型、不能发消息；这里只把它们并进队列，由正常的主动发言链路决定用不用。
@@ -392,8 +414,17 @@ export class LifeFeedManager {
     ]);
     let added = 0;
     for (const name of files) {
+      const file = path.join(inbox, name);
+      // 插件侧用这个文件保存"当天已提交的 id"做 20 条配额，不能吸收完就删；
+      // 只清两天以前的旧文件（跨天后配额状态本来就重置了），避免生活层关闭时永久堆积。
+      try {
+        if (now - fs.statSync(file).mtimeMs > 2 * 86400000) {
+          fs.rmSync(file, { force: true });
+          continue;
+        }
+      } catch { /* 读不到 mtime 就按正常文件处理 */ }
       let payload = null;
-      try { payload = JSON.parse(fs.readFileSync(path.join(inbox, name), 'utf8')); } catch { continue; }
+      try { payload = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
       const source = String(payload?.pluginId || name.replace(/\.json$/, ''));
       for (const item of Array.isArray(payload?.items) ? payload.items : []) {
         const id = String(item?.id || '').trim();
@@ -421,6 +452,7 @@ export class LifeFeedManager {
           pubdate: 0,
           tags,
           url: String(item.url || ''),
+          cover: /^https:\/\//i.test(String(item.cover || '')) ? String(item.cover).slice(0, 500) : '',
           score,
           addedAt: now
         });
@@ -468,8 +500,12 @@ export class LifeFeedManager {
 
   #quotaLeft(cfg, day) {
     // 手动分享是用户自己点的，不占自动份额：否则点两次没发出去，自动分享当天就没了。
-    const used = this.state.offers.filter((item) => item.day === day && item.manual !== true).length;
-    return Math.max(0, cfg.maxOffersPerDay - used);
+    const picks = this.state.offers.filter((item) => item.day === day && item.manual !== true).length;
+    const shares = this.state.records.filter((item) => item.day === day && item.action === 'shared').length;
+    return {
+      pickLeft: Math.max(0, (Number(cfg.maxPicksPerDay) || 10) - picks),
+      shareLeft: Math.max(0, (Number(cfg.maxOffersPerDay) || 2) - shares)
+    };
   }
 
   #pick({ count = 1, topic = '', manual = false } = {}) {
@@ -477,8 +513,10 @@ export class LifeFeedManager {
     const now = this.now();
     const day = dayKey(now);
     this.#load();
-    if (!manual && this.#quotaLeft(cfg, day) <= 0) {
-      return { error: `今天已经分享/领取 ${cfg.maxOffersPerDay} 次了，明天再继续` };
+    if (!manual) {
+      const quota = this.#quotaLeft(cfg, day);
+      if (quota.pickLeft <= 0) return { error: `今天已经领取 ${cfg.maxPicksPerDay} 次了，明天再继续` };
+      if (quota.shareLeft <= 0) return { error: `今天已经分享 ${cfg.maxOffersPerDay} 次了，明天再继续` };
     }
     const offeredToday = new Set(this.state.offers.filter((item) => item.day === day).map((item) => item.id));
     const usedUp = new Set(this.state.offers.filter((item) => item.day === day).map((item) => item.upMid).filter(Boolean));
@@ -487,6 +525,16 @@ export class LifeFeedManager {
       for (const tag of offer.tags || []) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
     }
     const needle = String(topic || '').trim().toLowerCase();
+    // 已分享/跳过的 UP 和标签做跨天冷却，不再只看当天 offers；否则热门 UP 天天霸榜。
+    const cooldownDays = Math.max(1, Math.min(30, Number(cfg.cooldownDays) || 7));
+    const cooldownSince = now - cooldownDays * 86400000;
+    const cooledUps = new Set();
+    const cooledTags = new Map();
+    for (const seen of this.state.seen) {
+      if (Number(seen.at) < cooldownSince) continue;
+      if (seen.upMid) cooledUps.add(String(seen.upMid));
+      for (const tag of seen.tags || []) cooledTags.set(tag, (cooledTags.get(tag) || 0) + 1);
+    }
     const picked = [];
     const sorted = this.state.candidates
       .filter((item) => !offeredToday.has(item.id))
@@ -498,8 +546,8 @@ export class LifeFeedManager {
         if (!haystack.includes(needle)) continue;
       }
       if (!manual) {
-        if (item.upMid && usedUp.has(item.upMid)) continue;
-        if ((item.tags || []).some((tag) => (tagCounts.get(tag) || 0) >= 2)) continue;
+        if (item.upMid && (usedUp.has(item.upMid) || cooledUps.has(String(item.upMid)))) continue;
+        if ((item.tags || []).some((tag) => (tagCounts.get(tag) || 0) >= 2 || (cooledTags.get(tag) || 0) >= 3)) continue;
       }
       picked.push(item);
       if (item.upMid) usedUp.add(item.upMid);
@@ -524,7 +572,26 @@ export class LifeFeedManager {
     return { items: picked.map(publicCandidate) };
   }
 
+  /** 立即吸收插件 inbox（不只等下一次 6 小时觅食）；控制台刷新和模型取候选前都会走。 */
+  drainInbox() {
+    const cfg = this.#cfg();
+    if (!cfg.enabled) return 0;
+    this.#load();
+    const now = this.now();
+    const added = this.#ingestPluginInbox(this.#profileFor(cfg, now), cfg, now);
+    if (added) this.#save();
+    return added;
+  }
+
+  /** 今天还剩几次自动分享（手动分享不受此限，但会占用已分享计数）。 */
+  shareQuotaLeft() {
+    const cfg = this.#cfg();
+    this.#load();
+    return this.#quotaLeft(cfg, dayKey(this.now())).shareLeft;
+  }
+
   next({ count = 2, topic = '', manual = false } = {}) {
+    this.drainInbox();
     return this.#pick({ count, topic, manual });
   }
 
@@ -533,8 +600,10 @@ export class LifeFeedManager {
     const now = this.now();
     const day = dayKey(now);
     this.#load();
-    if (!manual && this.#quotaLeft(cfg, day) <= 0) {
-      return { error: `今天已经分享 ${cfg.maxOffersPerDay} 次了` };
+    if (!manual) {
+      const quota = this.#quotaLeft(cfg, day);
+      if (quota.shareLeft <= 0) return { error: `今天已经分享 ${cfg.maxOffersPerDay} 次了` };
+      if (quota.pickLeft <= 0) return { error: `今天已经领取 ${cfg.maxPicksPerDay} 次了` };
     }
     const item = this.state.candidates.find((candidate) => candidate.id === String(id || ''));
     if (!item) return { error: '这条候选不在队列里（可能已过期或已被分享）' };
@@ -546,7 +615,20 @@ export class LifeFeedManager {
     return { item: publicCandidate(item) };
   }
 
-  feedback({ id, action = 'skip', chatKey = '' } = {}) {
+  /** 手动分享没有真正进入发送链路时，把本次 offer/排队记录撤回，允许重试。 */
+  releaseShare(id) {
+    const key = String(id || '').trim();
+    const day = dayKey(this.now());
+    this.#load();
+    this.state.offers = this.state.offers.filter((item) =>
+      !(item.id === key && item.manual === true && item.day === day));
+    this.state.records = this.state.records.filter((item) =>
+      !(item.id === key && item.action === 'manual-share' && item.day === day));
+    this.#save();
+    return { ok: true };
+  }
+
+  feedback({ id, action = 'skip', chatKey = '', messageId = null } = {}) {
     const key = String(id || '').trim();
     const verb = ['shared', 'skip', 'more_like_this'].includes(action) ? action : 'skip';
     this.#load();
@@ -561,8 +643,20 @@ export class LifeFeedManager {
       return { ok: true, action: verb };
     }
     this.state.candidates = this.state.candidates.filter((candidate) => candidate.id !== key);
-    this.state.seen.push({ id: key, at: this.now(), upMid: item.upMid || '' });
-    this.state.records.unshift({ at: this.now(), action: verb, id: key, chatKey, day: dayKey(this.now()) });
+    // shared 给正反馈、skip 给负反馈：只在 more_like_this 时加权的旧口径会让 skip 永远不收敛。
+    const delta = verb === 'shared' ? 1 : -1;
+    for (const tag of item.tags || []) {
+      const next = (Number(this.state.tagWeights[tag]) || 0) + delta;
+      this.state.tagWeights[tag] = Math.max(-10, Math.min(50, next));
+    }
+    this.state.seen.push({
+      id: key, at: this.now(), upMid: item.upMid || '',
+      tags: Array.isArray(item.tags) ? item.tags.slice(0, 6) : []
+    });
+    this.state.records.unshift({
+      at: this.now(), action: verb, id: key, chatKey, day: dayKey(this.now()),
+      ...(messageId === null || messageId === undefined ? {} : { messageId })
+    });
     this.#prune(this.now());
     this.#save();
     return { ok: true, action: verb };

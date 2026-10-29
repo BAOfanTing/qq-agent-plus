@@ -157,6 +157,42 @@ describe('Orchestrator', () => {
     return { cfg, runner, store, sessions, memory, handoffs, append };
   }
 
+  it('direct interactions use the short wake delay; ordinary group messages keep batching', async (t) => {
+    const { runner, store, cfg } = fixture(t);
+    const delays = [];
+    const original = runner.scheduleWake.bind(runner);
+    runner.scheduleWake = (chatKey, delay = null, options = {}) => {
+      const scheduled = original(chatKey, delay, options);
+      if (scheduled) delays.push(delay);
+      return scheduled;
+    };
+
+    const direct = store.appendIncoming('group:1', {
+      mid: 9001, text: '@bot 在吗', senderId: '42', senderName: 'member-42', mentionsSelf: true
+    });
+    runner.onIncoming('group:1', direct);
+    assert.equal(delays.at(-1), cfg.directWakeDelayMs, '被 @ 时应走 directWakeDelayMs 的短聚批');
+
+    const before = delays.length;
+    const ordinary = store.appendIncoming('group:1', {
+      mid: 9002, text: '普通群消息', senderId: '43', senderName: 'member-43'
+    });
+    runner.onIncoming('group:1', ordinary);
+    assert.equal(delays.length, before, '普通消息不能把已经排好的直接互动短聚批顶回长窗口');
+  });
+
+  it('records why a batch was skipped for the console', async (t) => {
+    const { runner, cfg, append } = fixture(t);
+    cfg.store.randomPercent = 0;
+    append(1, '普通群消息');
+    await runner.wake('group:1');
+    const decision = runner.decisionFor('group:1');
+    assert.ok(decision, '未命中时应留下最近一次判定');
+    assert.equal(decision.percent, 0);
+    assert.equal(typeof decision.reason, 'string');
+    assert.ok(decision.at > 0);
+  });
+
   it('only acknowledges the claimed batch after successful model processing', async (t) => {
     const { runner, store, append } = fixture(t);
     append(1);
@@ -189,6 +225,38 @@ describe('Orchestrator', () => {
     const session = sessions.get(sessions.listSummaries(1)[0].id);
     assert.equal(session.status, 'error');
     assert.equal(session.usage.totalTokens, 50);
+  });
+
+  it('sends one short fallback to direct interactions after model exhaustion, not to ordinary group messages', async (t) => {
+    const { runner, store } = fixture(t);
+    const out = [];
+    const original = runner.sender.sendTextBatch.bind(runner.sender);
+    runner.sender.sendTextBatch = async (chatKey, messages, options) => {
+      out.push({ chatKey, messages, options });
+      return original(chatKey, messages, options);
+    };
+    globalThis.fetch = async () => new Response('bad request', { status: 400 });
+
+    store.appendIncoming('group:1', {
+      mid: 9201, text: '@bot 在吗', senderId: '42', senderName: 'member-42', mentionsSelf: true
+    });
+    await runner.wake('group:1');
+    assert.equal(out.filter((x) => x.messages.some((m) => /卡了一下/.test(m))).length, 1,
+      '被 @ 的失败要给一句可见兜底');
+
+    store.appendIncoming('group:1', {
+      mid: 9202, text: '@bot 还在吗', senderId: '42', senderName: 'member-42', mentionsSelf: true
+    });
+    await runner.wake('group:1');
+    assert.equal(out.filter((x) => x.messages.some((m) => /卡了一下/.test(m))).length, 1,
+      '同一会话冷却期内不重复兜底');
+
+    store.appendIncoming('group:1', {
+      mid: 9203, text: '普通群消息', senderId: '43', senderName: 'member-43'
+    });
+    await runner.wake('group:1');
+    assert.equal(out.filter((x) => x.messages.some((m) => /卡了一下/.test(m))).length, 1,
+      '普通群消息失败保持安静');
   });
 
   it('does not escalate model-correctable malformed tool arguments to incidents', async (t) => {

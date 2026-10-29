@@ -58,28 +58,43 @@ function context(patch = {}) {
   };
 }
 
-test('send tools reject message IDs and unknown users before creating an external write', async () => {
+test('send_message 对非法引用/@ 只降级目标，正文照发', async () => {
   const f = context();
   const send = await tool('send_message').execute(f.ctx, {
     messages: 'hello',
     atUserId: '1710457251'
   });
-  assert.equal(send.isError, true);
-  assert.match(send.content, /它是消息 id/);
+  assert.equal(send.isError, undefined);
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.sends[0][3].atUserId, null, '像消息 id 的 @ 目标要忽略');
+  assert.match(send.content, /消息 id/);
 
   const reply = await tool('send_message').execute(f.ctx, {
     messages: 'hello',
     replyToMessageId: '999'
   });
-  assert.equal(reply.isError, true);
-  assert.match(reply.content, /当前会话找不到/);
+  assert.equal(reply.isError, undefined);
+  assert.equal(f.sends.length, 2);
+  assert.equal(f.sends[1][3].replyToMessageId, null, '坏引用不能吞掉正文');
+  assert.match(reply.content, /引用目标无效/);
+
+  const both = await tool('send_message').execute(f.ctx, {
+    messages: 'hello',
+    replyToMessageId: '1710457251',
+    atUserId: '42'
+  });
+  assert.equal(both.isError, undefined);
+  assert.equal(f.sends.length, 3);
+  assert.equal(f.sends[2][3].replyToMessageId, '1710457251');
+  assert.equal(f.sends[2][3].atUserId, null, '同时给时保留引用、忽略 @');
+  assert.match(both.content, /保留引用/);
 
   const poke = await tool('send_poke').execute(f.ctx, {
     targetUserId: '1710457251'
   });
   assert.equal(poke.isError, true);
   assert.match(poke.content, /它是消息 id/);
-  assert.deepEqual(f.sends, []);
+  assert.equal(f.sends.length, 3, 'send_poke 仍然严格校验');
 });
 
 test('send tools accept a verified current group member', async () => {
