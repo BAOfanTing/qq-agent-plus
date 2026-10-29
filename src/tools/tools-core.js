@@ -6,7 +6,7 @@
 import crypto from 'node:crypto';
 import { getConfig, imageGenAvailable, imageGenMaxPerHour } from '../core/config.js';
 import { imageType } from '../core/image-type.js';
-import { nextAtFromHHMM, normalizeRepeat, nextOccurrenceAt } from '../core/reminders.js';
+import { MAX_REMINDER_TEXT, nextAtFromHHMM, normalizeRepeat, nextOccurrenceAt } from '../core/reminders.js';
 import { synthesizeSpeech, ttsConfigured } from '../llm/tts.js';
 import { generateImage, MAX_PROMPT_CHARS } from '../llm/image-gen.js';
 import { resolveApiKey } from '../llm/llm.js';
@@ -40,6 +40,12 @@ const avatarQuota = createQuota({ windowMs: 7 * 24 * 3600_000 }); // 换头像�
 const albumWriteQuota = createQuota({ windowMs: 3600_000 });
 // 私聊文本文件：文件比消息显眼，且内容可能很大；默认每天 10 个。
 const privateFileQuota = createQuota({ windowMs: 24 * 3600_000 });
+
+// ctx 只属于本轮工具循环；新一轮即使复用 session，也不合并独立的提醒请求。
+const recurringRemindersByContext = new WeakMap();
+const reminderSnapshot = (item) => JSON.stringify([
+  item.chatKey, item.text, item.createdBy, item.targetName, item.repeat, item.quiet
+]);
 // "每群每天一次"类动作的去重表（群签到：重复签没有意义；群待办：同一条消息重复设也没意义）。
 // dayKey 是上海自然日，跨日自然失效，不需要定时器。resetPlatformQuotasForTest 会一起清。
 const signedDayByChat = new Map();     // chatKey -> 'YYYY-MM-DD'
@@ -2507,26 +2513,30 @@ export function buildToolDefs() {
           return ok({ canceled: true, text: hit.text, at: fmt(hit.at) });
         }
         let at = null;
+        let firstOccurrence = null;
         // repeat 可能是对象（schema 声明的形式）或字符串（"daily"/"weekly:mon"/cron）。
         // 旧写法 String(object) 会得到 "[object Object]"，带时刻的周期提醒根本建不出来。
         const repeatArg = typeof args.repeat === 'string' ? args.repeat.trim() : args.repeat;
         const hasRepeat = repeatArg !== undefined && repeatArg !== null
           && !(typeof repeatArg === 'string' && repeatArg === '');
         const quietCfg = getConfig().reminders?.quiet || null;
+        let normalizedRepeat = null;
         if (hasRepeat) {
+          try { normalizedRepeat = normalizeRepeat(repeatArg); } catch (error) { return err(String(error?.message ?? error)); }
           // 周期提醒：at/minutes 只定首次触发点；都不传时按 repeat 规则算第一次
           if (args.at !== undefined && String(args.at).trim() !== '') {
             at = nextAtFromHHMM(String(args.at));
             if (at === null) return err('at 需要是 HH:MM（24 小时制，如 09:30）');
+            firstOccurrence = ['at', ...String(args.at).trim().split(/[:：]/).map(Number)];
           } else if (args.minutes !== undefined && String(args.minutes).trim() !== '') {
             const m = Number(args.minutes);
             if (!Number.isFinite(m) || m < 1 || m > 30 * 24 * 60) return err('minutes 需要是 1~43200 之间的数字（最多 30 天）');
             at = Date.now() + Math.round(m) * 60000;
+            firstOccurrence = ['minutes', Math.round(m)];
           } else {
-            let normalized = null;
-            try { normalized = normalizeRepeat(repeatArg); } catch (error) { return err(String(error?.message ?? error)); }
-            at = normalized ? nextOccurrenceAt({ repeat: normalized }, Date.now(), { quiet: quietCfg }) : null;
+            at = normalizedRepeat ? nextOccurrenceAt({ repeat: normalizedRepeat }, Date.now(), { quiet: quietCfg }) : null;
             if (!at) return err('repeat 不合法，算不出首次触发时间');
+            firstOccurrence = ['repeat'];
           }
         } else if (args.at !== undefined && String(args.at).trim() !== '') {
           at = nextAtFromHHMM(String(args.at));
@@ -2544,17 +2554,41 @@ export function buildToolDefs() {
           // 兜底会把后来者记成提要求的人（2026-10-10 复核）。
           const fromArg = String(args.from ?? '').trim();
           let fromOk = false;
+          const requesterIds = new Set();
           if (fromArg) {
             for (const m of (ctx.triggerEntries || [])) {
               if (m?.self) continue;
               const sid = String(m?.senderId || '');
               const sname = String(m?.senderName || '').trim();
               if ((sid && fromArg === sid) || (sname && fromArg === sname)
-                || (sid && fromArg === displayNameOf(sid, sname))) { fromOk = true; break; }
+                || (sid && fromArg === displayNameOf(sid, sname))) {
+                fromOk = true;
+                requesterIds.add(sid || null);
+              }
+            }
+          } else {
+            for (const m of (ctx.triggerEntries || [])) {
+              if (!m?.self) requesterIds.add(String(m?.senderId || '') || null);
             }
           }
           const createdBy = fromOk ? fromArg : '';
-          const { id } = store.add({
+          const text = sanitizeUserText(String(args.text ?? '').trim()).slice(0, MAX_REMINDER_TEXT);
+          if (!text) return err('提醒内容不能为空');
+          // 未验证的 from、同名多人、未指明来源的多人批次都不合并，也不据此补写归属。
+          const unambiguous = (!fromArg || fromOk) && requesterIds.size <= 1 && !requesterIds.has(null);
+          const requestKey = normalizedRepeat && unambiguous ? JSON.stringify([
+            ctx.chatKey, text, fromArg, createdBy, [...requesterIds][0], String(args.to ?? '').trim(),
+            normalizedRepeat.kind, normalizedRepeat.weekday, normalizedRepeat.hour, normalizedRepeat.minute,
+            normalizedRepeat.cron?.replace(/\s+/g, ' '), normalizedRepeat.tz || 'Asia/Shanghai',
+            normalizedRepeat.jitterMs || 0, firstOccurrence,
+            quietCfg?.start && quietCfg?.end
+              ? [String(quietCfg.start).slice(0, 5), String(quietCfg.end).slice(0, 5)] : null
+          ]) : null;
+          const previous = requestKey && recurringRemindersByContext.get(ctx)?.get(requestKey);
+          const pending = previous && store.list?.(ctx.chatKey).find((item) =>
+            item.id === previous.id && item.chatKey === ctx.chatKey && item.status === 'pending'
+            && reminderSnapshot(item) === previous.snapshot);
+          const { id, at: actualAt } = pending || store.add({
             chatKey: ctx.chatKey, at,
             text: String(args.text ?? ''),
             createdBy,
@@ -2562,10 +2596,19 @@ export function buildToolDefs() {
             repeat: hasRepeat ? repeatArg : null,
             quiet: quietCfg
           });
+          if (requestKey && !pending) {
+            const item = store.list?.(ctx.chatKey).find((entry) => entry.id === id);
+            if (item) {
+              if (!recurringRemindersByContext.has(ctx)) recurringRemindersByContext.set(ctx, new Map());
+              recurringRemindersByContext.get(ctx).set(requestKey, { id, snapshot: reminderSnapshot(item) });
+            }
+          }
           return ok({
-            created: true, id, at: fmt(at),
+            created: !pending, ...(pending ? { reused: true } : {}), id, at: fmt(actualAt ?? at),
             ...(createdBy ? { from: createdBy } : {}),
-            note: '到点你会被唤醒并知道该提醒什么；不需要再回复这条结果。'
+            note: (pending
+              ? '本轮已创建相同的周期提醒，已复用原任务，没有重复创建。'
+              : '到点你会被唤醒并知道该提醒什么；不需要再回复这条结果。')
               + (fromArg && !fromOk
                 ? '（from 在最近这轮消息里对不上人，这次没有记录归属；要记的话填对方的群名片/备注名或 QQ 号）'
                 : '')
