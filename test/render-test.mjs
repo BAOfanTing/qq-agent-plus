@@ -3814,10 +3814,11 @@ try {
     sandbox.fetch = prevFetch;
   }
 
-  // ── 群勾选列表的"没读完别覆盖"守卫 ──
-  //    用户报过"群列表一直读取中"（2026-09-28）：那种状态下盒子里只剩提示文案、零勾选，
-  //    若保存照常发 chats: []，一次无关的保存就把白名单清空了。判据是 box.dataset.loaded
-  //    （渲染出真实行才置位）。这里三个断言：没读完不带 chats、读完后能主动清空、日报那份同理。
+  // ── 会话选择器的"没动过就别写"守卫 ──
+  //    用户报过"群列表一直读取中"（2026-09-28）：那种状态下零勾选被当成"清空"保存，
+  //    一次无关的保存就把白名单清空了。现在选择改成弹窗，只有用户点过「确定」的字段才会
+  //    在容器 dataset 上置 dirty；没动过就沿用配置里的原值（不覆盖）。三个断言：未编辑保留、
+  //    确认清空能写空数组、日报那份同理。
   {
     const posts2 = [];
     const prevFetch = sandbox.fetch;
@@ -3837,22 +3838,25 @@ try {
       await vm.runInContext('saveConfig({ quiet: true })', ctx);
       return posts2[posts2.length - 1] || {};
     };
-    // 配置里先放一份白名单：没读完时保存必须原样保留（不能变空），读完了没勾才允许清空。
+    // 配置里先放一份名单：没动过选择器时保存必须原样保留（不能变空）。
     vm.runInContext("state.config.groupGame = { ...(state.config.groupGame || {}), chats: ['group:111', 'group:222'] };", ctx);
     vm.runInContext("state.config.groupDigest = { ...(state.config.groupDigest || {}), chats: ['group:333'] };", ctx);
-    delete gbox.dataset.loaded;
+    gbox.dataset.sessionDirty = '0';
+    gbox.dataset.sessionValue = 'group:111,group:222';
     const bodyA = await saveIn('groupGame');
-    checks.push(['未读完保留原白名单', JSON.stringify(bodyA.groupGame?.chats) === '["group:111","group:222"]', JSON.stringify(bodyA.groupGame?.chats)]);
-    gbox.dataset.loaded = '1';
+    checks.push(['未编辑保留原白名单', JSON.stringify(bodyA.groupGame?.chats) === '["group:111","group:222"]', JSON.stringify(bodyA.groupGame?.chats)]);
+    // 用户在弹窗里点过确定并清空：dirty 置位后才允许把空数组写回去。
+    gbox.dataset.sessionDirty = '1';
+    gbox.dataset.sessionValue = '';
     const bodyB = await saveIn('groupGame');
-    checks.push(['读完后能清空', Array.isArray(bodyB.groupGame?.chats) && bodyB.groupGame.chats.length === 0, JSON.stringify(bodyB.groupGame?.chats)]);
-    delete dbox.dataset.loaded;
+    checks.push(['确认清空后能写空数组', Array.isArray(bodyB.groupGame?.chats) && bodyB.groupGame.chats.length === 0, JSON.stringify(bodyB.groupGame?.chats)]);
+    dbox.dataset.sessionDirty = '0';
     const bodyC = await saveIn('moments');
-    checks.push(['日报未读完保留原白名单', JSON.stringify(bodyC.groupDigest?.chats) === '["group:333"]', JSON.stringify(bodyC.groupDigest?.chats)]);
+    checks.push(['日报未编辑保留原白名单', JSON.stringify(bodyC.groupDigest?.chats) === '["group:333"]', JSON.stringify(bodyC.groupDigest?.chats)]);
     sandbox.fetch = prevFetch;
     const okGuard = checks.every(([, ok]) => ok);
     okGuard ? pass++ : fail++;
-    console.log('  ' + (okGuard ? 'OK   ' : 'FAIL ') + '群勾选列表：没读完保留原白名单、读完后能清空'
+    console.log('  ' + (okGuard ? 'OK   ' : 'FAIL ') + '会话选择器：没动过保留原名单、确认清空才写空'
       + (okGuard ? '' : ' -> ' + JSON.stringify(checks.map(([n, ok, v]) => n + '=' + ok + '(' + v + ')'))));
   }
 

@@ -1960,7 +1960,7 @@ export function buildToolDefs() {
           const humanShare = ctx.session?.manual === true && ctx.paced !== true;
           if (!humanShare) {
             if (feed.shareMode?.() === 'manual') return err('生活层当前是手动分享模式，等管理员在控制台点分享。', { reportIncident: false });
-            if (feed.isShareTarget?.(ctx.chatKey) === false) return err('当前群不在见闻分享白名单里。', { reportIncident: false });
+            if (feed.isShareTarget?.(ctx.chatKey) === false) return err('当前会话不在见闻分享目标里。', { reportIncident: false });
           }
           const count = Math.max(1, Math.min(3, Math.round(Number(args.count) || 2)));
           const topic = safeSlice(String(args.topic ?? ''), 20);
@@ -2035,7 +2035,7 @@ export function buildToolDefs() {
           const humanShare = ctx.session?.manual === true && ctx.paced !== true;
           if (!humanShare) {
             if (feed.shareMode?.() === 'manual') return err('生活层当前是手动分享模式，等管理员在控制台点分享。', { reportIncident: false });
-            if (feed.isShareTarget?.(ctx.chatKey) === false) return err('当前群不在见闻分享白名单里。', { reportIncident: false });
+            if (feed.isShareTarget?.(ctx.chatKey) === false) return err('当前会话不在见闻分享目标里。', { reportIncident: false });
             const left = feed.shareQuotaLeft?.();
             if (Number.isFinite(left) && left <= 0) return err('今天的自动分享额度已经用完，明天再继续');
           }

@@ -5,6 +5,7 @@
 // 分享复用现有 send_message，不新增发送通道。
 import fs from 'node:fs';
 import path from 'node:path';
+import { chatAllowed } from '../core/access.js';
 import { buildInterestProfile } from './life-feed-interest.js';
 import { forageBilibili, scoreCandidate } from './life-feed-source-bilibili.js';
 import { forageRss } from './life-feed-source-rss.js';
@@ -45,6 +46,16 @@ function cleanList(value, maxItems, maxChars) {
     .slice(0, maxItems);
 }
 
+// 分享目标的老配置里只有裸群号；现在群和私聊共用一份名单，统一收敛成 `group:<群号>` /
+// `private:<QQ>`。认不出的条目原样保留——它会永远匹配不上，但不会拖累已配置的目标。
+function shareTargetKey(entry) {
+  const raw = String(entry || '').trim();
+  if (!raw) return '';
+  if (/^(group|private):\d+$/.test(raw)) return raw;
+  if (/^\d+$/.test(raw)) return `group:${raw}`;
+  return raw;
+}
+
 function dayKey(now) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -71,7 +82,8 @@ export function normalizedLifeFeedConfig(raw = {}) {
     maxOffersPerDay: clampInt(cfg.maxOffersPerDay, B.maxOffersPerDay.min, B.maxOffersPerDay.max, 2),
     maxPicksPerDay: clampInt(cfg.maxPicksPerDay, B.maxPicksPerDay.min, B.maxPicksPerDay.max, 10),
     shareMode: cfg.shareMode === 'manual' ? 'manual' : 'auto',
-    shareGroups: cleanList(cfg.shareGroups, B.groups.max, 32),
+    // 群 `group:<群号>` 与私聊 `private:<QQ>` 共用一份目标名单；裸数字按老配置的群号处理。
+    shareGroups: [...new Set(cleanList(cfg.shareGroups, B.groups.max, 32).map(shareTargetKey).filter(Boolean))],
     rssUrls: cleanList(cfg.rssUrls, 10, 500).filter((url) => /^https?:\/\//i.test(url)),
     rssPerForage: clampInt(cfg.rssPerForage, B.rssPerForage.min, B.rssPerForage.max, 10),
     cooldownDays: clampInt(cfg.cooldownDays, B.cooldownDays.min, B.cooldownDays.max, 7),
@@ -79,8 +91,39 @@ export function normalizedLifeFeedConfig(raw = {}) {
     maxDurationSec: Math.max(minDurationSec, maxDurationSec),
     extraKeywords: cleanList(cfg.extraKeywords, B.extraKeywords.max, 20),
     excludeKeywords: cleanList(cfg.excludeKeywords, B.excludeKeywords.max, 20),
-    groups: cleanList(cfg.groups, B.groups.max, 32)
+    // 兴趣来源同样是"会话"：群 group:<群号> 或私聊 private:<QQ>，裸群号按群处理。
+    groups: [...new Set(cleanList(cfg.groups, B.groups.max, 32).map(shareTargetKey).filter(Boolean))]
   };
+}
+
+/**
+ * 提炼兴趣要读哪些会话：显式配置优先（群/私聊都认），没配就沿用聊天白名单（群 + 私聊），
+ * 白名单留空且允许所有会话时，用最近有消息的会话。最多 20 个，避免一次读太多历史。
+ * 私聊只参与词频排序（searchTerms 仍然只取人设与显式关键词），不会把私聊内容拿去搜 B 站。
+ */
+export function resolveInterestChatKeys({
+  groups = [],
+  allow = {},
+  allowAllWhenEmpty = false,
+  allChats = [],
+  denied = null
+} = {}) {
+  // 手写配置里的非法条目（全角冒号、空串）不能算"配了显式来源"，否则会把后面
+  // 白名单/所有会话的回退整段吃掉；deny 里的会话也不该再拿历史去提炼。
+  const usable = (key) => /^(group|private):\d+$/.test(key) && !(denied && denied.has(key));
+  const explicit = (Array.isArray(groups) ? groups : []).map(shareTargetKey).filter(usable);
+  if (explicit.length) return [...new Set(explicit)].slice(0, 20);
+  const fromAllow = [
+    ...(Array.isArray(allow?.groups) ? allow.groups : []).map((id) => `group:${String(id).trim()}`),
+    ...(Array.isArray(allow?.private) ? allow.private : []).map((id) => `private:${String(id).trim()}`)
+  ].filter(usable);
+  if (fromAllow.length) return [...new Set(fromAllow)].slice(0, 20);
+  // 注意：allowAllWhenEmpty 是配置的**顶层**字段（不在 allow 里），调用方要显式传进来。
+  if (allowAllWhenEmpty !== true) return [];
+  // allChats 由调用方先按 deny/白名单口径过滤好（见 LifeFeedManager#chatKeys）。
+  return [...new Set((Array.isArray(allChats) ? allChats : [])
+    .map((key) => String(key || ''))
+    .filter(usable))].slice(0, 20);
 }
 
 function emptyState() {
@@ -169,23 +212,35 @@ export class LifeFeedManager {
   }
 
   #chatKeys(cfg) {
-    if (cfg.groups.length) {
-      return cfg.groups.map((item) => (item.startsWith('group:') ? item : `group:${item}`)).slice(0, 20);
+    const cfgNow = this.config() || {};
+    const allow = cfgNow.allow || {};
+    const deny = cfgNow.deny || {};
+    const denyOf = (kind, list) => (Array.isArray(list) ? list : [])
+      .map((id) => `${kind}:${String(id).trim()}`)
+      .filter((key) => /^(group|private):\d+$/.test(key));
+    const denied = new Set([...denyOf('group', deny.groups), ...denyOf('private', deny.private)]);
+    // 只用"有效 id"判断白名单是否为空：allow 里只有空串/脏值时应当落到后面的回退。
+    const hasValidId = (list) => (Array.isArray(list) ? list : [])
+      .some((id) => /^\d+$/.test(String(id).trim()));
+    const hasAllowList = hasValidId(allow.groups) || hasValidId(allow.private);
+    // 只有"既没显式来源、白名单也为空、又允许所有会话"时才需要扫会话表；
+    // 否则每次觅食/取候选都白查一次 chats 表。
+    let allChats = [];
+    if (!cfg.groups.length && !hasAllowList && cfgNow.allowAllWhenEmpty === true) {
+      try {
+        // 回退到"所有会话"时仍尊重 deny 与运行口径，被屏蔽的会话不参与提炼。
+        allChats = (this.store?.listChats?.() || [])
+          .map((key) => String(key || ''))
+          .filter((key) => chatAllowed(key, cfgNow));
+      } catch { allChats = []; }
     }
-    const allow = this.config()?.allow || {};
-    const keys = (Array.isArray(allow.groups) ? allow.groups : [])
-      .map((id) => `group:${id}`)
-      .slice(0, 20);
-    if (keys.length) return keys;
-    if (allow.allowAllWhenEmpty !== true) return [];
-    try {
-      return (this.store?.listChats?.() || [])
-        .map((chat) => String(chat?.chatKey || ''))
-        .filter((key) => key.startsWith('group:'))
-        .slice(0, 20);
-    } catch {
-      return [];
-    }
+    return resolveInterestChatKeys({
+      groups: cfg.groups,
+      allow,
+      allowAllWhenEmpty: cfgNow.allowAllWhenEmpty === true,
+      allChats,
+      denied
+    });
   }
 
   #intervalMs(cfg) {
@@ -471,7 +526,12 @@ export class LifeFeedManager {
    * 插件提交的见闻候选（cap.feed.publish 写到 data/life-feed-inbox/<id>.json）。
    * 插件不能调模型、不能发消息；这里只把它们并进队列，由正常的主动发言链路决定用不用。
    */
-  #ingestPluginInbox(profile, cfg, now) {
+  #ingestPluginInbox(profileSource, cfg, now) {
+    // profile 可能很贵（最多 20 个会话 × 800 条消息分词）：只有真的发现新条目才求值。
+    // 控制台每次刷新 / 每次 life_feed_next 都会 drainInbox，inbox 里常常只剩"当天已吸收"的文件。
+    const profileOf = typeof profileSource === 'function' ? profileSource : () => profileSource;
+    let profileCache = null;
+    const profile = () => (profileCache ||= profileOf());
     const inbox = path.join(this.dataDir, 'life-feed-inbox');
     let files = [];
     try { files = fs.readdirSync(inbox).filter((name) => name.endsWith('.json')); } catch { return 0; }
@@ -505,7 +565,7 @@ export class LifeFeedManager {
           play: 0,
           pubdate: 0,
           duration: item.durationSec
-        }, profile) + tags.reduce((sum, tag) => sum + (Number(this.state.tagWeights[tag]) || 0) * 2, 0);
+        }, profile()) + tags.reduce((sum, tag) => sum + (Number(this.state.tagWeights[tag]) || 0) * 2, 0);
         this.state.candidates.push({
           source: `plugin:${source}`,
           via: 'plugin',
@@ -649,7 +709,7 @@ export class LifeFeedManager {
     } catch { return 0; }
     this.#load();
     const now = this.now();
-    const added = this.#ingestPluginInbox(this.#profileFor(cfg, now), cfg, now);
+    const added = this.#ingestPluginInbox(() => this.#profileFor(cfg, now), cfg, now);
     if (added) this.#save();
     return added;
   }
@@ -666,12 +726,12 @@ export class LifeFeedManager {
     return this.#cfg().shareMode;
   }
 
-  /** 分享目标白名单：空 = 沿用聊天白名单；配置后只允许这些群。 */
+  /** 分享目标白名单：空 = 沿用聊天白名单；配置后只允许列出的群 / 私聊。 */
   isShareTarget(chatKey) {
-    const groups = this.#cfg().shareGroups || [];
-    if (!groups.length) return true;
-    const key = String(chatKey || '');
-    return groups.some((id) => (String(id).startsWith('group:') ? String(id) : `group:${id}`) === key);
+    const targets = (this.#cfg().shareGroups || []).map(shareTargetKey).filter(Boolean);
+    if (!targets.length) return true;
+    const key = shareTargetKey(chatKey);
+    return targets.includes(key);
   }
 
   next({ count = 2, topic = '', manual = false } = {}) {

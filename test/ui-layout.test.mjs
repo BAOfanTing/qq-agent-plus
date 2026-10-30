@@ -425,6 +425,21 @@ test('分享设置：自动/手动模式与独立目标群都进保存补丁', (
   assert.match(lifeFeedUi, /value="auto"/);
   assert.match(lifeFeedUi, /id="cfg-lifefeed-sharegroups-box"/);
   assert.match(save, /shareMode: String\(val\('#cfg-lifefeed-sharemode'/);
-  assert.match(save, /pickedGroups\('cfg-lifefeed-sharegroups-box'\)/);
+  assert.match(save, /pickedSessionValues\('cfg-lifefeed-sharegroups-box'\)/);
   assert.match(save, /shareGroups/);
+});
+
+test('见闻分享范围：群与私聊混排，选择走统一会话选择器', () => {
+  const lifeFeedUi = fs.readFileSync(new URL('../ui/pages/life-feed.js', import.meta.url), 'utf8');
+  const picker = fs.readFileSync(new URL('../ui/core/session-picker.js', import.meta.url), 'utf8');
+  assert.match(lifeFeedUi, /renderSessionPicker\('cfg-lifefeed-sharegroups-box', selectedShareGroups/,
+    '分享目标要用统一选择器，不能退回内嵌群清单');
+  assert.match(lifeFeedUi, /renderSessionPicker\('cfg-lifefeed-groups-box', selectedGroups/,
+    '兴趣来源也要能选私聊');
+  assert.match(lifeFeedUi, /<option value="private:\$\{esc\(id\)\}">私聊/,
+    '手动分享下拉要有 private:<QQ> 选项');
+  assert.match(picker, /export \{ openSessionPicker, renderSessionPicker, pickedSessionValues \};/, '选择器要有弹窗实现');
+  assert.match(picker, /sessionDirty/, '只有用户确认过的字段才进保存补丁');
+  assert.match(css, /\.session-picker-row \{/);
+  assert.doesNotMatch(css, /\.group-checklist/, '旧的内嵌清单样式应已移除');
 });

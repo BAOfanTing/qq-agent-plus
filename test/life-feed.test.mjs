@@ -5,7 +5,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import {
   LifeFeedManager,
-  normalizedLifeFeedConfig
+  normalizedLifeFeedConfig,
+  resolveInterestChatKeys
 } from '../src/features/life-feed.js';
 import { buildInterestProfile, tokenize } from '../src/features/life-feed-interest.js';
 import { forageBilibili, scoreCandidate } from '../src/features/life-feed-source-bilibili.js';
@@ -142,11 +143,13 @@ test('管理器：觅食入库、每日配额、手动分享、状态持久化',
       groups: []
     },
     persona: { templateId: 'xiaojingyu' },
-    allow: { groups: ['123'], allowAllWhenEmpty: false }
+    allow: { groups: ['123'] },
+    allowAllWhenEmpty: false
   };
   const store = {
     recent: () => [{ ts: NOW - 1000, text: '深海 潜水 独立游戏' }],
-    listChats: () => [{ chatKey: 'group:123' }]
+    // 与生产一致：store.listChats() 返回字符串数组（store.js: listChats）。
+    listChats: () => ['group:123']
   };
   const fetchImpl = fakeFetch([['popular', POPULAR]]);
   const manager = new LifeFeedManager({
@@ -466,7 +469,7 @@ test('分享目标白名单：配置后只允许列出的群，手动会话仍�
   };
   const wrongGroup = await executeTool([tool], targetCtx, 'share_bilibili', JSON.stringify({ bvid: 'BVguard' }));
   assert.equal(wrongGroup.isError, true, '不在分享目标里的群不能自动分享');
-  assert.match(wrongGroup.content, /白名单/);
+  assert.match(wrongGroup.content, /分享目标/);
 
   // paced 唤醒带着 manual:true 派发，但它是机器人自己醒的，不是人工，不能绕过手动模式。
   const pacedCtx = { ...baseCtx, paced: true, session: { ...baseCtx.session, manual: true } };
@@ -486,6 +489,103 @@ test('分享目标白名单：配置后只允许列出的群，手动会话仍�
   const sharedRecord = manager.status();
   assert.equal(sharedRecord.todayShares, 1);
   assert.equal(manager.shareQuotaLeft(), 1, '真正发送成功的分享仍占每日防刷屏额度');
+});
+
+test('兴趣来源支持私聊：显式名单优先，否则沿用白名单里的群 + 私聊', () => {
+  assert.deepEqual(resolveInterestChatKeys({ groups: ['private:9', '42'] }), ['private:9', 'group:42']);
+  assert.deepEqual(
+    resolveInterestChatKeys({ allow: { groups: ['1'], private: ['9'] } }),
+    ['group:1', 'private:9'],
+    '没配置显式来源时，白名单里的私聊也参与提炼'
+  );
+  assert.deepEqual(resolveInterestChatKeys({ allow: { groups: [], private: [] } }), []);
+  assert.deepEqual(
+    resolveInterestChatKeys({
+      allowAllWhenEmpty: true,
+      allChats: ['group:1', 'private:9', 'weird', 'group:1']
+    }),
+    ['group:1', 'private:9'],
+    '允许所有会话时只取规范的 group:/private: 键并去重'
+  );
+  assert.deepEqual(
+    resolveInterestChatKeys({ allowAllWhenEmpty: false, allChats: ['group:1'] }),
+    [],
+    '开关是配置顶层字段，不能从 allow 里猜'
+  );
+  assert.deepEqual(
+    resolveInterestChatKeys({ groups: ['group：9'], allow: { groups: ['1'] } }),
+    ['group:1'],
+    '非法显式条目不能算"配过来源"、把白名单回退吃掉'
+  );
+  assert.deepEqual(
+    resolveInterestChatKeys({ groups: ['group:1', 'group:2'], denied: new Set(['group:2']) }),
+    ['group:1'],
+    'deny 的会话不参与兴趣提炼'
+  );
+});
+
+test('插件 inbox 全是已吸收条目时不再重建兴趣画像（惰性求值）', (t) => {
+  const dir = tempDir(t);
+  const inbox = path.join(dir, 'life-feed-inbox');
+  fs.mkdirSync(inbox, { recursive: true });
+  fs.writeFileSync(path.join(inbox, 'p1.json'), JSON.stringify({
+    pluginId: 'p1',
+    items: [{ id: 'BVknown', title: '已知条目', url: 'https://www.bilibili.com/video/BVknown' }]
+  }));
+  fs.writeFileSync(path.join(dir, 'life-feed.json'), JSON.stringify({
+    version: 1, candidates: [], seen: [{ id: 'BVknown', at: NOW }], offers: [], records: []
+  }));
+  let recentCalls = 0;
+  const cfg = {
+    lifeFeed: { enabled: true, sources: ['plugin'], groups: ['group:1'] },
+    allow: { groups: ['1'] }
+  };
+  const manager = new LifeFeedManager({
+    dataDir: dir,
+    store: { recent: () => { recentCalls += 1; return []; }, listChats: () => ['group:1'] },
+    config: () => cfg,
+    now: () => NOW
+  });
+  assert.equal(manager.drainInbox(), 0, '所有条目都已吸收过');
+  assert.equal(recentCalls, 0, '没有新条目就不该读会话历史/重建画像（控制台刷新会反复触发）');
+});
+
+test('兴趣来源：白名单为空且允许所有会话时，按会话表提炼并跳过被屏蔽的会话', async (t) => {
+  const dir = tempDir(t);
+  const requested = [];
+  const cfg = {
+    lifeFeed: { enabled: true, sources: ['rss'], groups: [], rssUrls: [] },
+    allow: { groups: [], private: [] },
+    deny: { groups: ['2'], private: [] },
+    allowAllWhenEmpty: true
+  };
+  const store = {
+    recent: (key) => { requested.push(key); return []; },
+    listChats: () => ['group:1', 'group:2', 'private:9', 'weird']
+  };
+  const manager = new LifeFeedManager({ dataDir: dir, store, config: () => cfg, now: () => NOW });
+  const result = await manager.forageNow({ reason: 'test' });
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual([...requested].sort(), ['group:1', 'private:9'],
+    '只读规范会话键，deny 里的 group:2 与非会话键 weird 都不能进画像');
+});
+
+test('分享目标支持私聊：群与 private:<QQ> 共用一份名单，老配置的裸群号照旧生效', () => {
+  const cfg = normalizedLifeFeedConfig({
+    enabled: true,
+    shareGroups: ['group:1', 'private:9', '42', 'private:9']
+  });
+  assert.deepEqual(cfg.shareGroups, ['group:1', 'private:9', 'group:42'], '去重并把裸群号补成 group:');
+  const manager = new LifeFeedManager({
+    dataDir: tempDirForOnly(),
+    config: () => ({ lifeFeed: cfg }),
+    now: () => NOW
+  });
+  assert.equal(manager.isShareTarget('private:9'), true, '配置了私聊目标，私聊会话可以自动分享');
+  assert.equal(manager.isShareTarget('group:42'), true, '裸群号按群处理');
+  assert.equal(manager.isShareTarget('group:1'), true);
+  assert.equal(manager.isShareTarget('private:8'), false, '未列出的私聊仍然不行');
+  assert.equal(manager.isShareTarget('group:9'), false, '私聊目标不能顺带放行同号群');
 });
 
 function tempDirForOnly() {

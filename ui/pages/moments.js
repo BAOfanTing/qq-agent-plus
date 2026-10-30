@@ -285,7 +285,7 @@ function renderDailyMomentsSection(c) {
       <div class="field"><label for="cfg-digest-time">发送时间（北京时间 HH:MM）</label>
         <input type="text" id="cfg-digest-time" value="${esc(c.groupDigest?.time || '09:30')}" placeholder="09:30" /></div>
       <div class="field"><label>发到哪些群（勾选机器人已加入的群）</label>
-        <div id="cfg-digest-chats-box" class="group-checklist"><span class="muted">正在读取群列表…</span></div></div>
+        <div id="cfg-digest-chats-box"></div></div>
     </div>
     <div class="settings-actions">
       <button class="btn btn-small" id="digest-run-btn" type="button">立即试跑一次</button>
@@ -302,7 +302,7 @@ function renderDailyMomentsSection(c) {
         <input type="number" id="cfg-briefing-max" min="80" max="600" value="${esc(c.adminBriefing?.maxChars ?? 300)}" /></div>
     </div>
     <div class="field"><label>汇报哪些群（不勾选 = 所有当前可运行的白名单群）</label>
-      <div id="cfg-briefing-chats-box" class="group-checklist"><span class="muted">正在读取群列表…</span></div></div>
+      <div id="cfg-briefing-chats-box"></div></div>
     <div class="settings-actions">
       <button class="btn btn-small" id="briefing-run-btn" type="button">立即试跑一次</button>
       <span id="briefing-run-result" class="muted"></span>
@@ -330,7 +330,7 @@ function renderGroupGameSection(c) {
       —— 开关在「实验功能」页（生命周期），这里是详细设置与局面。</div>
     <div class="field-row">
       <div class="field"><label>允许开局的群（勾选机器人已加入的群）</label>
-        <div id="cfg-game-chats-box" class="group-checklist"><span class="muted">正在读取群列表…</span></div></div>
+        <div id="cfg-game-chats-box"></div></div>
       <div class="field"><label for="cfg-game-daily">每群每天最多开局数</label>
         <input type="number" id="cfg-game-daily" min="1" max="50" value="${esc(c.groupGame?.dailyLimitPerChat ?? 6)}" /></div>
       <div class="field"><label for="cfg-game-maxtime">单局时长上限（分钟）</label>
@@ -511,94 +511,6 @@ function renderQzoneInteractionSection(c) {
       <span id="qzi-action-result" class="muted"></span>
     </div>
     <div id="qzone-interactions-status" class="daily-moments-status"><span class="muted">正在读取状态…</span></div>`;
-}
-
-// ── 群多选：查机器人已加入的群，让用户勾选（比手填 group:xxx 好用）──
-// 数据来自 OneBot 的 get_group_list（后端 /api/onebot/groups）。配置里有、但当前不在名单里的
-// （退群/改名/协议端未连接）也照样列出来，避免一次保存把既有配置静默丢掉。
-// 群多起来（几十上百个）纯勾选没法用，所以列表带滚动，并在群数 ≥3 时给筛选框、≥2 时给
-// 全选/清空（作用于当前可见行）与已选计数。
-async function renderGroupChecklist(boxId, selected) {
-  const box = document.querySelector('#' + boxId);
-  if (!box) return;
-  let groups = [];
-  try {
-    const r = await api('/api/onebot/groups');
-    groups = Array.isArray(r?.groups) ? r.groups : [];
-  } catch { /* 拿不到就只列已配置的 */ }
-  const sel = new Set((Array.isArray(selected) ? selected : []).map((x) => String(x)));
-  const seen = new Set();
-  const items = [];
-  for (const g of groups) {
-    const key = 'group:' + g.id;
-    seen.add(key);
-    items.push({ key, name: String(g.name ?? ''), id: String(g.id), stale: false });
-  }
-  for (const key of sel) {
-    if (seen.has(key)) continue;
-    items.push({ key, name: key, id: '', stale: true });
-  }
-  if (!items.length) {
-    box.innerHTML = '<span class="muted">拿不到群列表（协议端未连接或接口不可用）：刷新页面重试，或先让机器人在群里说句话记录会话。</span>';
-    return;
-  }
-  const showFilter = items.length >= 3;
-  const showBulk = items.length >= 2;
-  const rowHtml = (it) => '<label class="group-checklist-row" data-search="' + esc((it.name + ' ' + it.id).toLowerCase()) + '">'
-    + '<input type="checkbox" class="group-check" value="' + esc(it.key) + '"' + (sel.has(it.key) ? ' checked' : '') + ' />'
-    + '<span class="group-checklist-name" title="' + esc(it.name) + '">' + esc(it.name) + '</span>'
-    + (it.stale
-      ? '<span class="group-checklist-stale">不在当前群列表</span>'
-      : '<span class="group-checklist-id">' + esc(it.id) + '</span>')
-    + '</label>';
-  box.innerHTML = [
-    (showFilter || showBulk) ? '<div class="group-checklist-bar">'
-      + (showFilter ? '<input type="search" class="group-checklist-filter" placeholder="筛选群名或群号" />' : '')
-      + (showBulk ? '<button type="button" class="btn btn-small group-checklist-all">全选</button>'
-        + '<button type="button" class="btn btn-small group-checklist-none">清空</button>' : '')
-      + '<span class="group-checklist-count muted"></span></div>' : '',
-    '<div class="group-checklist-list">', items.map(rowHtml).join(''), '</div>',
-    '<div class="group-checklist-empty muted" hidden>没有匹配的群</div>',
-  ].join('');
-  // 行已渲染 = 这份列表可用；加载中 / 拉取失败（只有提示文案）时不置位，
-  // 保存那一步据此跳过 chats，避免在"还没读完"的窗口里把白名单存成空。
-  box.dataset.loaded = '1';
-  // 事件：筛选/全选/清空只作用在当前可见行；计数在勾选后刷新（pickedGroups 读的是
-  // input.group-check:checked，行被筛掉不影响它——被筛掉的行只是隐藏，勾选状态仍在）。
-  const rows = [...box.querySelectorAll('.group-checklist-row')];
-  const filterEl = box.querySelector('.group-checklist-filter');
-  const countEl = box.querySelector('.group-checklist-count');
-  const emptyEl = box.querySelector('.group-checklist-empty');
-  const visibleRows = () => rows.filter((r) => !r.classList.contains('is-hidden'));
-  const refreshCount = () => {
-    if (!countEl) return;
-    const all = [...box.querySelectorAll('input.group-check')];
-    countEl.textContent = '已选 ' + all.filter((n) => n.checked).length + ' / ' + all.length;
-  };
-  const applyFilter = () => {
-    const q = (filterEl?.value || '').trim().toLowerCase();
-    let shown = 0;
-    for (const row of rows) {
-      const hit = !q || (row.dataset.search || '').includes(q);
-      row.classList.toggle('is-hidden', !hit);
-      if (hit) shown += 1;
-    }
-    if (emptyEl) emptyEl.hidden = shown > 0;
-  };
-  const setVisibleChecked = (checked) => {
-    for (const row of visibleRows()) {
-      const cb = row.querySelector('input.group-check');
-      if (cb) cb.checked = checked;
-    }
-    refreshCount();
-  };
-  filterEl?.addEventListener('input', applyFilter);
-  box.querySelector('.group-checklist-all')?.addEventListener('click', () => setVisibleChecked(true));
-  box.querySelector('.group-checklist-none')?.addEventListener('click', () => setVisibleChecked(false));
-  box.querySelector('.group-checklist-list')?.addEventListener('change', (e) => {
-    if (e.target?.classList?.contains('group-check')) refreshCount();
-  });
-  refreshCount();
 }
 
 // 由 ui/core/widgets.js 机械拆出（2026-10-01，同一次「UI 结构治理」：把混装的叶子按域归位）。
@@ -892,6 +804,6 @@ function bindAdminBriefingRunButton() {
 export {
   bindAdminBriefingRunButton, cancelLivingMemoryGraduation, launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
   loadRemindersView, momentStatusLabel, renderDailyMomentsSection, renderExperimentalSettingsSectionImpl,
-  renderGroupChecklist, renderGroupGameSection, renderMomentWindowRow, renderQzoneInteractionSection,
+  renderGroupGameSection, renderMomentWindowRow, renderQzoneInteractionSection,
   renderRemindersSection
 };

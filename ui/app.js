@@ -1609,6 +1609,11 @@ async function init() {
         // 服务器已在响应里下发 Cookie，抹掉地址栏后继续正常启动即可。
         u.searchParams.delete('token');
         history.replaceState(null, '', u.toString());
+        // 兜底：早于这次登录发出的请求可能已经拿到 401 并把登录框弹了出来
+        // （令牌此时已经生效，再让人输一遍没有意义）。api() 侧已经用地址栏令牌
+        // 避免了这条 401，这里只处理其它来源留下的框。
+        const loginDialog = $('#console-login');
+        if (loginDialog?.open) loginDialog.close();
       }
     }
   } catch { /* 自动登录失败就按原流程弹登录框 */ }

@@ -3548,35 +3548,106 @@ input[type=checkbox], input[type=radio] {
 .field .radio-row > input[type=radio] { margin-top: 2px; }
 .experimental-settings .checkbox-row { flex-wrap: nowrap; }
 
-/* ── 群多选列表（群游戏「允许开局的群」/ 群日报「发到哪些群」）──
-   行标签以前借用 .checkbox-row，但它在 .field 里会被 `.field label`（0,1,1）压成
-   字段标题样式（display:block / 12px / muted），复选框与群名之间没有间距、基线还错位，
-   看着就是"勾选框和群名重叠"。改用专用类（.group-checklist .group-checklist-row，
-   0,2,0）显式做成 flex 行，并补上群多起来时的筛选 / 全选 / 滚动。 */
-.group-checklist-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
-.group-checklist-bar input[type=search] {
-  flex: 1 1 150px; width: auto; min-width: 110px; height: 30px; padding: 0 10px;
-  border-radius: var(--r-sm); background: var(--bg-3); font-size: var(--fs-sm);
-}
-.group-checklist-bar .btn { height: 30px; }
-.group-checklist-count { margin-left: auto; font-size: var(--fs-sm); white-space: nowrap; }
-.group-checklist-list {
-  max-height: 168px; overflow-y: auto; padding: 4px;
+/* ── 会话多选（群 / 私聊）──
+   以前各设置页把"全部群"摊成复选框塞进 168px 的滚动框：群少时两块并排高度对不齐
+   （左列空一大块），群/好友上百时只能靠滚动条硬翻。现在页面里只留一行「已选摘要」，
+   选择放到弹窗里（搜索 / 群聊 / 私聊 / 只看已选 / 全选），条目再多也不撑高设置页。 */
+.session-picker-btn {
+  width: 100%; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px;
   border: 1px solid var(--border); border-radius: var(--r-input); background: var(--bg-2);
+  color: var(--text); font-size: var(--fs-md); cursor: pointer; text-align: left;
 }
-.group-checklist .group-checklist-row {
+.session-picker-btn:hover { border-color: var(--accent); }
+.session-picker-count { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-picker-count.is-empty { color: var(--muted); }
+.session-picker-cta { flex: 0 0 auto; font-size: var(--fs-sm); color: var(--accent); }
+.session-picker-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.session-picker-chip {
+  max-width: 100%; padding: 1px 8px; border: 1px solid var(--border); border-radius: var(--r-pill);
+  background: var(--bg-2); font-size: var(--fs-xs); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-picker-modal { width: 560px; max-width: 94vw; }
+.session-picker-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.session-picker-search {
+  flex: 1 1 180px; width: auto; min-width: 140px; height: 30px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-3); font-size: var(--fs-sm);
+}
+.session-picker-tabs { display: flex; gap: 4px; }
+.session-picker-tab {
+  height: 30px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--r-sm);
+  background: var(--bg-2); color: var(--muted); font-size: var(--fs-sm); cursor: pointer;
+}
+.session-picker-tab.is-on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.session-picker-only { display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--fs-sm); }
+.session-picker-bulk { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.session-picker-bulk .btn { height: 30px; }
+.session-picker-tip { margin-left: auto; font-size: var(--fs-sm); }
+.session-picker-list {
+  /* 高度固定：筛选只剩两行时弹窗不能跟着缩，否则整块会往上跳（用户反馈）。
+     用 flex-basis 而不是 min-height —— 视口很矮时仍允许收缩到 min-height。 */
+  display: flex; flex-direction: column;
+  flex: 1 1 auto; height: min(46vh, 400px); min-height: 120px; padding: 4px;
+}
+/* 筛到 0 条 / 加载中：提示文案在固定高度的列表里居中，别贴着顶边。 */
+.session-picker-list .session-picker-empty { margin: auto; }
+.session-picker-row {
   display: flex; align-items: center; gap: 8px;
-  margin: 0; padding: 4px 8px; border-radius: var(--r-sm);
+  margin: 0; padding: 5px 8px; border-radius: var(--r-sm);
   font-size: var(--fs-md); font-weight: 400; letter-spacing: normal; color: var(--text);
   cursor: pointer;
 }
-.group-checklist .group-checklist-row:hover { background: var(--bg-3); }
-.group-checklist .group-checklist-row.is-hidden { display: none; }
-.group-checklist .group-checklist-row:has(input:checked) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.group-checklist-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.group-checklist-id { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
-.group-checklist-stale { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--orange); }
-.group-checklist-empty { margin-top: 4px; font-size: var(--fs-sm); }
+.session-picker-row:hover { background: var(--bg-3); }
+.session-picker-row:has(input:checked) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.session-picker-kind {
+  flex: 0 0 auto; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--r-pill);
+  font-size: var(--fs-xs); line-height: 17px; color: var(--muted); white-space: nowrap;
+}
+.session-picker-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-picker-id { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.session-picker-stale { flex: 0 0 auto; font-size: var(--fs-xs); color: var(--orange); }
+.session-picker-empty { padding: 10px 4px; font-size: var(--fs-sm); }
+
+/* ── 见闻设置分组（生活层）──
+   原先所有控件堆在三个三轨 .field-row 里：4 个一组的参数（运行额度、时长限制）最后一个
+   被挤到下一行单独占一列，来源/群清单/手动分享之间也看不出分组。改成按语义分块，
+   参数用四轨（与 .update-deploy-settings 一致），长文本和群清单用两轨，窄屏逐级降列。 */
+.lifefeed-section { max-width: 1180px; margin: 20px 0 22px; }
+.lifefeed-section:first-of-type { margin-top: 14px; }
+.lifefeed-section:last-child { margin-bottom: 0; }
+.lifefeed-section-title {
+  margin: 0 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  letter-spacing: .3px;
+  color: var(--text);
+}
+.lifefeed-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 20px;
+  align-items: start;
+}
+.lifefeed-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.lifefeed-grid > .span-full { grid-column: 1 / -1; }
+/* 全局把 select 卡在 380px，和栅格列宽对不齐；这里让下拉铺满所在列。 */
+.lifefeed-grid .field > select { width: 100%; max-width: 100%; }
+.lifefeed-toggles { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 20px; min-height: 36px; }
+.lifefeed-toggles .checkbox-row { margin: 0; padding: 0; }
+.field .lifefeed-toggles label.checkbox-row { align-items: center; }
+.lifefeed-switch-line { display: flex; align-items: center; min-height: 36px; }
+.field .lifefeed-switch-line label.checkbox-row { margin: 0; padding: 0; align-items: center; }
+.lifefeed-actions { margin-top: 12px; flex-wrap: wrap; }
+#lifefeed-action-result { min-width: 0; }
+@media (max-width: 1240px) {
+  .lifefeed-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .lifefeed-grid, .lifefeed-grid--2 { grid-template-columns: minmax(0, 1fr); }
+  .lifefeed-grid > .span-full { grid-column: auto; }
+}
 
 /* ── 见闻候选卡片（生活层）──
    候选以前是一行内联 flex：44×32 缩略图 + 一行塞满来源/UP/播放/时长/分数的 <small>，

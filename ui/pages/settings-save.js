@@ -17,7 +17,8 @@ import {
   IO_PROFILES, asrHostOf, clampInt, hasOwnPrice, hostOfUrl, memThreshold, mulOf, normalizeAsrMax, normalizeImageGenMax,
   normalizeStickerCollectMax, normalizeStickerMax, parseList, sliderToTierUI
 } from '../core/format.js';
-import { pickedGroups, state } from '../core/state.js';
+import { state } from '../core/state.js';
+import { pickedSessionValues } from '../core/session-picker.js';
 import { buildPerChatPatch } from './persona-per-chat.js';
 // 「平台能力」页的键表与配额行：渲染在 platform.js，这里只按同一份键名读控件
 // （键名与 id 约定只维护一处；改名不同步时源码锚点用例会红）。
@@ -212,6 +213,7 @@ async function saveConfig({ quiet = false } = {}) {
   }
 
   if (sec === 'groupGame') {
+    const gameChats = pickedSessionValues('cfg-game-chats-box');
     patch.groupGame = {
       ...(c.groupGame || {}),
       allowPrivateInvite: chk('#cfg-game-private', c.groupGame?.allowPrivateInvite === true),
@@ -235,7 +237,7 @@ async function saveConfig({ quiet = false } = {}) {
         ['undercover', '#cfg-game-undercover'],
         ['werewolf', '#cfg-game-werewolf']
       ].filter(([, sel]) => chk(sel, sel === '#cfg-game-werewolf' ? false : true)).map(([id]) => id),
-      ...(pickedGroups('cfg-game-chats-box') ? { chats: pickedGroups('cfg-game-chats-box') } : {})
+      ...(gameChats ? { chats: gameChats } : {})
     };
   }
 
@@ -254,7 +256,8 @@ async function saveConfig({ quiet = false } = {}) {
       const number = Number(val(selector, fallback));
       return Number.isFinite(number) ? number : fallback;
     };
-    const shareGroups = pickedGroups('cfg-lifefeed-sharegroups-box');
+    const shareGroups = pickedSessionValues('cfg-lifefeed-sharegroups-box');
+    const interestGroups = pickedSessionValues('cfg-lifefeed-groups-box');
     patch.lifeFeed = {
       ...(c.lifeFeed || {}),
       enabled: chk('#cfg-lifefeed-enabled', c.lifeFeed?.enabled === true),
@@ -272,11 +275,13 @@ async function saveConfig({ quiet = false } = {}) {
       maxDurationSec: lifeNum('#cfg-lifefeed-max-duration', c.lifeFeed?.maxDurationSec ?? 3600),
       extraKeywords: splitKeywords('#cfg-lifefeed-extra'),
       excludeKeywords: splitKeywords('#cfg-lifefeed-exclude'),
-      ...(pickedGroups('cfg-lifefeed-groups-box') ? { groups: pickedGroups('cfg-lifefeed-groups-box') } : {})
+      ...(interestGroups ? { groups: interestGroups } : {})
     };
   }
 
   if (sec === 'moments') {
+    const digestChats = pickedSessionValues('cfg-digest-chats-box');
+    const briefingChats = pickedSessionValues('cfg-briefing-chats-box');
     patch.groupDigest = {
       ...(c.groupDigest || {}),
       enabled: chk('#cfg-digest-enabled', c.groupDigest?.enabled === true),
@@ -285,7 +290,7 @@ async function saveConfig({ quiet = false } = {}) {
         const raw = String(val('#cfg-digest-time', '') || '').trim();
         return /^([01]?\d|2[0-3]):([0-5]\d)$/.test(raw) ? raw : (c.groupDigest?.time || '09:30');
       })(),
-      ...(pickedGroups('cfg-digest-chats-box') ? { chats: pickedGroups('cfg-digest-chats-box') } : {})
+      ...(digestChats ? { chats: digestChats } : {})
     };
     patch.adminBriefing = {
       ...(c.adminBriefing || {}),
@@ -297,7 +302,7 @@ async function saveConfig({ quiet = false } = {}) {
       maxChars: clampInt(val('#cfg-briefing-max', c.adminBriefing?.maxChars), 80, 600, 300),
       // 不勾 = 空数组 = 所有当前可运行的白名单群（与「群日报」必须显式选群不同）；
       // 列表没渲染出来（null）时不动存量值。
-      ...(pickedGroups('cfg-briefing-chats-box') ? { chats: pickedGroups('cfg-briefing-chats-box') } : {})
+      ...(briefingChats ? { chats: briefingChats } : {})
     };
     patch.dailyMoments = {
       ...(c.dailyMoments || {}),

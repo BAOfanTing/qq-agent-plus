@@ -25,6 +25,26 @@ test('?token= 自动登录后把 Token 从地址栏移除', async ({ page }) => 
   await expect.poll(() => new URL(page.url()).searchParams.get('token')).toBeNull();
 });
 
+test('?token= 登录比启动请求慢时也不弹登录框（远程/隧道场景回归）', async ({ page }) => {
+  // 真实复现：经 SSH 隧道访问时，登录 POST 的往返比页面启动的第一批 API 请求慢，
+  // 那些请求先拿到 401 就会把登录框弹出来；登录成功后旧实现也不会把它关掉，
+  // 用户明明带了令牌却要再输一遍。
+  await page.route('**/api/login', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  const unauthorized = [];
+  page.on('response', (response) => {
+    if (response.status() === 401) unauthorized.push(new URL(response.url()).pathname);
+  });
+  await page.goto(`/?token=${encodeURIComponent(E2E_TOKEN)}`);
+  // 等自动登录真正落地：地址栏令牌被抹掉 = POST /api/login 已经成功
+  await expect.poll(() => new URL(page.url()).searchParams.get('token'), { timeout: 10000 }).toBeNull();
+  await expect(page.locator('#view-overview')).toHaveClass(/active/);
+  await expect(page.locator('#console-login')).toBeHidden();
+  expect(unauthorized, `启动期不应出现 401：${unauthorized.join(', ')}`).toEqual([]);
+});
+
 test('config.json 外部修改提示：显示备份横幅，点击可关闭', async ({ page }) => {
   await page.route('**/api/status', async (route) => {
     const response = await route.fetch();
@@ -525,6 +545,106 @@ test('生活层设置页可渲染、可保存，窄屏无横向溢出', async ({
   await interval.fill('360');
   await page.click('#save-cfg-btn');
   await expect.poll(read).toBe(360);
+});
+
+test('见闻分享目标：上百个群 + 好友在弹窗里搜索/筛选，字段只占一行', async ({ page }) => {
+  const manyGroups = Array.from({ length: 120 }, (_, i) => ({ id: String(500000 + i), name: `测试群 ${i + 1}` }));
+  await page.route('**/api/onebot/groups', (route) => route.fulfill({ json: { groups: manyGroups } }));
+  await page.route('**/api/onebot/friends', (route) => route.fulfill({
+    json: { friends: [{ id: '2001', name: '阿明' }, { id: '2002', name: '小红' }] }
+  }));
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="life-feed"]');
+
+  const box = page.locator('#cfg-lifefeed-sharegroups-box');
+  await expect(box.locator('.session-picker-btn')).toBeVisible();
+  // 字段只占一行：不再把几百行清单铺在设置页里（旧实现的左右两栏还会一高一空）。
+  const fieldHeight = await box.evaluate((el) => Math.round(el.getBoundingClientRect().height));
+  expect(fieldHeight).toBeLessThan(90);
+
+  await box.locator('.session-picker-btn').click();
+  const modal = page.locator('.session-picker-modal');
+  await expect(modal).toBeVisible();
+  await expect(modal.locator('.session-picker-row')).toHaveCount(122);
+
+  // 弹窗里的列表自身滚动，高度受 modal 的 70vh 约束。
+  const listMetrics = await modal.locator('.session-picker-list').evaluate((el) => ({
+    height: Math.round(el.getBoundingClientRect().height),
+    scrollHeight: el.scrollHeight
+  }));
+  expect(listMetrics.height).toBeLessThan(520);
+  expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.height);
+  const modalHeightBefore = await modal.evaluate((el) => Math.round(el.getBoundingClientRect().height));
+
+  // 类型页签：只看私聊 → 2 条；再按群号搜索 → 1 条。
+  await modal.locator('.session-picker-tab[data-tab="private"]').click();
+  await expect(modal.locator('.session-picker-row')).toHaveCount(2);
+  await modal.locator('.session-picker-tab[data-tab="all"]').click();
+  await modal.locator('.session-picker-search').fill('500119');
+  await expect(modal.locator('.session-picker-row')).toHaveCount(1);
+  // 回归（用户反馈）：筛到只剩一行时弹窗不能跟着缩小，否则整块会往上跳。
+  const modalHeightAfter = await modal.evaluate((el) => Math.round(el.getBoundingClientRect().height));
+  expect(Math.abs(modalHeightAfter - modalHeightBefore)).toBeLessThanOrEqual(2);
+  await modal.locator('.session-picker-cancel').click();
+  await expect(modal).toHaveCount(0);
+});
+
+test('见闻分享目标：好友接口不可用时，私聊页签明确提示读取失败', async ({ page }) => {
+  await page.route('**/api/onebot/groups', (route) => route.fulfill({ json: { groups: [{ id: '1001', name: '测试群' }] } }));
+  await page.route('**/api/onebot/friends', (route) => route.fulfill({ status: 502, json: { error: 'get_friend_list 不可用' } }));
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="life-feed"]');
+
+  await page.locator('#cfg-lifefeed-sharegroups-box .session-picker-btn').click();
+  const modal = page.locator('.session-picker-modal');
+  await expect(modal.locator('.session-picker-row')).toHaveCount(1);
+  await modal.locator('.session-picker-tab[data-tab="private"]').click();
+  await expect(modal.locator('.session-picker-empty')).toContainText('好友列表读取失败');
+  await expect(modal.locator('.session-picker-tip')).toContainText('好友读取失败');
+  await modal.locator('.session-picker-cancel').click();
+});
+
+test('见闻分享目标：弹窗里勾选私聊保存后回写 private:<QQ>，再清空还原', async ({ page }) => {
+  await page.route('**/api/onebot/groups', (route) => route.fulfill({ json: { groups: [{ id: '1001', name: '测试群' }] } }));
+  await page.route('**/api/onebot/friends', (route) => route.fulfill({ json: { friends: [{ id: '2001', name: '阿明' }] } }));
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="life-feed"]');
+
+  const box = page.locator('#cfg-lifefeed-sharegroups-box');
+  await box.locator('.session-picker-btn').click();
+  const modal = page.locator('.session-picker-modal');
+  await modal.locator('input.session-pick[value="private:2001"]').check();
+  await modal.locator('.session-picker-ok').click();
+  await expect(box.locator('.session-picker-count')).toContainText('已选 1 个');
+  await page.click('#save-cfg-btn');
+  await expect(page.locator('#cfg-save-result')).toHaveText('已保存 ✓');
+
+  const read = async () => (await (await page.request.get('/api/config')).json()).lifeFeed.shareGroups;
+  await expect.poll(read).toEqual(['private:2001']);
+
+  // 清空也要走弹窗（确定后才算用户编辑过），再保存回空。
+  await page.locator('#cfg-lifefeed-sharegroups-box .session-picker-btn').click();
+  await page.locator('.session-picker-none').click();
+  await page.locator('.session-picker-ok').click();
+  await page.click('#save-cfg-btn');
+  await expect.poll(read).toEqual([]);
+});
+
+test('见闻手动分享下拉：白名单里的私聊也能选', async ({ page }) => {
+  await login(page);
+  const before = (await (await page.request.get('/api/config')).json()).allow.private;
+  await page.request.post('/api/config', { data: { allow: { private: ['2001'] } } });
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="life-feed"]');
+  await expect(page.locator('#cfg-lifefeed-chat option[value="private:2001"]')).toHaveCount(1);
+  await page.request.post('/api/config', { data: { allow: { private: before } } });
 });
 
 test('生活层候选卡片：真实长文/多标签在 390px 下不溢出，操作条不出卡', async ({ page }) => {

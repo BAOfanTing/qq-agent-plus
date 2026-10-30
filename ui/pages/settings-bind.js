@@ -17,8 +17,9 @@ import { bindAdminBriefingRunButton } from './moments.js';
 import { openMemoryModelPicker } from './memory.js';
 import {
   cancelLivingMemoryGraduation, launchExperimentalFeature, loadDailyMomentsStatus, loadGroupGameView, loadQzoneInteractionStatus,
-  loadRemindersView, momentStatusLabel, renderGroupChecklist, renderMomentWindowRow
+  loadRemindersView, momentStatusLabel, renderMomentWindowRow
 } from './moments.js';
+import { renderSessionPicker } from '../core/session-picker.js';
 import {
   applyPersonaDraft, currentPersonaId, defaultPersonaFold, openPersonaCreateModal, parsePersonaCard,
   personaBaseCardId, personaDraftDirty, personaSectionBody, savedPersonaId, syncPersonaButtons
@@ -106,9 +107,10 @@ function bindCrossSectionControls() {
     });
   }
   bindAdminBriefingRunButton();
-  renderGroupChecklist('cfg-game-chats-box', state.config?.groupGame?.chats || []);
-  renderGroupChecklist('cfg-digest-chats-box', state.config?.groupDigest?.chats || []);
-  renderGroupChecklist('cfg-briefing-chats-box', state.config?.adminBriefing?.chats || []);
+  // 这三处按设计只发群，allowFriends:false；选择在弹窗里完成，群再多也不撑高页面。
+  renderSessionPicker('cfg-game-chats-box', state.config?.groupGame?.chats || [], { allowFriends: false, title: '允许开局的群' });
+  renderSessionPicker('cfg-digest-chats-box', state.config?.groupDigest?.chats || [], { allowFriends: false, title: '群日报发到哪些群' });
+  renderSessionPicker('cfg-briefing-chats-box', state.config?.adminBriefing?.chats || [], { allowFriends: false, title: '早报汇报哪些群' });
   // 定时提醒页：列表加载 + 取消按钮（事件挂在列表容器上做委托，行是动态渲染的）
   const pendBox = $('#reminders-pending');
   if (pendBox && !pendBox.dataset.bound) {

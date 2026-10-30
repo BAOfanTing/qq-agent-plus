@@ -285,19 +285,7 @@ state.personaParseCache = { text: null, card: null };
 /** 卡库简介（取自「你是谁」第一段）按卡正文缓存 —— 卡库每次重画都要用 5 次。 */
 const personaDescCache = new Map();
 
-function pickedGroups(boxId) {
-  // 盒子不在场（在别的设置页保存）→ 返回 null，调用方据此"不覆盖 chats"，
-  // 否则一次无关页面的保存就会把白名单清空（2026-09-28 审查 P1）
-  const box = document.querySelector('#' + boxId);
-  if (!box) return null;
-  // 在场但还没渲染出行（"正在读取群列表…" 或拉取失败的提示）→ 同样返回 null：
-  // 这时候的"零勾选"是没读完，不是用户清空，不能拿它覆盖已有配置。
-  if (box.dataset.loaded !== '1') return null;
-  return [...box.querySelectorAll('input.group-check:checked')].map((n) => n.value);
-}
-
-
 export {
-  loadingLogs, loadingStatus, pendingSessionDetail, personaDescCache, pickedGroups, refreshIntervalMs,
+  loadingLogs, loadingStatus, pendingSessionDetail, personaDescCache, refreshIntervalMs,
   startConsolidateTicker, startLifecycleTicker, startUpdateProgressTicker, startWaitTicker, state
 };
