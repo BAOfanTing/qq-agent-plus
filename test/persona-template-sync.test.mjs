@@ -17,7 +17,7 @@ process.env.DEBUG_SERVER_URL = 'http://127.0.0.1:1/event';
 
 const { PERSONAS, applyPersonaTemplate, builtinPersonaTemplate, PERSONA_TEMPLATE_IDS } =
   await import('../src/personas.js');
-const { loadConfig, updateConfig, getConfig, CONFIG_FILE } = await import('../src/core/config.js');
+const { loadConfig, reloadConfig, updateConfig, getConfig, CONFIG_FILE } = await import('../src/core/config.js');
 
 const writeConfig = (persona) => {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify({ persona }, null, 2), { mode: 0o600 });
@@ -90,6 +90,7 @@ test('老配置（没有 templateId 键）不会被误绑成默认卡', () => {
 
 test('保存配置时同样会刷新，且只在绑定时生效', () => {
   writeConfig({ templateId: 'maoniang', roleText: '旧正文', behaviorProfile: 'legacy' });
+  reloadConfig();
   updateConfig({ persona: { templateId: 'maoniang', roleText: '旧正文' } });
   assert.equal(updateConfig({}).persona.roleText, PERSONAS.maoniang.text);
 

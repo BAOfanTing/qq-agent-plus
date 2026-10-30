@@ -11,9 +11,90 @@ import { assertCanSend, chatAllowed } from '../core/access.js';
 import { isTimeActive } from '../core/time-gate.js';
 import { platformToolAllowed, privateFileMaxKiB } from '../core/platform-gates.js';
 import { preparePrivateTextFile, privateTextFileError } from './private-text-file.js';
+import { displayNameOf } from '../core/display-name.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('sender');
+
+/**
+ * 把正文里的 @昵称 展开成 text / at 段。只接受唯一命名的成员；重名、找不到、
+ * 像邮箱/URL 里的 @ 一律保持原文。返回 null 表示没有任何可替换的 mention。
+ * members: [{ userId, name }]，调用方负责把群名片与备注显示名都放进来。
+ */
+export function buildMentionParts(text, members = []) {
+  const source = String(text ?? '');
+  const owners = new Map();
+  for (const member of Array.isArray(members) ? members : []) {
+    const name = String(member?.name ?? '').trim();
+    const userId = String(member?.userId ?? '').trim();
+    if (!name || !/^\d+$/.test(userId)) continue;
+    const key = name.toLowerCase();
+    const ids = owners.get(key) || new Set();
+    ids.add(userId);
+    owners.set(key, ids);
+  }
+  const candidates = [...owners.entries()]
+    .filter(([, ids]) => ids.size === 1)
+    .map(([key, ids]) => ({ key, name: key, userId: [...ids][0] }))
+    .sort((a, b) => b.name.length - a.name.length);
+  if (!candidates.length) return null;
+
+  const parts = [];
+  let cursor = 0;
+  let changed = false;
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] !== '@') continue;
+    const prev = source[i - 1] || '';
+    // 邮箱/URL 里的 @ 不转（a@b.com、https://x/@user）；中文正文里的“你好@张三”照转。
+    if (prev && /[A-Za-z0-9._%+/-]/.test(prev)) continue;
+    let matched = null;
+    for (const candidate of candidates) {
+      const end = i + 1 + candidate.name.length;
+      if (end > source.length) continue;
+      if (source.slice(i + 1, end).toLowerCase() !== candidate.key) continue;
+      const after = source[end] || '';
+      // 不能把“@张三丰”里的“张三”当成 mention（项目 isAtMe 同款边界）；邮箱的
+      // “张三@qq.com”也不能把 qq 拆成 at。宁可少一个提醒，也不 @ 错人。
+      if (after && /[A-Za-z0-9_.\u3400-\u9fff]/u.test(after)) continue;
+      matched = { ...candidate, end };
+      break;
+    }
+    if (!matched) continue;
+    if (i > cursor) parts.push({ type: 'text', text: source.slice(cursor, i) });
+    parts.push({ type: 'at', qq: matched.userId });
+    cursor = matched.end;
+    i = matched.end - 1;
+    changed = true;
+  }
+  if (!changed) return null;
+  if (cursor < source.length) parts.push({ type: 'text', text: source.slice(cursor) });
+  return parts;
+}
+
+function expandMemberNames(members = []) {
+  const out = [];
+  for (const member of Array.isArray(members) ? members : []) {
+    const userId = String(member?.userId || '');
+    const raw = String(member?.name || '').trim();
+    if (!userId || !raw) continue;
+    out.push({ userId, name: raw });
+    const display = displayNameOf(userId, raw);
+    if (display && display !== raw) out.push({ userId, name: display });
+  }
+  return out;
+}
+
+function mentionMembersFor(store, chatKey) {
+  if (typeof store?.memberNames !== 'function') return [];
+  return expandMemberNames(store.memberNames(chatKey, { limit: 10000 }) || []);
+}
+
+function directoryMembersFrom(list) {
+  return expandMemberNames((Array.isArray(list) ? list : []).map((member) => ({
+    userId: member?.user_id ?? member?.userId ?? '',
+    name: member?.card || member?.nickname || member?.name || ''
+  })));
+}
 
 // 限频回退值统一取自 DEFAULT_CONFIG，杜绝"代码默认 80 / 回退值 8 / UI 回退 8"三处打架。
 const DEFAULT_MAX_PER_MINUTE = DEFAULT_CONFIG.send.maxPerMinute;
@@ -162,6 +243,54 @@ export class SendQueue {
     this.chains = new Map();      // chatKey -> enqueue fn
     this.minuteTimes = new Map(); // chatKey -> [ts]
     this.hourTimes = new Map();   // chatKey -> [ts]
+    this.mentionCache = new Map(); // chatKey -> { at, members }（协议端成员名单，10 分钟缓存）
+    this.mentionDirectoryPending = new Map(); // chatKey -> Promise
+  }
+
+  async #refreshMentionDirectory(chatKey) {
+    if (this.mentionDirectoryPending.has(chatKey)) return this.mentionDirectoryPending.get(chatKey);
+    const [kind, id] = String(chatKey).split(':');
+    if (kind !== 'group' || typeof this.onebot?.getGroupMemberList !== 'function') {
+      this.mentionCache.set(chatKey, { at: Date.now(), members: [] });
+      return;
+    }
+    const task = (async () => {
+      let timer = null;
+      try {
+        const timeout = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('成员名单获取超时')), 4000);
+        });
+        const list = await Promise.race([this.onebot.getGroupMemberList(id), timeout]);
+        this.mentionCache.set(chatKey, { at: Date.now(), members: directoryMembersFrom(list) });
+      } catch (error) {
+        // 不是所有协议端都支持/允许拉完整群成员；失败就只退回消息表里的发言人，
+        // 不能因为成员名单接口不可用而让回复发不出去。
+        log.warn(`[sender] ${chatKey} 拉取群成员名单失败，@昵称 仅使用最近发言人:`, error?.message ?? error);
+        this.mentionCache.set(chatKey, { at: Date.now(), members: [] });
+      } finally {
+        if (timer) clearTimeout(timer);
+        this.mentionDirectoryPending.delete(chatKey);
+      }
+    })();
+    this.mentionDirectoryPending.set(chatKey, task);
+    return task;
+  }
+
+  async #mentionMembersFor(chatKey) {
+    let recent = [];
+    try {
+      recent = mentionMembersFor(this.store, chatKey);
+    } catch (error) {
+      // 成员表读失败只放弃这次 @ 展开，纯文本仍要照常发出去。
+      log.warn('[sender] 读取成员表失败，本次不展开 @昵称:', error?.message ?? error);
+    }
+    const cached = this.mentionCache.get(chatKey);
+    if (!cached || Date.now() - cached.at > 10 * 60 * 1000) {
+      await this.#refreshMentionDirectory(chatKey);
+    }
+    const directory = this.mentionCache.get(chatKey)?.members || [];
+    // buildMentionParts 会按名字去重；这里保留两份，让“最近发言人”和完整名单互相兜底。
+    return [...recent, ...directory];
   }
 
   #chain(chatKey) {
@@ -371,6 +500,9 @@ export class SendQueue {
       else parts.push(plain);
     }
     if (!parts.length) throw new Error('消息内容为空');
+    // 显式 atUserId 优先；只有正文里真的出现 @ 才查成员表并展开成 at 段。
+    const mentionMembers = kind === 'group' && !options.atUserId && parts.some((text) => text.includes('@'))
+      ? await this.#mentionMembersFor(chatKey) : [];
 
     const chain = this.#chain(chatKey);
     const promises = [];
@@ -380,6 +512,8 @@ export class SendQueue {
       // 首条：开了人类化才用它（可为 0），否则回退到原来的 #gap —— 关闭时发送节奏与升级前一致。
       const lead = i === 0 ? this.#leadDelay(parts) : null;
       const gap = lead === null ? this.#gap(text, isLast, options.voice) : lead;
+      const mentionParts = mentionMembers.length && text.includes('@')
+        ? buildMentionParts(text, mentionMembers) : null;
       promises.push(chain(async () => {
         assertCanSend(chatKey, options.signal, { gameScoped: options.gameScoped === true });
         if (options.runId && this.store.hasUncertainEffects(options.runId)) throw new Error('Previous send delivery is uncertain');
@@ -387,11 +521,18 @@ export class SendQueue {
         // 先亮"正在输入"再等间隔：对方看到的状态是"它正在打字"，而不是干等（私聊限定）。
         await this.#signalTyping(kind, id, options);
         if (gap > 0) await sleepAbortable(gap, options.signal);
-        const data = await this.#deliver(chatKey, options, { type: 'text', text }, () => this.onebot.sendText(kind, id, text, {
-          replyToMessageId: i === 0 ? options.replyToMessageId : null, // 引用挂在第一条上：回的就是那条
-          atUserId: i === 0 ? options.atUserId : null,
-          signal: options.signal
-        }));
+        const data = await this.#deliver(chatKey, options, { type: 'text', text }, () => (
+          mentionParts
+            ? this.onebot.sendRichText(kind, id, mentionParts, {
+              replyToMessageId: i === 0 ? options.replyToMessageId : null,
+              signal: options.signal
+            })
+            : this.onebot.sendText(kind, id, text, {
+              replyToMessageId: i === 0 ? options.replyToMessageId : null, // 引用挂在第一条上：回的就是那条
+              atUserId: i === 0 ? options.atUserId : null,
+              signal: options.signal
+            })
+        ));
         const ts = Date.now();
         let targetUserId = this.#replyTarget(chatKey, options);
         if (!targetUserId && kind === 'private') targetUserId = String(id);

@@ -46,6 +46,25 @@ QARegistry.override('refreshStatus', async function refreshStatus() {
         document.body.appendChild(banner);
       }
     }
+    // config.json 在进程运行期间被外部改过：冲突版本已备份，提示管理员去看一眼。
+    // 用 sessionStorage 按冲突时间记住"已关闭"，避免每次 15 秒轮询又弹回来。
+    if (s.configConflict?.at) {
+      const key = `config-conflict-dismissed:${s.configConflict.at}`;
+      let dismissed = false;
+      try { dismissed = sessionStorage.getItem(key) === '1'; } catch { /* 无 storage 时照常提示 */ }
+      if (!dismissed && !document.querySelector('#config-conflict-banner')) {
+        const banner = document.createElement('button');
+        banner.id = 'config-conflict-banner';
+        banner.type = 'button';
+        banner.textContent = '配置曾被外部修改 · 旧版本已备份 · 点击关闭';
+        banner.title = `备份文件：${s.configConflict.backupPath || '未知'}`;
+        banner.addEventListener('click', () => {
+          try { sessionStorage.setItem(key, '1'); } catch { /* 忽略 */ }
+          banner.remove();
+        });
+        document.body.appendChild(banner);
+      }
+    }
     const dot = $('#onebot-dot');
     const label = $('#onebot-label');
     dot.className = 'dot ' + (s.onebot.connected ? 'dot-on' : (s.onebot.everConnected ? 'dot-wait' : 'dot-off'));

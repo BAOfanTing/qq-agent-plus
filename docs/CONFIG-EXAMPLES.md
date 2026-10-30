@@ -3,6 +3,28 @@
 配置写在数据目录的 `config.json`（默认 `data/config.json`，含密钥，已被 Git 忽略）。
 下面是本分支新增或调整过的键，其余键保持上游默认即可。
 
+## security.allowFakeIpDns：代理 fake-ip（默认开）
+
+```json
+"security": {
+  "allowFakeIpDns": true,
+  "fakeIpCidrs": ["198.18.0.0/15"],
+  "allowPrivateImageHosts": false
+}
+```
+
+Clash/mihomo 等代理的 fake-ip 模式会把任意域名解析到 `198.18.0.0/15`。开启时只放行
+**DNS 解析结果**里命中 `fakeIpCidrs` 的网段；URL 里直接写这些网段仍会被拒，`127/10/192.168/169.254`
+等真正内网地址也仍然拦截。默认只列 IPv4 基准测试段；需要 fake-ip6 时自行追加
+（例如 `"fc00::/18"`，先确认该网段在你的代理/网络里确实只承载 fake-ip）。关掉
+`allowFakeIpDns` 则恢复旧行为：解析到任何私网/基准段都拒绝。
+
+`config.json` 在进程运行期间被外部修改时，下一次保存会先把磁盘版本备份成
+`config.json.conflict-<时间戳>-<pid>.bak`，然后返回 409，**默认不写盘**；控制台会给出
+「重新加载磁盘配置 / 用当前页面覆盖」二选一。API 调用方确认覆盖时用
+`POST /api/config?force=1`，重新加载用 `POST /api/config/reload`。备份写不出来时保存直接失败，
+不会静默覆盖。
+
 ## platform.privateFileSend：当前私聊的纯文本资料（默认关闭）
 
 ```json

@@ -10,7 +10,7 @@ import { api } from '../core/api.js';
 import { appearancePatch } from '../core/appearance.js';
 import { ASR_SERVICES } from '../core/constants.js';
 import {
-  identityPilotSettingsPatch, setStatusLabel, syncGraduatedFeatureNavigation
+  askConfigConflict, identityPilotSettingsPatch, setStatusLabel, syncGraduatedFeatureNavigation
 } from '../core/dom-util.js';
 import { $, $$ } from '../core/dom.js';
 import {
@@ -1208,7 +1208,23 @@ async function saveConfig({ quiet = false } = {}) {
     };
   }
 
-  const data = await api('/api/config', { method: 'POST', body: JSON.stringify(patch) });
+  const postConfig = (force = false) => api(`/api/config${force ? '?force=1' : ''}`, {
+    method: 'POST', body: JSON.stringify(patch)
+  });
+  let data;
+  try {
+    data = await postConfig(false);
+  } catch (error) {
+    if (error?.code !== 'CONFIG_CONFLICT' || quiet) throw error;
+    const choice = await askConfigConflict(error.data?.configConflict);
+    if (choice === 'reload') {
+      await api('/api/config/reload', { method: 'POST', body: '{}' });
+      window.location.reload();
+      return null;
+    }
+    if (choice !== 'overwrite') throw error;
+    data = await postConfig(true);
+  }
   state.config = data.config;
   // 按群覆盖草稿作废：下次渲染从刚保存的配置重新克隆。不清的话，若别的标签页/直连 API
   // 改过 perGroup，本页再用陈旧草稿提交就会整体覆盖回去（__replace__ 是整表替换，2026-10-07 审计 P3）。

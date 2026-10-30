@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { CAP_METHODS } from './protocol.js';
 import { sanitizeUserText } from '../core/util.js';
+import { imageType } from '../core/image-type.js';
 import { safeFetchRequest, safeFetchBinary, isHostAllowed } from '../llm/safe-fetch.js';
 import { readPluginSecrets, writePluginSecrets, secretFieldKeys } from './secrets.js';
 import { ffmpegToPcm, runProvider } from '../tools/audio-transcribe.js';
@@ -32,6 +33,8 @@ const MAX_SENDS_PER_MIN = 6;           // 每个插件每分钟最多说几句 �
 const MAX_HTTP_HEADERS = 16;
 const MAX_HEADER_CHARS = 2048;
 const MAX_MEDIA_BYTES = 80 * 1024 * 1024;   // 单次下载上限（B 站 480P/720P 够用）
+const MAX_INLINE_IMAGE_BYTES = 8 * 1024 * 1024; // WS 已连接时可用（大帧走 WS）
+const HTTP_INLINE_IMAGE_BYTES = 1 * 1024 * 1024; // 仅 HTTP 时受协议端 body 上限约束
 const MAX_MEDIA_FILES = 12;                 // 每个插件保留的媒体文件数（抽帧+缓存+成品都要住这里）
 const MEDIA_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -554,8 +557,27 @@ export function createCapabilities({
       const size = fs.statSync(source).size;
       if (size > MAX_MEDIA_BYTES) throw fail('E_TOO_BIG', `文件超过 ${MAX_MEDIA_BYTES / 1024 / 1024}MB，不能发送`);
       const sender = senderOf();
-      if (!sender?.groupFile) throw fail('E_NO_SENDER', '宿主没有可用的发送队列（插件暂时发不了文件）');
       const displayName = String(name || path.basename(source)).replace(/[\\/:*?"<>|]/g, '_').slice(0, 100);
+      // NTQQ 的 upload_group_file 只收文件，图片会被 rich media transfer failed。
+      // 文件名可能没有扩展名，按魔数识别；是图片就走 image 消息段，否则保持群文件。
+      const imageMime = sniffImage(source);
+      if (imageMime) {
+        if (!sender?.sendImage) throw fail('E_NO_SENDER', '宿主没有可用的图片发送队列');
+        // 小图直接内联 base64：协议端跑在容器/另一台机器时也能收到；
+        // 大图仍用路径，避免一次把几十 MB 塞进请求体。
+        const inlineLimit = sender.onebot?.connected ? MAX_INLINE_IMAGE_BYTES : HTTP_INLINE_IMAGE_BYTES;
+        const imageUrl = size <= inlineLimit
+          ? `base64://${fs.readFileSync(source).toString('base64')}`
+          : source;
+        await sender.sendImage(target, {
+          id: `plugin-${pluginId}-${path.basename(source)}`,
+          url: imageUrl,
+          desc: displayName
+        }, {});
+        log(`[plugin:${pluginId}] 以机器人身份在 ${target} 发了一张图片：${displayName}（${Math.round(size / 1024)}KB）`);
+        return { ok: true, chatKey: target, bytes: size, image: true, mime: imageMime };
+      }
+      if (!sender?.groupFile) throw fail('E_NO_SENDER', '宿主没有可用的发送队列（插件暂时发不了文件）');
       await sender.groupFile(target, { file: source, name: displayName }, {});
       log(`[plugin:${pluginId}] 以机器人身份在 ${target} 发了一个文件：${displayName}（${Math.round(size / 1024)}KB）`);
       return { ok: true, chatKey: target, bytes: size };
@@ -581,6 +603,21 @@ export function createCapabilities({
     if (file !== path.resolve(mediaDir, path.basename(file))) throw fail('E_ARGS', 'file 越界');
     if (!fs.existsSync(file)) throw fail('E_NO_FILE', `找不到文件 ${raw}`);
     return file;
+  }
+
+  /** 只读前 16 字节嗅探图片魔数；插件文件名可能没有扩展名，不能只看后缀。 */
+  function sniffImage(file) {
+    let fd = null;
+    try {
+      fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(16);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      return imageType(buf.subarray(0, n));
+    } finally {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch { /* 忽略 */ }
+      }
+    }
   }
 
   return {

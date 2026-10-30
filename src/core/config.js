@@ -99,6 +99,10 @@ export function getConfig() {
   return stabilize(legacy.getConfig(), { persist: true });
 }
 
+export function reloadConfig() {
+  return stabilize(legacy.reloadConfig());
+}
+
 /** The only administrator QQ configuration read/written by current code. */
 export function adminOwnerUin(cfg = getConfig()) {
   return globalAdminUin(cfg);
@@ -293,7 +297,7 @@ export function imageGenMaxPerHour(cfg = getConfig()) {
   return Number.isFinite(n) && n > 0 ? Math.min(100, Math.round(n)) : 6;
 }
 
-export function updateConfig(patch) {
+export function updateConfig(patch, options = {}) {
   const current = stabilize(legacy.getConfig());
   const rawPatch = structuredClone(
     patch && typeof patch === 'object' ? patch : {}
@@ -317,14 +321,19 @@ export function updateConfig(patch) {
   mirrorAdminIntoLegacyPatch(compatiblePatch, requestedAdmin.ownerUin);
   ensureAdminPrivateAccess(compatiblePatch, current, requestedAdmin.ownerUin);
 
+  let conflict = false;
   try {
-    const updated = legacy.updateConfig(compatiblePatch);
+    const updated = legacy.updateConfig(compatiblePatch, options);
     return stabilize(updated);
+  } catch (error) {
+    conflict = error?.code === 'CONFIG_CONFLICT';
+    throw error;
   } finally {
     // An unrelated validation error must never leave promoted infrastructure
     // gated off in the in-memory legacy object.
     applyStableFeaturePolicy(legacy.getConfig());
-    legacy.scheduleConfigSave();
+    // 冲突时不要排防抖保存：那会在后台再撞一次冲突，也不会带来任何写入。
+    if (!conflict) legacy.scheduleConfigSave();
   }
 }
 

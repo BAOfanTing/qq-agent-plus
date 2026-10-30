@@ -113,7 +113,8 @@ test('② asr.keys 里被手改成标量的槽位，归档时不摊成字符索�
   getConfig().asr.keys = { tencent: 'SCALAR' };
 
   // 保存一次（换服务、不带凭据）→ 归档循环要往 tencent 槽写
-  const res = await request('/api/config', {
+  // 磁盘是故意手改坏的，模拟管理员确认“用当前页面覆盖”。
+  const res = await request('/api/config?force=1', {
     method: 'POST',
     body: { asr: { enabled: true, provider: 'openai', baseUrl: 'https://api.groq.com/openai/v1' } }
   });

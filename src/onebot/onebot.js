@@ -435,7 +435,15 @@ export class OneBotClient {
     return this.call(action, params, timeoutMs, signal);
   }
 
-  async sendText(kind, id, text, { replyToMessageId = null, atUserId = null, signal } = {}) {
+  async sendText(kind, id, text, options = {}) {
+    return this.sendRichText(kind, id, [{ type: 'text', text: String(text ?? '') }], options);
+  }
+
+  /**
+   * 发送带结构化段的消息（文本 / at）。给正文里的 @昵称 转真实 at 段用：
+   * 文本段统一过 escapeCqText，at 段只接受数字 QQ 号。
+   */
+  async sendRichText(kind, id, parts, { replyToMessageId = null, atUserId = null, signal } = {}) {
     const segments = [];
     if (replyToMessageId !== undefined && replyToMessageId !== null && String(replyToMessageId).trim() !== '') {
       const rid = String(replyToMessageId).trim();
@@ -457,7 +465,15 @@ export class OneBotClient {
       }
       segments.push({ type: 'at', data: { qq: at } });
     }
-    segments.push({ type: 'text', data: { text: escapeCqText(String(text ?? '')) } });
+    for (const part of Array.isArray(parts) ? parts : []) {
+      if (part?.type === 'at') {
+        const qq = String(part.qq ?? '').trim();
+        if (!/^\d+$/.test(qq)) continue;
+        segments.push({ type: 'at', data: { qq } });
+      } else if (typeof part?.text === 'string') {
+        segments.push({ type: 'text', data: { text: escapeCqText(part.text) } });
+      }
+    }
     return this.sendSegments(kind, id, segments, signal);
   }
 

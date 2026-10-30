@@ -101,6 +101,39 @@ export function isPrivateIp(ip) {
   return false;
 }
 
+/** 默认 fake-ip 网段（RFC 2544）；可通过 security.fakeIpCidrs 追加 IPv6 fake-ip6。 */
+export const DEFAULT_FAKE_IP_CIDRS = Object.freeze(['198.18.0.0/15']);
+
+/**
+ * 判断 DNS 解析结果是否落在配置的 fake-ip 网段。支持 IPv4 / IPv6 CIDR，
+ * 也支持 ::ffff:198.18.x.x 这类内嵌 IPv4 形态。
+ */
+export function isFakeIpAddress(ip, cidrs = DEFAULT_FAKE_IP_CIDRS) {
+  const raw = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!raw) return false;
+  const embedded = raw.includes(':') ? parseEmbeddedIpv4(raw) : null;
+  const target = embedded || raw;
+  const family = net.isIP(target);
+  if (!family) return false;
+  const list = new net.BlockList();
+  let added = false;
+  for (const cidr of Array.isArray(cidrs) ? cidrs : DEFAULT_FAKE_IP_CIDRS) {
+    const match = /^([0-9a-f:.]+)\/(\d{1,3})$/i.exec(String(cidr || '').trim());
+    if (!match) continue;
+    const base = match[1];
+    const prefix = Number(match[2]);
+    const type = net.isIP(base);
+    if (!type) continue;
+    if ((type === 4 && prefix > 32) || (type === 6 && prefix > 128)) continue;
+    try {
+      list.addSubnet(base, prefix, type === 4 ? 'ipv4' : 'ipv6');
+      added = true;
+    } catch { /* 坏 CIDR 跳过，不影响其他网段 */ }
+  }
+  if (!added) return false;
+  return list.check(target, family === 4 ? 'ipv4' : 'ipv6');
+}
+
 // ── 主机名校验（含 DNS） ────────────────────────────────────────────────
 
 async function lookupWithTimeout(hostname) {
@@ -129,9 +162,18 @@ async function resolveSafeHost(hostname, { allowPrivate = false } = {}) {
   }
   if (!addresses.length) throw new Error('域名没有解析结果');
   if (!allowPrivate) {
+    // fake-ip 代理会把任意域名解析到配置的 fake-ip 网段；只放行"DNS 结果"，
+    // 直接在 URL 里写这些 IP 仍会被上面的 net.isIP 分支拦住。
+    const security = getConfig().security || {};
+    const allowFakeIpDns = security.allowFakeIpDns !== false;
+    const fakeCidrs = security.fakeIpCidrs;
     for (const { address } of addresses) {
-      if (isPrivateIp(address)) throw new Error('域名解析到内网/本机地址，已阻止');
+      if (isPrivateIp(address) && !(allowFakeIpDns && isFakeIpAddress(address, fakeCidrs))) {
+        throw new Error('域名解析到内网/本机地址，已阻止');
+      }
     }
+    const usable = addresses.find(({ address }) => !isPrivateIp(address) || isFakeIpAddress(address, fakeCidrs));
+    return (usable || addresses[0]).address;
   }
   return addresses[0].address;
 }

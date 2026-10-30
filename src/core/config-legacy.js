@@ -23,11 +23,28 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function invalidConfig(message) {
   return Object.assign(new Error(message), { httpStatus: 400 });
 }
+function configConflict(message, conflict) {
+  return Object.assign(new Error(message), {
+    httpStatus: 409,
+    code: 'CONFIG_CONFLICT',
+    configConflict: conflict || null
+  });
+}
 // 本文件在 src/core/ 下：仓库根要多退一层（挪目录时最容易漏的就是这里）
 export const ROOT = path.resolve(__dirname, '..', '..');
 // 测试/便携场景可重定向数据目录
 export const DATA_DIR = process.env.QQ_AGENT_DATA_DIR || path.join(ROOT, 'data');
 export const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+
+// 最近一次读盘看到的原文，用于识别"进程运行期间 config.json 被外部改过"。
+let lastDiskText = null;
+let lastConfigConflict = null;
+let pendingExternalDiskText = null;
+
+/** 最近一次检测到的外部修改冲突（控制台用；不随保存清空）。 */
+export function getConfigConflict() {
+  return lastConfigConflict ? { ...lastConfigConflict } : null;
+}
 
 export const DEFAULT_CONFIG = {
   // OpenAI 兼容 API（必填才能跑）
@@ -279,9 +296,15 @@ export const DEFAULT_CONFIG = {
     timeoutMs: 120000,        // 生图比对话慢
     extraBody: {}             // 额外请求参数（个别网关要 quality/style 之类）
   },
-  // 安全例外（默认全部关闭）
+  // 安全例外（默认只放行 fake-ip 的 DNS 结果，其余全部关闭）
   security: {
-    allowPrivateImageHosts: false           // true 时图片下载允许内网地址（仅本地测试/自建图床）
+    allowPrivateImageHosts: false,          // true 时图片下载允许内网地址（仅本地测试/自建图床）
+    // 代理软件（Clash/mihomo 等）的 fake-ip 模式会把任意域名解析到 198.18.0.0/15。
+    // 只对「DNS 解析结果」放行这些网段；直接写 IP 的 URL 仍然拦，
+    // 127/10/192.168/169.254 等真正的内网地址也仍然拦。需要 fake-ip6 时
+    // 在这里追加 "fc00::/18" 等用户自己确认过的网段。
+    allowFakeIpDns: true,
+    fakeIpCidrs: ['198.18.0.0/15']
   },
   // 外部 OneBot v11 服务
   onebot: {
@@ -1819,9 +1842,59 @@ function deepMerge(base, override) {
   return out;
 }
 
-export function loadConfig() {
+/**
+ * 写盘前先看磁盘是否被外部改过：是则把磁盘版本另存一份，再继续写内存快照。
+ * 备份失败时直接抛错，宁可不保存也不静默覆盖用户刚改的文件。
+ */
+function backupExternalConfigIfNeeded() {
+  let diskText;
   try {
-    let text = fs.readFileSync(CONFIG_FILE, 'utf8');
+    diskText = fs.readFileSync(CONFIG_FILE, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+  if (lastDiskText === null) {
+    lastDiskText = diskText;
+    return null;
+  }
+  if (diskText === lastDiskText) return null;
+  // 同一次外部修改只备份一次：用户选“覆盖”重试时不能又生成一份。
+  if (pendingExternalDiskText === diskText && lastConfigConflict?.backupPath) return lastConfigConflict.backupPath;
+  const backupPath = `${CONFIG_FILE}.conflict-${Date.now()}-${process.pid}.bak`;
+  // 先写备份再动 config.json：备份失败会抛错，调用方本次保存直接失败，不会覆盖磁盘版本。
+  fs.writeFileSync(backupPath, diskText, { mode: 0o600, flush: true });
+  try { fs.chmodSync(backupPath, 0o600); } catch { /* 备份已写入 */ }
+  lastConfigConflict = { at: Date.now(), backupPath };
+  pendingExternalDiskText = diskText;
+  console.warn(`[config] 检测到 config.json 被进程外修改，磁盘版本已备份到 ${path.basename(backupPath)}`);
+  return backupPath;
+}
+
+/** 统一的配置落盘：冲突备份 + 原子写 + 0600 + 更新 lastDiskText。 */
+function writeConfigFile(config, { force = false } = {}) {
+  const text = JSON.stringify(config, null, 2);
+  const backupPath = backupExternalConfigIfNeeded();
+  if (backupPath && !force) {
+    throw configConflict('config.json 已被外部修改，本次保存未写入；请选择重新加载或确认覆盖', {
+      ...lastConfigConflict
+    });
+  }
+  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+  const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, text, { mode: 0o600, flush: true });
+  fs.renameSync(tmp, CONFIG_FILE);
+  try { fs.chmodSync(CONFIG_FILE, 0o600); } catch { /* 保留已成功写入 */ }
+  lastDiskText = text;
+  pendingExternalDiskText = null;
+}
+
+export function loadConfig() {
+  let rawText = null;
+  try {
+    rawText = fs.readFileSync(CONFIG_FILE, 'utf8');
+    lastDiskText = rawText;
+    let text = rawText;
     if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
     const parsed = migrateConfig(JSON.parse(text));
     const merged = deepMerge(DEFAULT_CONFIG, parsed);
@@ -1853,6 +1926,9 @@ export function loadConfig() {
     applyPersonaPerChatTemplates(merged);   // 绑了内置卡就按 roles/*.md 刷新正文（卡文件是唯一来源）
     return merged;
   } catch (error) {
+    // 启动时没有文件 = 基线是“空”；之后若外部先放了一份 config.json 进来，
+    // 首次保存也要把它当外部修改备份，而不是当成自己的初始文件直接覆盖。
+    if (error?.code === 'ENOENT') lastDiskText = '';
     // 读不动/解析不了就**先把原件留一份**再退回默认值：config.js 的 stabilize 会把结果持久化，
     // 原来这里只是静默返回默认配置 —— 手改坏一个字符，apiKey、白名单、人设就整份被覆盖掉了。
     if (fs.existsSync(CONFIG_FILE)) {
@@ -1946,7 +2022,7 @@ function clampMemberNotes(value) {
 
 /** 更新并持久化配置（深合并到当前值：对象字段递归合并、数组整体替换；
  *  映射型字段（如 api.modelPrices）要"删掉旧键"时传 `{ __replace__: X }` 整体替换）。 */
-export function updateConfig(patch) {
+export function updateConfig(patch, { force = false } = {}) {
   // 人设段传了 null / 数组 / 标量（手写 API 调用、坏客户端）时当"没改人设"处理：
   // 直接把这个键从 patch 里摘掉，免得它在合并/迁移里被当成"恢复默认人设"，甚至抛错。
   const safePatch = isPlainObject(patch) ? { ...patch } : {};
@@ -2382,6 +2458,7 @@ export function updateConfig(patch) {
   if (!['127.0.0.1', 'localhost', '::1'].includes(next.server.host) && !String(next.server.token || '').trim()) {
     throw invalidConfig('A console token is required for LAN access');
   }
+  const previousConfig = currentConfig;
   currentConfig = next;
 
   // ── 响应概率：以滑条位置为唯一真相 ──
@@ -2410,20 +2487,15 @@ export function updateConfig(patch) {
     groupSliderPos
   };
 
-  fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-  // tmp 带 pid：与下面的防抖保存同口径 —— 两条路径可能同时触发保存，同名 tmp 会互相截断，
-  // 且对方先 rename 走之后本方 rename 会 ENOENT 把保存直接抛出去（控制台保存报 500）
-  //（2026-10-12 复审 P3：防抖那条加了 pid，这条主路径漏了）。
-  const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
-  // flush：rename 之前先把数据落盘，否则断电后可能拿到"改名成功、内容为空"的 config.json
-  // （进程被杀不受影响，只有真断电会中招；2026-09-29 审查 P2）
-  fs.writeFileSync(tmp, JSON.stringify(currentConfig, null, 2), { mode: 0o600, flush: true });
-  fs.renameSync(tmp, CONFIG_FILE);
-  // btrfs（部分 NAS）上 writeFileSync 的 mode 参数会丢失（0600→0700）：
-  // 显式 chmod 兜底，不依赖"创建时 mode"在所有文件系统上都生效（Issue #11）。
-  // chmod 失败不向上抛：写入本身已成功，别让一次已成功的 updateConfig 因
-  // 极窄文件系统场景（FUSE/NFS 关闭 mode 支持等）变成全仓调用方的失败。
-  try { fs.chmodSync(CONFIG_FILE, 0o600); } catch { /* 保留已成功写入 */ }
+  // 统一落盘：写前检测外部修改并备份磁盘版本；tmp 带 pid + flush 原子写 + 0600
+  //（btrfs 上 mode 会丢，写后 chmod 兜底，Issue #11）。写失败回滚内存，避免运行时
+  // 已经在用“没落盘的新配置”、重启后又回退。
+  try {
+    writeConfigFile(currentConfig, { force });
+  } catch (error) {
+    currentConfig = previousConfig;
+    throw error;
+  }
   if (oldTimeControl !== JSON.stringify(next.timeControl)) notifyTimeControlChange();
   return currentConfig;
 }
@@ -2432,6 +2504,15 @@ export function updateConfig(patch) {
 export function setRuntimeConfig(cfg) {
   currentConfig = cfg;
   notifyTimeControlChange();
+}
+
+/** 放弃内存快照，重新读盘（冲突弹窗的“重新加载磁盘配置”）。 */
+export function reloadConfig() {
+  currentConfig = loadConfig();
+  lastConfigConflict = null;
+  pendingExternalDiskText = null;
+  notifyTimeControlChange();
+  return currentConfig;
 }
 
 /**
@@ -2472,15 +2553,8 @@ export function scheduleConfigSave() {
   clearTimeout(saveTimers.get('cfg'));
   saveTimers.set('cfg', setTimeout(() => {
     try {
-      fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-      // tmp 带 pid：控制台与主进程可能同时触发保存，同名 tmp 会互相截断
-      //（另一处的用法是 rename 前被对方写坏；2026-10-12 审查）
-      const tmp = `${CONFIG_FILE}.${process.pid}.tmp`;
-      // config.json 含模型 Key 与控制台 Token，防抖路径也必须锁 0600，
-      // 否则 rename 会把 updateConfig 落好的 0600 打回 umask 默认（0664）
-      fs.writeFileSync(tmp, JSON.stringify(getConfig(), null, 2), { mode: 0o600, flush: true });
-      fs.renameSync(tmp, CONFIG_FILE);
-      fs.chmodSync(CONFIG_FILE, 0o600); // btrfs 兜底（Issue #11：mode 参数在该文件系统上会丢失）
+      // 与 updateConfig 共用同一落盘路径：外部修改检测、冲突备份、原子写、0600 都只维护一处。
+      writeConfigFile(getConfig());
     } catch (error) {
       console.error('[config] 保存失败:', error);
     }

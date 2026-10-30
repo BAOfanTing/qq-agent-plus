@@ -21,11 +21,17 @@ const realDnsLookup = dns.promises.lookup;
 dns.promises.lookup = async (hostname, options) => (
   hostname === 'pinned.test'
     ? [{ address: '127.0.0.1', family: 4 }]
-    : realDnsLookup(hostname, options)
+    : hostname === 'fake-ip.test'
+      ? [{ address: '198.18.0.5', family: 4 }]
+      : hostname === 'fake-ip6.test'
+        ? [{ address: 'fc00::5', family: 6 }]
+        : hostname === 'private.test'
+          ? [{ address: '10.0.0.8', family: 4 }]
+          : realDnsLookup(hostname, options)
 );
 
 const { DEFAULT_CONFIG, setRuntimeConfig } = await import('../src/core/config.js');
-const { safeFetchBinary, readBounded, safeFetchRequest } = await import('../src/llm/safe-fetch.js');
+const { safeFetchBinary, readBounded, safeFetchRequest, validateFetchUrl } = await import('../src/llm/safe-fetch.js');
 
 const TLS_DIR = path.join(import.meta.dirname, 'fixtures', 'tls');
 const TLS_CERT = fs.readFileSync(path.join(TLS_DIR, 'localhost-cert.pem'));
@@ -33,6 +39,29 @@ const TLS_KEY = fs.readFileSync(path.join(TLS_DIR, 'localhost-key.pem'));
 // 测试用自签证书只在本进程内被信任；不要用 NODE_TLS_REJECT_UNAUTHORIZED=0，
 // 那会把“证书校验失败必须拒绝”的用例一起关掉。
 tls.setDefaultCACertificates([...tls.getCACertificates('default'), TLS_CERT.toString()]);
+
+test('fake-ip DNS：放行 198.18/15 的解析结果，但直连地址和真内网仍然拦截', async () => {
+  const base = structuredClone(DEFAULT_CONFIG);
+  setRuntimeConfig({ ...base, security: { ...base.security, allowFakeIpDns: true } });
+  const ok = await validateFetchUrl('https://fake-ip.test/a');
+  assert.equal(ok.ip, '198.18.0.5', 'DNS 解析到 fake-ip 段应放行');
+  await assert.rejects(validateFetchUrl('http://198.18.0.5/a'), /内网\/本机地址/, 'URL 直接写 198.18 仍拒绝');
+  await assert.rejects(validateFetchUrl('https://private.test/a'), /内网\/本机地址/, '真内网解析结果仍拒绝');
+
+  setRuntimeConfig({ ...base, security: { ...base.security, allowFakeIpDns: false } });
+  await assert.rejects(validateFetchUrl('https://fake-ip.test/a'), /内网\/本机地址/, '显式关闭后恢复拒绝');
+
+  // fake-ip6 不默认放行；用户显式把网段加进 fakeIpCidrs 才生效。
+  await assert.rejects(validateFetchUrl('https://fake-ip6.test/a'), /内网\/本机地址/, '默认不放行 IPv6 fake-ip');
+  setRuntimeConfig({
+    ...base,
+    security: { ...base.security, allowFakeIpDns: true, fakeIpCidrs: ['198.18.0.0/15', 'fc00::/18'] }
+  });
+  const ok6 = await validateFetchUrl('https://fake-ip6.test/a');
+  assert.equal(ok6.ip, 'fc00::5', '显式配置的 fake-ip6 网段可放行');
+  setRuntimeConfig({ ...base, security: { ...base.security, allowFakeIpDns: true, fakeIpCidrs: ['bad', '999.1.1.1/8'] } });
+  await assert.rejects(validateFetchUrl('https://fake-ip.test/a'), /内网\/本机地址/, '坏 CIDR 不能变成放行');
+});
 
 function listen(server) {
   return new Promise((resolve) => {

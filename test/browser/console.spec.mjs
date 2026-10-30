@@ -25,6 +25,46 @@ test('?token= 自动登录后把 Token 从地址栏移除', async ({ page }) => 
   await expect.poll(() => new URL(page.url()).searchParams.get('token')).toBeNull();
 });
 
+test('config.json 外部修改提示：显示备份横幅，点击可关闭', async ({ page }) => {
+  await page.route('**/api/status', async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    body.configConflict = { at: Date.now(), backupPath: 'C:/data/config.json.conflict-1-2.bak' };
+    await route.fulfill({ response, json: body });
+  });
+  await login(page);
+  await page.goto('/');
+  const banner = page.locator('#config-conflict-banner');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('配置曾被外部修改');
+  await banner.click();
+  await expect(banner).toHaveCount(0);
+});
+
+test('配置冲突保存：弹出三选一，取消后不写盘', async ({ page }) => {
+  await page.route('**/api/config', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    return route.fulfill({
+      status: 409,
+      json: {
+        ok: false, code: 'CONFIG_CONFLICT', error: 'config.json 已被外部修改',
+        configConflict: { at: Date.now(), backupPath: 'C:/data/config.json.conflict-1-2.bak' }
+      }
+    });
+  });
+  await login(page);
+  await page.goto('/');
+  await switchTo(page, 'settings');
+  await page.click('.settings-menu-item[data-section="chat"]');
+  await page.click('#save-cfg-btn');
+  const dialog = page.locator('.model-modal');
+  await expect(dialog).toContainText('配置文件已被外部修改');
+  await expect(dialog.locator('[data-conflict-overwrite]')).toBeVisible();
+  await dialog.locator('[data-conflict-cancel]').click();
+  await expect(page.locator('.model-modal')).toHaveCount(0);
+  await page.unroute('**/api/config');
+});
+
 test('15 个页签逐一切换，且没有 console error / pageerror', async ({ page }) => {
   const errors = collectPageErrors(page);
   await login(page);

@@ -445,7 +445,8 @@ console.log('\n=== 场景 4：revealWords=false（结算也不公开身份与词
   const cfgNow = JSON.parse(fs2.readFileSync(cfgPath, 'utf8'));
   cfgNow.groupGame.revealWords = false;
   fs2.writeFileSync(cfgPath, JSON.stringify(cfgNow));
-  const { updateConfig } = await import('../../src/core/config.js');
+  const { updateConfig, reloadConfig } = await import('../../src/core/config.js');
+  reloadConfig();
   updateConfig({ groupGame: cfgNow.groupGame });
   gameSeq += 1;   // 新的一局：夜号会在不同局里重复，配额统计要按局分开
   for (const p of PLAYERS) groupSay(p.uid, p.name, '再来一局狼人杀');

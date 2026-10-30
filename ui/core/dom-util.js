@@ -102,6 +102,38 @@ function askForConfirmation(message) {
   });
 }
 
+/**
+ * config.json 冲突三选一：重新加载磁盘 / 强制覆盖（已备份）/ 取消。
+ * 返回 'reload' | 'overwrite' | 'cancel'。
+ */
+function askConfigConflict(conflict = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const backup = String(conflict?.backupPath || '').trim();
+    const overlay = modelModalShell({
+      head: '配置文件已被外部修改',
+      body: `<div style="white-space:pre-wrap">检测到 config.json 在进程运行期间被外部修改。${backup ? `\n磁盘版本已备份到：${esc(backup)}` : ''}\n\n重新加载会丢弃当前页面尚未保存的修改；覆盖会把当前页面配置写回磁盘（旧磁盘版本已备份）。</div>`,
+      foot: '<button type="button" class="btn" data-conflict-cancel>取消</button>'
+        + '<button type="button" class="btn" data-conflict-reload>重新加载磁盘配置</button>'
+        + '<button type="button" class="btn btn-danger" data-conflict-overwrite>用当前页面覆盖</button>'
+    });
+    const finish = (choice) => {
+      if (settled) return;
+      settled = true;
+      closeModelModal(overlay);
+      resolve(choice);
+    };
+    overlay.querySelector('[data-conflict-cancel]').addEventListener('click', () => finish('cancel'));
+    overlay.querySelector('[data-conflict-reload]').addEventListener('click', () => finish('reload'));
+    overlay.querySelector('[data-conflict-overwrite]').addEventListener('click', () => finish('overwrite'));
+    overlay.querySelector('.model-modal-close').addEventListener('click', () => finish('cancel'));
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) finish('cancel');
+    });
+    overlay.querySelector('[data-conflict-cancel]').focus();
+  });
+}
+
 function setLoadingStatus(text) {
   state.bootLogs.push(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${text}`);
   if (loadingStatus) loadingStatus.textContent = text;
@@ -774,7 +806,7 @@ function bindPeekToggle(buttonId, inputId) {
 }
 
 export {
-  afterRender, askForConfirmation, bindPeekToggle, experimentalFeatureLaunchPatch, extraBodyText, hideLoading,
+  afterRender, askConfigConflict, askForConfirmation, bindPeekToggle, experimentalFeatureLaunchPatch, extraBodyText, hideLoading,
   identityPilotSettingsPatch, impressionMetaLabel, initChatScrollLoader, initSessionScrollLoader,
   patchKeyedList, pollUntilReady, readAssetImage, requestExperimentOwnerUin, revealLoadingIfSlow,
   scheduleChatsRefresh, scheduleSessionRender, setBoxError, setHtmlIfChanged, setLoadingStatus,

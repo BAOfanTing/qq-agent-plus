@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createRouter } from './router.js';
 import { createMetrics } from './metrics.js';
 
-import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCredentialResolve, asrCredentialSlot, asrCredentialSlotOf, asrCredentials, asrEndpointHost, asrKeyHost, asrKeySlots, asrKeySource, asrLocalBin, asrLocalModel, asrSecretId, asrSecretKey, ASR_PROVIDERS, conversationConfigForChat, findWhisperBinSync, getConfig, identityPilotEnabled, imageGenAvailable, imageGenKeyHosts, imageGenKeyOwnedBy, imageGenKeyResolve, incidentPilotEnabled, slangPilotEnabled, storeConfigForChat, updateConfig, onTimeControlChange, pinImageGenKeyHost, DATA_DIR, ROOT } from '../core/config.js';
+import { asrApiKey, asrAvailable, asrConfigured, asrCredentialForSlot, asrCredentialResolve, asrCredentialSlot, asrCredentialSlotOf, asrCredentials, asrEndpointHost, asrKeyHost, asrKeySlots, asrKeySource, asrLocalBin, asrLocalModel, asrSecretId, asrSecretKey, ASR_PROVIDERS, conversationConfigForChat, findWhisperBinSync, getConfig, getConfigConflict, reloadConfig, identityPilotEnabled, imageGenAvailable, imageGenKeyHosts, imageGenKeyOwnedBy, imageGenKeyResolve, incidentPilotEnabled, slangPilotEnabled, storeConfigForChat, updateConfig, onTimeControlChange, pinImageGenKeyHost, DATA_DIR, ROOT } from '../core/config.js';
 import { tokenSaverEffective } from '../core/token-saver.js';
 import { redactText } from '../core/redact.js';
 import { getSkillRegistry } from '../skills/registry.js';
@@ -695,7 +695,7 @@ export function createApp({
   }
   const mcpManager = new McpManager({ log: moduleLog('mcp') });
   if (getConfig().mcp?.enabled === true) {
-    void mcpManager.start().catch((error) => moduleLog('mcp').warn?.('启动失败:', error?.message ?? error));
+    void mcpManager.start().catch((error) => moduleLog('mcp')('启动失败:', error));
   }
   // 生活层：宿主侧的觅食与候选队列。禁用时不建状态文件、不起定时器。
   const lifeFeed = new LifeFeedManager({
@@ -5000,6 +5000,8 @@ export function createApp({
       webSearchCount: usage.webSearchCount || 0,
       // 前端构建戳：轮询时发现它变了 → 前端提示"控制台已更新，点击刷新"
       uiBuild: uiBuildStamp(UI_DIR),
+      // 进程运行期间 config.json 被外部改过：磁盘版本已备份，控制台据此提示
+      configConflict: getConfigConflict(),
       // 当前版本号（package.json 的 version）：控制台侧栏与控制页的版本徽标用它。
       // 之前控制页只显示部署提交号（sha），用户看不出"这是哪个版本"。
       version: PKG.version,
@@ -5517,10 +5519,19 @@ export function createApp({
       }
     }
     let next;
+    const force = new URL(req.url, 'http://127.0.0.1').searchParams.get('force') === '1';
     try {
-      next = updateConfig(patch);
+      next = updateConfig(patch, { force });
     } catch (error) {
       auditWrite('config.update', 'config', { req, before: auditBefore, ok: false, error: String(error?.message ?? error) });
+      if (error?.code === 'CONFIG_CONFLICT') {
+        return json(res, 409, {
+          ok: false,
+          code: 'CONFIG_CONFLICT',
+          error: String(error.message || '配置文件已被外部修改'),
+          configConflict: error.configConflict || getConfigConflict()
+        });
+      }
       // updateConfig 的校验错误自带 httpStatus=400（见 config-legacy 的 invalidConfig）；
       // 文件系统/内部错误没有这个标记，按 500 处理并进异常面板。
       throw error;
@@ -5531,7 +5542,7 @@ export function createApp({
     sessions.setPersistIntervalMs(next.store?.sessionPersistMs);
     if (patch?.mcp) {
       try { await mcpManager.reload(); }
-      catch (error) { moduleLog('mcp').warn?.('配置保存后重载失败:', error?.message ?? error); }
+      catch (error) { moduleLog('mcp')('配置保存后重载失败:', error); }
     }
     let closedThreads = 0;
     for (const [chatKey, previousMode] of previousModes) {
@@ -5627,7 +5638,137 @@ export function createApp({
     initPriceFeed(next.api?.priceRemoteUrl || '');   // 远程价格表 URL 可能改了（内部幂等）
     initChannelPrices(next.api?.channelPriceFeeds || []);   // 渠道价目表同理
     emit('status', { configUpdated: true });
-    return json(res, 200, { ok: true, config: safeConfigWithAsrStatus(next) });
+    return json(res, 200, { ok: true, config: safeConfigWithAsrStatus(next), configConflict: getConfigConflict() });
+  });
+
+  // 配置冲突时用户选择“重新加载磁盘配置”：丢内存快照、重新读盘，并按与保存路径相同的
+  // 口径重排所有缓存配置的子系统；单个子系统起不来只记警告，不把整次重载判失败。
+  router.add('POST', '/api/config/reload', async (req, res) => {
+    // 只读地看一眼磁盘版本做前置校验：不调用 loadConfig()，避免它更新基线后让后续保存
+    // 把这份被拒绝的配置当成“自己的版本”静默覆盖。
+    let diskToken = '';
+    try {
+      const disk = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'config.json'), 'utf8').replace(/^\uFEFF/, ''));
+      diskToken = String(disk?.server?.token || '');
+    } catch (error) {
+      if (error?.code !== 'ENOENT') {
+        return json(res, 409, {
+          ok: false,
+          code: 'CONFIG_RELOAD_REJECTED',
+          error: `磁盘 config.json 解析失败，未重载：${String(error?.message ?? error)}`
+        });
+      }
+    }
+    // 运行期套接字固定在 start() 的绑定地址上；重载一份没令牌的配置会让远程控制台立即失联。
+    if (boundServerHost && !['127.0.0.1', 'localhost', '::1'].includes(boundServerHost) && !diskToken) {
+      return json(res, 409, {
+        ok: false,
+        code: 'CONFIG_RELOAD_REJECTED',
+        error: '磁盘配置没有控制台令牌，而控制台已绑定在非回环地址；重新加载会让远程控制台全部失联，请先恢复 server.token 再重载'
+      });
+    }
+
+    const previous = getConfig();
+    const previousModes = new Map(
+      store.listChats().map((chatKey) => [chatKey, conversationConfigForChat(chatKey).mode])
+    );
+    const next = reloadConfig();
+    const warnings = [];
+    const warn = (label, error) => {
+      const text = `${label}：${String(error?.message ?? error)}`;
+      warnings.push(text);
+      if (error instanceof Error) moduleLog('config')(text, error);
+      else moduleLog('config')(text);
+    };
+
+    store.setMaxPerChat(next.store?.maxMessagesPerChat ?? 0);
+    store.setSynchronous(next.store?.sqliteSynchronous);
+    sessions.setPersistIntervalMs(next.store?.sessionPersistMs);
+
+    let closedThreads = 0;
+    for (const [chatKey, previousMode] of previousModes) {
+      if (conversationConfigForChat(chatKey).mode !== previousMode) {
+        if (store.closeConversationThread(chatKey, 'mode-changed')) closedThreads += 1;
+      }
+    }
+    if (closedThreads) emit('chat-update', '*');
+
+    if (JSON.stringify(next.proactive || {}) !== JSON.stringify(previous.proactive || {})) {
+      if (next.proactive?.enabled) orchestrator.startProactiveLoop();
+      else orchestrator.stopProactiveLoop();
+    }
+    if (JSON.stringify(next.dailyMoments || {}) !== JSON.stringify(previous.dailyMoments || {})) {
+      dailyMoments.reconfigure();
+    }
+    if (JSON.stringify(next.lifeFeed || {}) !== JSON.stringify(previous.lifeFeed || {})) {
+      lifeFeed.reconfigure();
+    }
+    if (JSON.stringify(next.qzoneInteractions || {}) !== JSON.stringify(previous.qzoneInteractions || {})) {
+      qzoneInteractions.reconfigure();
+    }
+    if (JSON.stringify(next.groupDigest || {}) !== JSON.stringify(previous.groupDigest || {})) {
+      groupDigest.reconfigure();
+    }
+    if (JSON.stringify(next.adminBriefing || {}) !== JSON.stringify(previous.adminBriefing || {})
+      || String(next.admin?.ownerUin || '') !== String(previous.admin?.ownerUin || '')) {
+      adminBriefing.reconfigure();
+    }
+    if (JSON.stringify(next.plugins || {}) !== JSON.stringify(previous.plugins || {})) {
+      // 与保存路径一致：不 await，控制台重载不该等第三方插件子进程起完。
+      Promise.resolve(pluginRegistry.reconfigure())
+        .catch((error) => warn('插件重排失败', error));
+    }
+    if (JSON.stringify(next.mcp || {}) !== JSON.stringify(previous.mcp || {})) {
+      try { await mcpManager.reload(); }
+      catch (error) { warn('MCP 重载失败', error); }
+    }
+
+    if (JSON.stringify(next.incidentPilot || {}) !== JSON.stringify(previous.incidentPilot || {})) {
+      try {
+        syncIncidentPilot();
+        for (const chatKey of store.listChats()) orchestrator.enforceChatControl(chatKey);
+      } catch (error) {
+        warn('异常处理实验重排失败', error);
+      }
+    }
+    const identityChanged = JSON.stringify(next.identityPilot || {}) !== JSON.stringify(previous.identityPilot || {});
+    const identitySourcesChanged = JSON.stringify({
+      allow: next.allow || {},
+      deny: next.deny || {},
+      allowAllWhenEmpty: next.allowAllWhenEmpty === true,
+      blocklist: next.blocklist || {}
+    }) !== JSON.stringify({
+      allow: previous.allow || {},
+      deny: previous.deny || {},
+      allowAllWhenEmpty: previous.allowAllWhenEmpty === true,
+      blocklist: previous.blocklist || {}
+    });
+    const personaChanged = JSON.stringify(next.persona || {}) !== JSON.stringify(previous.persona || {});
+    if (identityChanged || (identityPilotEnabled(next) && (identitySourcesChanged || personaChanged))) {
+      try {
+        await syncIdentityPilot({
+          reindex: identitySourcesChanged,
+          reconfigure: identityChanged || identitySourcesChanged || personaChanged
+        });
+      } catch (error) {
+        warn('统一身份库重排失败', error);
+      }
+    }
+    if (JSON.stringify(next.slangPilot || {}) !== JSON.stringify(previous.slangPilot || {})) {
+      try { await syncSlangPilot(); }
+      catch (error) { warn('黑话语料库重排失败', error); }
+    }
+    initPriceFeed(next.api?.priceRemoteUrl || '');
+    initChannelPrices(next.api?.channelPriceFeeds || []);
+
+    auditWrite('config.reload', 'config', { req, changed: changedTopKeys(previous, next) });
+    emit('status', { configUpdated: true });
+    return json(res, 200, {
+      ok: true,
+      config: safeConfigWithAsrStatus(next),
+      configConflict: getConfigConflict(),
+      ...(warnings.length ? { warnings } : {})
+    });
   });
 
   router.add('POST', '/api/group-game/stop', async (req, res) => {

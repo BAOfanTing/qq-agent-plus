@@ -223,7 +223,8 @@ try {
       activeHours: { start: '07:00', end: '01:00' }
     }
   }));
-  const { updateConfig } = await import(pathToFileURL(path.join(repoRoot, 'src', 'core', 'config.js')).href);
+  const { updateConfig, reloadConfig } = await import(pathToFileURL(path.join(repoRoot, 'src', 'core', 'config.js')).href);
+  reloadConfig();
   updateConfig({ qzoneInteractions: { activeHours: { start: '07:00', end: '01:00' } } });
   const beforeQuiet = { ...calls };
   fakeNow = zonedMs(2026, 9, 19, 2, 0); // 该时区凌晨 2 点，落在 01:00–07:00 的静默段

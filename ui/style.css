@@ -890,6 +890,15 @@ html[data-glass='liquid'] .chat-item.selected { padding-left: 17px; }
   font-size: var(--fs-sm); padding: 6px 14px; box-shadow: var(--shadow-md);
 }
 #ui-build-banner:hover { background: var(--bg-3); }
+/* config.json 被进程外修改：冲突旧版本已备份的提示（与刷新提示错开位置） */
+#config-conflict-banner {
+  position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
+  z-index: 9999; cursor: pointer;
+  border: 1px solid var(--orange); border-radius: var(--r-pill);
+  background: var(--bg-2); color: var(--orange);
+  font-size: var(--fs-sm); padding: 6px 14px; box-shadow: var(--shadow-md);
+}
+#config-conflict-banner:hover { background: var(--bg-3); }
 @media (max-width: 600px) {
   /* 移动端：状态 pills 允许整段换行显示，不再 OneB…/模型：dee… 截断 */
   .top-status > .muted { white-space: normal; overflow: visible; text-overflow: clip; }

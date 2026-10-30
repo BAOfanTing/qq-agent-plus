@@ -320,8 +320,8 @@ test('P3 锚点：snowluma .env 原子写 / 备份 tar 有超时 / health 单元
   assert.ok(tarBody.includes('{ timeout: 30 * 60 * 1000 }'), 'tar 打包要有界超时（原来是永不超时）');
   assert.ok((ops.match(/Environment="QQ_AGENT_SERVICE=\$\{serviceName\}"/g) || []).length >= 2, 'health 单元也要带 QQ_AGENT_SERVICE');
   const cl = src('src/core/config-legacy.js');
-  assert.equal((cl.match(/CONFIG_FILE\}\.\$\{process\.pid\}\.tmp/g) || []).length, 2,
-    '两条落盘路径（updateConfig 与防抖保存）的 tmp 都要带 pid：同名 tmp 会互相截断');
+  assert.equal((cl.match(/CONFIG_FILE\}\.\$\{process\.pid\}\.tmp/g) || []).length, 1,
+    'updateConfig 与防抖保存共用同一条落盘路径，tmp 带 pid：同名 tmp 会互相截断');
 });
 
 test('P3 锚点：UI 三条修复点（E3 自愈 / E4 启动外观 / E5 展开态）与发布脚本护栏', () => {

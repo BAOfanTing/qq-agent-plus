@@ -28,7 +28,13 @@ async function api(path, options = {}) {
     if (dialog && !dialog.open) dialog.showModal();
     $('#loading-overlay')?.classList.add('hidden');
   }
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(data.error || `HTTP ${res.status}`);
+    error.status = res.status;
+    error.code = data.code || '';
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 

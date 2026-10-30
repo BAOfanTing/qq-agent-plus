@@ -107,6 +107,8 @@ export class ChatStore {
       -- getChatMeta 取"最新一条"按 ts 排序（历史导入的 ts 可能乱序）；没有这个索引
       -- 时 SQLite 要对整个会话做临时排序。
       CREATE INDEX IF NOT EXISTS messages_chat_ts ON messages(chat_key, ts DESC, id DESC);
+      -- 成员表/@昵称解析按 sender 取最新一条；没有它会在会话历史里反复求 MAX(id)。
+      CREATE INDEX IF NOT EXISTS messages_member_latest ON messages(chat_key, sender_id, id DESC) WHERE self=0;
       -- 群聊/私聊共用上下文按 ts 跨会话取最新 N 条；不加这条会每次唤醒全表扫描 + 排序
       -- （messages_chat_ts 以 chat_key 开头，跨会话的 ORDER BY ts 用不上）。
       CREATE INDEX IF NOT EXISTS messages_ts ON messages(ts DESC, id DESC);
@@ -1149,6 +1151,74 @@ export class ChatStore {
     return this.db.prepare(`SELECT sender_id AS userId, sender_name AS name, MAX(ts) AS lastTs,
       COUNT(*) AS count FROM messages WHERE chat_key=? AND self=0
       GROUP BY sender_id ORDER BY lastTs DESC LIMIT ?`).all(chatKey, Math.max(1, limit));
+  }
+
+  /**
+   * 本会话成员名单（最近一次名字，按名字长度倒序：@ 解析时最长匹配先命中）。
+   * 只读 message 表的 sender_name；备注优先的显示名由调用方用 displayNameOf 叠加。
+   */
+  memberNames(chatKey, { limit = 5000 } = {}) {
+    return this.db.prepare(`SELECT m.sender_id AS userId, m.sender_name AS name, m.ts AS lastTs,
+      g.count AS count
+      FROM messages m
+      JOIN (
+        SELECT chat_key, sender_id, MAX(id) AS maxId, COUNT(*) AS count
+        FROM messages
+        WHERE chat_key=? AND self=0 AND sender_id<>'' AND sender_name<>''
+        GROUP BY chat_key, sender_id
+      ) g ON m.id=g.maxId AND m.chat_key=g.chat_key AND m.sender_id=g.sender_id
+      ORDER BY length(m.sender_name) DESC, m.ts DESC LIMIT ?`)
+      .all(chatKey, Math.max(1, Math.min(10000, Number(limit) || 5000)))
+      .map((row) => ({ userId: String(row.userId || ''), name: String(row.name || ''), lastTs: Number(row.lastTs) || 0, count: Number(row.count) || 0 }));
+  }
+
+  /**
+   * 按昵称找 QQ：精确命中优先，其次成员名以该昵称开头；多个不同 QQ 命中就返回 null。
+   * 宁可不 @，也不能因为重名猜错人。
+   */
+  memberByName(chatKey, name) {
+    const query = String(name ?? '').trim().replace(/^@+/, '').toLowerCase();
+    if (!query) return null;
+    const members = this.memberNames(chatKey).filter((member) => member.name);
+    const unique = (rows) => {
+      const ids = new Set(rows.map((row) => row.userId));
+      return ids.size === 1 ? rows[0] : null;
+    };
+    return unique(members.filter((member) => member.name.toLowerCase() === query))
+      || unique(members.filter((member) => member.name.toLowerCase().startsWith(query)));
+  }
+
+  /**
+   * 这些 QQ 各自在哪些会话露过面、在那边叫什么；不搬消息内容。
+   * 返回 { [userId]: [{ chatKey, name, lastTs, count }] }。
+   */
+  personChatIndex(userIds = []) {
+    const ids = [...new Set((Array.isArray(userIds) ? userIds : [])
+      .map((id) => String(id ?? '').trim()).filter((id) => /^\d{1,15}$/.test(id)))].slice(0, 200);
+    if (!ids.length) return {};
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = this.db.prepare(`SELECT m.chat_key AS chatKey, m.sender_id AS userId,
+      m.sender_name AS name, m.ts AS lastTs, g.count AS count
+      FROM messages m
+      JOIN (
+        SELECT chat_key, sender_id, MAX(id) AS maxId, COUNT(*) AS count
+        FROM messages
+        WHERE self=0 AND sender_id IN (${placeholders})
+        GROUP BY chat_key, sender_id
+      ) g ON m.id=g.maxId AND m.chat_key=g.chat_key AND m.sender_id=g.sender_id
+      ORDER BY m.ts DESC LIMIT 1000`).all(...ids);
+    const out = Object.fromEntries(ids.map((id) => [id, []]));
+    for (const row of rows) {
+      const userId = String(row.userId || '');
+      if (!out[userId]) continue;
+      out[userId].push({
+        chatKey: String(row.chatKey || ''),
+        name: String(row.name || ''),
+        lastTs: Number(row.lastTs) || 0,
+        count: Number(row.count) || 0
+      });
+    }
+    return out;
   }
 
   hasParticipant(chatKey, userId) {
