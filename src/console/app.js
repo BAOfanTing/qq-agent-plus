@@ -5044,11 +5044,14 @@ export function createApp({
     return json(res, 200, safe);
   });
   router.add('POST', '/api/config', async (req, res) => {
-    const cfgNow = getConfig();
     // 审计（#5）：getConfig() 返回引用，patch 应用后会被就地改写 —— 必须先拍快照，
     // 否则 before 会被写成 after（等于没记；方案附录 J.2）。
-    const auditBefore = structuredClone(cfgNow);
+    const auditBefore = structuredClone(getConfig());
     const patch = await readBody(req);
+    // readBody 可能很慢（设置页整包可达数 MB），期间别的保存/接口写入可能已经落盘。
+    // 快照必须取在读完之后：下面 tts/imageGen/asr 的 keys、voices 都是"服务端维护的映射"，
+    // 用旧快照重建会把并发请求刚写进去的 Key 静默抹掉。
+    const cfgNow = getConfig();
     // ── 整节替换（{ __replace__: X }）会把"映射由服务端维护"整条绕过：deepMerge 直接换成
     //    客户端对象，我们算好的 keys 被丢掉，客户端于是能把 keys 映射写进配置（2026-10-02
     //    全量审查实测：`{asr:{__replace__:{keys:{'openai|evil…':{apiKey:'ATK'}}}}}` 落盘成功）。

@@ -321,19 +321,17 @@ export function updateConfig(patch, options = {}) {
   mirrorAdminIntoLegacyPatch(compatiblePatch, requestedAdmin.ownerUin);
   ensureAdminPrivateAccess(compatiblePatch, current, requestedAdmin.ownerUin);
 
-  let conflict = false;
   try {
     const updated = legacy.updateConfig(compatiblePatch, options);
-    return stabilize(updated);
-  } catch (error) {
-    conflict = error?.code === 'CONFIG_CONFLICT';
-    throw error;
+    // legacy.updateConfig 已经同步落过盘（含外部修改检测/原子写）；这里只在稳定特性策略
+    // 真的改写了配置时再补一次保存。原来的 finally 无条件 scheduleConfigSave 会让每次保存
+    // 都多写一次盘，连"校验失败被 400 拒绝"的请求也会在 400ms 后整体重写 config.json，
+    // 可能在用户没保存任何东西时撞出 .conflict 备份。
+    return stabilize(updated, { persist: true });
   } finally {
     // An unrelated validation error must never leave promoted infrastructure
     // gated off in the in-memory legacy object.
     applyStableFeaturePolicy(legacy.getConfig());
-    // 冲突时不要排防抖保存：那会在后台再撞一次冲突，也不会带来任何写入。
-    if (!conflict) legacy.scheduleConfigSave();
   }
 }
 

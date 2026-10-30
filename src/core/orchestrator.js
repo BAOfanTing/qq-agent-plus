@@ -3793,12 +3793,18 @@ export class Orchestrator {
 
   setPaused(paused, reason = 'manual') {
     this.paused = !!paused;
-    updateConfig({ runtime: { paused: this.paused } });
-    if (this.paused) {
-      for (const controller of this.controllers.values()) controller.abort(new Error('Run cancelled'));
+    try {
+      updateConfig({ runtime: { paused: this.paused } });
+    } finally {
+      // updateConfig 在 config.json 被外部改过时会抛 CONFIG_CONFLICT（路由返回 409）。
+      // 落盘失败不能只改一半内存：正在跑的 run 仍要中止、状态仍要广播，否则用户看到
+      // "保存失败"但机器人已经半暂停（或恢复后积压没被处理）。
+      if (this.paused) {
+        for (const controller of this.controllers.values()) controller.abort(new Error('Run cancelled'));
+      }
+      this.pauseReason = this.paused ? reason : null;
+      this.emit('status', { paused: this.paused, pauseReason: this.pauseReason });
     }
-    this.pauseReason = this.paused ? reason : null;
-    this.emit('status', { paused: this.paused, pauseReason: this.pauseReason });
   }
 
   async abortAll() {
