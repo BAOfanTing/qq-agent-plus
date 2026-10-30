@@ -399,7 +399,8 @@ export class ChatStore {
       FROM messages WHERE chat_key=? AND self=0 AND state='pending' AND available_at<=? AND id>?
       ORDER BY id LIMIT 500`);
     let lastId = -1;
-    for (;;) {
+    // 上限只是防病态积压（几十万条）把 CPU 吃满；正常量级几页就扫完。
+    for (let page = 0; page < 40; page += 1) {
       const rows = stmt.all(chatKey, now, lastId);
       if (!rows.length) return false;
       for (const row of rows) {
@@ -412,8 +413,12 @@ export class ChatStore {
           reply
         })) return true;
       }
-      lastId = Number(rows[rows.length - 1].id);
+      const nextId = Number(rows[rows.length - 1].id);
+      // id 超出 Number 安全整数时 Number() 会舍入；不前进就停，避免同一页无限循环。
+      if (!Number.isFinite(nextId) || nextId <= lastId) return false;
+      lastId = nextId;
     }
+    return false;
   }
 
   markRead(chatKey, ids) {

@@ -26,7 +26,7 @@ lifecycle 收尾写库失败阻塞会话。以下为登记待修（按严重度�
 - 待批审批只保存 `actionPreview` 前 300 字，管理员批准的是全文哈希
   （`src/plugins/grants.js:290`、`src/plugins/registry.js:686`）。
 - CLI 卸载不清授权与凭据，重装同 id 会继承旧批准（`src/ops.js:2692`；控制台路径有清理）。
-- MCP server 进程退出后不会自动重启（单次调用超时已不再置 not-ready）。
+- MCP server 进程退出后不会自动重启（单次超时不再置 not-ready；连续 3 次超时才会标记未就绪）。
 - `requireIsolation:false` 时 `--max-old-space-size` 不生效，`memoryMb` 形同虚设
   （`src/plugins/isolation.js:86`）。
 
@@ -40,6 +40,12 @@ lifecycle 收尾写库失败阻塞会话。以下为登记待修（按严重度�
   （`src/identity/identity-store.js:1413`）。
 - 管理员早报 `stop()` 不取消在途运行，关闭后仍可能发出（`src/features/admin-briefing.js:183`）。
 - 长期记忆删除一条卡片会连带删除同批其它卡片仍在引用的 turns（`src/living-memory/store.js:379`）。
+
+**提示词完整性**
+
+- 群消息里的换行会在"过去状态/触发批"里渲染成新的 transcript 行，理论上可伪造"另一个人说的话"；
+  现有 `sanitizeUserText` 只弱化方括号段头，不处理跨行冒充。修法方向：渲染历史行时把正文换行
+  折叠/缩进（需同时改 live 与历史两条链路，并补 prompt-safety 用例）。
 
 **控制台前端**
 

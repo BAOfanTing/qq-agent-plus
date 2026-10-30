@@ -614,10 +614,11 @@ export class DailyMomentsManager {
     }
     // 暂停/观察期间不跑：run() 要等模型返回后才在发布闸门抛 MOMENT_INACTIVE，而那个错误
     // 会被记成 failed 并进入阻断集合 —— 当天剩下的定时轮次全被挡掉（白花一次模型调用）。
-    // 与窗口模式的 waiting 同口径：保留 deferredDay，恢复后补发。
+    // 每分钟再检查一次，恢复后由正常的到期判定决定补发还是等下一个点。
     const runtime = getConfig().runtime || {};
     if (runtime.mode !== 'active' || runtime.paused) {
-      this.deferredDay ||= scheduledDayAt(this.now(), cfg, startup);
+      // 不要在这里钉 deferredDay：暂停跨天后它会把"旧的一天"带进恢复后的运行。
+      // 恢复时由 scheduledDayAt 重新判断（当天已过点就补发当天，未到点就等）。
       this.#schedule(60000);
       return;
     }

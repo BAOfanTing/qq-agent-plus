@@ -131,6 +131,7 @@ export class McpStdioClient {
       if (message?.id != null && this.pending.has(message.id)) {
         const entry = this.pending.get(message.id);
         entry.cleanup?.();
+        this.consecutiveTimeouts = 0;
         if (message.error) entry.reject(new Error(String(message.error.message || 'MCP 调用失败')));
         else entry.resolve(message.result);
       }
@@ -161,8 +162,13 @@ export class McpStdioClient {
       const timer = setTimeout(() => {
         // 单次调用超时 ≠ server 挂了：之前把 ready 置 false 之后没有任何路径能恢复，
         // 一次慢检索就会让该 server 的全部工具在进程剩余生命里一直报"没有就绪"。
-        // 只有子进程退出/报错（#failAll 的调用方）才改 ready。
+        // 连续 3 次超时才认为 server 真的卡死（成功的应答会把计数清零）。
+        this.consecutiveTimeouts = (Number(this.consecutiveTimeouts) || 0) + 1;
         this.lastError = `${method} 超时（${this.timeoutMs}ms）`;
+        if (this.consecutiveTimeouts >= 3) {
+          this.ready = false;
+          this.lastError = `连续 ${this.consecutiveTimeouts} 次调用超时，已标记未就绪`;
+        }
         cleanup();
         reject(new Error(`MCP ${this.id} ${this.lastError}`));
       }, this.timeoutMs);
