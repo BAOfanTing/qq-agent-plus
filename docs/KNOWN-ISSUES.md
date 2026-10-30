@@ -5,6 +5,51 @@
 
 ## 待修问题
 
+### 2026-10-30 全项目审查遗留
+
+本轮已修复：插件能力调用的并发/限频闸门、技能市场 `homepage` 的 scheme 校验、插件 feed
+封面的 SSRF、同版本重装的权限面变更确认、MCP 单次调用超时误置 not-ready、degrade 闸门漏看
+队尾 @、关系影子评估绕过 `memory.visibility`、暂停期间每日动态白跑并被记成阻断、控制台存档
+新消息不刷新、屏蔽名单切群竞态、记忆详情重绘冲掉编辑、设置未保存改动无提示、保存双写/暂停
+半生效/并发保存旧快照、reminders cron 扫描的 Intl 重复构造、face-catalog 数据目录口径、
+lifecycle 收尾写库失败阻塞会话。以下为登记待修（按严重度）：
+
+**插件 / MCP**
+
+- 安装入口不一致：`/api/plugins/install-file` 与 `ops.js plugins install` 升级时不传
+  `expectedDiffHash`，权限面变化的升版本包会一直 409 且没有确认入口；这两条路径也不做
+  `resetPluginGrants`/关闭写开关（`src/console/app.js:3722`、`src/ops.js:2712`）。
+- `media.describe` / `media.asr.transcribe` 不消费 ASR/视觉配额，插件可无限放大付费调用
+  （`src/plugins/capabilities.js:459-497`）。
+- `media.merge` / `media.frames` 不检查磁盘配额，输入各自低于单文件上限时可写出远超
+  `plugins.limits.diskMb` 的产物（`src/plugins/capabilities.js:416-456`）。
+- 待批审批只保存 `actionPreview` 前 300 字，管理员批准的是全文哈希
+  （`src/plugins/grants.js:290`、`src/plugins/registry.js:686`）。
+- CLI 卸载不清授权与凭据，重装同 id 会继承旧批准（`src/ops.js:2692`；控制台路径有清理）。
+- MCP server 进程退出后不会自动重启（单次调用超时已不再置 not-ready）。
+- `requireIsolation:false` 时 `--max-old-space-size` 不生效，`memoryMb` 形同虚设
+  （`src/plugins/isolation.js:86`）。
+
+**功能**
+
+- 群游戏终局播报在发送结果 unknown 时仍会重发（`src/features/group-game.js:791`）。
+- 群日报"已完成"日期用发送时刻，跨午夜会把第二天标成已发（`src/features/group-digest.js:73`）；
+  结果 unknown 时补跑可能重复发（`:165`）。
+- 每日动态手动发布当天草稿后，定时器会再生成一份预览（`src/features/daily-moments.js:49`）。
+- 删除身份资产不清理待批好友请求/好友机会，残留请求仍可把人加回私聊白名单
+  （`src/identity/identity-store.js:1413`）。
+- 管理员早报 `stop()` 不取消在途运行，关闭后仍可能发出（`src/features/admin-briefing.js:183`）。
+- 长期记忆删除一条卡片会连带删除同批其它卡片仍在引用的 turns（`src/living-memory/store.js:379`）。
+
+**控制台前端**
+
+- 表情包批量导入的 object URL 在关闭弹窗/导入成功后不释放（`ui/pages/features.js:373`）。
+- 用量页轮询没有校验范围/序号，旧响应会覆盖新范围（`ui/pages/usage.js:1042`）；
+  "展开全部"用进页面时的旧快照回填（`:707`）。
+- 长期记忆页切范围没有请求序号，旧响应可能覆盖（`ui/pages/living-memory.js:755`）。
+- 关系状态行的 15 秒定时器在离开分区后不清理（`ui/relationship-pilot.js:171`）。
+
+
 ### 插件写操作在宿主硬崩时的一致性（2026-10-24 审查）
 
 批准与配额在调用插件**之前**消费；`kill -9` 落在消费与结算之间时，退款收据只在内存里，重启后

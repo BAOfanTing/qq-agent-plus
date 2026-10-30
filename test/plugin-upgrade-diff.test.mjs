@@ -162,6 +162,22 @@ test('安装器：权限变化必须带确认哈希；无变化可直升级；�
   assert.equal(reinstall.upgraded, true);
 });
 
+test('同版本重装：权限面变化同样要确认哈希（不能因为版本号没动就静默换入）', async (t) => {
+  const dir = tempDir(t);
+  const install = (version, options = {}, extra = {}) => installPlugin({
+    id: 'demo', tarball: pack(version, options), dataDir: dir, log: () => {}, ...extra
+  });
+  const first = await install('1.0.0');
+  assert.equal(first.upgraded, false);
+  await assert.rejects(
+    () => install('1.0.0', { actionTarget: 'bvid' }),
+    (error) => error.code === 'E_UPGRADE_CONFIRM' && error.diff?.permissionChanged === true
+  );
+  const preview = await install('1.0.0', { actionTarget: 'bvid' }, { previewOnly: true });
+  const applied = await install('1.0.0', { actionTarget: 'bvid' }, { expectedDiffHash: preview.diff.diffHash });
+  assert.equal(applied.upgraded, true);
+});
+
 test('版本比较：数字段优先，v 前缀与预发布后缀不干扰', () => {
   assert.equal(comparePluginVersions('1.2.0', '1.10.0'), -1);
   assert.equal(comparePluginVersions('v2.0.0', '2.0.0'), 0);

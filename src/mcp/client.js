@@ -159,7 +159,9 @@ export class McpStdioClient {
         this.pending.delete(id);
       };
       const timer = setTimeout(() => {
-        this.ready = false;
+        // 单次调用超时 ≠ server 挂了：之前把 ready 置 false 之后没有任何路径能恢复，
+        // 一次慢检索就会让该 server 的全部工具在进程剩余生命里一直报"没有就绪"。
+        // 只有子进程退出/报错（#failAll 的调用方）才改 ready。
         this.lastError = `${method} 超时（${this.timeoutMs}ms）`;
         cleanup();
         reject(new Error(`MCP ${this.id} ${this.lastError}`));

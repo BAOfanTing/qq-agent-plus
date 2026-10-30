@@ -43,6 +43,23 @@ test('cap.feed.publish：只收公开元数据、按 id 去重、每插件每天
   assert.equal(again.accepted, 0);
 });
 
+test('cap.feed.publish：内网封面地址被丢弃（协议端会去取，不能当 SSRF 跳板）', async (t) => {
+  const { getConfig } = await import('../src/core/config.js');
+  if (getConfig().security?.allowPrivateImageHosts === true) {
+    t.diagnostic('本机配置显式允许私网图片，跳过');
+    return;
+  }
+  const dir = tempDir(t);
+  const caps = createCapabilities({ pluginId: 'demo', dataDir: dir, manifest: { capabilities: ['feed'] }, now: () => NOW });
+  const result = caps.methods[CAP_METHODS.feedPublish]({ items: [
+    { id: 'p1', title: '本机', url: 'https://example.com/p1', cover: 'https://127.0.0.1:8443/a.jpg' },
+    { id: 'p2', title: '元数据', url: 'https://example.com/p2', cover: 'https://169.254.169.254/latest/meta-data/' }
+  ] });
+  assert.equal(result.accepted, 2);
+  const saved = JSON.parse(fs.readFileSync(path.join(dir, 'life-feed-inbox', 'demo.json'), 'utf8'));
+  assert.deepEqual(saved.items.map((item) => item.cover), ['', ''], '内网封面必须清空，只保留安全地址');
+});
+
 test('生活层会吸收插件的见闻候选，并参与正常的分享选择', async (t) => {
   const dir = tempDir(t);
   // 先由插件写 inbox

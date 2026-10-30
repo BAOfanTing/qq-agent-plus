@@ -7,13 +7,18 @@
 // （只补离线表没有的编号：已有编号保持原名字，避免同一条来信的渲染口径随连接时机漂移）。
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// 与 config-legacy 的 DATA_DIR 同口径（仓库根/data），不能用 process.cwd()：
+// systemd 没写 WorkingDirectory 时 cwd 是 /，会把 ops 导出的表情表读到别处去。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 let bySid = null;      // { sid: name }
 let nameIndex = null;  // Map(name -> sid)，同名时优先编号更小的经典表情（0~103 那批）
 let onlineAttempted = false;
 
 function dataDir() {
-  return process.env.QQ_AGENT_DATA_DIR || path.join(process.cwd(), 'data');
+  return process.env.QQ_AGENT_DATA_DIR || path.join(ROOT, 'data');
 }
 
 function rebuildNameIndex() {

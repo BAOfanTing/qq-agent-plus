@@ -1198,7 +1198,14 @@ function connectSSE() {
       if (status) status.textContent = `整理失败：${data.error || '未知错误'}`;
       renderMemoryList();
     } else {
-      loadMemoryView();
+      // 用户正在详情里编辑（交接/备注输入框有焦点）时不要整块重绘：SSE 由模型写回触发，
+      // loadMemoryDetail 会先写"加载中"再重建，把未保存的输入冲掉。只刷左侧列表。
+      const detail = $('#memory-detail');
+      const active = document.activeElement;
+      const editing = Boolean(detail && active && detail.contains(active)
+        && (/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName || '') || active.isContentEditable));
+      if (editing) renderMemoryList();
+      else loadMemoryView();
     }
   });
   es.addEventListener('living-memory-update', (event) => {
@@ -1524,7 +1531,13 @@ function modelModalShell({ head, body, foot = '', danger = false }) {
 //    页面永远空白（轮询走的是"只更新数值"路径，骨架从未建立也救不回来）。
 //    两条路径各维护一份必然再次分叉，所以这里只准调 switchTab。
 $$('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+  tab.addEventListener('click', async () => {
+    const next = tab.dataset.tab;
+    // 离开设置页会丢掉未保存的输入（loadSettings 重读配置并重绘）：先确认一次。
+    if (state.tab === 'settings' && next !== 'settings' && state.settingsDirty
+      && !await askForConfirmation('设置页有未保存的改动，离开后会丢失。确定离开？')) return;
+    switchTab(next);
+  });
 });
 // 侧栏待批徽标：点它进插件页，并让插件页自动打开第一条待批。
 document.querySelector('[data-pending-badge]')?.addEventListener('click', (event) => {

@@ -2051,11 +2051,14 @@ export function buildToolDefs() {
           let coverSent = false;
           if (item.cover) {
             try {
+              // 图片段是交给协议端去取的（不经 safe-fetch）：必须先挡内网/本机字面量，
+              // 否则插件/RSS 提供的内网 https 地址会被协议端请求并把响应发进群。
+              assertPublicUrlLiteral(item.cover, { label: '封面地址' });
               await ctx.sender.sendImage(ctx.chatKey, {
                 id: `feed-${item.id}`, url: item.cover, desc: item.title
               }, { runId: ctx.session.leaseId, signal: ctx.signal });
               coverSent = true;
-            } catch { /* 封面失败只降级成文本，不阻断分享 */ }
+            } catch { /* 封面失败/地址不安全只降级成文本，不阻断分享 */ }
           }
           afterSent(() => {
             const mid = result.sent[0]?.messageId;

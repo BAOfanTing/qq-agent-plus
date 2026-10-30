@@ -38,6 +38,17 @@ describe('ChatStore', () => {
     assert.deepEqual(store.peekUnread('group:1').map((m) => m.mid), ['2']);
   });
 
+  it('somePending 扫描整段未读：排在 peek 窗口之后的 @ 也能找到', (t) => {
+    const { store } = fixture(t);
+    for (let i = 1; i <= 150; i += 1) append(store, i, `普通消息 ${i}`);
+    store.appendIncoming('group:1', { mid: 151, text: '@机器人 看一下', senderId: '43', senderName: 'member', mentionsSelf: true });
+    assert.equal(store.peekUnread('group:1', 100).some((m) => m.mentionsSelf), false,
+      'peek 只看最旧 100 条，@ 在窗口外');
+    assert.equal(store.somePending('group:1', { test: (m) => m.mentionsSelf === true }), true,
+      'degrade 闸门必须扫完整段未读，否则该群当天对 @ 完全无反应');
+    assert.equal(store.somePending('group:1', { test: (m) => m.eventKind === 'poke' }), false);
+  });
+
   it('returns failed unsent batches to pending and stops after the attempt budget', (t) => {
     const { store } = fixture(t);
     append(store, 1);

@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import { CAP_METHODS } from './protocol.js';
 import { sanitizeUserText } from '../core/util.js';
 import { imageType } from '../core/image-type.js';
-import { safeFetchRequest, safeFetchBinary, isHostAllowed } from '../llm/safe-fetch.js';
+import { safeFetchRequest, safeFetchBinary, isHostAllowed, assertPublicUrlLiteral } from '../llm/safe-fetch.js';
 import { readPluginSecrets, writePluginSecrets, secretFieldKeys } from './secrets.js';
 import { ffmpegToPcm, runProvider } from '../tools/audio-transcribe.js';
 import { asrAvailable } from '../core/config.js';
@@ -529,8 +529,13 @@ export function createCapabilities({
           tags: Array.isArray(item?.tags)
             ? item.tags.map((tag) => sanitizeUserText(String(tag)).slice(0, 30)).slice(0, 6) : [],
           summary: sanitizeUserText(String(item?.summary ?? '')).slice(0, 200),
-          // 封面只收 https；下载仍由宿主发送层走 safeFetchBinary，插件拿不到网络能力。
-          cover: /^https:\/\//i.test(cover) ? cover.slice(0, 500) : '',
+          // 封面最终是由**协议端**去取的，宿主的 safeFetchBinary 不在这条路上：
+          // 只校验 https 挡不住 127.0.0.1 / 169.254.169.254 这类内网目标，入库前先挡掉。
+          cover: (() => {
+            if (!/^https:\/\//i.test(cover)) return '';
+            try { return assertPublicUrlLiteral(cover, { label: '封面地址' }).slice(0, 500); }
+            catch { return ''; }
+          })(),
           source: `plugin:${pluginId}`,
           addedAt: nowFn()
         });

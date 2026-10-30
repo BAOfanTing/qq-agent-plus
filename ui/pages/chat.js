@@ -796,7 +796,13 @@ async function loadChatMessages(key, { keepView = false } = {}) {
       if (state.currentChatKey !== key) return;
       const fresh = data.messages || [];
       if (!fresh.length) return;
-      state.chatMessages.push(...fresh);
+      // 必须换新数组：chatMessagesNewestFirst() 用数组引用做排序缓存 key，
+      // 原地 push 会让缓存永远命中，新消息渲染不出来；顺带按 id 去重（两个轮询重叠时
+      // 会各自拉到同一批）。
+      const known = new Set((state.chatMessages || []).map((m) => String(m.id)));
+      const added = fresh.filter((m) => !known.has(String(m.id)));
+      if (!added.length) return;
+      state.chatMessages = [...state.chatMessages, ...added];
       updateChatMessagesBody(true);
       return;
     }

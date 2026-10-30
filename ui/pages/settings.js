@@ -128,7 +128,11 @@ function renderSettingsSidebar() {
     </div>
     <div class="hint" id="settings-search-empty" hidden>没有匹配的设置</div>`;
   sidebar.querySelectorAll('.settings-menu-item').forEach((el) => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', async () => {
+      if (el.dataset.section === state.settingsSection) return;
+      // 切分区会整块重绘表单：未保存的输入直接丢失，给一次确认（2026-10-30 全项目审查）。
+      if (state.settingsDirty
+        && !await askForConfirmation('当前分区有未保存的改动，切换后会丢失。确定切换？')) return;
       state.settingsSection = el.dataset.section;
       state.settingsDirty = false;
       renderSettingsSidebar();
@@ -1595,16 +1599,21 @@ function openBlocklistModal() {
   }
 
   async function loadMembers() {
+    // 快速切群时先发后到的响应会把 A 群成员画到 B 群下，勾选后写进 B 群的屏蔽名单
+    // （2026-10-30 全项目审查）。用请求发出时的群号做守卫。
+    const gid = activeGid;
     right.innerHTML = '<div class="empty-hint" style="padding:18px">正在拉取群成员…</div>';
     try {
-      const d = await api(`/api/groups/${activeGid}/members`);
+      const d = await api(`/api/groups/${gid}/members`);
+      if (gid !== activeGid) return;
       // 机器人自己列出来也没意义（自己的消息本来就不走这条管道）
       members = (d.members || []).filter((m) => String(m.userId) !== selfId);
       kw = '';
       renderRight();
-      const n = (pending[activeGid] || []).length;
+      const n = (pending[gid] || []).length;
       statusEl.textContent = n ? `当前群已屏蔽 ${n} 人` : '';
     } catch (e) {
+      if (gid !== activeGid) return;
       right.innerHTML = `<div class="empty-hint" style="padding:18px">拉取失败：${esc(e.message)}（OneBot 在线才能拿到群成员列表）</div>`;
     }
   }

@@ -28,12 +28,25 @@ export function validTimezone(tz) {
   try { new Intl.DateTimeFormat('en-US', { timeZone: name }); return true; } catch { return false; }
 }
 
+// Intl.DateTimeFormat 构造很贵（每次几十微秒），nextCronAt 会按分钟扫最多 10080 次；
+// 不缓存的话一条周提醒就能同步卡住事件循环近一秒（2026-10-30 全项目审查）。
+const wallFormatters = new Map();
+function wallFormatter(tz) {
+  const key = String(tz || '');
+  let formatter = wallFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour12: false, weekday: 'short', hour: '2-digit', minute: '2-digit'
+    });
+    wallFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
 /** 时刻 ms 在时区 tz 里的挂钟时间 { hour, minute, dow }。 */
 export function zonedWallClock(ms, tz) {
   const parts = {};
-  for (const part of new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, hour12: false, weekday: 'short', hour: '2-digit', minute: '2-digit'
-  }).formatToParts(ms)) parts[part.type] = part.value;
+  for (const part of wallFormatter(tz).formatToParts(ms)) parts[part.type] = part.value;
   let hour = Number(parts.hour);
   if (hour === 24) hour = 0;   // 某些 ICU 把午夜格式化成 24
   return { hour, minute: Number(parts.minute), dow: DOW_NAMES[String(parts.weekday || '').toLowerCase()] ?? 0 };

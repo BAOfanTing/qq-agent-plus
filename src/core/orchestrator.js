@@ -653,6 +653,9 @@ export class Orchestrator {
     // claimUnread 真正领取的批次大小）：
     // 闸门看的是「这次要处理的那批未读里有没有 @」。窗口偏小时，落在窗口之后的 @ 会被这里
     // 判成"会丢"，提醒被无谓顺延 24 小时（#wake 其实照常派发）—— 2026-10-05 复审实测。
+    if (typeof this.store.somePending === 'function') {
+      return !this.store.somePending(chatKey, { test: (m) => mentionsOrPokesBot(m, this.onebot.selfId) });
+    }
     const pending = this.store.peekUnread(chatKey, this.#unreadScanLimit()) || [];
     return !pending.some((m) => mentionsOrPokesBot(m, this.onebot.selfId));
   }
@@ -1378,7 +1381,11 @@ export class Orchestrator {
       // degrade 只拦"新消息触发"的这一路（主动唤醒不在这个分支里，上面的 block 已经先判过了）
       if (budget.enabled && budget.exceeded && budget.onExceed === 'degrade' && !budgetExempt
         && String(chatKey).startsWith('group:')) {
-        const mentioned = pendingEntries.some((entry) => mentionsOrPokesBot(entry, this.onebot.selfId));
+        // 闸门要扫**整段未读**：degrade 下不 ack 任何消息，积压破扫描窗后最旧的一批里
+        // 可能永远没有 @，新 @ 排在队尾 —— 只看 peekUnread 的窗口会让该群当天彻底失联。
+        const mentioned = typeof this.store.somePending === 'function'
+          ? this.store.somePending(chatKey, { test: (entry) => mentionsOrPokesBot(entry, this.onebot.selfId) })
+          : pendingEntries.some((entry) => mentionsOrPokesBot(entry, this.onebot.selfId));
         if (!mentioned) {
           if (waitingSessionId) this.#discardWaiting(waitingSessionId);
           return;   // 保留未读：被 @ 时（或跨日重置后）自然会再进这里
@@ -1580,11 +1587,19 @@ export class Orchestrator {
         manual, contextLimit: tierResult.count, tierInfo: tierResult, conversation, signal: controller.signal });
       controller.signal.throwIfAborted();
       if (conversation.mode === 'lifecycle') {
-        const handoff = this.#commitSessionHandoff(session, { chatKey, triggerEntries });
-        this.#commitConversationThread(session, {
-          chatKey, triggerEntries, handoff, conversation, runResult,
-          leaseId: lease?.id || '', runId: session.leaseId
-        });
+        // 回复已经发出去了：收尾写库失败（SQLITE_BUSY/磁盘满）不能把整批打成 held ——
+        // 那会让该会话的后续唤醒全被 held 闸门挡住，而实际上用户已经收到回复。
+        // 与 threaded 分支同一口径：只记录，不影响本轮的 ack。
+        try {
+          const handoff = this.#commitSessionHandoff(session, { chatKey, triggerEntries });
+          this.#commitConversationThread(session, {
+            chatKey, triggerEntries, handoff, conversation, runResult,
+            leaseId: lease?.id || '', runId: session.leaseId
+          });
+        } catch (error) {
+          session.threadError = String(error?.message ?? error);
+          log.warn(`[lifecycle] ${chatKey} 收尾写库失败:`, session.threadError);
+        }
       } else {
         if (lease) this.store.ackLease(lease.id);
         else this.store.completeRun(session.leaseId);

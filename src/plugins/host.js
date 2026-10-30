@@ -78,6 +78,11 @@ export class PluginHost {
     this.limits = { memoryMb: 128, callsPerMinute: 120, concurrency: 4, diskMb: 256, ...limits };
     this.callWindow = [];          // 最近一分钟的调用时间戳（限频用，见 #allowCall）
     this.inFlight = 0;             // 当前在途工具调用数（并发上限用）
+    // 插件→宿主的能力调用同样要有闸门：callTool 的限频/并发只拦宿主→插件方向，
+    // 拦不住插件在 stdout 里连发 cap.media.download（单次 80MB）把宿主进程打爆。
+    this.capInFlight = 0;          // 当前在途能力调用数
+    this.mediaInFlight = 0;        // 其中媒体类（下载/合并/抽帧）并发
+    this.capWindow = [];           // 媒体/HTTP/日志能力的一分钟窗口
     this.rssKb = 0;                // 最近一次采样到的常驻内存（Linux 读 /proc，其他平台 0）
     this.unconfined = false;
     this.netIsolated = false;
@@ -295,6 +300,36 @@ export class PluginHost {
       throw Object.assign(new Error(`插件 ${this.id} 调用太频繁（每分钟上限 ${limit} 次，来源：${kind}）`), { code: 'E_RATE_LIMIT' });
     }
     this.callWindow.push(this.now());
+  }
+
+  /**
+   * 能力调用闸门（插件→宿主方向）：并发上限对所有能力生效，媒体类再加"同时 1 个"。
+   * 媒体/HTTP/日志额外限频 —— 这三类是内存与磁盘的主要放大器（80MB 下载、整包进内存、
+   * 无限刷日志）；storage 这类高频小调用不按分钟限，避免把正常插件卡死。
+   */
+  #allowCapability(method) {
+    const now = this.now();
+    const maxConcurrency = Math.max(1, Number(this.limits.concurrency) || 4);
+    if (this.capInFlight >= maxConcurrency) {
+      this.stats.busy = (this.stats.busy || 0) + 1;
+      throw Object.assign(new Error(`插件 ${this.id} 能力调用并发已满（上限 ${maxConcurrency} 个），请稍后重试`), { code: 'E_BUSY' });
+    }
+    const media = /^media\./.test(method);
+    if (media && this.mediaInFlight >= 1) {
+      this.stats.busy = (this.stats.busy || 0) + 1;
+      throw Object.assign(new Error(`插件 ${this.id} 已有媒体任务在跑，请稍后重试`), { code: 'E_BUSY' });
+    }
+    if (media || /^http\./.test(method) || /^log\./.test(method)) {
+      const limit = Number(this.limits.callsPerMinute) || 0;
+      if (limit > 0) {
+        this.capWindow = this.capWindow.filter((at) => at > now - 60000);
+        if (this.capWindow.length >= limit) {
+          this.stats.rateLimited = (this.stats.rateLimited || 0) + 1;
+          throw Object.assign(new Error(`插件 ${this.id} 能力调用太频繁（每分钟上限 ${limit} 次，来源：${method}）`), { code: 'E_RATE_LIMIT' });
+        }
+        this.capWindow.push(now);
+      }
+    }
   }
 
   /** 主动采样一次 RSS（注册表做"全部插件总内存"预算时用；非 Linux 返回插件自报值）。 */
@@ -570,10 +605,22 @@ export class PluginHost {
       return;
     }
     try {
+      this.#allowCapability(method);
+    } catch (error) {
+      reply(rpcError(id, error?.code || 'E_CAP', error?.message ?? String(error)));
+      return;
+    }
+    const media = /^media\./.test(method);
+    this.capInFlight += 1;
+    if (media) this.mediaInFlight += 1;
+    try {
       const result = await this.caps.methods[method](params ?? {});
       reply(rpcResult(id, result ?? null));
     } catch (error) {
       reply(rpcError(id, error?.code || 'E_CAP', error?.message ?? String(error)));
+    } finally {
+      this.capInFlight = Math.max(0, this.capInFlight - 1);
+      if (media) this.mediaInFlight = Math.max(0, this.mediaInFlight - 1);
     }
   }
 }

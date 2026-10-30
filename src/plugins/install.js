@@ -307,9 +307,19 @@ export async function installPlugin({
       try { fs.rmSync(staging, { recursive: true, force: true }); } catch { /* 忽略 */ }
       return { ok: true, preview: true, id: finalId, version: parsed.manifest.version, upgraded: upgrading, diff: upgradeDiff };
     }
-    // 只有**版本上升**才强制确认：同版本重装是修复/重装路径（签名仍照常校验），
-    // 强制降级是管理员显式动作。升级时权限面一变，必须先把 diff 给管理员看。
-    if (upgradeDiff?.permissionChanged && versionOrder > 0) {
+    // 升级（版本号上升）时权限面一变就必须确认；同版本重装是修复/重装路径，内容一致时
+    // 不需要确认，但**能力/工具/域名/审批/密钥/定时**这些真正的权限面变了，同样要确认。
+    // 只换发布者/签名不在此列（生态起步阶段允许未登记发布者的包照装，见 plugin-hardening）。
+    const surfaceChanged = Boolean(
+      upgradeDiff?.added?.capabilities?.length || upgradeDiff?.removed?.capabilities?.length
+      || upgradeDiff?.added?.httpDomains?.length || upgradeDiff?.removed?.httpDomains?.length
+      || upgradeDiff?.added?.tools?.length || upgradeDiff?.removed?.tools?.length || upgradeDiff?.changed?.tools?.length
+      || upgradeDiff?.added?.approvals?.length || upgradeDiff?.removed?.approvals?.length || upgradeDiff?.changed?.approvals?.length
+      || upgradeDiff?.changed?.quotas?.length
+      || upgradeDiff?.added?.secrets?.length || upgradeDiff?.removed?.secrets?.length
+      || upgradeDiff?.added?.schedule?.length || upgradeDiff?.removed?.schedule?.length || upgradeDiff?.changed?.schedule?.length
+    );
+    if (upgradeDiff?.permissionChanged && (versionOrder > 0 || surfaceChanged)) {
       // 权限面变了：管理员必须先看到差异并确认。没有确认哈希 = 拒绝（fail-closed）；
       // 哈希对不上 = 索引/包在这期间又变了，要求重新预览。
       if (!String(expectedDiffHash || '').trim()) {

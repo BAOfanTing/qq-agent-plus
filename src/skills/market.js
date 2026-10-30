@@ -104,6 +104,9 @@ function normalizeIndex(raw, indexUrl) {
     if (!files['skill.json']) continue;
     const allowedTools = Array.isArray(item.allowedTools) ? item.allowedTools.map((t) => clean(t, 64)).filter(Boolean).slice(0, 40) : [];
     const triggers = Array.isArray(item.triggers) ? item.triggers.map((t) => clean(t, 40)).filter(Boolean).slice(0, 30) : [];
+    // 主页会原样进控制台的 <a href>：只收 http(s)，否则 javascript:/data: 会变成
+    // 同源存储型 XSS（控制台持有会话 Cookie 与全部管理 API）。
+    const homepage = clean(item.homepage, 300);
     skills.push({
       id,
       name: clean(item.name, 60) || id,
@@ -111,7 +114,7 @@ function normalizeIndex(raw, indexUrl) {
       version: clean(item.version, 32) || '1.0.0',
       author: clean(item.author, 80),
       category: clean(item.category, 40) || '其他',
-      homepage: clean(item.homepage, 300),
+      homepage: /^https?:\/\//i.test(homepage) ? homepage : '',
       preview: clean(item.preview, 2000),
       allowedTools,
       triggers,

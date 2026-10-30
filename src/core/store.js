@@ -387,6 +387,35 @@ export class ChatStore {
       .all(chatKey, Date.now(), Math.max(1, Number(limit) || 3)).map(entry);
   }
 
+  /**
+   * 逐条扫未读，matcher.test 命中即停。给 degrade 闸门用：只看最旧一批（peekUnread）时，
+   * 积压超过扫描窗的 @ 会被判成"没被 @"，整段未读就此永远不处理（当天对 @ 完全无反应）。
+   * 只取判定需要的列，keyset 分页（id 递增），避免 OFFSET 越翻越慢。
+   */
+  somePending(chatKey, matcher) {
+    if (!matcher || typeof matcher.test !== 'function') return false;
+    const now = Date.now();
+    const stmt = this.db.prepare(`SELECT id, mentions_self, event_kind, target_user_id, reply
+      FROM messages WHERE chat_key=? AND self=0 AND state='pending' AND available_at<=? AND id>?
+      ORDER BY id LIMIT 500`);
+    let lastId = -1;
+    for (;;) {
+      const rows = stmt.all(chatKey, now, lastId);
+      if (!rows.length) return false;
+      for (const row of rows) {
+        let reply = null;
+        if (row.reply) { try { reply = JSON.parse(row.reply); } catch { reply = null; } }
+        if (matcher.test({
+          mentionsSelf: Boolean(row.mentions_self),
+          eventKind: String(row.event_kind || 'message'),
+          targetUserId: String(row.target_user_id || ''),
+          reply
+        })) return true;
+      }
+      lastId = Number(rows[rows.length - 1].id);
+    }
+  }
+
   markRead(chatKey, ids) {
     return this.#transaction(() => {
       let n = 0;

@@ -612,6 +612,15 @@ export class DailyMomentsManager {
       this.#schedule(timeState.nextActiveAt ? timeState.nextActiveAt - this.now() + 1 : 60000);
       return;
     }
+    // 暂停/观察期间不跑：run() 要等模型返回后才在发布闸门抛 MOMENT_INACTIVE，而那个错误
+    // 会被记成 failed 并进入阻断集合 —— 当天剩下的定时轮次全被挡掉（白花一次模型调用）。
+    // 与窗口模式的 waiting 同口径：保留 deferredDay，恢复后补发。
+    const runtime = getConfig().runtime || {};
+    if (runtime.mode !== 'active' || runtime.paused) {
+      this.deferredDay ||= scheduledDayAt(this.now(), cfg, startup);
+      this.#schedule(60000);
+      return;
+    }
     if (cfg.enabled) {
       const dayKey = this.deferredDay || scheduledDayAt(this.now(), cfg, startup);
       this.deferredDay = '';

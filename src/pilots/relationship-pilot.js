@@ -15,6 +15,7 @@ import {
 } from '../llm/relationship-pilot-prompt.js';
 import { resolveToolCalls } from '../tools/inline-tools.js';
 import { repairJsonObject } from '../core/json-repair.js';
+import { memoryVisibilityOf, visibleImpressions } from '../core/memory-visibility.js';
 
 const EVENT_TYPES = new Set(RELATIONSHIP_EVENT_TYPES);
 const clean = (value, max = 240) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -365,10 +366,20 @@ export class RelationshipPilotManager {
       WHERE created_at>=?`).get(shanghaiDayStart())?.n) || 0;
   }
 
-  #newEvidence(uin, maxEvidence) {
+  #newEvidence(uin, maxEvidence, scopeChatKey = '') {
     const cursors = this.relationshipStore.cursors(uin);
+    const vis = memoryVisibilityOf(this.config());
+    // 证据同样受 memory.visibility 约束：perChat 只看当前会话；群里不把私聊原文带进来。
     const chats = this.store.db.prepare(`SELECT chat_key,MAX(id) AS maxId FROM messages
-      WHERE self=0 AND sender_id=? GROUP BY chat_key ORDER BY MAX(ts) DESC`).all(String(uin));
+      WHERE self=0 AND sender_id=? GROUP BY chat_key ORDER BY MAX(ts) DESC`).all(String(uin))
+      .filter((chat) => {
+        const key = String(chat.chat_key);
+        const scope = String(scopeChatKey || '');
+        if (!scope) return true;
+        if (vis.mode === 'perChat') return key === scope;
+        if (vis.hidePrivateInGroup && scope.startsWith('group:') && key.startsWith('private:')) return false;
+        return true;
+      });
     const bootstrapPerChat = Math.max(2, Math.ceil(maxEvidence / Math.max(1, chats.length)));
     const rows = [];
     for (const chat of chats) {
@@ -439,11 +450,14 @@ export class RelationshipPilotManager {
     return updates;
   }
 
-  #memoryContext(uin, limit) {
+  #memoryContext(uin, limit, chatKey = '') {
     const memory = globalMemoryStoreForIdentity();
     if (!memory || limit <= 0) return [];
     const member = memory.getMember('', String(uin));
-    return [...(member?.impressions || [])]
+    // 与提示词/记忆工具同口径：perChat / hidePrivateInGroup 在这里也必须生效，
+    // 否则私聊印象会经"关系影子评估"这条新路径重新进入模型。
+    const impressions = visibleImpressions(member?.impressions || [], chatKey, memoryVisibilityOf(this.config()));
+    return [...impressions]
       .sort((a, b) => (Number(b.lastObservedAt) || Number(b.createdAt) || 0)
         - (Number(a.lastObservedAt) || Number(a.createdAt) || 0))
       .slice(0, limit)
@@ -460,7 +474,7 @@ export class RelationshipPilotManager {
       return { evaluated: false, reason: 'daily-budget' };
     }
     const state = this.#refreshFamiliarity(uin) || this.relationshipStore.getState(uin);
-    const evidence = this.#newEvidence(uin, settings.maxEvidenceMessages);
+    const evidence = this.#newEvidence(uin, settings.maxEvidenceMessages, sourceChatKey);
     if (!evidence.length) return { evaluated: false, reason: 'no-new-evidence' };
     const ageMs = state?.lastEvaluatedAt ? Date.now() - state.lastEvaluatedAt : 0;
     const eligible = evidence.length >= settings.minNewMessages
@@ -476,7 +490,7 @@ export class RelationshipPilotManager {
     const systemPrompt = buildRelationshipSystemPrompt();
     const userPrompt = buildRelationshipUserPrompt({
       person,
-      memoryContext: this.#memoryContext(uin, settings.maxMemoryContext),
+      memoryContext: this.#memoryContext(uin, settings.maxMemoryContext, sourceChatKey || evidence.at(-1)?.chatKey || ''),
       openFlags,
       evidence,
       agentContext: this.#agentContext(evidence)
