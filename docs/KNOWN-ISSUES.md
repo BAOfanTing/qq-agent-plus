@@ -38,6 +38,9 @@ quiet 保存后误报未保存、保存双写/暂停半生效/并发保存旧快
   （`src/console/app.js:5939`）。
 - `web_search` 没有把本轮 AbortSignal 传进聚合搜索链，超时/暂停后底层 provider 请求仍会
   跑 60–75s，批次重试时可能重复计费（`src/tools/tools-core.js:3126`）。
+- cron 提醒在 DST 切换日按传统 cron 语义处理：秋季回拨的重复小时会触发两次，春季跳过的
+  挂钟时间当天不触发（daily/weekly 则顺延到跳变后）。这是有意保留的差异，因为 cron 本身
+  允许一天多次触发，不能按"每个本地日期一次"去重（`src/core/reminders.js:198`）。
 - degrade 的全量未读扫描有 2 万条上限：病态积压（>2 万 pending）时队尾 @ 仍可能扫不到，
   且每 5s 恢复循环会重扫；更稳的做法是按最新 id 反向扫描或用 mention 游标
   （`src/core/store.js:395`）。

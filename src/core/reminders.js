@@ -36,53 +36,125 @@ function wallFormatter(tz) {
   let formatter = wallFormatters.get(key);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, hour12: false, weekday: 'short', hour: '2-digit', minute: '2-digit'
+      timeZone: tz, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      weekday: 'short', hour: '2-digit', minute: '2-digit'
     });
     wallFormatters.set(key, formatter);
   }
   return formatter;
 }
 
-/** 时刻 ms 在时区 tz 里的挂钟时间 { hour, minute, dow }。 */
-export function zonedWallClock(ms, tz) {
+/** 时刻 ms 在时区 tz 里的完整挂钟时间（含年月日与星期）。 */
+function zonedParts(ms, tz) {
   const parts = {};
   for (const part of wallFormatter(tz).formatToParts(ms)) parts[part.type] = part.value;
   let hour = Number(parts.hour);
   if (hour === 24) hour = 0;   // 某些 ICU 把午夜格式化成 24
-  return { hour, minute: Number(parts.minute), dow: DOW_NAMES[String(parts.weekday || '').toLowerCase()] ?? 0 };
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour,
+    minute: Number(parts.minute),
+    dow: DOW_NAMES[String(parts.weekday || '').toLowerCase()] ?? 0
+  };
 }
 
-/** 下一天（挂钟）的 hour:minute。跨 DST 用"结果回读校正"兜一圈（最多 2 次）。 */
+/** 时刻 ms 在时区 tz 里的挂钟时间 { hour, minute, dow }。 */
+export function zonedWallClock(ms, tz) {
+  const p = zonedParts(ms, tz);
+  return { hour: p.hour, minute: p.minute, dow: p.dow };
+}
+
+/** 本地日历前进 n 天（用 UTC 日期字段做日历运算，不受时区影响）。 */
+function addLocalDays({ year, month, day }, n) {
+  const t = new Date(Date.UTC(year, month - 1, day) + n * 86400000);
+  return { year: t.getUTCFullYear(), month: t.getUTCMonth() + 1, day: t.getUTCDate() };
+}
+
+/**
+ * 把"本地挂钟时间"解成时间戳：先当成 UTC 猜一次，再按时区偏移定点迭代。
+ * 原来的做法是"挂钟分钟差 + 结果回读校正"，在夏令时切换日会错：实际经过时间与挂钟差
+ * 相差 ±1 小时，回读校正可能再加/减一整天（美东春季调时 23:00 被排到 46 小时后；
+ * 秋季回拨 00:00 返回与输入相同的时刻，不是"下一次"）。改成按本地日期求解后，
+ * 夏季/冬季/DST 前后以及 30/45 分钟偏移的时区都按同一套逻辑处理。
+ * 不存在的挂钟时间（春季跳过的 02:30）会收敛到跳变后的临近时刻（如 03:30）。
+ */
+function wallToInstant({ year, month, day, hour, minute }, tz, biasMs = 0) {
+  const wallUtc = Date.UTC(year, month - 1, day, hour, minute);
+  let guess = wallUtc + (Number(biasMs) || 0);
+  let previous = null;
+  for (let i = 0; i < 4; i += 1) {
+    const p = zonedParts(guess, tz);
+    const seenUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
+    const offset = seenUtc - guess;          // 时区偏移（含 DST）
+    const next = wallUtc - offset;
+    if (Math.abs(next - guess) < 1000) return next;
+    previous = guess;
+    guess = next;
+  }
+  // 不收敛 = 这个挂钟时间在当天不存在（春季跳过的那一小时）。取震荡里的较晚者，
+  // 即"跳变之后最近的时刻"（02:30 → 03:30），比提前一小时触发更符合直觉。
+  return Math.max(guess, previous ?? guess);
+}
+
+/**
+ * 某本地日期上、目标挂钟时间的**最早一次未来出现**。
+ * 秋季回拨时同一个挂钟时间有两次（如纽约 01:30 EDT 与 01:30 EST）：`wallToInstant`
+ * 只解出一个瞬时、落在哪一次取决于初始猜测，基准夹在两次之间时容易漏掉还未来的那次。
+ * 这里用 -24h/0/+24h 三个初值各解一次，收集"本地日期与挂钟都对得上且晚于基准"的结果取最早；
+ * 一个都对不上（春季跳过的 02:30）时退回跳变后的临近时刻（03:30）。
+ */
+function resolveOnDate(parts, tz, afterMs) {
+  const matches = [];
+  for (const bias of [-24 * 3600e3, 0, 24 * 3600e3]) {
+    const at = wallToInstant(parts, tz, bias);
+    if (!(at > afterMs)) continue;
+    const p = zonedParts(at, tz);
+    if (p.year !== parts.year || p.month !== parts.month || p.day !== parts.day) continue;
+    if (p.hour !== parts.hour || p.minute !== parts.minute) continue;
+    matches.push(at);
+  }
+  if (matches.length) return Math.min(...matches);
+  // 这个挂钟时间当天不存在（春季跳变）：取跳变之后最接近的时刻。
+  const gap = wallToInstant(parts, tz);
+  if (gap > afterMs) {
+    const p = zonedParts(gap, tz);
+    if (p.year === parts.year && p.month === parts.month && p.day === parts.day) return gap;
+  }
+  return null;
+}
+
+/** 下一个本地日期的 hour:minute（严格晚于 afterMs）。 */
 export function nextDailyAt({ hour, minute }, tz, afterMs) {
-  const cur = zonedWallClock(afterMs, tz);
-  let delta = (hour * 60 + minute) - (cur.hour * 60 + cur.minute);
-  if (delta <= 0) delta += 1440;
-  let result = afterMs + delta * 60000;
-  for (let i = 0; i < 2; i += 1) {
-    const wall = zonedWallClock(result, tz);
-    const want = (hour * 60 + minute) - (wall.hour * 60 + wall.minute);
-    if (want === 0) break;
-    result += want * 60000;
+  const after = Number(afterMs);
+  if (!Number.isFinite(after)) return null;
+  const cur = zonedParts(after, tz);
+  let date = { year: cur.year, month: cur.month, day: cur.day };
+  const target = { hour: Number(hour) || 0, minute: Number(minute) || 0 };
+  for (let i = 0; i < 3; i += 1) {
+    const candidate = resolveOnDate({ ...date, ...target }, tz, after);
+    if (candidate) return candidate;
+    date = addLocalDays(date, 1);
   }
-  return result;
+  return after + 86400000;   // 理论不可达；宁可晚一天也不要返回过去
 }
 
-/** 下一个星期几的 hour:minute（weekday 0=周日）。 */
+/** 下一个星期几的 hour:minute（weekday 0=周日，严格晚于 afterMs）。 */
 export function nextWeeklyAt({ weekday, hour, minute }, tz, afterMs) {
-  const cur = zonedWallClock(afterMs, tz);
-  const curAbs = cur.dow * 1440 + cur.hour * 60 + cur.minute;
-  const want = ((weekday % 7) * 1440) + hour * 60 + minute;
-  let delta = want - curAbs;
-  while (delta <= 0) delta += 10080;
-  let result = afterMs + delta * 60000;
-  for (let i = 0; i < 2; i += 1) {
-    const wall = zonedWallClock(result, tz);
-    const wallAbs = wall.dow * 1440 + wall.hour * 60 + wall.minute;
-    const fix = want - wallAbs;
-    if (fix === 0) break;
-    result += fix * 60000;
+  const after = Number(afterMs);
+  if (!Number.isFinite(after)) return null;
+  const cur = zonedParts(after, tz);
+  const targetDow = ((Number(weekday) % 7) + 7) % 7;
+  let date = addLocalDays({ year: cur.year, month: cur.month, day: cur.day }, (targetDow - cur.dow + 7) % 7);
+  const target = { hour: Number(hour) || 0, minute: Number(minute) || 0 };
+  for (let i = 0; i < 3; i += 1) {
+    const candidate = resolveOnDate({ ...date, ...target }, tz, after);
+    if (candidate) return candidate;
+    date = addLocalDays(date, 7);
   }
-  return result;
+  return after + 7 * 86400000;
 }
 
 /** 5 字段简化 cron：分 时 日 月 周。日/月只认 *；分/时/周支持数字、列表 a,b、区间 a-b、步进 。
@@ -133,7 +205,13 @@ export function parseCron5(expr) {
 export function nextCronAt(cron, tz, afterMs) {
   const parsed = typeof cron === 'string' ? parseCron5(cron) : cron;
   if (!parsed) return null;
-  let cursor = afterMs - (afterMs % 60000) + 60000;
+  const after = Number(afterMs);
+  if (!Number.isFinite(after)) return null;
+  // DST 语义按"绝对分钟扫描"（与系统 cron 一致）：秋季回拨时同一个挂钟时间可能出现
+  // 两次（如 01:30 EDT/EST 各触发一次），春季跳过的挂钟时间（02:30）当天不触发。
+  // daily/weekly 走本地日期求解，跳过的时刻会顺延到 03:30；两者口径不同属有意保留，
+  // 因为 cron 表达式本身就允许一天多次（*/15 等），不能按"每个本地日期只触发一次"去重。
+  let cursor = after - (after % 60000) + 60000;
   for (let i = 0; i < 10080; i += 1) {
     const wall = zonedWallClock(cursor, tz);
     if (parsed.minutes.has(wall.minute) && parsed.hours.has(wall.hour) && parsed.dows.has(wall.dow)) return cursor;
@@ -160,7 +238,14 @@ function pushOutOfQuiet(atMs, tz, quiet) {
     if (!inWindow) return result;
     let delta = end - cur;
     if (delta <= 0) delta += 1440;
-    result += delta * 60000;
+    // 窗口结束时刻按本地挂钟求解：直接加绝对分钟在 DST 切换夜会差一小时
+    //（例如免打扰 22:00-07:00，春季调时夜会落到 08:00 而不是 07:00）。
+    const p = zonedParts(result, tz);
+    const endDate = (start <= end || cur < end)
+      ? { year: p.year, month: p.month, day: p.day }
+      : addLocalDays({ year: p.year, month: p.month, day: p.day }, 1);
+    const endAt = wallToInstant({ ...endDate, hour: Math.floor(end / 60), minute: end % 60 }, tz);
+    result = endAt > result ? endAt : result + delta * 60000;
   }
   return result;
 }
@@ -169,7 +254,11 @@ function pushOutOfQuiet(atMs, tz, quiet) {
 export function nextOccurrenceAt(item, afterMs, { quiet = null } = {}) {
   const repeat = item?.repeat;
   if (!repeat || typeof repeat !== 'object') return null;
-  const tz = validTimezone(repeat.tz) ? repeat.tz : 'Asia/Shanghai';
+  // 显式写了时区但不合法：返回 null（由调用方标 failed 并给出原因），
+  // 不能静默换成上海 —— 那会把提醒整体平移 8~13 小时，比失败更难发现。
+  const tzRaw = String(repeat.tz ?? '').trim();
+  if (tzRaw && !validTimezone(tzRaw)) return null;
+  const tz = tzRaw || 'Asia/Shanghai';
   const jitter = Math.max(0, Math.min(3600000, Number(repeat.jitterMs) || 0));
   let at = null;
   if (repeat.kind === 'daily') {

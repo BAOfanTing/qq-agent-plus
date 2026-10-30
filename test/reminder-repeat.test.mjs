@@ -18,6 +18,60 @@ const {
 // 固定基准：2026-10-24 12:00 UTC = 上海 20:00（周六）
 const BASE = Date.UTC(2026, 9, 24, 12, 0, 0);
 
+test('夏令时：春季调时不跳成 46 小时后，秋季回拨返回严格未来', () => {
+  // 美东 2026-03-08 春季调时：00:00 EST 之后，当天 23:00 已是 EDT。
+  // 旧实现按挂钟分钟差 + 回读校正会再加一整天（实测 46 小时）。
+  const springBase = Date.parse('2026-03-08T05:00:00Z');
+  assert.equal(new Date(nextDailyAt({ hour: 23, minute: 0 }, 'America/New_York', springBase)).toISOString(),
+    '2026-03-09T03:00:00.000Z');
+  // 秋季回拨日：00:00 当天已经过去，下一次必须是第二天 00:00 EST（严格未来）。
+  const fallBase = Date.parse('2026-11-01T04:00:00Z');
+  const nextMidnight = nextDailyAt({ hour: 0, minute: 0 }, 'America/New_York', fallBase);
+  assert.ok(nextMidnight > fallBase, '下一次必须严格晚于基准');
+  assert.equal(new Date(nextMidnight).toISOString(), '2026-11-02T05:00:00.000Z');
+  // 被跳过的挂钟时间（02:30 不存在）：落到跳变之后的临近时刻，不能提前一天/不触发。
+  const gap = nextDailyAt({ hour: 2, minute: 30 }, 'America/New_York', springBase);
+  assert.ok(gap > springBase && gap - springBase < 26 * 3600e3);
+  assert.equal(zonedWallClock(gap, 'America/New_York').hour, 3);
+
+  // 秋季回拨的重复小时：01:30 出现两次。基准夹在两次之间时，必须取还未来的那次，
+  // 而不是跳过一整天/一周（2026-10-30 独立交叉审查抓到）。
+  const between = Date.parse('2026-11-01T05:40:00Z');   // 纽约 01:40 EDT
+  assert.equal(new Date(nextDailyAt({ hour: 1, minute: 30 }, 'America/New_York', between)).toISOString(),
+    '2026-11-01T06:30:00.000Z', '第二次 01:30 EST 还在 50 分钟后');
+  assert.equal(new Date(nextWeeklyAt({ weekday: 0, hour: 1, minute: 30 }, 'America/New_York', between)).toISOString(),
+    '2026-11-01T06:30:00.000Z');
+  // 基准在重复小时之前时，取最早的一次（01:30 EDT）。
+  assert.equal(new Date(nextDailyAt({ hour: 1, minute: 30 }, 'America/New_York', Date.parse('2026-11-01T04:00:00Z'))).toISOString(),
+    '2026-11-01T05:30:00.000Z');
+  // 东半球回拨同理：伦敦 01:30 BST（00:30Z）比 01:30 GMT（01:30Z）更早。
+  assert.equal(new Date(nextDailyAt({ hour: 1, minute: 30 }, 'Europe/London', Date.parse('2026-10-25T00:20:00Z'))).toISOString(),
+    '2026-10-25T00:30:00.000Z');
+
+  // 免打扰跨 DST：22:00-07:00 的顺延要落在本地 07:00，而不是 08:00。
+  const quiet = nextOccurrenceAt(
+    { repeat: { kind: 'daily', hour: 23, minute: 30, tz: 'America/New_York' } },
+    Date.parse('2026-03-07T12:00:00Z'),
+    { quiet: { start: '22:00', end: '07:00' } }
+  );
+  assert.equal(new Date(quiet).toISOString(), '2026-03-08T11:00:00.000Z');
+  assert.deepEqual(zonedWallClock(quiet, 'America/New_York'), { hour: 7, minute: 0, dow: 0 });
+
+  // 显式时区写错：返回 null（调用方标 failed），不能静默换成上海把提醒平移。
+  assert.equal(nextOccurrenceAt(
+    { repeat: { kind: 'daily', hour: 9, minute: 0, tz: 'America/New_Yrok' } },
+    Date.now()
+  ), null);
+  // 非有限基准：返回 null（与其他"非法输入返回 null"的路径一致），不抛 RangeError。
+  assert.equal(nextDailyAt({ hour: 9, minute: 0 }, 'Asia/Shanghai', Infinity), null);
+  assert.equal(nextWeeklyAt({ weekday: 1, hour: 9, minute: 0 }, 'Asia/Shanghai', NaN), null);
+  assert.equal(nextCronAt('0 9 * * *', 'Asia/Shanghai', Infinity), null);
+  // 半小时间隔 DST 的时区（Lord Howe）也必须严格未来且挂钟正确。
+  const lh = nextDailyAt({ hour: 2, minute: 15 }, 'Australia/Lord_Howe', Date.parse('2026-10-03T14:00:00Z'));
+  assert.ok(lh > Date.parse('2026-10-03T14:00:00Z'));
+  assert.deepEqual(zonedWallClock(lh, 'Australia/Lord_Howe').hour, 2);
+});
+
 test('时区：IANA 校验 fail-closed，挂钟读数正确', () => {
   assert.equal(validTimezone('Asia/Shanghai'), true);
   assert.equal(validTimezone('UTC'), true);

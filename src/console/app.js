@@ -671,9 +671,10 @@ export function createApp({
   });
   // OneBot 入站新鲜度告警：连接还在但 10 分钟没有任何事件/心跳（半开连接/上游卡死）——
   // 只在主进程里看着，一次发作只通知一次，恢复后复位。
+  let freshnessTimer = null;
   {
     let staleNotified = false;
-    const freshnessTimer = setInterval(async () => {
+    freshnessTimer = setInterval(async () => {
       try {
         const last = Number(onebot.lastEventAt) || 0;
         if (!onebot.connected || !last) { staleNotified = false; return; }
@@ -6745,6 +6746,7 @@ export function createApp({
       killTreeOf(child);
     }
     clearTimeout(timeControlTimer);
+    clearInterval(freshnessTimer);
     clearInterval(sseHeartbeat);
     snowlumaAutoStopped = true;
     clearTimeout(snowlumaAutoTimer);
