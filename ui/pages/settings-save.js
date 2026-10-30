@@ -1063,6 +1063,11 @@ async function saveConfig({ quiet = false } = {}) {
       keywordCount: clampInt(val('#cfg-kwcount', c.store?.keywordCount), 0, 500, 15),
       keywords: String($('#cfg-keywords')?.value || '')
         .split('\n').map((x) => x.trim()).filter(Boolean),
+      blacklistKeywords: (() => {
+        const field = $('#cfg-blacklist-keywords');
+        return field ? String(field.value).split('\n').map((x) => x.trim()).filter(Boolean)
+          : (c.store?.blacklistKeywords || []);
+      })(),
       randomCount: clampInt(val('#cfg-randcount', c.store?.randomCount), 0, 500, 8),
       allCount: clampInt(val('#cfg-allcount', c.store?.allCount), 0, 500, 80),
       pastStateMaxChars: clampInt(val('#cfg-pastchars', c.store?.pastStateMaxChars), 100, 100000, 24000),

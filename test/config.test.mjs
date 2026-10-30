@@ -378,14 +378,14 @@ test('三个带凭据映射的段（asr/tts/imageGen）：手改坏成标量/数
   assert.deepEqual(getConfig().asr.keys.tencent, { secretId: 'AKID', secretKey: 'SK' });
 });
 
-test('坏形状的 allow/deny/blocklist/providers/customPersonas/store.keywords 归一化', () => {
+test('坏形状的 allow/deny/blocklist/providers/customPersonas/store keywords 归一化', () => {
   updateConfig({
     allow: { groups: '123456', private: { a: 1 } },
     deny: { groups: null, private: 'x' },
     blocklist: { '123': '456' },
     providers: {},
     customPersonas: {},
-    store: { keywords: 'not-an-array' }
+    store: { keywords: 'not-an-array', blacklistKeywords: 'also-not-an-array' }
   });
   const cfg = getConfig();
   assert.deepEqual(cfg.allow.groups, []);
@@ -396,6 +396,14 @@ test('坏形状的 allow/deny/blocklist/providers/customPersonas/store.keywords 
   assert.deepEqual(cfg.providers, []);
   assert.deepEqual(cfg.customPersonas, []);
   assert.deepEqual(cfg.store.keywords, []);
+  assert.deepEqual(cfg.store.blacklistKeywords, []);
+});
+
+test('消息关键词黑白名单保留为数组，并校验正则规则', () => {
+  updateConfig({ store: { keywords: ['小鲸鱼'], blacklistKeywords: ['广告', '抽奖'] } });
+  assert.deepEqual(getConfig().store.blacklistKeywords, ['广告', '抽奖']);
+  assert.throws(() => updateConfig({ store: { blacklistKeywords: ['re:('] } }),
+    (error) => error.httpStatus === 400 && /黑名单规则/.test(error.message));
 });
 
 test('updateConfig 的校验错误带 httpStatus=400 标记（控制台据此区分用户输入）', () => {

@@ -850,7 +850,9 @@ export const DEFAULT_CONFIG = {
     contextTier: 4,             // 派生：0%→1、中间→3、100%→4（决定读多少条已读、触发方式展示）
     atCount: 300,               // 被艾特时读多少条已读
     keywordCount: 100,          // 命中关键词时读多少条
-    keywords: [],               // 关键词表（清空就只回 @）
+    // 白名单关键词：命中后必回。黑名单优先，命中黑名单的消息不入库。
+    keywords: [],
+    blacklistKeywords: [],
     randomPercent: 100,         // 派生 = 概率（运行时判定用的就是它）
     randomCount: 60,            // 按概率响应时读多少条
     allCount: 300,              // 全响应时读多少条
@@ -1405,7 +1407,10 @@ function migrateConfig(parsed) {
   // store 段缺失或形状坏掉时整段丢掉，交给默认值合并：补一个空对象会让后面的概率迁移
   // 以为"用户明确写了 0%"，把默认的全响应改成不响应。
   if (out.store !== undefined && !isPlainObject(out.store)) delete out.store;
-  if (isPlainObject(out.store)) out.store.keywords = listOf(out.store.keywords);
+  if (isPlainObject(out.store)) {
+    out.store.keywords = listOf(out.store.keywords);
+    out.store.blacklistKeywords = listOf(out.store.blacklistKeywords);
+  }
   // 人设段必须是对象：手改坏的 config.json 里可能是 "persona": "小鲸鱼" 这类标量或数组，
   // 放它过去会在保存时炸（Cannot create property 'behaviorProfile' on string），
   // 而控制台保存与 scripts/configure-linux.mjs 都要走这条路径 —— 恢复成默认人设对象。
