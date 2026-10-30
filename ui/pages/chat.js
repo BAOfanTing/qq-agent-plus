@@ -539,7 +539,7 @@ return `
         <div class="hint">白名单关键词（每行一个，不区分大小写）；命中<b>一定响应</b>。留空就只回 @：</div>
         <textarea id="cfg-keywords" rows="3" placeholder="小鲸鱼&#10;bot">${esc((st.keywords || []).join('\n'))}</textarea>
       </div>
-      <div class="tier-param">
+      <div class="keyword-blacklist-param">
         <label>消息关键词黑名单</label>
         <div class="hint">每行一个，普通文字不区分大小写。以 <code>re:</code> 开头可使用受限正则，如 <code>re:^转发.*抽奖$</code>。命中后消息会在入口直接丢弃，黑名单优先于白名单。</div>
         <textarea id="cfg-blacklist-keywords" rows="3" placeholder="广告关键词&#10;re:^转发.*抽奖$">${esc((st.blacklistKeywords || []).join('\n'))}</textarea>
