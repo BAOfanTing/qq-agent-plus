@@ -854,11 +854,18 @@ export class Orchestrator {
       return { ...result, shouldRespond: false, reason: '无未读', conversationMode: conversation.mode };
     }
     if (entries.some((entry) => Number(entry.attempts) > 0)) {
+      // 与正式领取同一口径按 mode 取上下文条数：原来固定读 lifecycleContextCount
+      // （任何 mode 都有默认值），默认配置下 @ 批次首轮读 300 条、重试只读 100 条。
+      const retryContext = conversation.mode === 'lifecycle'
+        ? conversation.lifecycleContextCount
+        : conversation.mode === 'threaded'
+          ? conversation.continuationContextCount
+          : storeConfigForChat(chatKey).allCount;
       return {
         tier: 8,
         count: cappedByTokenSaver(Math.min(
           500,
-          Math.max(1, Number(conversation.lifecycleContextCount) || result.count || 100)
+          Math.max(1, Number(retryContext) || result.count || 100)
         ), tokenSaverCapsOf(getConfig())?.allCount),
         reason: '失败批次重试',
         shouldRespond: true,
@@ -1340,6 +1347,7 @@ export class Orchestrator {
     // 与 10-06 修的"add 之后准备段"是同一类窗口，范围补齐 add 之前。
     let conversation = null;
     let pendingEntries = [];
+    let claimFromId = 0;   // degrade：@ 在扫描窗之外时，从这条开始领取
     let tierResult = null;
     let runTimeoutMs = 0;
     let lease = null;
@@ -1383,16 +1391,23 @@ export class Orchestrator {
         && String(chatKey).startsWith('group:')) {
         // 闸门要扫**整段未读**：degrade 下不 ack 任何消息，积压破扫描窗后最旧的一批里
         // 可能永远没有 @，新 @ 排在队尾 —— 只看 peekUnread 的窗口会让该群当天彻底失联。
-        const mentioned = typeof this.store.somePending === 'function'
-          ? this.store.somePending(chatKey, { test: (entry) => mentionsOrPokesBot(entry, this.onebot.selfId) })
-          : pendingEntries.some((entry) => mentionsOrPokesBot(entry, this.onebot.selfId));
-        if (!mentioned) {
+        const mentionMatcher = { test: (entry) => mentionsOrPokesBot(entry, this.onebot.selfId) };
+        const inWindow = pendingEntries.some((entry) => mentionsOrPokesBot(entry, this.onebot.selfId));
+        const hit = typeof this.store.findPending === 'function'
+          ? this.store.findPending(chatKey, mentionMatcher)
+          : (inWindow ? { id: 0 } : null);
+        if (!hit && !inWindow) {
           if (waitingSessionId) this.#discardWaiting(waitingSessionId);
           return;   // 保留未读：被 @ 时（或跨日重置后）自然会再进这里
         }
+        // @ 不在这一批里：从 @ 那条开始领。否则闸门判"有 @"、实际领到的却是更早的
+        // 一批普通消息 —— degrade 的"只回 @"变成连续空跑模型，还把普通消息当回复对象。
+        if (hit && !inWindow) claimFromId = hit.id;
       }
 
       const predicted = this.#predictTier(chatKey, roll === undefined ? {} : { roll });
+      // degrade 下队尾命中的 @ 必回：档位是基于"最旧一批"预测的，不该把一个明确的 @ 判成不响应。
+      if (claimFromId > 0) predicted.shouldRespond = true;
       const manualContextCount = cappedByTokenSaver(Math.min(500, Math.max(
         1,
         Number(conversation.mode === 'lifecycle'
@@ -1455,7 +1470,8 @@ export class Orchestrator {
 
     runTimeoutMs = Math.min(240000, Math.max(1000, Number(cfgNow.api.runTimeoutMs) || 180000));
     lease = proactive ? null : this.store.claimUnread(chatKey, {
-      limit: cfgNow.store.batchLimit, maxChars: cfgNow.store.batchMaxChars, leaseMs: runTimeoutMs + 60000
+      limit: cfgNow.store.batchLimit, maxChars: cfgNow.store.batchMaxChars, leaseMs: runTimeoutMs + 60000,
+      fromId: claimFromId
     });
     triggerEntries = lease?.messages || [];
     if (!proactive && triggerEntries.length === 0) {
@@ -1599,6 +1615,15 @@ export class Orchestrator {
         } catch (error) {
           session.threadError = String(error?.message ?? error);
           log.warn(`[lifecycle] ${chatKey} 收尾写库失败:`, session.threadError);
+          // 失败的事务会把 ack 一起回滚；不补 ack 的话租约到期后 recoverExpired 看到
+          // outbox 的 sent 行会把整批打成 held，整个会话从此不再回话。回复已经发出去了，
+          // 这里 best-effort 收口（失败只记日志）。
+          try {
+            if (lease?.id) this.store.ackLease(lease.id);
+            else this.store.completeRun(session.leaseId);
+          } catch (ackError) {
+            log.warn(`[lifecycle] ${chatKey} 收尾失败后补 ack 也失败:`, ackError?.message ?? ackError);
+          }
         }
       } else {
         if (lease) this.store.ackLease(lease.id);
@@ -1669,7 +1694,11 @@ export class Orchestrator {
           // 进 held/failed 人工核对，不自动重试。
           if (timeClosed && !this.store.hasEffects(lease.id)) this.store.ackLease(lease.id);
           else this.store.failLease(lease.id, session.error, {
-            retryable: !timeClosed && (isRetryableError(error) || controller.signal.aborted)
+            // 「本轮跑超时」不能当可重试：同一批上下文再跑 1-2 次只会把模型费用翻倍，
+            // 且非发送类工具的副作用（写记忆/提醒/生图）可能被重复执行。
+            retryable: !timeClosed
+              && controller.signal.reason?.message !== 'Run deadline exceeded'
+              && (isRetryableError(error) || controller.signal.aborted)
           });
         } else {
           // 主动唤醒（无租约）失败也要收 outbox 的尾巴：成功路径会清掉 sent/failed 残行，

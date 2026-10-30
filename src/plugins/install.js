@@ -316,6 +316,8 @@ export async function installPlugin({
       || upgradeDiff?.added?.tools?.length || upgradeDiff?.removed?.tools?.length || upgradeDiff?.changed?.tools?.length
       || upgradeDiff?.added?.approvals?.length || upgradeDiff?.removed?.approvals?.length || upgradeDiff?.changed?.approvals?.length
       || upgradeDiff?.changed?.quotas?.length
+      || upgradeDiff?.added?.quotas?.length || upgradeDiff?.removed?.quotas?.length
+      || upgradeDiff?.changed?.apiVersion
       || upgradeDiff?.added?.secrets?.length || upgradeDiff?.removed?.secrets?.length
       || upgradeDiff?.added?.schedule?.length || upgradeDiff?.removed?.schedule?.length || upgradeDiff?.changed?.schedule?.length
     );

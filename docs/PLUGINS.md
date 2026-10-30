@@ -521,6 +521,9 @@ CI 里可选），`--json` 给机器读。
   在 `ping` 应答里上报的 `rssKb`，不报则不做 RSS 判杀）；工具调用每分钟上限 120 次、并发在途
   调用上限 4 个（超了返回 `E_BUSY`，不排队堆积）、插件数据磁盘上限 256MB（storage/media/secrets
   合计，超了返回 `E_DISK_QUOTA`）。周期任务不受每分钟调用限制。
+  插件 → 宿主的**能力调用（`cap.*`）同样受闸门约束**：并发在途不超过 `concurrency`；媒体类
+  （`media.*`）同时只允许 1 个；`media.*`/`http.*`/`log.write` 另受 `callsPerMinute` 限制
+  （storage/send 等高频小调用不按分钟限）。超限返回 `E_BUSY` / `E_RATE_LIMIT`，不排队。
   另有可选的**全部插件总内存上限** `plugins.limits.totalMemoryMb`（默认 0 = 不限；只在 Linux 有可靠
   RSS 读数）：运行中插件 RSS 之和达到上限后不再启动新插件，启动后超限的会被停掉并记 `E_TOTAL_MEMORY`。
   这些都在 `plugins.limits` 里调，也可以走控制台「设置 → 平台能力 → 插件宿主（高级）」；

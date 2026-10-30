@@ -7,18 +7,24 @@
 
 ### 2026-10-30 全项目审查遗留
 
-本轮已修复：插件能力调用的并发/限频闸门、技能市场 `homepage` 的 scheme 校验、插件 feed
-封面的 SSRF、同版本重装的权限面变更确认、MCP 单次调用超时误置 not-ready、degrade 闸门漏看
-队尾 @、关系影子评估绕过 `memory.visibility`、暂停期间每日动态白跑并被记成阻断、控制台存档
-新消息不刷新、屏蔽名单切群竞态、记忆详情重绘冲掉编辑、设置未保存改动无提示、保存双写/暂停
-半生效/并发保存旧快照、reminders cron 扫描的 Intl 重复构造、face-catalog 数据目录口径、
-lifecycle 收尾写库失败阻塞会话。以下为登记待修（按严重度）：
+本轮已修复：插件能力调用的并发/限频闸门（含子进程退出后计数复位）、技能市场 `homepage`
+的 scheme 校验、插件 feed 封面的 SSRF、同版本重装的权限面变更确认（含配额增删/apiVersion）、
+install-file 与 CLI 安装的确认哈希入口、MCP 单次超时误置 not-ready（连续 3 次才标记）、
+degrade 闸门漏看队尾 @（并从 @ 那条开始领取）、degrade 全量扫描的循环/上限防御、关系影子
+评估绕过 `memory.visibility`、暂停期间每日动态白跑并被记成阻断、控制台存档新消息不刷新、
+屏蔽名单切群竞态、记忆详情重绘冲掉编辑、设置未保存改动确认（所有 switchTab 入口统一）、
+quiet 保存后误报未保存、保存双写/暂停半生效/并发保存旧快照与审计快照、reminders cron 扫描
+的 Intl 重复构造、face-catalog 数据目录口径、lifecycle 收尾写库失败阻塞会话（补 ack）、
+生图额度在结果未知时误退、贴表情/查表情回应的跨会话归属校验、`get_recent_messages` 长度
+上限、safeFetch 重定向不剥离凭据头、run 超时的批次重试放大、失败批次重试的上下文条数口径、
+控制台备份/恢复按部署元数据解析服务名、脱敏回填的大小写不敏感匹配。以下为登记待修：
 
 **插件 / MCP**
 
-- 安装入口不一致：`/api/plugins/install-file` 与 `ops.js plugins install` 升级时不传
-  `expectedDiffHash`，权限面变化的升版本包会一直 409 且没有确认入口；这两条路径也不做
-  `resetPluginGrants`/关闭写开关（`src/console/app.js:3722`、`src/ops.js:2712`）。
+- 本地安装的**两段式确认 UI** 仍未做：API（`expectedDiffHash`）与 CLI（`--expect-diff`）
+  已支持，但控制台"安装文件"遇到 E_UPGRADE_CONFIRM 只会显示错误，不会引导用户确认；
+  install-file/CLI 升级后也不做 `resetPluginGrants`/关闭写开关（`src/console/app.js:3704`、
+  `src/ops.js:2704`）。
 - `media.describe` / `media.asr.transcribe` 不消费 ASR/视觉配额，插件可无限放大付费调用
   （`src/plugins/capabilities.js:459-497`）。
 - `media.merge` / `media.frames` 不检查磁盘配额，输入各自低于单文件上限时可写出远超
@@ -27,6 +33,14 @@ lifecycle 收尾写库失败阻塞会话。以下为登记待修（按严重度�
   （`src/plugins/grants.js:290`、`src/plugins/registry.js:686`）。
 - CLI 卸载不清授权与凭据，重装同 id 会继承旧批准（`src/ops.js:2692`；控制台路径有清理）。
 - MCP server 进程退出后不会自动重启（单次超时不再置 not-ready；连续 3 次超时才会标记未就绪）。
+- 控制台备份/恢复若把备份口令放在 `QQ_AGENT_BACKUP_KEY`，会经 `systemd-run --setenv` 进入
+  进程参数与 transient unit 环境（同机可见）；建议改为 0600 临时 key 文件 + `*_KEY_FILE`
+  （`src/console/app.js:5939`）。
+- `web_search` 没有把本轮 AbortSignal 传进聚合搜索链，超时/暂停后底层 provider 请求仍会
+  跑 60–75s，批次重试时可能重复计费（`src/tools/tools-core.js:3126`）。
+- degrade 的全量未读扫描有 2 万条上限：病态积压（>2 万 pending）时队尾 @ 仍可能扫不到，
+  且每 5s 恢复循环会重扫；更稳的做法是按最新 id 反向扫描或用 mention 游标
+  （`src/core/store.js:395`）。
 - `requireIsolation:false` 时 `--max-old-space-size` 不生效，`memoryMb` 形同虚设
   （`src/plugins/isolation.js:86`）。
 

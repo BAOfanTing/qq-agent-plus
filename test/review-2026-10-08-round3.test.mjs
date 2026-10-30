@@ -45,9 +45,15 @@ test('未读扫描窗口与 claimUnread 的领取上限必须同一个数（否�
   const orch = read('src/core/orchestrator.js');
   const store = read('src/core/store.js');
   const win = /#unreadScanLimit\(\)\s*\{[\s\S]{0,200}?Math\.min\(100,\s*Math\.max\(1,/.exec(orch);
-  assert.ok(win, '#unreadScanLimit 要把窗口夹在 100 以内（与 claimUnread 的领取上限同口径）');
+  assert.ok(win, '#unreadScanLimit 要把窗口夹在 100 以内');
   assert.equal(/Math\.max\(100,\s*Number\(getConfig\(\)\.store\?\.batchLimit\)/.test(orch), false,
-    '不许再用 max(100, batchLimit)：窗口比实际领取的大，判定就会看见"批外"的消息');
-  assert.ok(/peekUnread\(chatKey,\s*Math\.min\(100,\s*Math\.max\(1,\s*limit\)\)\)/.test(store),
-    'claimUnread 的领取上限仍是 100（改了这里要同步改窗口）');
+    '不许再用 max(100, batchLimit)');
+  // 2026-10-30：degrade 闸门改为扫整段未读；@ 在窗口外时必须从 @ 那条开始领取，
+  // 不能"判有 @ 却领到更早的一批普通消息"。
+  assert.match(orch, /findPending\(chatKey, mentionMatcher\)/,
+    'degrade 闸门要用 findPending 拿到队尾 @ 的位置');
+  assert.match(orch, /claimFromId = hit\.id/, '记下 @ 的 id，作为领取起点');
+  assert.match(orch, /fromId: claimFromId/, 'claimUnread 必须从 @ 那条开始领');
+  assert.ok(/peekUnread\(chatKey,\s*Math\.min\(100,\s*Math\.max\(1,\s*limit\)\),\s*fromId\)/.test(store),
+    'claimUnread 的领取上限仍是 100，并支持从指定 id 开始');
 });

@@ -618,8 +618,9 @@ export class DailyMomentsManager {
     const runtime = getConfig().runtime || {};
     if (runtime.mode !== 'active' || runtime.paused) {
       // 不要在这里钉 deferredDay：暂停跨天后它会把"旧的一天"带进恢复后的运行。
-      // 恢复时由 scheduledDayAt 重新判断（当天已过点就补发当天，未到点就等）。
-      this.#schedule(60000);
+      // 恢复时由 scheduledDayAt 重新判断（当天已过点就补发当天，未到点就等）；
+      // startup 要继续传，否则启动时暂停会把"昨天错过点"的启动补发吞掉。
+      this.#schedule(60000, startup);
       return;
     }
     if (cfg.enabled) {

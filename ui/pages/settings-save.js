@@ -1231,6 +1231,13 @@ async function saveConfig({ quiet = false } = {}) {
     data = await postConfig(true);
   }
   state.config = data.config;
+  // 保存成功（含 quiet 的开关/预览类保存）就清掉"有未保存改动"：否则实验功能等入口
+  // 存完仍显示未保存，切换分区/离开设置时会误弹确认，用户学会无脑点确认后真改动也拦不住。
+  state.settingsDirty = false;
+  {
+    const dirty = document.querySelector('#cfg-dirty-note');
+    if (dirty) dirty.textContent = '';
+  }
   // 按群覆盖草稿作废：下次渲染从刚保存的配置重新克隆。不清的话，若别的标签页/直连 API
   // 改过 perGroup，本页再用陈旧草稿提交就会整体覆盖回去（__replace__ 是整表替换，2026-10-07 审计 P3）。
   state.platformPerGroupDraft = undefined;

@@ -111,6 +111,12 @@ it('react_to_message：参数归一化、非数字编号被拒、每小时封顶
   const bad = await def.execute(ctx, { messageId: '123', emojiId: '微笑' });
   assert.equal(bad.isError, true, '编号必须是数字');
 
+  // 跨会话：协议端 message_id 是全局的，不属于当前会话的消息不能贴表情
+  const denied = await def.execute({ ...ctx, store: { findByMid: () => null } },
+    { messageId: '999', emojiId: '14' });
+  assert.equal(denied.isError, true, '别的会话的消息要拒绝');
+  assert.match(denied.content, /不在当前会话/);
+
   // 实测（SnowLuma 1.14.22）：QQ 私聊消息不支持表情回应 → 工具层直接说清楚
   const priv = await def.execute({ kind: 'private', chatId: '2', chatKey: 'private:2' }, { messageId: '123', emojiId: '14' });
   assert.equal(priv.isError, true);

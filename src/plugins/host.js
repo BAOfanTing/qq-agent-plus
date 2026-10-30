@@ -161,6 +161,10 @@ export class PluginHost {
     this.stopping = false;
     this.lastError = '';
     this.rssKb = 0;   // 新进程重新采样/上报，别把上一代的高水位带过来
+    // 手动 start()（没有 exit 事件）时也要清掉上一代的能力计数
+    this.capInFlight = 0;
+    this.mediaInFlight = 0;
+    this.capWindow = [];
 
     const entry = this.manifest.entry;
     // 先语法体检：插件写错一个括号，直接 spawn 只会得到"进程秒退"，报错里看不出原因
@@ -501,6 +505,11 @@ export class PluginHost {
   async #onExit(code, signal) {
     this.#stopHeartbeat();
     this.#rejectAll(new Error(`插件进程退出（code=${code}, signal=${signal}）`));
+    // 旧代发起的能力调用可能还在宿主里跑（下载/HTTP 没有总截止）。计数不归零的话，
+    // 新进程的 media.* 会一直被上一代占着并发位、永久 E_BUSY。
+    this.capInFlight = 0;
+    this.mediaInFlight = 0;
+    this.capWindow = [];
     if (this.stopping || this.state === 'stopped' || this.state === 'stopping') { this.state = 'stopped'; return; }
     this.stats.crashes += 1;
     this.child = null;

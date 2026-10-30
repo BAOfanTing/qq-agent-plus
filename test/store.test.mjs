@@ -38,6 +38,14 @@ describe('ChatStore', () => {
     assert.deepEqual(store.peekUnread('group:1').map((m) => m.mid), ['2']);
   });
 
+  it('claimUnread 支持从指定 id 开始领取（degrade 队尾 @ 不被更早的普通消息挤出批次）', (t) => {
+    const { store } = fixture(t);
+    for (let i = 1; i <= 5; i += 1) append(store, i, `m${i}`);
+    const batch = store.claimUnread('group:1', { fromId: 3 });
+    assert.deepEqual(batch.messages.map((m) => m.mid), ['3', '4', '5']);
+    store.ackLease(batch.id);
+  });
+
   it('somePending 扫描整段未读：排在 peek 窗口之后的 @ 也能找到', (t) => {
     const { store } = fixture(t);
     for (let i = 1; i <= 150; i += 1) append(store, i, `普通消息 ${i}`);

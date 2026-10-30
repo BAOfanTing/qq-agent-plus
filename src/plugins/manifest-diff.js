@@ -113,8 +113,8 @@ export function diffManifests(previous, next, {
 } = {}) {
   const before = permissionProjection(previous);
   const after = permissionProjection(next);
-  const added = { capabilities: [], httpDomains: [], tools: [], approvals: [], secrets: [], schedule: [] };
-  const removed = { capabilities: [], httpDomains: [], tools: [], approvals: [], secrets: [], schedule: [] };
+  const added = { capabilities: [], httpDomains: [], tools: [], approvals: [], secrets: [], schedule: [], quotas: [] };
+  const removed = { capabilities: [], httpDomains: [], tools: [], approvals: [], secrets: [], schedule: [], quotas: [] };
   const changed = {
     tools: [], approvals: [], quotas: [], settings: [], schedule: [], publisher: false, signature: false, apiVersion: false
   };
@@ -134,6 +134,8 @@ export function diffManifests(previous, next, {
 
   const quotaDiff = mapDiff(before.quotas, after.quotas);
   changed.quotas.push(...quotaDiff.modified);
+  // 新增/删除配额同样是权限面变化（例如删掉 write 的每日上限 = 去掉一道刹车）
+  setDiff(Object.keys(before.quotas), Object.keys(after.quotas), 'quotas', added, removed);
 
   const secretKeys = Object.keys(after.settings).filter((key) => after.settings[key].secret);
   const oldSecretKeys = Object.keys(before.settings).filter((key) => before.settings[key].secret);
@@ -158,7 +160,7 @@ export function diffManifests(previous, next, {
     || added.httpDomains.length || removed.httpDomains.length
     || added.tools.length || removed.tools.length || changed.tools.length
     || added.approvals.length || removed.approvals.length || changed.approvals.length
-    || changed.quotas.length
+    || changed.quotas.length || added.quotas.length || removed.quotas.length
     || added.secrets.length || removed.secrets.length
     || added.schedule.length || removed.schedule.length || changed.schedule.length
     || changed.publisher || changed.signature || changed.apiVersion
@@ -179,6 +181,8 @@ export function diffManifests(previous, next, {
   push('新增', added.approvals, '写动作');
   push('移除', removed.approvals, '写动作');
   push('变更', changed.approvals, '写动作');
+  push('新增', added.quotas, '配额');
+  push('移除', removed.quotas, '配额');
   push('变更', changed.quotas, '配额');
   push('新增', added.secrets, '凭据字段');
   push('移除', removed.secrets, '凭据字段');
@@ -199,7 +203,7 @@ export function diffManifests(previous, next, {
       ...(added.httpDomains.length || removed.httpDomains.length ? ['httpDomains'] : []),
       ...(added.tools.length || removed.tools.length || changed.tools.length ? ['tools'] : []),
       ...(added.approvals.length || removed.approvals.length || changed.approvals.length ? ['approvals'] : []),
-      ...(changed.quotas.length ? ['quotas'] : []),
+      ...(added.quotas.length || removed.quotas.length || changed.quotas.length ? ['quotas'] : []),
       ...(added.secrets.length || removed.secrets.length ? ['secrets'] : []),
       ...(added.schedule.length || removed.schedule.length || changed.schedule.length ? ['schedule'] : []),
       ...(changed.publisher || changed.signature ? ['publisher'] : []),

@@ -343,6 +343,17 @@ function afterSent(run) {
   }
 }
 
+/**
+ * 消息归属校验：OneBot 的 message_id 是**全局**的，不校验就能给别的群/私聊的消息贴表情、
+ * 读别人的表情回应（跨会话副作用，提示词注入可达）。测试桩/精简上下文没有 store.findByMid
+ * 时放行（生产工具上下文一定带 store）。
+ */
+function messageInChat(ctx, mid) {
+  const store = ctx?.store;
+  if (!store || typeof store.findByMid !== 'function') return true;
+  return Boolean(store.findByMid(ctx.chatKey, mid));
+}
+
 function sendErr(error, metadata = {}, messageOverride) {
   return err(messageOverride ?? (error?.message ?? error), {
     incidentCaptured: error?.incidentCaptured === true,
@@ -934,8 +945,12 @@ export function buildToolDefs() {
               usage: revisedPrompt ? `提示词修订：${revisedPrompt}`.slice(0, 300) : ''
             });
           } catch (error) {
-            // 只有"没画出来/没落库"才退额度；发送失败时生成已经真实计费，不能退款
-            imageQuota.refund(ctx.chatKey, reservedAt);
+            // 生成已经发出去了（中止/超时/落库失败）就不能退额度：服务商侧可能已完成并计费，
+            // 退款会让每小时 6 张的成本闸门少计，模型看到"失败"重试还会再扣一次。
+            // 只有"请求根本没发出去"的配置/参数错误才退。
+            const maybeBilled = Boolean(buffer) || ctx.signal?.aborted === true
+              || /超时|timeout|abort|cancel|ECONN|ETIMEDOUT|落库|addManual/i.test(String(error?.message ?? error));
+            if (!maybeBilled) imageQuota.refund(ctx.chatKey, reservedAt);
             throw error;
           }
           // 生成即发送：只保存、等模型再调 send_sticker 的旧路径在模型漏掉第二步时
@@ -1044,6 +1059,9 @@ export function buildToolDefs() {
           if (!/^-?\d+$/.test(mid)) return err(`messageId 要是消息 id（收到的是 ${mid}）。${midHint(ctx)}`);
           const emojiId = String(args.emojiId ?? '').trim();
           if (!/^\d+$/.test(emojiId)) return err('emojiId 要是 QQ 系统表情编号（数字），如 14 微笑、128077 👍');
+          // 协议端的 message_id 是全局的：不校验归属的话，被提示词注入引导就能给别的群
+          // 的消息贴表情（跨会话副作用），违反"模型物理上无法操作其它会话"的约束。
+          if (!messageInChat(ctx, mid)) return err('这条消息不在当前会话里，不能贴表情');
           const humanGate = actionGate(ctx, 'react');
           if (!humanGate.ok) return err(humanGate.reason, { reportIncident: false });
           const cfg = getConfig();
@@ -1084,6 +1102,7 @@ export function buildToolDefs() {
         try {
           const mid = normalizeMid(args.messageId);
           if (!/^-?\d+$/.test(mid)) return err('messageId 要是消息 id（聊天记录里那条消息前的 #数字）');
+          if (!messageInChat(ctx, mid)) return err('这条消息不在当前会话里，不能查它的表情回应');
           const res = await ctx.onebot.call('get_msg_emoji_likes', { message_id: Number(mid) }, 15000, ctx.signal);
           const list = Array.isArray(res) ? res : [];
           if (!list.length) return ok({ messageId: mid, reactions: [], note: '这条消息还没有表情回应。' });
@@ -2318,19 +2337,30 @@ export function buildToolDefs() {
         messages = filterBlockedHistory(messages, ctx.chatKey, { crossScope });
         return ok({
           count: messages.length,
-          messages: messages.map((m) => {
-            const cross = sharedContext && String(m.chatKey || '') !== String(ctx.chatKey);
-            const [kind, id] = cross ? String(m.chatKey || '').split(':') : [];
-            const label = !cross ? '' : (kind === 'group' ? `[群 ${id || '?'}]` : `[与 ${id || '另一位好友'}]`);
-            return {
-              // 别的会话的 mid 在当前会话无效，不能给模型拿去引用/看图
-              messageId: cross ? undefined : (m.mid ?? undefined),
-              time: new Date(m.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
-              sender: m.self ? '我' : displayNameOf(m.senderId, m.senderName),
-              // 与【过去状态】同一套渲染：正文缺引用块时补上（回复 + 合并转发卡片那类记录）
-              text: cross ? `${label} ${stripQuoteMessageId(m.text)}` : textWithQuote(m)
-            };
-          })
+          messages: (() => {
+            // 与【过去状态】同口径给单条和总量设上限：合并转发存档单条可达数 KB，
+            // limit=100 时一次能把 200–400KB 塞进下一轮请求（上游 400 / 巨额 token）。
+            let used = 0;
+            const MAX_LINE = 2000;
+            const MAX_TOTAL = 24000;
+            return messages.map((m) => {
+              const cross = sharedContext && String(m.chatKey || '') !== String(ctx.chatKey);
+              const [kind, id] = cross ? String(m.chatKey || '').split(':') : [];
+              const label = !cross ? '' : (kind === 'group' ? `[群 ${id || '?'}]` : `[与 ${id || '另一位好友'}]`);
+              const raw = cross ? `${label} ${stripQuoteMessageId(m.text)}` : textWithQuote(m);
+              const room = Math.max(0, MAX_TOTAL - used);
+              const text = room > 0 ? safeSlice(raw, Math.min(MAX_LINE, room)) : '[…超出本次读取上限，用更小的 limit 或 get_message_detail]';
+              used += text.length;
+              return {
+                // 别的会话的 mid 在当前会话无效，不能给模型拿去引用/看图
+                messageId: cross ? undefined : (m.mid ?? undefined),
+                time: new Date(m.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+                sender: m.self ? '我' : displayNameOf(m.senderId, m.senderName),
+                // 与【过去状态】同一套渲染：正文缺引用块时补上（回复 + 合并转发卡片那类记录）
+                text
+              };
+            });
+          })()
         });
       }
     },

@@ -3723,6 +3723,9 @@ export function createApp({
         tarball: buffer, dataDir: DATA_DIR, hostVersion: PKG.version,
         source: `本地文件：${fileName}`,
         publishers: getConfig().plugins?.publishers || {},
+        // 本地包也可能在升级一个正在跑的插件；权限面变化时与其他安装入口同一道确认门槛。
+        // 调用方可以先不带哈希、拿 409 里的 diff.diffHash 带回来重试。
+        expectedDiffHash: String(body.expectedDiffHash || '').trim(),
         // 同上：本地包也可能是在升级一个正在跑的插件
         beforeReplace: (pluginId) => { replaced = true; return pluginRegistry.stopOne(pluginId); },
         log: moduleLog('plugins')
@@ -3733,6 +3736,11 @@ export function createApp({
     } catch (error) {
       // 换入阶段失败时旧进程已被停掉：按原配置放回去（更早的失败没停过任何进程，不重排）
       if (replaced) await pluginRegistry.reconfigure().catch(() => {});
+      if (['E_UPGRADE_CONFIRM', 'E_UPGRADE_CONFIRM_STALE'].includes(error?.code)) {
+        return json(res, 409, {
+          ok: false, code: error.code, error: error.message, diff: error.diff || null
+        });
+      }
       return pluginError(res, error);
     }
   });
@@ -5044,14 +5052,15 @@ export function createApp({
     return json(res, 200, safe);
   });
   router.add('POST', '/api/config', async (req, res) => {
-    // 审计（#5）：getConfig() 返回引用，patch 应用后会被就地改写 —— 必须先拍快照，
-    // 否则 before 会被写成 after（等于没记；方案附录 J.2）。
-    const auditBefore = structuredClone(getConfig());
     const patch = await readBody(req);
     // readBody 可能很慢（设置页整包可达数 MB），期间别的保存/接口写入可能已经落盘。
     // 快照必须取在读完之后：下面 tts/imageGen/asr 的 keys、voices 都是"服务端维护的映射"，
     // 用旧快照重建会把并发请求刚写进去的 Key 静默抹掉。
     const cfgNow = getConfig();
+    // 审计（#5）：getConfig() 返回引用，patch 应用后会被就地改写 —— 必须先拍快照，
+    // 否则 before 会被写成 after（等于没记；方案附录 J.2）。与合并用同一份快照，
+    // 避免把并发请求的改动算到本次请求头上。
+    const auditBefore = structuredClone(cfgNow);
     // ── 整节替换（{ __replace__: X }）会把"映射由服务端维护"整条绕过：deepMerge 直接换成
     //    客户端对象，我们算好的 keys 被丢掉，客户端于是能把 keys 映射写进配置（2026-10-02
     //    全量审查实测：`{asr:{__replace__:{keys:{'openai|evil…':{apiKey:'ATK'}}}}}` 落盘成功）。
@@ -5098,14 +5107,16 @@ export function createApp({
         const value = out[key];
         if (/^has[A-Z]/.test(key)) {
           const realKey = key.charAt(3).toLowerCase() + key.slice(4);
+          // 大小写不敏感地找服务端真实键名：extraBody 里常见 `Authorization` / `X-Api-Key`，
+          // 脱敏生成 hasAuthorization，反推出来却是小写 authorization —— 直接 hasOwn 匹配不到，
+          // 真值不回填、占位也不删，最后整段 __replace__ 落盘，真实请求头被静默丢掉。
+          const lower = realKey.toLowerCase();
+          const currentKey = Object.keys(cur).find((k) => k.toLowerCase() === lower) || '';
+          const submittedHasReal = Object.keys(out).some((k) => k.toLowerCase() === lower);
           // ⚠️ 提交里同时带了真值（用户在这个框里填了新 Key）时**真值优先**：无条件回填
           // 服务端旧值会把刚填的新 Key 悄悄丢掉（2026-10-04 复审 P2）。
-          // 视图本身不含这些字段（脱敏是整条删除 + hasXxx 标记），所以"提交里有 realKey"
-          // 就等于用户真的填了新值，不存在"回传掩码"的干扰。
-          if (!Object.hasOwn(out, realKey) && Object.hasOwn(cur, realKey)) {
-            out[realKey] = structuredClone(cur[realKey]);
-          }
-          if (Object.hasOwn(cur, realKey)) delete out[key];
+          if (!submittedHasReal && currentKey) out[realKey] = structuredClone(cur[currentKey]);
+          if (currentKey) delete out[key];
           continue;
         }
         if (value && typeof value === 'object' && Object.hasOwn(cur, key)) {
@@ -5936,7 +5947,16 @@ export function createApp({
       return { ok: false, error: '本机没有可用的 systemd-run；请用 SSH 执行 ops 命令' };
     }
     const dataDirAbs = path.resolve(DATA_DIR);
-    const service = process.env.QQ_AGENT_SERVICE || 'qq-agent-linux.service';
+    // 服务名优先取部署元数据：deploy.sh --service <自定义名> 时硬编码的 qq-agent-linux
+    // 会让 ops 判成"服务未加载"，于是备份不停服务（tar 正在写的 SQLite）、恢复在服务运行时
+    // 换数据目录。与环境变量、AutoUpdateManager.deployment() 同一口径。
+    const deploymentService = (() => {
+      try {
+        const meta = JSON.parse(fs.readFileSync(path.join(ROOT, '.deployment.json'), 'utf8'));
+        return String(meta?.service || '').trim();
+      } catch { return ''; }
+    })();
+    const service = process.env.QQ_AGENT_SERVICE || deploymentService || 'qq-agent-linux.service';
     const unit = `qq-agent-${kind}-${Date.now()}`;
     const setenv = (key, value) => `--setenv=${key}=${value}`;
     const args = [

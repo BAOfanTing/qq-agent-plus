@@ -57,6 +57,9 @@ test('diff：新增能力 / 改 actionTarget / 新增 secret / 换发布者都�
   const base = manifest('1.0.0');
   assert.equal(diffManifests(base, manifest('1.1.0', { capabilities: ['tools', 'approval', 'observe'] })).permissionChanged, true);
   assert.equal(diffManifests(base, manifest('1.1.0', { actionTarget: 'bvid' })).permissionChanged, true);
+  const quotaRemoved = { ...manifest('1.1.0'), quotas: {} };
+  assert.equal(diffManifests(base, quotaRemoved).permissionChanged, true,
+    '删除配额（去掉一道刹车）同样是权限面变化');
   assert.equal(diffManifests(base, manifest('1.1.0', { secret: true })).permissionChanged, true);
   const publisher = diffManifests(base, base, { previousPublisher: 'a', nextPublisher: 'b' });
   assert.equal(publisher.permissionChanged, true);

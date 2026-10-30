@@ -143,8 +143,8 @@ test('C1b：猜中炸弹的终局播报失败也不丢局（handleNewMessages �
 test('A3/A4 锚点：排程失败收尾后必须 return；无租约失败路径也要 completeRun', () => {
   const orch = src('src/core/orchestrator.js');
   assert.match(orch, /#abortSchedule\(chatKey, error\);\s*return;/, 'scheduleWake 的 catch 收尾后要 return');
-  assert.equal((orch.match(/completeRun\(session\.leaseId\)/g) || []).length, 2,
-    'completeRun(session.leaseId) 必须在成功与失败两条路径各出现一次');
+  assert.equal((orch.match(/completeRun\(session\.leaseId\)/g) || []).length, 3,
+    'completeRun(session.leaseId)：成功、无租约失败、lifecycle 收尾失败补 ack 三处');
   assert.match(orch, /cfg\.groupGame\?\.enabled !== true && d\.name === 'group_game'/, 'D3：群游戏关掉要摘 group_game 工具');
 });
 

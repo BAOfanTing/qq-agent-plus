@@ -546,7 +546,7 @@ it('模拟群·配额：超出 reactionsPerHour 上限后拒绝，且不再打�
       const ctx = {
         kind: 'group', chatId: '1', chatKey: 'group:1',
         session: { id: 's', sent: [], leaseId: 'l' },
-        onebot: client, store: { findByMid: () => null, recent: () => [] }, emit: () => {}
+        onebot: client, store: { findByMid: () => ({ mid: 77 }), recent: () => [] }, emit: () => {}
       };
       const first = parse(await tool('react_to_message').execute(ctx, { messageId: '77', emojiId: 14 }));
       assert.equal(first.reacted, true);

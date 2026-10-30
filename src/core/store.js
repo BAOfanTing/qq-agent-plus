@@ -381,10 +381,16 @@ export class ChatStore {
       AND state='pending' AND available_at<=?`).get(chatKey, Date.now()).n;
   }
 
-  peekUnread(chatKey, limit = 3) {
+  peekUnread(chatKey, limit = 3, fromId = 0) {
+    const take = Math.max(1, Number(limit) || 3);
+    if (Number(fromId) > 0) {
+      return this.db.prepare(`SELECT * FROM messages WHERE chat_key=? AND self=0
+        AND state='pending' AND available_at<=? AND id>=? ORDER BY id LIMIT ?`)
+        .all(chatKey, Date.now(), Number(fromId), take).map(entry);
+    }
     return this.db.prepare(`SELECT * FROM messages WHERE chat_key=? AND self=0
       AND state='pending' AND available_at<=? ORDER BY id LIMIT ?`)
-      .all(chatKey, Date.now(), Math.max(1, Number(limit) || 3)).map(entry);
+      .all(chatKey, Date.now(), take).map(entry);
   }
 
   /**
@@ -393,7 +399,12 @@ export class ChatStore {
    * 只取判定需要的列，keyset 分页（id 递增），避免 OFFSET 越翻越慢。
    */
   somePending(chatKey, matcher) {
-    if (!matcher || typeof matcher.test !== 'function') return false;
+    return Boolean(this.findPending(chatKey, matcher));
+  }
+
+  /** 与 somePending 同一次扫描，返回命中的那条（带 id，degrade 闸门用它从 @ 处开始领取）。 */
+  findPending(chatKey, matcher) {
+    if (!matcher || typeof matcher.test !== 'function') return null;
     const now = Date.now();
     const stmt = this.db.prepare(`SELECT id, mentions_self, event_kind, target_user_id, reply
       FROM messages WHERE chat_key=? AND self=0 AND state='pending' AND available_at<=? AND id>?
@@ -402,23 +413,25 @@ export class ChatStore {
     // 上限只是防病态积压（几十万条）把 CPU 吃满；正常量级几页就扫完。
     for (let page = 0; page < 40; page += 1) {
       const rows = stmt.all(chatKey, now, lastId);
-      if (!rows.length) return false;
+      if (!rows.length) return null;
       for (const row of rows) {
         let reply = null;
         if (row.reply) { try { reply = JSON.parse(row.reply); } catch { reply = null; } }
-        if (matcher.test({
+        const candidate = {
+          id: Number(row.id),
           mentionsSelf: Boolean(row.mentions_self),
           eventKind: String(row.event_kind || 'message'),
           targetUserId: String(row.target_user_id || ''),
           reply
-        })) return true;
+        };
+        if (matcher.test(candidate)) return candidate;
       }
       const nextId = Number(rows[rows.length - 1].id);
       // id 超出 Number 安全整数时 Number() 会舍入；不前进就停，避免同一页无限循环。
-      if (!Number.isFinite(nextId) || nextId <= lastId) return false;
+      if (!Number.isFinite(nextId) || nextId <= lastId) return null;
       lastId = nextId;
     }
-    return false;
+    return null;
   }
 
   markRead(chatKey, ids) {
@@ -471,10 +484,11 @@ export class ChatStore {
     return Boolean(this.db.prepare("SELECT 1 FROM runs WHERE chat_key=? AND state='leased'").get(chatKey));
   }
 
-  claimUnread(chatKey, { limit = 100, maxChars = 32000, leaseMs = 240000 } = {}) {
+  claimUnread(chatKey, { limit = 100, maxChars = 32000, leaseMs = 240000, fromId = 0 } = {}) {
     return this.#transaction(() => {
       if (this.hasLeasedRun(chatKey)) return null;
-      const pending = this.peekUnread(chatKey, Math.min(100, Math.max(1, limit)));
+      // fromId：degrade 闸门在队尾发现 @ 时，从那条开始领，别让更早的普通消息把 @ 挤出批次。
+      const pending = this.peekUnread(chatKey, Math.min(100, Math.max(1, limit)), fromId);
       const messages = [];
       let chars = 0;
       for (const m of pending) {

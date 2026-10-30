@@ -525,14 +525,18 @@ function assertAllowedHost(url, domains, label = '地址') {
 export async function safeFetch(urlString, { maxBytes = 50000, signal, headers } = {}) {
   const cap = Math.max(1, Math.floor(Number(maxBytes) || 50000));
   let { url, ip } = await validateFetchUrl(urlString);
+  let hopHeaders = headers;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     // signal 用于"整次抓取的总截止时间"：默认的 timeout 是**空闲超时**，对端每隔十几秒吐一个
     // 字节就能把连接一直吊着（慢速攻击面，2026-10-17 审查 P3）
-    const result = await requestOnce(url, ip, { asBinary: false, maxBytes: cap, signal, headers });
+    const result = await requestOnce(url, ip, { asBinary: false, maxBytes: cap, signal, headers: hopHeaders });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
       if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
       const next = new URL(result.redirect, url).toString();
       ({ url, ip } = await validateFetchUrl(next));
+      // 跨跳不携带凭据头（与 safeFetchRequest / safeFetchBinary 同口径）：
+      // 不能让一个 302 把 Authorization/Cookie 带到别的站点，哪怕域名白名单放行了。
+      hopHeaders = stripCredentialHeaders(hopHeaders);
       continue;
     }
     const body = result.body || '';

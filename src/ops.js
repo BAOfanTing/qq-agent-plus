@@ -2702,8 +2702,11 @@ async function cmdPlugins(args) {
   }
 
   if (sub === 'install') {
-    const file = args.filter((a) => !a.startsWith('-'))[1] || '';
-    if (!file) { ngLine('要指定一个包文件：node src/ops.js plugins install <文件.tar.gz>'); return 2; }
+    const diffFlag = args.indexOf('--expect-diff');
+    const expectedDiffHash = diffFlag >= 0 ? String(args[diffFlag + 1] || '').trim() : '';
+    const positional = args.filter((a, i) => !a.startsWith('-') && !(diffFlag >= 0 && i === diffFlag + 1));
+    const file = positional[1] || '';
+    if (!file) { ngLine('要指定一个包文件：node src/ops.js plugins install <文件.tar.gz> [--expect-diff <hash>]'); return 2; }
     const full = path.resolve(file);
     if (!fs.existsSync(full)) { ngLine(`找不到文件：${full}`); return 1; }
     const buffer = fs.readFileSync(full);
@@ -2711,7 +2714,8 @@ async function cmdPlugins(args) {
     try {
       const result = await installPlugin({
         tarball: buffer, dataDir: cfg.dataDir, log: noteLine,
-        source: `本地文件：${path.basename(full)}`, hostVersion: readRepoVersion()
+        source: `本地文件：${path.basename(full)}`, hostVersion: readRepoVersion(),
+        expectedDiffHash
       });
       section('安装完成');
       okLine(`插件 ${result.id} v${result.version}${result.upgraded ? '（升级，旧版已备份）' : ''}`);
@@ -2720,6 +2724,12 @@ async function cmdPlugins(args) {
       noteLine('或者写进配置 plugins.enabledIds（并确保 plugins.enabled 为 true）。');
       return 0;
     } catch (error) {
+      if (error?.code === 'E_UPGRADE_CONFIRM' || error?.code === 'E_UPGRADE_CONFIRM_STALE') {
+        ngLine(`安装失败：${error.message}`);
+        if (error.diff?.summary?.length) noteLine(`权限变化：${error.diff.summary.join('；')}`);
+        noteLine(`确认后重试：node src/ops.js plugins install ${file} --expect-diff ${error.diff?.diffHash || '<diffHash>'}`);
+        return 1;
+      }
       ngLine(`安装失败：${error?.message ?? error}${error?.code ? `（${error.code}）` : ''}`);
       return 1;
     }

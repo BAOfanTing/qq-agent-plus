@@ -270,6 +270,16 @@ function renderBanner() {
 }
 
 function switchTab(name) {
+  // 统一守卫：所有入口（页签点击、待批徽标、实验页跳转）都经过这里，
+  // 不能只挂在 .tab 的 click 上，否则别的入口会静默丢掉未保存的设置。
+  if (state.tab === 'settings' && name !== 'settings' && state.settingsDirty && !state.switchTabBypass) {
+    void askForConfirmation('设置页有未保存的改动，离开后会丢失。确定离开？').then((ok) => {
+      if (!ok) return;
+      state.switchTabBypass = true;
+      try { switchTab(name); } finally { state.switchTabBypass = false; }
+    });
+    return;
+  }
   $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
   state.tab = name;
@@ -1531,13 +1541,7 @@ function modelModalShell({ head, body, foot = '', danger = false }) {
 //    页面永远空白（轮询走的是"只更新数值"路径，骨架从未建立也救不回来）。
 //    两条路径各维护一份必然再次分叉，所以这里只准调 switchTab。
 $$('.tab').forEach((tab) => {
-  tab.addEventListener('click', async () => {
-    const next = tab.dataset.tab;
-    // 离开设置页会丢掉未保存的输入（loadSettings 重读配置并重绘）：先确认一次。
-    if (state.tab === 'settings' && next !== 'settings' && state.settingsDirty
-      && !await askForConfirmation('设置页有未保存的改动，离开后会丢失。确定离开？')) return;
-    switchTab(next);
-  });
+  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
 });
 // 侧栏待批徽标：点它进插件页，并让插件页自动打开第一条待批。
 document.querySelector('[data-pending-badge]')?.addEventListener('click', (event) => {

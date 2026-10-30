@@ -89,7 +89,7 @@ const groupCtx = (client, overrides = {}) => ({
   kind: 'group', chatId: '1', chatKey: 'group:1',
   session: { id: 's', sent: [], leaseId: 'l' },
   onebot: client,
-  store: { findByMid: () => null, recent: () => [] },
+  store: { findByMid: () => ({ mid: 77 }), recent: () => [] },
   emit: () => {},
   ...overrides
 });
