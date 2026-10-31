@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { sanitizeBlacklistKeywordRules } from './keyword-rules.js';
 import { fileURLToPath } from 'node:url';
 import { PERSONAS, normalizeBehaviorProfile, applyPersonaTemplate, applyPersonaPerChatTemplates } from '../personas.js';
 import { idList } from './list.js';
@@ -1409,7 +1410,9 @@ function migrateConfig(parsed) {
   if (out.store !== undefined && !isPlainObject(out.store)) delete out.store;
   if (isPlainObject(out.store)) {
     out.store.keywords = listOf(out.store.keywords);
-    out.store.blacklistKeywords = listOf(out.store.blacklistKeywords);
+    // 手改的 config.json 也要过同一套安全校验：非法/不安全的正则在这里丢弃（fail-closed），
+    // 不能只靠控制台保存路径 —— 这个项目明确支持直接编辑配置文件。
+    out.store.blacklistKeywords = sanitizeBlacklistKeywordRules(listOf(out.store.blacklistKeywords));
   }
   // 人设段必须是对象：手改坏的 config.json 里可能是 "persona": "小鲸鱼" 这类标量或数组，
   // 放它过去会在保存时炸（Cannot create property 'behaviorProfile' on string），

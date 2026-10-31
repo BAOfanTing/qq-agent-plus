@@ -59,6 +59,7 @@ const {
   incomingFriendRequestEnabled,
   incidentPilotEnabled,
   promptFriendProposalEnabled,
+  reloadConfig,
   slangPilotEnabled,
   triggeredFriendProposalEnabled,
   updateConfig
@@ -385,7 +386,9 @@ test('坏形状的 allow/deny/blocklist/providers/customPersonas/store keywords 
     blocklist: { '123': '456' },
     providers: {},
     customPersonas: {},
-    store: { keywords: 'not-an-array', blacklistKeywords: 'also-not-an-array' }
+    // blacklistKeywords 故意不放在这里：它是"显式提交必须是数组"，坏形状会 400（见下方用例）；
+    // 手改文件的坏形状仍由 migrateConfig 清洗成 []。
+    store: { keywords: 'not-an-array' }
   });
   const cfg = getConfig();
   assert.deepEqual(cfg.allow.groups, []);
@@ -411,4 +414,26 @@ test('updateConfig 的校验错误带 httpStatus=400 标记（控制台据此区
     (error) => error.httpStatus === 400 && /Invalid server port/.test(error.message));
   assert.throws(() => updateConfig({ runtime: { mode: 'nope' } }),
     (error) => error.httpStatus === 400 && /Invalid runtime mode/.test(error.message));
+});
+
+test('黑名单规则：保存时非数组直接 400；手改配置加载时丢弃不安全规则', () => {
+  assert.throws(() => updateConfig({ store: { blacklistKeywords: '广告' } }),
+    (error) => error.httpStatus === 400 && /数组/.test(error.message));
+
+  const file = path.join(dir, 'config.json');
+  const original = fs.readFileSync(file, 'utf8');
+  try {
+    const raw = JSON.parse(original);
+    raw.store = {
+      ...(raw.store || {}),
+      blacklistKeywords: ['广告', 're:^a*a*a*b$', 're:^转发.*抽奖$', 're:(a+)+']
+    };
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const cfg = reloadConfig();
+    assert.deepEqual(cfg.store.blacklistKeywords, ['广告', 're:^转发.*抽奖$'],
+      '手改的不安全/非法规则在加载时被丢弃（fail-closed）');
+  } finally {
+    fs.writeFileSync(file, original);
+    reloadConfig();
+  }
 });
