@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { sanitizeBlacklistKeywordRules } from './keyword-rules.js';
+import { sanitizeBlacklistKeywordRulesWithReport } from './keyword-rules.js';
 import { fileURLToPath } from 'node:url';
 import { PERSONAS, normalizeBehaviorProfile, applyPersonaTemplate, applyPersonaPerChatTemplates } from '../personas.js';
 import { idList } from './list.js';
@@ -1350,6 +1350,20 @@ export function normalizePersonaPerChat(raw) {
   return out;
 }
 
+// 丢弃黑名单规则只告警一次（同一份丢弃清单不重复刷屏）：加载与每次保存都会走 migrateConfig。
+let lastBlacklistWarn = '';
+
+function warnDroppedBlacklistRules(dropped, shapeInvalid) {
+  if (!dropped.length && !shapeInvalid) return;
+  const signature = JSON.stringify(dropped) + (shapeInvalid ? '|shape' : '');
+  if (signature === lastBlacklistWarn) return;
+  lastBlacklistWarn = signature;
+  const detail = dropped.slice(0, 3).map((item) => `「${item.rule}」${item.reason}`).join('；');
+  console.warn(`[config] 黑名单规则有 ${dropped.length} 条被忽略`
+    + (shapeInvalid ? '（blacklistKeywords 必须是数组）' : '')
+    + (detail ? `：${detail}` : ''));
+}
+
 function migrateConfig(parsed) {
   // 顶层必须是对象：手改坏的 config.json 可能是 null / 5 / "x" / true（都是合法 JSON）。
   // 放它过去，下面 out.persona = … 那一步就会抛（Cannot create property 'persona' on number '5'），
@@ -1412,7 +1426,11 @@ function migrateConfig(parsed) {
     out.store.keywords = listOf(out.store.keywords);
     // 手改的 config.json 也要过同一套安全校验：非法/不安全的正则在这里丢弃（fail-closed），
     // 不能只靠控制台保存路径 —— 这个项目明确支持直接编辑配置文件。
-    out.store.blacklistKeywords = sanitizeBlacklistKeywordRules(listOf(out.store.blacklistKeywords));
+    // 丢弃时必须告警：否则用户只会看到规则"消失"，下一次保存还会把清洗结果写回磁盘。
+    const rawBlacklist = out.store.blacklistKeywords;
+    const cleaned = sanitizeBlacklistKeywordRulesWithReport(listOf(rawBlacklist));
+    out.store.blacklistKeywords = cleaned.rules;
+    warnDroppedBlacklistRules(cleaned.dropped, rawBlacklist !== undefined && !Array.isArray(rawBlacklist));
   }
   // 人设段必须是对象：手改坏的 config.json 里可能是 "persona": "小鲸鱼" 这类标量或数组，
   // 放它过去会在保存时炸（Cannot create property 'behaviorProfile' on string），
