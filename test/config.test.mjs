@@ -419,6 +419,9 @@ test('updateConfig 的校验错误带 httpStatus=400 标记（控制台据此区
 test('黑名单规则：保存时非数组直接 400；手改配置加载时丢弃不安全规则', () => {
   assert.throws(() => updateConfig({ store: { blacklistKeywords: '广告' } }),
     (error) => error.httpStatus === 400 && /数组/.test(error.message));
+  // 整段替换形状也要校验，不能靠加载期 sanitize 静默兜底
+  assert.throws(() => updateConfig({ store: { __replace__: { blacklistKeywords: ['re:(a+)+'] } } }),
+    (error) => error.httpStatus === 400 && /黑名单规则/.test(error.message));
 
   const file = path.join(dir, 'config.json');
   const original = fs.readFileSync(file, 'utf8');

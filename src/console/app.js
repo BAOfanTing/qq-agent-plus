@@ -1305,6 +1305,13 @@ export function createApp({
       log('[ingest] 合并转发未自动展开（「消息类型」页关着）：占位符已存档，需要时模型可调 read_forward');
     }
 
+    // 合并转发展开后的正文也要过黑名单：上面的前置判定只看到占位符，
+    // 广告写在转发内容里会绕过（2026-10-31 复审 P2）。展开有网络成本，但既然已经
+    // 展开并即将存档/喂模型，这次匹配是必要的；未自动展开的卡片只能看到摘要。
+    if (!isSelf && text && matchesBlacklistKeyword(text, cfgNow.store?.blacklistKeywords)) {
+      log(`[ingest] ${chatKey} 转发展开后的正文命中消息关键词黑名单，已丢弃`);
+      return;
+    }
     if (!text && !media.length) return;
     const message = {
       mid: event.message_id,

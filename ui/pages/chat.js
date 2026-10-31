@@ -541,7 +541,7 @@ return `
       </div>
       <div class="keyword-blacklist-param">
         <label>消息关键词黑名单</label>
-        <div class="hint">每行一个，普通文字不区分大小写。以 <code>re:</code> 开头可使用受限正则，如 <code>re:^转发.*抽奖$</code>。命中后消息会在入口直接丢弃，黑名单优先于白名单。</div>
+        <div class="hint">每行一个，普通文字不区分大小写。以 <code>re:</code> 开头可使用受限正则，如 <code>re:^转发.*抽奖$</code>；<code>re:</code> 只匹配消息前 2000 字，变长量词有组合上限（如 <code>a?</code> 最多 7 个）。命中后消息会在入口直接丢弃，黑名单优先于白名单。</div>
         <textarea id="cfg-blacklist-keywords" rows="3" placeholder="广告关键词&#10;re:^转发.*抽奖$">${esc((st.blacklistKeywords || []).join('\n'))}</textarea>
       </div>
       <div class="tier-param${paramOn.random ? '' : ' dim'}">

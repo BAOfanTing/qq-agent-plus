@@ -25,6 +25,9 @@ test('re: 前缀：锚定/字符类/单个量词可用', () => {
   assert.equal(matchesBlacklistKeyword('价格 123 元', ['re:^\\D+\\d+\\D+$']), false, '两个不限量词要拒绝');
   assert.equal(matchesBlacklistKeyword('aaaa', ['re:^a{1,10}$']), true);
   assert.equal(validateBlacklistKeywordRules(['re:^转发.*抽奖$']), '');
+  // 少量选择点是允许的：`a?` 两个 = 4 种组合；单个 {0,199} = 200 种
+  assert.equal(validateBlacklistKeywordRules(['re:^a?b?c$']), '');
+  assert.equal(validateBlacklistKeywordRules(['re:^a{0,199}$']), '');
 });
 
 test('不安全的正则：顺序量词/嵌套重复/超大重复/断言/反向引用全部拒绝', () => {
@@ -36,15 +39,23 @@ test('不安全的正则：顺序量词/嵌套重复/超大重复/断言/反向�
   assert.match(validateBlacklistKeywordRules(['re:(?=广告)广告']), /不支持/);
   assert.match(validateBlacklistKeywordRules(['re:(a)\\1']), /不支持/);
   assert.match(validateBlacklistKeywordRules(['re:^a{1,100000}$']), /上下界/);
+  // 顺序量词的变体：多个 {0,n}、一串 a? —— 选择点按乘积预算拒绝（2026-10-31 复审 P1）
+  assert.match(validateBlacklistKeywordRules(['re:^a{0,1000}a{0,1000}a{0,1000}b$']), /变长量词组合/);
+  assert.match(validateBlacklistKeywordRules(['re:^a{0,100}a{0,100}a{0,100}b$']), /变长量词组合/);
+  assert.match(validateBlacklistKeywordRules([`re:^${'a?'.repeat(40)}b$`]), /变长量词组合/);
   assert.match(validateBlacklistKeywordRules(['re:(']), /无效/);
   assert.match(validateBlacklistKeywordRules(['re:']), /不能为空/);
 });
 
 test('防御性：即使把不安全规则直接喂给匹配函数，也会被跳过且不卡住', () => {
-  const rule = 're:^a*a*a*a*a*a*a*a*a*a*b$';
+  const rules = [
+    're:^a*a*a*a*a*a*a*a*a*a*b$',
+    're:^a{0,1000}a{0,1000}a{0,1000}b$',
+    `re:^${'a?'.repeat(40)}b$`
+  ];
   const text = 'a'.repeat(3000);
   const started = Date.now();
-  assert.equal(matchesBlacklistKeyword(text, [rule]), false);
+  for (const rule of rules) assert.equal(matchesBlacklistKeyword(text, [rule]), false);
   assert.ok(Date.now() - started < 200, '不安全规则不能在匹配路径上被编译执行');
 });
 

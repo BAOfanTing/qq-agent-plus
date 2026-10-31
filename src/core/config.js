@@ -303,11 +303,17 @@ export function updateConfig(patch, options = {}) {
   const rawPatch = structuredClone(
     patch && typeof patch === 'object' ? patch : {}
   );
-  if (rawPatch?.store && Object.hasOwn(rawPatch.store, 'blacklistKeywords')) {
-    if (!Array.isArray(rawPatch.store.blacklistKeywords)) {
+  // 控制台的整段替换用 { __replace__: {...} } 表达：校验要看替换后的内容，
+  // 否则脚本/第三方客户端可以绕过 400（随后被加载期 sanitize 静默丢弃）。
+  const storePatch = rawPatch?.store && typeof rawPatch.store === 'object'
+    && Object.hasOwn(rawPatch.store, '__replace__')
+    ? rawPatch.store.__replace__
+    : rawPatch?.store;
+  if (storePatch && typeof storePatch === 'object' && Object.hasOwn(storePatch, 'blacklistKeywords')) {
+    if (!Array.isArray(storePatch.blacklistKeywords)) {
       throw Object.assign(new Error('消息关键词黑名单必须是数组'), { httpStatus: 400 });
     }
-    const error = validateBlacklistKeywordRules(rawPatch.store.blacklistKeywords);
+    const error = validateBlacklistKeywordRules(storePatch.blacklistKeywords);
     if (error) throw Object.assign(new Error(error), { httpStatus: 400 });
   }
   const requestedAdmin = normalizedRequestedAdmin(rawPatch, current);
