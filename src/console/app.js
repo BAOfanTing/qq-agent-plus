@@ -45,6 +45,7 @@ import { searchPresets } from '../mcp/presets.js';
 import { knowledgeEnabled, knowledgeStats, listKnowledgeFiles, writeKnowledgeFile, deleteKnowledgeFile, reindexKnowledge } from '../knowledge/store.js';
 import { listMemes, rememberMeme, deleteMeme, memeStats } from '../memes/store.js';
 import { listModels, chatCompletion, resolveApiKey, cachedTokensOfUsage, llmRuntimeStats, addUsage, emptyUsage } from '../llm/llm.js';
+import { matchesBlacklistKeyword } from '../core/keyword-rules.js';
 import { synthesizeSpeech } from '../llm/tts.js';
 import { generateImage, imageGenEffectiveHost, imageGenKeyStale, resolveImageGenAuth } from '../llm/image-gen.js';
 import { imageType } from '../core/image-type.js';
@@ -1263,6 +1264,11 @@ export function createApp({
       // 协议端以字符串 / CQ 码上报时（message_format=string）正文也要清洗：
       // 否则这种部署形态下群友文本可以原样伪造段标记
       text = sanitizeUserText(String(event.raw_message ?? event.message ?? '').trim());
+    }
+
+    if (!isSelf && matchesBlacklistKeyword(text, cfgNow.store?.blacklistKeywords)) {
+      log(`[ingest] ${chatKey} 命中消息关键词黑名单，已丢弃`);
+      return;
     }
 
     // 合并转发：占位符 → 展开真实内容（模型要读懂、看懂转发的聊天记录）

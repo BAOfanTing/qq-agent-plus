@@ -17,6 +17,7 @@ import {
   stableFeatureFingerprint,
   suspendLegacyExperimentalGates
 } from './stable-feature-policy.js';
+import { validateBlacklistKeywordRules } from './keyword-rules.js';
 
 export * from './config-legacy.js';
 
@@ -302,6 +303,13 @@ export function updateConfig(patch, options = {}) {
   const rawPatch = structuredClone(
     patch && typeof patch === 'object' ? patch : {}
   );
+  if (rawPatch?.store && Object.hasOwn(rawPatch.store, 'blacklistKeywords')) {
+    if (!Array.isArray(rawPatch.store.blacklistKeywords)) {
+      throw Object.assign(new Error('消息关键词黑名单必须是数组'), { httpStatus: 400 });
+    }
+    const error = validateBlacklistKeywordRules(rawPatch.store.blacklistKeywords);
+    if (error) throw Object.assign(new Error(error), { httpStatus: 400 });
+  }
   const requestedAdmin = normalizedRequestedAdmin(rawPatch, current);
   const autoUpdateEnabled = hasOwn(rawPatch?.autoUpdate, 'enabled')
     ? rawPatch.autoUpdate.enabled === true
