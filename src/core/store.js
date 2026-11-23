@@ -137,8 +137,6 @@ export class ChatStore {
       CREATE INDEX IF NOT EXISTS outbox_chat_state ON outbox(chat_key, state);
       -- held 自动释放按 run_id 查这批外发是否已终结；没有它每个 held 批次都扫全表。
       CREATE INDEX IF NOT EXISTS outbox_run_state ON outbox(run_id, state);
-      -- 全局 state 统计/年龄查询用；outbox_chat_state 以 chat_key 开头用不上。
-      CREATE INDEX IF NOT EXISTS outbox_state_created ON outbox(state, created_at);
       CREATE TABLE IF NOT EXISTS conversation_threads (
         chat_key TEXT PRIMARY KEY, thread_id TEXT NOT NULL,
         mode TEXT NOT NULL DEFAULT 'threaded', state TEXT NOT NULL,
@@ -207,6 +205,8 @@ export class ChatStore {
     ensureColumn(this.db, 'messages', 'release_state', "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.db, 'messages', 'deferred_at', 'INTEGER NOT NULL DEFAULT 0');
     ensureColumn(this.db, 'outbox', 'created_at', 'INTEGER NOT NULL DEFAULT 0');
+    this.db.exec(`CREATE INDEX IF NOT EXISTS outbox_state_created
+      ON outbox(state, created_at)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS messages_deferred
       ON messages(deferred_at) WHERE state='deferred'`);
     // /api/metrics 的 queueStats 按 state 聚合、取 MIN(ts/deferred_at)；默认保留期 0 时
