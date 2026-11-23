@@ -51,9 +51,9 @@ test('ttsKeyFor 只认自有属性：service=constructor 不会把函数源码�
   assert.equal(ttsKeyFor({ ...cfg, keys: { minimax: 'MM-KEY' } }, 'minimax'), 'MM-KEY', '自有键照常读到');
 });
 
-test('预设表：七家齐全，火山 v1 / 豆包 2.0 / MiniMax / MiMo 标记了 provider 与凭据需求', () => {
+test('预设表：八家齐全，火山 v1 / 豆包 2.0 / MiniMax / MiMo / Breeze 标记了 provider 与凭据需求', () => {
   const ids = TTS_SERVICES.map((s) => s.id);
-  assert.deepEqual(ids, ['siliconflow', 'openai', 'volc', 'doubao', 'minimax', 'mimo', 'custom']);
+  assert.deepEqual(ids, ['siliconflow', 'openai', 'volc', 'doubao', 'minimax', 'mimo', 'breeze', 'custom']);
   assert.equal(ttsServiceById('volc').provider, 'volc');
   assert.deepEqual(ttsServiceById('volc').creds, ['appId', 'key']);
   assert.equal(ttsServiceById('doubao').provider, 'doubao');
@@ -63,6 +63,9 @@ test('预设表：七家齐全，火山 v1 / 豆包 2.0 / MiniMax / MiMo 标记�
   assert.equal(ttsServiceById('mimo').provider, 'mimo');
   assert.deepEqual(ttsServiceById('mimo').creds, ['key']);
   assert.ok(ttsVoicesFor('mimo', 'mimo-v2.5-tts').includes('Chloe'));
+  assert.equal(ttsServiceById('breeze').provider, 'breeze');
+  assert.deepEqual(ttsServiceById('breeze').creds, ['key']);
+  assert.ok(ttsVoicesFor('breeze', 'breeze-tts-2').includes('voc_8yud7hz7c9q2'));
   assert.ok(ttsVoicesFor('siliconflow', 'FunAudioLLM/CosyVoice2-0.5B').includes('anna'));
   assert.ok(ttsServiceById('volc').voicesFlat.includes('BV001_streaming'));
   assert.ok(ttsVoicesFor('minimax', 'speech-01-turbo').includes('female-shaonv'));

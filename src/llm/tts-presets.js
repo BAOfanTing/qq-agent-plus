@@ -227,6 +227,31 @@ export const TTS_SERVICES = [
       + '音色是内置候选，实际可用与否看账号开通情况；报错会带 HTTP 状态与上游原因。'
   },
   {
+    id: 'breeze',
+    label: 'Breeze 语音（BreezeBlue，拟真情感与音色）',
+    provider: 'breeze',
+    creds: ['key'],
+    baseUrl: 'https://api.breeze.blue',
+    hosts: ['api.breeze.blue'],
+    keyUrl: 'https://breezeblue.ai',
+    models: [
+      {
+        id: 'breeze-tts-2',
+        voices: [
+          { id: 'voc_8yud7hz7c9q2', label: '默认音色 (voc_8yud7hz7c9q2)', cat: 'Breeze' }
+        ]
+      },
+      {
+        id: 'breeze-tts',
+        voices: []
+      }
+    ],
+    voicesFlat: [
+      { id: 'voc_8yud7hz7c9q2', label: '默认音色 (voc_8yud7hz7c9q2)', cat: 'Breeze' }
+    ],
+    note: 'Breeze（BreezeBlue）语音合成：填 API Key（brz_ 开头）与音色 ID（voc_ 开头，可去 breezeblue.ai 音色库复制）。云端模式直接走官方接口；音色列表可点击「获取模型列表」直接从账号拉取。'
+  },
+  {
     id: 'custom',
     label: '自定义 / 自建（OpenAI 兼容 /audio/speech）',
     provider: 'openai',

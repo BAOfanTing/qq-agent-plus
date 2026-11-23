@@ -436,6 +436,11 @@ async function bindTtsControls() {
       const mimo = services.find((x) => x.id === 'mimo');
       if (mimo) return mimo;
     }
+    if (prov === 'breeze') {
+      // Breeze 也有内置官方地址
+      const breeze = services.find((x) => x.id === 'breeze');
+      if (breeze) return breeze;
+    }
     if (prov === 'openai' || prov === 'custom') {
       const custom = services.find((x) => x.id === 'custom');
       if (custom) return custom;
@@ -544,6 +549,17 @@ async function bindTtsControls() {
         + '模型用 mimo-v2.5-tts，音色先在控制台确认已开通；服务地址填到 /v1 即可。';
       keyHint.style.display = '';
     }
+    if (keyLabel && prov === 'breeze') {
+      keyLabel.textContent = 'API Key（Breeze brz_...；按供应商分别保存，留空/掩码 = 保持不变）';
+    }
+    if (keyHint && prov === 'breeze') {
+      const link = service?.keyUrl
+        ? `（<a href="${esc(service.keyUrl)}" target="_blank" rel="noreferrer">打开 Breeze 控制台</a>）`
+        : '';
+      keyHint.innerHTML = `填 BreezeBlue 的 API Key ${link}（请求头是 <code>xi-api-key</code>，以 <code>brz_</code> 开头）。`
+        + '音色请填控制台音色库里的音色 ID（以 <code>voc_</code> 开头），也可点上面的「获取模型列表」直接拉取。';
+      keyHint.style.display = '';
+    }
     // 模型栏：这一家不要模型名就整栏藏掉（火山 v1 / 豆包）；「自定义/自建」虽然 models 为空
     // 但**必须填模型名**（note 里写了），也保留；有内置模型但不支持拉取的（MiniMax）
     // 留输入框 + 内置候选，只把「获取模型列表」按钮藏掉
@@ -551,7 +567,7 @@ async function bindTtsControls() {
     const needsModelField = (service?.models || []).length > 0 || service?.id === 'custom';
     if (modelField) modelField.style.display = needsModelField ? '' : 'none';
     const fetchBtnEl = q('#tts-fetch-models-btn');
-    if (fetchBtnEl) fetchBtnEl.style.display = prov === 'openai' && service?.id !== 'custom' ? '' : 'none';
+    if (fetchBtnEl) fetchBtnEl.style.display = (prov === 'openai' || prov === 'breeze') && service?.id !== 'custom' ? '' : 'none';
   };
   // 实时校验火山的三个框：把"填错位置"当场指出来（用户实测就把资源 ID 填进了 AppID、音色填进了 Cluster）
   const validateVolcFields = () => {
@@ -706,8 +722,16 @@ async function bindTtsControls() {
         return;
       }
       fillModelPick(r.models || []);
+      if (Array.isArray(r.voices) && r.voices.length) {
+        const curSvc = currentService();
+        if (curSvc) {
+          curSvc.voicesFlat = r.voices;
+          fillVoicePick(curSvc, String(modelInput?.value || '').trim());
+          if (voicePick) voicePick.style.display = '';
+        }
+      }
       if (modelsHint) {
-        modelsHint.textContent = `共 ${r.models.length} 个${r.ttsOnly ? '（已按语音合成过滤）' : '（没认出语音模型，给的是全量）'}，选一个填进上面的输入框`;
+        modelsHint.textContent = r.note || `共 ${r.models.length} 个${r.ttsOnly ? '（已按语音合成过滤）' : '（没认出语音模型，给的是全量）'}，选一个填进上面的输入框`;
       }
     } catch (e) { if (modelsHint) modelsHint.textContent = `失败：${e.message}`; }
   });

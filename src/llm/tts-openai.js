@@ -11,8 +11,8 @@ export function ttsConfigured(cfg) {
   if (t.enabled !== true) return false;
   const provider = (ttsServiceOfBaseUrl(t.baseUrl)?.provider || String(t.provider || 'openai'))
     .trim().toLowerCase();
-  // MiMo 有内置官方地址：只填 provider/Key 也能用，不强制再抄一遍地址。
-  const hasBase = String(t.baseUrl || '').trim() !== '' || provider === 'mimo';
+  // MiMo 与 Breeze 有内置官方地址：只填 provider/Key 也能用，不强制再抄一遍地址。
+  const hasBase = String(t.baseUrl || '').trim() !== '' || provider === 'mimo' || provider === 'breeze';
   if (!hasBase) return false;
   // 只教"必然能跑"的工具：各 provider 必需的模型/音色/AppID 缺一个就不注入。
   if (provider === 'openai' || provider === 'custom') return Boolean(String(t.model || '').trim());
@@ -20,6 +20,7 @@ export function ttsConfigured(cfg) {
     return Boolean(String(t.appId || '').trim() && String(t.voice || '').trim());
   }
   if (provider === 'doubao' || provider === 'minimax') return Boolean(String(t.voice || '').trim());
+  if (provider === 'breeze') return Boolean(String(t.voice || t.voiceId || '').trim());
   if (provider === 'mimo') return true;
   return Boolean(String(t.model || '').trim() || String(t.voice || '').trim());
 }

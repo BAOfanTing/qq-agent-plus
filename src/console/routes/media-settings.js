@@ -2,6 +2,7 @@
 // （从 console/app.js 拆出，2026-10-31 结构整治 M3）。
 // 明文 Key 端点沿用 keyEndpointAllowed：只允许本机控制台或带令牌的请求。
 import { synthesizeSpeech } from '../../llm/tts.js';
+import { breezeVoices } from '../../llm/tts-breeze.js';
 import { generateImage, imageGenEffectiveHost, resolveImageGenAuth } from '../../llm/image-gen.js';
 import { TTS_SERVICES, ttsServiceOfBaseUrl, ttsKeyFor } from '../../llm/tts-presets.js';
 import { IMAGEGEN_SERVICES } from '../../llm/image-gen-presets.js';
@@ -32,6 +33,32 @@ export function registerMediaSettingsRoutes(router, deps = {}) {
     try {
       const body = await readBody(req);
       const provider = String(body.provider || cfgNow.tts?.provider || 'openai').trim().toLowerCase();
+      if (provider === 'breeze') {
+        const baseUrl = String(body.baseUrl || cfgNow.tts?.baseUrl || '').trim();
+        const submitted = String(body.apiKey ?? '').trim();
+        const norm = (v) => String(v || '').trim().replace(/[/]+$/, '').toLowerCase();
+        const apiKey = (submitted && submitted !== '******')
+          ? submitted
+          : (norm(baseUrl) === norm(cfgNow.tts?.baseUrl) ? ttsKeyFor(cfgNow.tts) : '');
+        const r = await breezeVoices({ baseUrl, apiKey });
+        if (r.ok && Array.isArray(r.voices) && r.voices.length) {
+          return json(res, 200, {
+            ok: true,
+            models: ['breeze-tts-2', 'breeze-tts'],
+            voices: r.voices,
+            ttsOnly: true,
+            total: r.voices.length,
+            note: `已拉取到 ${r.voices.length} 个音色，默认模型 breeze-tts-2。`
+          });
+        }
+        return json(res, 200, {
+          ok: true,
+          models: ['breeze-tts-2', 'breeze-tts'],
+          ttsOnly: true,
+          total: 2,
+          note: r.message ? `拉取音色提示：${r.message}（可手填 voc_ 开头的音色 ID）` : '默认模型 breeze-tts-2，音色填 voc_ 开头的音色 ID。'
+        });
+      }
       if (provider !== 'openai') {
         // 火山（v1/v3）与 MiniMax 没有"列模型"的公开接口：模型名/音色按服务商文档内置。
         // 这里如实说明该填什么，而不是回空列表让界面显示"共 0 个"（2026-09-28 用户实测反馈）。

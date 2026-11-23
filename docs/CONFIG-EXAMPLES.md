@@ -603,7 +603,7 @@ URL 里不能内嵌 `user:pass@`（safe-fetch 一律拒绝凭据），需要鉴�
 
 - `maxPerHour` / `maxPerHourPerChat`：语音合成的全局/每会话每小时硬闸门（默认 30 / 6）。
   合成发生在发送限频之前，超限直接拒绝，不会先扣服务商额度。
-- **五种适配器**（按 `provider` 分发，`src/llm/tts.js`）：
+- **六种适配器**（按 `provider` 分发，`src/llm/tts.js`）：
   `openai`（兼容 `POST {baseUrl}/audio/speech`，硅基流动/OpenAI/自建，**已实测**）、
   `volc`（火山引擎语音合成 **v1** HTTP，需要数字 `appId` + `apiKey`=Access Token，`cluster` 默认 `volcano_tts`、
   复刻音色自动切 `volcano_icl`（见下文「火山的两套凭据不一样，别混」），
@@ -613,7 +613,8 @@ URL 里不能内嵌 `user:pass@`（safe-fetch 一律拒绝凭据），需要鉴�
   **2026-09-28 用真实账号实测**：音频/语速/音量/格式/错误码都核过，自然度明显高于 v1 与硅基流动）、
   `minimax`（T2A v2，需要 `apiKey` + `groupId`，音色如 `female-shaonv`，音频是 hex 编码、适配器已处理）、
   `mimo`（小米 MiMo token-plan，走 `POST {baseUrl}/chat/completions`，Key 放 `api-key` 头；
-  支持「导演指令」和 `send_voice` 的 `emotion` 参数，**2026-10-25 用 token-plan 账号实测**：有导演指令时停顿/语气明显更自然）。
+  支持「导演指令」和 `send_voice` 的 `emotion` 参数，**2026-10-25 用 token-plan 账号实测**：有导演指令时停顿/语气明显更自然）、
+  `breeze`（Breeze 语音，走 `POST {baseUrl}/v1/text-to-speech/{voiceId}`，Key 放 `xi-api-key` 头，音色如 `voc_8yud7hz7c9q2`；亦支持本地自建 `breeze_infer` 的 multipart 模式）。
   volc / minimax 按官方文档实现但机器上没凭据、未实测：填好凭据点控制台「试听」即可验证，报错会把人话原因（含火山错误码含义）带出来。
 
 豆包 2.0 的写法（当前最推荐的音质）：
@@ -655,6 +656,26 @@ MiMo 的写法（想要语气、又不想上 GPU 时最省事）：
   服务端会把情绪追加成一行「【情绪】…」再发给 MiMo。没有情绪时最少也会带一句「群聊口语、不要播音腔」的默认指导。
 - `voice` 内置候选有 `mimo_default` / 冰糖 / 茉莉 / 苏打 / 白桦 / Mia / Chloe / Milo / Dean；实测 Chloe 偏清亮，最接近「小鲸鱼」那类形象。
   音色是否可用看账号开通情况，报错会带 HTTP 状态与上游原因。
+
+Breeze 的写法（拟真情感与音色）：
+
+```json
+{
+  "tts": {
+    "enabled": true,
+    "provider": "breeze",
+    "baseUrl": "https://api.breeze.blue",
+    "keys": { "breeze": "<Breeze brz_... API Key>" },
+    "model": "breeze-tts-2",
+    "voice": "voc_8yud7hz7c9q2",
+    "format": "mp3_24000_128"
+  }
+}
+```
+
+- Breeze 的 Key 走 `xi-api-key` 请求头（以 `brz_` 开头）；音色填音色库中的音色 ID（以 `voc_` 开头）。
+- 控制台在选择 Breeze 服务预设后，可点「获取模型列表」直接从 Breeze 官方拉取账号可用音色。
+- 本地自建模式下设 `mode: "local"`，将向 `/v1/audio/speech` 发起 multipart 表单请求。
 - 这不是 RVC/Seed-VC：它能把**说话**的语气做出来，但不能把真人歌声换成另一个声线，也别拿它复刻未授权的第三方声音。
 - **合成失败会自动回落成文字**：`send_voice` 发不出语音时改发同一段文字（返回里带 `fallback: "text"` 与原因），不会让这轮回复消失。
 - 与 `asr` 对称但**默认关**。
