@@ -2,7 +2,13 @@
 // （从 console/app.js 拆出，2026-10-31 结构整治 M3）。
 // 明文 Key 端点沿用 keyEndpointAllowed：只允许本机控制台或带令牌的请求。
 import { synthesizeSpeech } from '../../llm/tts.js';
-import { breezeVoices } from '../../llm/tts-breeze.js';
+import {
+  breezeVoices,
+  breezeBalance,
+  breezeClaimSaved,
+  breezeAccountView,
+  saveBreezeAccount
+} from '../../llm/tts-breeze.js';
 import { generateImage, imageGenEffectiveHost, resolveImageGenAuth } from '../../llm/image-gen.js';
 import { TTS_SERVICES, ttsServiceOfBaseUrl, ttsKeyFor } from '../../llm/tts-presets.js';
 import { IMAGEGEN_SERVICES } from '../../llm/image-gen-presets.js';
@@ -104,6 +110,41 @@ export function registerMediaSettingsRoutes(router, deps = {}) {
       if (cfgNow.tts?.enabled !== true) return json(res, 400, { ok: false, error: '语音回复未启用（勾上并保存后再试听）' });
       const { buffer, format } = await synthesizeSpeech({ cfg: cfgNow.tts, text });
       return json(res, 200, { ok: true, format, audio: buffer.toString('base64') });
+    } catch (error) {
+      return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+
+  // ── Breeze 云端账号：余额 / 登录 / 每日领取额度 ─────────────────────────
+  // 账号（邮箱/密码）与领额度会话单独存 data/breeze-account.json（不塞进 config，
+  // 避免密钥脱敏与配置回传的一堆坑）；这里只暴露"有没有密码"，不回显明文。
+  router.add('GET', '/api/tts/breeze/status', async (req, res) => {
+    const cfgNow = getConfig();
+    const apiKey = ttsKeyFor(cfgNow.tts);
+    const bal = await breezeBalance({ baseUrl: cfgNow.tts?.baseUrl, apiKey });
+    return json(res, 200, { ok: true, balance: bal.balance, balanceNote: bal.note, account: breezeAccountView() });
+  });
+  router.add('POST', '/api/tts/breeze/account', async (req, res) => {
+    try {
+      const body = await readBody(req);
+      const view = saveBreezeAccount({
+        email: body.email,
+        password: body.password,
+        autoClaim: body.autoClaim
+      });
+      return json(res, 200, { ok: true, account: view });
+    } catch (error) {
+      return json(res, 400, { ok: false, error: String(error?.message ?? error) });
+    }
+  });
+  router.add('POST', '/api/tts/breeze/claim', async (req, res) => {
+    try {
+      const view = breezeAccountView();
+      if (!view.email || !view.hasPassword) {
+        return json(res, 400, { ok: false, error: '还没填 Breeze 账号邮箱/密码（填好并保存后再领）' });
+      }
+      const r = await breezeClaimSaved();
+      return json(res, 200, { ok: true, ...r, account: breezeAccountView() });
     } catch (error) {
       return json(res, 400, { ok: false, error: String(error?.message ?? error) });
     }

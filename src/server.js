@@ -8,6 +8,7 @@ import { DATA_DIR } from './core/config.js';
 import { assertSqliteAvailable } from './core/sqlite.js';
 import { createLogger } from './core/logger.js';
 import { createDailyRetentionScheduler } from './core/ledger-retention.js';
+import { autoClaimOnce } from './llm/tts-breeze.js';
 import { isContainerRuntime } from './core/runtime.js';
 
 const log = createLogger('server');
@@ -16,6 +17,8 @@ let app = null;
 // 台账保留期清理的每日调度（见 core/ledger-retention.js）。
 // 三个台账的保留期 DELETE 原来只在各自构造函数里跑一次 —— 常驻不重启等于不执行。
 let retentionScheduler = null;
+// Breeze 每日领额度：每小时醒一次，模块内部按 20 小时闸门判要不要真领（幂等）。
+let breezeClaimTimer = null;
 process.on('unhandledRejection', (error) => {
   app?.captureIncident(error, {
     source: 'process',
@@ -109,6 +112,14 @@ app.start().then(() => {
     log
   });
   retentionScheduler.start();
+  // Breeze 每日免费额度：启动 1 分钟后先试一次，之后每小时一次；未配置账号时静默跳过。
+  const breezeTick = () => autoClaimOnce({ log }).catch((error) => {
+    log.warn('[Breeze] 自动领取额度异常:', error?.message ?? error);
+  });
+  const breezeKickoff = setTimeout(breezeTick, 60_000);
+  breezeKickoff.unref?.();
+  breezeClaimTimer = setInterval(breezeTick, 3600_000);
+  breezeClaimTimer.unref?.();
 }).catch((error) => {
   log.error('[启动失败]', error);
   process.exit(1);
@@ -119,6 +130,7 @@ async function shutdown() {
   if (stopping) return;
   stopping = true;
   retentionScheduler?.stop();
+  if (breezeClaimTimer) { clearInterval(breezeClaimTimer); breezeClaimTimer = null; }
   const deadline = setTimeout(() => process.exit(1), 25000);
   deadline.unref();
   try { await app.stop(); process.exit(0); }

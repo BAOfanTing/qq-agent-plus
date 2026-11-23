@@ -243,6 +243,26 @@ function renderAsrSection(c) {
         <button class="btn btn-small" id="tts-reveal-key-btn" type="button">显示</button>
       </div>
       <div class="hint" id="tts-key-hint"></div></div>
+    <div id="tts-breeze-account" style="display:none">
+      <div class="hint" style="margin-bottom:6px">
+        Breeze 账号（可选）：填邮箱/密码后可以每天自动领一次免费额度。
+        密码加密保存在服务器本地，不回显；留空 = 保持不变。
+        <strong>余额：</strong><span id="tts-breeze-balance">查询中…</span>
+        <button class="btn btn-small" id="tts-breeze-refresh" type="button" style="margin-left:8px">刷新余额</button>
+      </div>
+      <div class="field-row">
+        <div class="field"><label for="cfg-breeze-email">Breeze 账号邮箱</label>
+          <input type="text" id="cfg-breeze-email" autocomplete="off" placeholder="注册 breezeblue.ai 用的邮箱" /></div>
+        <div class="field"><label for="cfg-breeze-password">Breeze 账号密码</label>
+          <input type="password" id="cfg-breeze-password" autocomplete="new-password" placeholder="留空 = 保持不变" /></div>
+      </div>
+      <div class="checkbox-row"><input type="checkbox" id="cfg-breeze-autoclaim" checked />
+        <label for="cfg-breeze-autoclaim">每天自动领一次免费额度</label></div>
+      <div class="hint">保存账号后点「领取今日积分」可立即领一次；<span id="tts-breeze-msg" class="muted"></span>
+        <button class="btn btn-small" id="tts-breeze-save" type="button" style="margin-left:8px">保存账号</button>
+        <button class="btn btn-small" id="tts-breeze-claim" type="button" style="margin-left:8px">领取今日积分</button>
+      </div>
+    </div>
     <div class="field-row">
       <div class="field"><label for="cfg-tts-speed">语速（0.25~4，1=原速）</label>
         <input type="number" id="cfg-tts-speed" min="0.25" max="4" step="0.05" value="${esc(c.tts?.speed ?? 1)}" /></div>
@@ -402,6 +422,29 @@ async function bindTtsControls() {
   const voicePick = q('#cfg-tts-voice-pick');
   const presetHint = q('#tts-preset-hint');
   const voiceHint = q('#tts-voice-hint');
+
+  /** 刷新 Breeze 云端余额与账号信息（只在该服务预设下调用）。 */
+  async function refreshBreezeStatus() {
+    const balNode = q('#tts-breeze-balance');
+    if (balNode) balNode.textContent = '查询中…';
+    try {
+      const r = await api('/api/tts/breeze/status');
+      if (!r?.ok) { if (balNode) balNode.textContent = r?.error || '查询失败'; return; }
+      if (balNode) {
+        balNode.textContent = Number.isFinite(r.balance) ? `${r.balance}` : (r.balanceNote || '未知');
+      }
+      const a = r.account || {};
+      const emailNode = q('#cfg-breeze-email');
+      if (emailNode && !emailNode.value.trim() && a.email) emailNode.value = a.email;
+      const sw = q('#cfg-breeze-autoclaim');
+      if (sw) sw.checked = a.autoClaim !== false;
+      const pwNode = q('#cfg-breeze-password');
+      if (pwNode) pwNode.placeholder = a.hasPassword ? '留空 = 保持不变' : '还没设置';
+    } catch (e) {
+      if (balNode) balNode.textContent = `查询失败：${e.message}`;
+    }
+  }
+
   const hostOf = (u) => { try { return new URL(String(u || '').trim()).host.toLowerCase(); } catch { return ''; } };
   const pathOf = (u) => { try { return new URL(String(u || '').trim()).pathname.toLowerCase(); } catch { return ''; } };
   let services = [];
@@ -560,6 +603,9 @@ async function bindTtsControls() {
         + '音色请填控制台音色库里的音色 ID（以 <code>voc_</code> 开头），也可点上面的「获取模型列表」直接拉取。';
       keyHint.style.display = '';
     }
+    const breezeBox = q('#tts-breeze-account');
+    if (breezeBox) breezeBox.style.display = prov === 'breeze' ? '' : 'none';
+    if (prov === 'breeze') refreshBreezeStatus();
     // 模型栏：这一家不要模型名就整栏藏掉（火山 v1 / 豆包）；「自定义/自建」虽然 models 为空
     // 但**必须填模型名**（note 里写了），也保留；有内置模型但不支持拉取的（MiniMax）
     // 留输入框 + 内置候选，只把「获取模型列表」按钮藏掉
@@ -680,9 +726,28 @@ async function bindTtsControls() {
   // 的统一实现。这里的旧实现有两个坑（2026-10-01 审查）：①「显示」会用回读值盖掉用户刚
   // 输了一半的新 Key；②「隐藏」无条件写 ****** —— 而 ****** 在服务端是"保持不变"，
   // 等于把刚粘进去的新 Key 静默丢弃。
-  if (voicePickBtn) voicePickBtn.addEventListener('click', () => {
+  if (voicePickBtn) voicePickBtn.addEventListener('click', async () => {
     if (!voicePick) return;
     const service = currentService();
+    // Breeze 没有内置全量音色表：点「候选音色」时现拉账号下的真实音色（有 Key 才有）
+    if (service?.provider === 'breeze') {
+      if (voiceHint) { voiceHint.style.display = ''; voiceHint.textContent = '正在从 Breeze 拉取音色…'; }
+      try {
+        const keyNode = q('#cfg-tts-key');
+        const rawKey = keyNode?.value?.trim() || '';
+        const r = await api('/api/tts/models', {
+          method: 'POST',
+          body: JSON.stringify({
+            baseUrl: baseUrlInput?.value?.trim() || '',
+            apiKey: rawKey === '******' ? '' : rawKey,
+            provider: 'breeze'
+          })
+        });
+        if (Array.isArray(r?.voices) && r.voices.length) {
+          service.voicesFlat = r.voices;
+        }
+      } catch { /* 拉不到就退回内置默认，后面按 0 个提示 */ }
+    }
     const count = fillVoicePick(service, String(modelInput?.value || '').trim());
     voicePick.style.display = count ? '' : 'none';
     if (voiceHint) {
@@ -690,10 +755,13 @@ async function bindTtsControls() {
         voiceHint.style.display = '';
         voiceHint.textContent = `已填入 ${count} 个候选音色，选一个即写进上面的输入框`
           + (service?.provider === 'doubao' ? '（音色要账号已开通，未开通会报 resource not granted）' : '')
+          + (service?.provider === 'breeze' ? '（拉不到时检查上方 API Key，或直接手填 voc_ 开头的音色 ID）' : '')
           + '。';
       } else {
         voiceHint.style.display = '';
-        voiceHint.textContent = '这一家没有内置音色表：直接手填 voice（MiniMax 如 female-shaonv）。';
+        voiceHint.textContent = service?.provider === 'breeze'
+          ? '没能拉到音色：先填上方 API Key 并保存，或直接手填 voc_ 开头的音色 ID。'
+          : '这一家没有内置音色表：直接手填 voice（MiniMax 如 female-shaonv）。';
       }
     }
   });
@@ -734,6 +802,37 @@ async function bindTtsControls() {
         modelsHint.textContent = r.note || `共 ${r.models.length} 个${r.ttsOnly ? '（已按语音合成过滤）' : '（没认出语音模型，给的是全量）'}，选一个填进上面的输入框`;
       }
     } catch (e) { if (modelsHint) modelsHint.textContent = `失败：${e.message}`; }
+  });
+
+  // ── Breeze 账号：保存 / 领今日积分 / 刷新余额 ──
+  const breezeMsg = q('#tts-breeze-msg');
+  const setBreezeMsg = (text) => { if (breezeMsg) breezeMsg.textContent = text || ''; };
+  q('#tts-breeze-refresh')?.addEventListener('click', () => { setBreezeMsg(''); refreshBreezeStatus(); });
+  q('#tts-breeze-save')?.addEventListener('click', async () => {
+    const email = String(q('#cfg-breeze-email')?.value || '').trim();
+    const password = String(q('#cfg-breeze-password')?.value || '').trim();
+    const autoClaim = q('#cfg-breeze-autoclaim')?.checked !== false;
+    setBreezeMsg('保存中…');
+    try {
+      const r = await api('/api/tts/breeze/account', {
+        method: 'POST',
+        body: JSON.stringify({ email, password, autoClaim })
+      });
+      if (!r?.ok) { setBreezeMsg(r?.error || '保存失败'); return; }
+      const pwNode = q('#cfg-breeze-password');
+      if (pwNode) pwNode.value = '';
+      setBreezeMsg('账号已保存');
+      refreshBreezeStatus();
+    } catch (e) { setBreezeMsg(`保存失败：${e.message}`); }
+  });
+  q('#tts-breeze-claim')?.addEventListener('click', async () => {
+    setBreezeMsg('领取中…');
+    try {
+      const r = await api('/api/tts/breeze/claim', { method: 'POST', body: JSON.stringify({}) });
+      if (!r?.ok) { setBreezeMsg(r?.error || '领取失败'); return; }
+      setBreezeMsg(r.message || (r.claimed ? `领到 ${r.reward} 积分` : '今天已领过'));
+      refreshBreezeStatus();
+    } catch (e) { setBreezeMsg(`领取失败：${e.message}`); }
   });
 }
 
