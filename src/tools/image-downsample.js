@@ -137,7 +137,8 @@ async function runFfmpeg(ffmpegPath, buffer, vf, signal) {
 export async function fetchOversizedImageAsJpeg(safeUrl, originalError, signal, {
   cap = 12 * 1024 * 1024,
   // 与音频/视频通道同一个 64MB 上限：整包读内存 + 解压/抽帧的峰值已经够高。
-  largeCap = 64 * 1024 * 1024
+  largeCap = 64 * 1024 * 1024,
+  gifSingleFrame = false
 } = {}) {
   if (!OVERSIZE_LIMIT_RE.test(String(originalError?.message ?? ''))) throw originalError;
   const ffmpegPath = await resolveFfmpeg();
@@ -154,9 +155,11 @@ export async function fetchOversizedImageAsJpeg(safeUrl, originalError, signal, 
     throw originalError; // 其他二次拉取失败：原始超限错误更贴近真相
   }
   if (!buffer?.length || !/^image\//i.test(String(contentType || ''))) throw originalError;
-  // 动图走帧条（与常规 GIF 路径同一口径，别只给模型一帧）；其他图按尺寸降采样
-  let vf = "scale='min(2048,iw)':-2";
-  if (/^image\/gif/i.test(String(contentType || ''))) {
+  // 动图走帧条（与常规 GIF 路径同一口径，别只给模型一帧）；图生图参考图只取单帧，避免拼成四宫格
+  let vf = gifSingleFrame
+    ? "scale='if(gte(iw,ih),min(1024,iw),-2)':'if(gte(iw,ih),-2,min(1024,ih))'"
+    : "scale='min(2048,iw)':-2";
+  if (!gifSingleFrame && /^image\/gif/i.test(String(contentType || ''))) {
     vf = gifStripVf(await countGifFrames(ffmpegPath, buffer, signal));
   }
   const jpeg = await runFfmpeg(ffmpegPath, buffer, vf, signal);
@@ -171,6 +174,41 @@ export async function convertStillImageToJpeg(buffer, signal, { maxDimension = 2
     throw new Error('系统未安装 ffmpeg，无法把该图片转成视觉接口支持的 JPEG');
   }
   return runFfmpeg(ffmpegPath, buffer, `scale='min(${maxDimension},iw)':-2`, signal);
+}
+
+const DIRECT_REF_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+/**
+ * 图生图参考图收口成 data URI：
+ *   1) png/jpeg/webp 且体积不大（≤2 MiB）：原样直出，不额外起 ffmpeg；
+ *   2) 超出体积、GIF（取首帧，不拼四宫格）或非常见格式（AVIF/HEIC/BMP）：
+ *      有 ffmpeg 时按长边 1024 压成 JPEG；无 ffmpeg 时常见四类直接透传、非常见格式明确报错。
+ */
+export async function prepareReferenceImageDataUrl(buffer, mime, signal, {
+  maxDimension = 1024,
+  maxInlineBytes = 2 * 1024 * 1024
+} = {}) {
+  signal?.throwIfAborted();
+  const normalizedMime = String(mime || '').toLowerCase();
+  const directSupported = DIRECT_REF_MIME.has(normalizedMime);
+  if (directSupported && buffer.length <= maxInlineBytes) {
+    return `data:${normalizedMime};base64,${buffer.toString('base64')}`;
+  }
+  const ffmpegPath = await resolveFfmpeg();
+  if (ffmpegPath) {
+    const vf = `scale='if(gte(iw,ih),min(${maxDimension},iw),-2)':'if(gte(iw,ih),-2,min(${maxDimension},ih))'`;
+    try {
+      const jpeg = await runFfmpeg(ffmpegPath, buffer, vf, signal);
+      if (jpeg?.length) return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error;
+      if (!directSupported && normalizedMime !== 'image/gif') throw error;
+    }
+  }
+  if (directSupported || normalizedMime === 'image/gif') {
+    return `data:${normalizedMime};base64,${buffer.toString('base64')}`;
+  }
+  throw new Error(`图片格式 ${normalizedMime || '未知'} 不支持且系统未安装 ffmpeg，无法转为参考图`);
 }
 
 /** 数 GIF 总帧数：-f null 全量解一遍，取 stderr 末尾 progress 的 frame= N。

@@ -791,8 +791,8 @@ export function buildSystemPrompt({
     // 与工具注入同一道门：生图开关 + 表情包开关（生图的发送路径是 send_sticker）
     if (imageGenAvailable(getConfig()) && getConfig().sticker?.enabled !== false) {
       gameLines.push(cardFirst
-        ? '- 群友要你「画一张」时用 generate_image：prompt 写清画面（主体+风格+氛围），生成后会自动发到当前会话，不需要再调 send_sticker（只想存进表情库、这次不发就传 send:false）；要不要配一句话按角色设定。这是按张计费的，一天里别主动画、只在群友真开口要时才用。'
-        : '- 群友要你「画一张」时用 generate_image：prompt 写清画面（主体+风格+氛围），生成后会自动发到当前会话，不需要再调 send_sticker（只想存进表情库、这次不发就传 send:false）；记得带上一句自己的话，别只甩图。这是按张计费的，一天里别主动画、只在群友真开口要时才用。');
+        ? '- 群友要你「画一张」或「照这张图画/改一下」时用 generate_image：prompt 写清画面（主体+风格+氛围），图生图时传 sourceMessageId（参考图所在消息的 #数字）或 sourceStickerId（表情/上张图 id），生成后会自动发到当前会话，不需要再调 send_sticker（只想存进表情库、这次不发就传 send:false）；要不要配一句话按角色设定。这是按张计费的，一天里别主动画、只在群友真开口要时才用。'
+        : '- 群友要你「画一张」或「照这张图画/改一下」时用 generate_image：prompt 写清画面（主体+风格+氛围），图生图时传 sourceMessageId（参考图所在消息的 #数字）或 sourceStickerId（表情/上张图 id），生成后会自动发到当前会话，不需要再调 send_sticker（只想存进表情库、这次不发就传 send:false）；记得带上一句自己的话，别只甩图。这是按张计费的，一天里别主动画、只在群友真开口要时才用。');
     }
     parts.push('', gameLines.join('\n'));
   }

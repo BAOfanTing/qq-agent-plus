@@ -157,3 +157,19 @@ test('convertStillImageToJpeg 直接产出 JPEG 字节', { skip: !HAS_FFMPEG && 
   assert.equal(jpeg[0], 0xff);
   assert.equal(jpeg[1], 0xd8);
 });
+
+test('prepareReferenceImageDataUrl：小图直接透传 data URI，不依赖 ffmpeg', async () => {
+  const { prepareReferenceImageDataUrl } = await import('../src/tools/image-downsample.js');
+  const out = await prepareReferenceImageDataUrl(PNG, 'image/png');
+  assert.equal(out, `data:image/png;base64,${PNG.toString('base64')}`);
+});
+
+test('prepareReferenceImageDataUrl：GIF 转为单帧 JPEG（不拼四宫格）', { skip: !HAS_FFMPEG && '需要 ffmpeg' }, async () => {
+  const { prepareReferenceImageDataUrl } = await import('../src/tools/image-downsample.js');
+  const TINY_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  const out = await prepareReferenceImageDataUrl(TINY_GIF, 'image/gif');
+  assert.match(out, /^data:image\/jpeg;base64,/);
+  const bytes = Buffer.from(out.split(',')[1], 'base64');
+  assert.equal(bytes[0], 0xff);
+  assert.equal(bytes[1], 0xd8);
+});

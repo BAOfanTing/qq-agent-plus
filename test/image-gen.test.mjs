@@ -605,3 +605,61 @@ test('服务地址误填完整 /images/generations 时剥掉，避免拼成双�
   });
   assert.equal(calls[0], 'https://api.mosi.cn/v1/images/generations');
 });
+
+test('图生图：传 image 时写进 /images/generations 请求体，不传时不带', async () => {
+  const calls = [];
+  const dataUri = `data:image/png;base64,${PNG.toString('base64')}`;
+  const fetchFn = async (url, req) => {
+    calls.push({ url: String(url), body: JSON.parse(req.body) });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }) };
+  };
+  await generateImage({
+    cfg: { imageGen: { enabled: true, baseUrl: 'https://gw.example.com/v1', model: 'qwen-image-2.1-turbo' } },
+    apiCfg: { baseUrl: 'https://gw.example.com/v1' },
+    apiKey: 'k',
+    prompt: '改成水彩画风',
+    image: dataUri,
+    fetchFn
+  });
+  assert.equal(calls[0].url, 'https://gw.example.com/v1/images/generations');
+  assert.equal(calls[0].body.image, dataUri);
+  assert.equal(calls[0].body.prompt, '改成水彩画风');
+
+  await generateImage({
+    cfg: { imageGen: { enabled: true, baseUrl: 'https://gw.example.com/v1', model: 'qwen-image-2.1-turbo' } },
+    apiCfg: { baseUrl: 'https://gw.example.com/v1' },
+    apiKey: 'k',
+    prompt: '纯文生图',
+    fetchFn
+  });
+  assert.equal('image' in calls[1].body, false);
+});
+
+test('图生图：Pollinations 与 ModelScope 预设不支持参考图时直接报错且不发请求', async () => {
+  let called = false;
+  const fetchFn = async () => {
+    called = true;
+    throw new Error('不应发请求');
+  };
+  const dataUri = `data:image/png;base64,${PNG.toString('base64')}`;
+  await assert.rejects(
+    generateImage({
+      cfg: { imageGen: { enabled: true, baseUrl: 'https://image.pollinations.ai', model: 'flux' } },
+      prompt: '改图',
+      image: dataUri,
+      fetchFn
+    }),
+    /Pollinations.*不支持参考图/
+  );
+  await assert.rejects(
+    generateImage({
+      cfg: { imageGen: { enabled: true, baseUrl: 'https://api-inference.modelscope.cn/v1', model: 'Qwen/Qwen-Image' } },
+      apiKey: 'ms-key',
+      prompt: '改图',
+      image: dataUri,
+      fetchFn
+    }),
+    /ModelScope.*暂不支持参考图/
+  );
+  assert.equal(called, false);
+});

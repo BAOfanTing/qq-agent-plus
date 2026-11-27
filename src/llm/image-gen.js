@@ -150,6 +150,7 @@ async function generateImageOnce({
   apiCfg = null,
   apiKey = '',
   prompt,
+  image = '',
   signal = null,
   fetchFn = fetch,
   modelscopePollMs = MODELSCOPE_POLL_MS
@@ -158,9 +159,18 @@ async function generateImageOnce({
   const base = imageGenBaseUrl(g, apiCfg);
   const model = String(g.model || '').trim();
   const body = String(prompt || '').trim().slice(0, MAX_PROMPT_CHARS);
+  const referenceImage = String(image || '').trim();
   if (!base) throw new Error('未配置图片生成的服务地址（设置 → 图片生成；留空表示与聊天模型同一家，那边也要有地址）');
   if (!model) throw new Error('未配置图片生成的模型（如 gpt-image-1 / seedream-3.0）');
   if (!body) throw new Error('生图提示词为空');
+
+  const preset = imageGenServiceOfBaseUrl(base);
+  if (referenceImage && preset?.shape === 'pollinations') {
+    throw new Error('当前图片生成服务（Pollinations）不支持参考图（图生图）');
+  }
+  if (referenceImage && preset?.shape === 'modelscope') {
+    throw new Error('当前图片生成服务（魔搭 ModelScope）暂不支持参考图（图生图）');
+  }
 
   const auth = resolveImageGenAuth({ imageGen: g, api: apiCfg, apiKey });
   if (!auth.ok) throw new Error(auth.error);
@@ -184,7 +194,6 @@ async function generateImageOnce({
     else signal.addEventListener('abort', onAbort, { once: true });
   }
   const releaseTimeGuard = watchTimeWindow((error) => controller.abort(error));
-  const preset = imageGenServiceOfBaseUrl(base);
   // Moss 官方 output_watermark 是 { enabled: boolean }；0.9.11 早期说明误导过布尔写法，
   // 这里兼容一次，免得按旧说明保存的配置在升级后还是发不出（issue #62 更正）。
   const requestExtra = extra.output_watermark !== undefined && typeof extra.output_watermark === 'boolean' && preset?.id === 'moss'
@@ -211,6 +220,7 @@ async function generateImageOnce({
         n: 1,
         ...formatParam,
         ...(size ? { size } : {}),
+        ...(referenceImage ? { image: referenceImage } : {}),
         ...requestExtra
       }),
       signal: controller.signal

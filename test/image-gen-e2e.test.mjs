@@ -316,3 +316,126 @@ test('imageGen.autoSend=false 时只入库、不自动发送', async () => {
     updateConfig({ imageGen: { autoSend: true } });
   }
 });
+
+test('图生图端到端：sourceMessageId（含多图选择与引用回退）把参考图塞进 image 字段', async (t) => {
+  resetImageQuotaForTest();
+  const http = await import('node:http');
+  const { closeServer } = await import('./helpers/cleanup.mjs');
+  const { updateConfig } = await import('../src/core/config.js');
+  updateConfig({
+    imageGen: { enabled: true, model: 'qwen-image-2.1-turbo', baseUrl: '', maxPerHour: 3, autoSend: true },
+    security: { allowPrivateImageHosts: true }
+  });
+
+  // 用两份不同内容的合法 PNG 区分 imageIndex=1 与 imageIndex=2
+  const PNG2 = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mNk+M9QzwAEjDAGACCKAoFF5l6tAAAAAElFTkSuQmCC',
+    'base64'
+  );
+  const imgServer = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'image/png' });
+    res.end(req.url === '/two.png' ? PNG2 : PNG);
+  });
+  await new Promise((resolve) => imgServer.listen(0, '127.0.0.1', resolve));
+  const imgBase = `http://127.0.0.1:${imgServer.address().port}`;
+  t.after(() => closeServer(imgServer));
+
+  const realFetch = globalThis.fetch;
+  const genCalls = [];
+  globalThis.fetch = async (url, req) => {
+    const target = String(url);
+    if (target.startsWith(imgBase)) return realFetch(url, req);
+    genCalls.push({ url: target, body: JSON.parse(req.body || '{}') });
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] })
+    };
+  };
+
+  try {
+    const entries = new Map([
+      ['101', {
+        mid: 101,
+        media: [
+          { kind: 'image', url: `${imgBase}/one.png` },
+          { kind: 'image', url: `${imgBase}/two.png` }
+        ]
+      }],
+      ['102', {
+        mid: 102,
+        media: [],
+        reply: { messageId: '101', sender: '张三', text: '[图片]' }
+      }],
+      ['103', {
+        mid: 103,
+        media: [{ kind: 'video', url: `${imgBase}/v.mp4` }]
+      }]
+    ]);
+    const f = context({
+      store: {
+        activeMembers: () => [],
+        recent: () => [...entries.values()],
+        findByMid: (_chatKey, mid) => entries.get(String(mid).replace(/^#+/, '')) || null
+      }
+    });
+
+    // ① 指定第 2 张图 + 带 # 前缀的 sourceMessageId
+    const res1 = await tool('generate_image').execute(f.ctx, {
+      prompt: '改成水彩画风',
+      sourceMessageId: '#101',
+      imageIndex: 2
+    });
+    assert.equal(res1.isError, undefined, res1.content);
+    const body1 = JSON.parse(res1.content);
+    assert.equal(body1.mode, 'img2img');
+    assert.equal(genCalls[0].body.image, `data:image/png;base64,${PNG2.toString('base64')}`);
+    const saved1 = f.manager.entries.find((e) => e.id === body1.id);
+    assert.ok(saved1.localNote.startsWith('图生图：'));
+    assert.ok(saved1.tags.includes('图生图'));
+
+    // ② 模型传了引用回复那条消息 #102：自动顺着 reply.messageId 回退到 #101 第 1 张图
+    const res2 = await tool('generate_image').execute(f.ctx, {
+      prompt: '加个墨镜',
+      sourceMessageId: '102'
+    });
+    assert.equal(res2.isError, undefined, res2.content);
+    assert.equal(genCalls[1].body.image, `data:image/png;base64,${PNG.toString('base64')}`);
+
+    // ③ sourceStickerId：直接拿刚生成的图继续改
+    const res3 = await tool('generate_image').execute(f.ctx, {
+      prompt: '背景换成海边',
+      sourceStickerId: body1.id
+    });
+    assert.equal(res3.isError, undefined, res3.content);
+    assert.equal(genCalls[2].body.image, `data:image/png;base64,${PNG.toString('base64')}`);
+
+    // ④ 只有视频没有图：报错且不消耗第 4 次额度（前面用掉 3/3；先重设额度测不消耗）
+    resetImageQuotaForTest();
+    updateConfig({ imageGen: { maxPerHour: 1 } });
+    const badVideo = await tool('generate_image').execute(f.ctx, {
+      prompt: '改图',
+      sourceMessageId: '103'
+    });
+    assert.equal(badVideo.isError, true);
+    assert.match(badVideo.content, /只有视频/);
+
+    const badBoth = await tool('generate_image').execute(f.ctx, {
+      prompt: '改图',
+      sourceMessageId: '101',
+      sourceStickerId: body1.id
+    });
+    assert.equal(badBoth.isError, true);
+    assert.match(badBoth.content, /只能传一个/);
+
+    // 前两次参考图解析失败绝不能扣掉 maxPerHour=1 的额度
+    const afterBad = await tool('generate_image').execute(f.ctx, { prompt: '正常出图' });
+    assert.equal(afterBad.isError, undefined, `参考图校验失败不应消耗额度：${afterBad.content}`);
+  } finally {
+    globalThis.fetch = realFetch;
+    updateConfig({
+      imageGen: { enabled: true, model: 'gpt-image-1', baseUrl: '', maxPerHour: 1, autoSend: true },
+      security: { allowPrivateImageHosts: false }
+    });
+  }
+});

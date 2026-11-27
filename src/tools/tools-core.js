@@ -4,13 +4,12 @@
 //
 // 工具命名去掉了 qq_ 前缀（更短，省 token）。
 import crypto from 'node:crypto';
-import { getConfig, imageGenAvailable, imageGenMaxPerHour } from '../core/config.js';
+import { getConfig } from '../core/config.js';
 import { classifyTransportFailure } from '../onebot/sender.js';
 import { imageType } from '../core/image-type.js';
 import { MAX_REMINDER_TEXT, nextAtFromHHMM, normalizeRepeat, nextOccurrenceAt } from '../core/reminders.js';
 import { synthesizeSpeech, ttsConfigured } from '../llm/tts.js';
-import { generateImage, MAX_PROMPT_CHARS } from '../llm/image-gen.js';
-import { resolveApiKey } from '../llm/llm.js';
+import { executeGenerateImage } from './image-gen-exec.js';
 import { safeFetchBinary } from '../llm/safe-fetch.js';
 import { stickerVisionEnabled } from '../llm/vision-scan.js';
 import { todayKey } from '../core/util.js';   // 上海自然日（"每群每天一次"的去重用同一个口径）
@@ -894,115 +893,34 @@ export function buildToolDefs({ kind = '', chatId = '', cfg = getConfig() } = {}
     },
     {
       name: 'generate_image',
-      description: '自己画一张图（调用图片生成服务，按张计费、有每小时上限）。适合群友点名要"画一张"：梗图、应景的图。'
+      description: '自己画一张图或按参考图改画（调用图片生成服务，按张计费、有每小时上限）。适合群友点名要"画一张"或"照这张图画/改一下/换个风格"。'
         + 'prompt 要写清楚画面内容（主体、风格、氛围）；要在图上带中文文字时，把文字用引号原样写进 prompt'
         + '（例如：…画面上有中文文字"事已至此，先吃饭吧"——能不能写对取决于所选图模型）。'
+        + '图生图时传 sourceMessageId（参考图所在聊天消息的 #数字；多图消息可用 imageIndex 指定第几张）或 sourceStickerId（表情库/刚生成的图返回的 id），并在 prompt 里写清要保留什么、改成什么。'
         + '默认生成后直接发到当前会话（配置可关掉自动发送），并同时存进表情库供以后复用；只想收藏、这次不发就传 send:false。'
         + '别频繁用（一次调用就是一次真实花费）。',
       parameters: {
         type: 'object',
         properties: {
-          prompt: { type: 'string', description: '画面描述：主体 + 风格 + 氛围（如"一只橘猫戴着草帽坐在海边，卡通风格"）' },
+          prompt: { type: 'string', description: '画面描述：主体 + 风格 + 氛围（图生图时写清要怎么改、保留什么）' },
+          sourceMessageId: { type: ['integer', 'string'], description: '可选（图生图）：参考图所在的 QQ 消息 id（聊天记录里的 #数字）' },
+          imageIndex: { type: 'integer', description: '可选（图生图）：当 sourceMessageId 消息有多张图时指定第几张（从 1 开始，默认 1）' },
+          sourceStickerId: { type: 'string', description: '可选（图生图）：参考图在表情库/上次生图结果里的 id（不要与 sourceMessageId 同时传）' },
           note: { type: 'string', description: '可选：给这张图起的短语（存进表情库便于以后找）' },
           send: { type: 'boolean', description: '传 false：这次只存进表情库、不发送；不传时按图片生成设置里的「生成后直接发送」处理' }
         },
         required: ['prompt']
       },
-      async execute(ctx, args) {
-        try {
-          const cfg = getConfig();
-          if (!imageGenAvailable(cfg)) return err('图片生成未启用或未配置（设置 → 图片生成）');
-          const prompt = String(args.prompt ?? '').trim();
-          if (!prompt) return err('prompt 不能为空');
-          if (prompt.length > MAX_PROMPT_CHARS) return err(`画面描述太长了（≤${MAX_PROMPT_CHARS} 字），说短一点`);
-          // 按张计费：**事前原子消费**再生成 —— 这是唯一一道成本闸门，并发下必须封顶。
-          // 以前是 peek → 生成 → tryConsume（且忽略返回值）：两个并发轮次（默认 maxConcurrentRuns=2）
-          // 会双双通过 peek，各生成一张，上限被突破且超限那张照样计费（2026-10-01 审查）。
-          // 用法与 asr 的 consumeAsrQuota 一致；失败/落库失败再 refund 退回（失败不扣）。
-          // 每次读配置：界面上改上限后不必重启就生效
-          imageQuota.configure({ globalMax: imageGenMaxPerHour(cfg), perChatMax: Infinity });
-          const reservedAt = Date.now();
-          const gate = imageQuota.tryConsume(ctx.chatKey, reservedAt);
-          if (!gate.ok) {
-            return err(gate.scope === 'chat'
-              ? '本会话的画图额度用完了（每小时有上限），过一会儿再画'
-              : '画图额度用完了（全局每小时有上限，这是按张计费的）');
-          }
-          let buffer; let revisedPrompt;
-          const label = String(args.note || '').trim() || prompt;
-          let entry;
-          try {
-            ({ buffer, revisedPrompt } = await generateImage({
-              cfg,
-              apiCfg: cfg.api,
-              apiKey: resolveApiKey(cfg),
-              prompt,
-              signal: ctx.signal
-            }));
-            // 落库：走与"控制台上传的自定义表情"同一条路（addManual 自己校验格式与体积并落盘）
-            entry = ctx.stickers.addManual({
-              imageBuffer: buffer,
-              desc: label.slice(0, 40),
-              localNote: `生成的图：${prompt}`.slice(0, 300),
-              tags: ['生成'],
-              usage: revisedPrompt ? `提示词修订：${revisedPrompt}`.slice(0, 300) : ''
-            });
-          } catch (error) {
-            // 生成已经发出去了（中止/超时/落库失败）就不能退额度：服务商侧可能已完成并计费，
-            // 退款会让每小时 6 张的成本闸门少计，模型看到"失败"重试还会再扣一次。
-            // 只有"请求根本没发出去"的配置/参数错误才退。
-            const maybeBilled = Boolean(buffer) || ctx.signal?.aborted === true
-              || /超时|timeout|abort|cancel|ECONN|ETIMEDOUT|落库|addManual/i.test(String(error?.message ?? error));
-            if (!maybeBilled) imageQuota.refund(ctx.chatKey, reservedAt);
-            throw error;
-          }
-          // 生成即发送：只保存、等模型再调 send_sticker 的旧路径在模型漏掉第二步时
-          // 用户什么也收不到（Issue #41）。仍存进表情库，后续可复用。
-          const autoSend = args.send !== false && cfg.imageGen?.autoSend !== false;
-          if (!autoSend) {
-            return ok({
-              id: entry.id,
-              note: entry.localNote,
-              sent: false,
-              kind: '已存进表情库（未发送）',
-              next: '需要发送时用 send_sticker 传这个 id'
-            });
-          }
-          try {
-            const sendable = await ctx.stickers.findForSend(entry.id);
-            if (!sendable?.url) throw new Error('生成的图片没有可发送的地址');
-            // 默认仍按表情发送（保持 0.9.x 行为）；imageGen.sendAs='image' 时发普通图片，
-            // 群友可以直接保存（issue #67）。表情库手动发表情不受这个开关影响。
-            const sendAsImage = cfg.imageGen?.sendAs === 'image';
-            const sent = sendAsImage
-              ? await ctx.sender.sendImage(ctx.chatKey, sendable, { runId: ctx.session.leaseId, signal: ctx.signal })
-              : await ctx.sender.sendSticker(ctx.chatKey, sendable, { runId: ctx.session.leaseId, signal: ctx.signal });
-            afterSent(() => {
-              ctx.stickers.markUsed(entry.id, String(ctx.session.triggerText || '').slice(0, 100));
-              ctx.session.sent.push({ type: sendAsImage ? 'image' : 'sticker', text: `[生成的图:${sanitizeUserText(label.slice(0, 40))}]`, at: new Date().toLocaleTimeString('zh-CN', { hour12: false }) });
-              ctx.emit('session-update', ctx.session.id);
-            });
-            return ok({
-              id: entry.id,
-              note: entry.localNote,
-              sent: true,
-              messageId: sent?.message_id ?? null,
-              kind: '已发送并存入表情库'
-            });
-          } catch (error) {
-            // 图已经生成并入库（钱花了）：把 id 交给模型，不要让它重复生成；
-            // 发送结果不确定时也不要自动重发（outbox 会留 unknown 供人工核对）。
-            return ok({
-              id: entry.id,
-              note: entry.localNote,
-              sent: false,
-              kind: '已生成并存入表情库，但发送失败',
-              warning: `发送失败：${error?.message ?? error}。不要重复生成；结果不确定时不要自动重发。`
-            });
-          }
-        } catch (error) {
-          return err(error?.message ?? error);
-        }
+      execute(ctx, args) {
+        return executeGenerateImage(ctx, args, {
+          currentMessageImageUrls,
+          stickerLookupHint,
+          imageQuota,
+          normalizeMid,
+          afterSent,
+          ok,
+          err
+        });
       }
     },
     {
